@@ -1,0 +1,19 @@
+export const API_BASE_URL = 'http://localhost:3000';
+
+export const API_ENDPOINTS = {
+  BASE_URL: API_BASE_URL,
+  PROMPT: `${API_BASE_URL}/prompt`,
+  CHAT_HISTORY: `${API_BASE_URL}/chat-history`,
+  ALL_CHAT_HISTORY: `${API_BASE_URL}/all-chat-history`,
+} as const;
+
+export const MAX_HISTORY_ITEMS = 10;
+
+export const DEFAULT_MESSAGE = {
+  id: '1',
+  content: '你好！我是你的智能助手，有什么可以帮助你的吗？',
+  role: 'assistant' as const,
+  timestamp: new Date(),
+};
+
+export const ERROR_MESSAGE = '抱歉，发生了错误，请稍后重试。';
