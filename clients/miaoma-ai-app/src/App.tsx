@@ -6,6 +6,7 @@ function App() {
   return (
     <div className="h-screen w-full">
       <ChatAgent/>
+      <h3 className="text-3xl font-bold text-center text-white">Miaoma AI</h3>
     </div>
   );
 }
