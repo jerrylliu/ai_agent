@@ -1,3 +1,4 @@
+// API 端点常量导入
 import { API_ENDPOINTS } from './constants';
 import { Session, Message } from '../types/session';
 
@@ -31,6 +32,12 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 // API 调用函数
+
+/**
+ * 保存聊天记录
+ * @param data 聊天历史项数据
+ * @throws 保存失败时抛出错误
+ */
 export async function saveChatHistory(data: ChatHistoryItem): Promise<void> {
   const response = await fetch(API_ENDPOINTS.CHAT_HISTORY, {
     method: 'POST',
@@ -42,30 +49,61 @@ export async function saveChatHistory(data: ChatHistoryItem): Promise<void> {
   }
 }
 
-export async function getAIResponse(message: string): Promise<string> {
-  const response = await fetch(`${API_ENDPOINTS.PROMPT}?message=${encodeURIComponent(message)}`);
+/**
+ * 获取 AI 响应流
+ * @param message 用户消息
+ * @param history 历史消息列表
+ * @returns 可读流，包含 AI 响应文本
+ * @throws 获取失败时抛出错误
+ */
+export async function getAIResponse(message: string, history: Message[] = []): Promise<ReadableStream<string>> {
+  const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, history }),
+  });
   if (!response.ok) {
     throw new Error('获取 AI 响应失败');
   }
-  return response.text();
+  return response.body!.pipeThrough(new TextDecoderStream());
 }
 
+/**
+ * 获取指定会话的历史记录
+ * @param sessionId 会话 ID
+ * @returns 聊天记录列表
+ */
 export async function getSessionHistory(sessionId: string): Promise<ChatHistoryRecord[]> {
   const response = await fetch(`${API_ENDPOINTS.CHAT_HISTORY}?sessionId=${sessionId}`);
   return handleResponse<ChatHistoryRecord[]>(response);
 }
 
+/**
+ * 获取所有聊天记录
+ * @returns 所有聊天记录列表
+ */
 export async function getAllChatHistory(): Promise<ChatHistoryRecord[]> {
   const response = await fetch(API_ENDPOINTS.ALL_CHAT_HISTORY);
   return handleResponse<ChatHistoryRecord[]>(response);
 }
 
 // 会话相关 API
+
+/**
+ * 获取所有会话列表
+ * @returns 会话列表
+ */
 export async function getSessions(): Promise<Session[]> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions`);
   return handleResponse<Session[]>(response);
 }
 
+/**
+ * 创建新会话
+ * @param sessionId 会话 ID
+ * @param title 会话标题
+ * @returns 创建的会话对象
+ */
 export async function createSession(sessionId: string, title: string): Promise<Session> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions`, {
     method: 'POST',
@@ -75,11 +113,22 @@ export async function createSession(sessionId: string, title: string): Promise<S
   return handleResponse<Session>(response);
 }
 
+/**
+ * 获取指定会话详情
+ * @param sessionId 会话 ID
+ * @returns 会话对象
+ */
 export async function getSession(sessionId: string): Promise<Session> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}`);
   return handleResponse<Session>(response);
 }
 
+/**
+ * 更新会话标题
+ * @param sessionId 会话 ID
+ * @param title 新标题
+ * @throws 更新失败时抛出错误
+ */
 export async function updateSessionTitle(sessionId: string, title: string): Promise<void> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}`, {
     method: 'PUT',
@@ -91,6 +140,11 @@ export async function updateSessionTitle(sessionId: string, title: string): Prom
   }
 }
 
+/**
+ * 删除会话
+ * @param sessionId 会话 ID
+ * @throws 删除失败时抛出错误
+ */
 export async function deleteSession(sessionId: string): Promise<void> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}`, {
     method: 'DELETE',
@@ -100,6 +154,11 @@ export async function deleteSession(sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * 切换会话置顶状态
+ * @param sessionId 会话 ID
+ * @throws 操作失败时抛出错误
+ */
 export async function toggleSessionPin(sessionId: string): Promise<void> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}/pin`, {
     method: 'PATCH',
@@ -109,11 +168,21 @@ export async function toggleSessionPin(sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * 获取指定会话的消息列表
+ * @param sessionId 会话 ID
+ * @returns 消息记录列表
+ */
 export async function getSessionMessages(sessionId: string): Promise<ChatHistoryRecord[]> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}/messages`);
   return handleResponse<ChatHistoryRecord[]>(response);
 }
 
+/**
+ * 上传文件
+ * @param file 要上传的文件
+ * @returns 包含文件 URL 的响应
+ */
 export async function uploadFile(file: File): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append('file', file);
@@ -124,6 +193,12 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
   return handleResponse<UploadResponse>(response);
 }
 
+/**
+ * 更新消息内容
+ * @param id 消息 ID
+ * @param content 新内容
+ * @throws 更新失败时抛出错误
+ */
 export async function updateMessage(id: string, content: string): Promise<void> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/messages/${id}`, {
     method: 'PUT',
@@ -135,6 +210,11 @@ export async function updateMessage(id: string, content: string): Promise<void> 
   }
 }
 
+/**
+ * 删除消息
+ * @param id 消息 ID
+ * @throws 删除失败时抛出错误
+ */
 export async function deleteMessage(id: string): Promise<void> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/messages/${id}`, {
     method: 'DELETE',
