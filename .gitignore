@@ -21,4 +21,4 @@ build/
 *~
 
 # 子仓库
-servers/miaoma-llm-server/
+# servers/miaoma-llm-server/
