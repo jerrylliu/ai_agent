@@ -34,7 +34,7 @@ export const promptTemplate =  async (promptText?: string, history?: Array<{ rol
       for await (const chunk of stream) {
         const content = chunk.content?.toString() || '';
         const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
-        // console.log(content,666666);
+        // console.log(content,666);
         res.write(cleanContent);
         console.log(cleanContent);
       }
