@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
-import { 
-  saveChatHistory, 
-  getAIResponse, 
-  getSessions, 
-  createSession, 
-  deleteSession, 
-  getSessionMessages, 
-  updateSessionTitle, 
+import {
+  saveChatHistory,
+  getAIResponse,
+  getSessions,
+  createSession,
+  deleteSession,
+  getSessionMessages,
+  updateSessionTitle,
   toggleSessionPin,
   updateMessage as updateMessageApi,
   deleteMessage as deleteMessageApi,
@@ -43,7 +43,7 @@ export function useChat() {
       setIsLoading(true);
       const sessionsData = await getSessions();
       setSessions(sessionsData);
-      
+
       // 如果有会话，使用第一个会话作为当前会话
       if (sessionsData.length > 0) {
         setCurrentSessionId(sessionsData[0].sessionId);
@@ -86,7 +86,7 @@ export function useChat() {
   const createNewSession = async () => {
     const newSessionId = generateSessionId();
     const sessionTitle = '新对话';
-    
+
     try {
       await createSession(newSessionId, sessionTitle);
       await loadSessions();
@@ -106,7 +106,7 @@ export function useChat() {
     try {
       await deleteSession(sessionId);
       await loadSessions();
-      
+
       // 如果删除的是当前会话，切换到第一个会话
       if (sessionId === currentSessionId && sessions.length > 1) {
         const remainingSessions = sessions.filter(s => s.sessionId !== sessionId);
@@ -156,21 +156,39 @@ export function useChat() {
       };
       setHistory(prev => [newHistoryItem, ...prev].slice(0, 10));
 
-      const aiResponse = await getAIResponse(userInput);
-
-      const assistantMessage: Message = {
-        id: generateId(),
-        content: aiResponse,
+      // 准备历史消息（排除默认消息）
+      const chatHistory = messages.filter(msg => msg.id !== DEFAULT_MESSAGE.id);
+      
+      // 创建一个临时的助手消息 ID
+      const assistantMessageId = generateId();
+      const tempAssistantMessage: Message = {
+        id: assistantMessageId,
+        content: '',
         role: 'assistant',
         timestamp: new Date(),
       };
+      setMessages(prev => [...prev, tempAssistantMessage]);
 
-      setMessages(prev => [...prev, assistantMessage]);
+      // 处理流式响应
+      const stream = await getAIResponse(userInput, chatHistory);
+      const reader = stream.getReader();
+      let fullResponse = '';
 
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        fullResponse += value;
+        // 更新临时消息的内容
+        setMessages(prev => prev.map(msg => 
+          msg.id === assistantMessageId ? { ...msg, content: fullResponse } : msg
+        ));
+      }
+
+      // 保存完整的响应
       await saveChatHistory({
         sessionId: currentSessionId,
         role: 'assistant',
-        content: aiResponse,
+        content: fullResponse,
       });
 
       // 重新加载会话列表以更新会话标题和时间
@@ -195,8 +213,8 @@ export function useChat() {
 
     try {
       const uploadResult = await uploadFile(file);
-      const fileMessage = file.type.startsWith('image/') 
-        ? `![图片](${uploadResult.url})` 
+      const fileMessage = file.type.startsWith('image/')
+        ? `![图片](${uploadResult.url})`
         : `[${file.name}](${uploadResult.url})`;
 
       await sendMessage(fileMessage);
@@ -218,7 +236,7 @@ export function useChat() {
     try {
       await updateMessageApi(messageId, content);
       // 更新本地消息列表
-      setMessages(prev => prev.map(msg => 
+      setMessages(prev => prev.map(msg =>
         msg.id === messageId ? { ...msg, content } : msg
       ));
     } catch (error) {

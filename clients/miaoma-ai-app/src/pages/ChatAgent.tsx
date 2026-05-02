@@ -7,6 +7,7 @@ import { useChat } from "../hooks/useChat";
 import { useTheme } from "../hooks/useTheme";
 import { formatTime, formatDate } from "../lib/utils";
 import { API_BASE_URL } from "../lib/constants";
+import MarkdownRenderer from "../components/MarkdownRenderer";
 
 const ChatAgent: React.FC = () => {
   const [inputValue, setInputValue] = useState("");
@@ -298,7 +299,11 @@ const ChatAgent: React.FC = () => {
                         : "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white rounded-tl-none"
                       }`}
                     >
-                      <p className="break-words">{message.content}</p>
+                      {message.role === "assistant" ? (
+                        <MarkdownRenderer>{message.content.replace(/<think>[\s\S]*?<\/think>/gs, "")}</MarkdownRenderer>
+                      ) : (
+                        <p className="break-words">{message.content}</p>
+                      )}
                     </div>
                     {message.role === "user" && (
                       <div className="top-1 right-1 flex space-x-1">
@@ -398,8 +403,10 @@ const ChatAgent: React.FC = () => {
                     sendFile(file);
                   }
                 }} />
-                <Button variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
-                  <Image className="h-5 w-5" />
+                <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+                  <span>
+                    <Image className="h-5 w-5" />
+                  </span>
                 </Button>
               </label>
               <label className="cursor-pointer">
@@ -409,8 +416,10 @@ const ChatAgent: React.FC = () => {
                     sendFile(file);
                   }
                 }} />
-                <Button variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
-                  <FileText className="h-5 w-5" />
+                <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+                  <span>
+                    <FileText className="h-5 w-5" />
+                  </span>
                 </Button>
               </label>
             </div>
@@ -422,13 +431,13 @@ const ChatAgent: React.FC = () => {
                 placeholder="输入消息..."
                 className="pr-24 py-3 rounded-full border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-primary focus:border-transparent"
               />
-              <Button
+              {/* <Button
                 variant="ghost"
                 size="icon"
                 className="absolute right-10 bottom-1/2 transform -translate-y-1/2 rounded-full"
               >
                 <Mic className="h-5 w-5" />
-              </Button>
+              </Button> */}
             </div>
             <Button
               onClick={handleSend}
