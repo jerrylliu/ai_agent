@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Send, Mic, Paperclip, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText } from "lucide-react";
+import { Send, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
