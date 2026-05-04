@@ -9,32 +9,44 @@ interface MarkdownRendererProps {
   className?: string;
 }
 
+// 在 MarkdownRenderer.tsx 中添加代码块样式
 const CodeBlock: React.FC<any> = ({ node, inline, className, children }) => {
   const match = /language-(\w+)/.exec(className || '');
   return !inline && match ? (
-    <div className="mt-2 mb-4 rounded-lg overflow-hidden">
+    <div className="mt-2 mb-4 rounded-lg overflow-hidden overflow-x-auto max-w-full break-all">
       <SyntaxHighlighter
         style={vscDarkPlus}
         language={match[1]}
         PreTag="div"
+        wrapLines={true}
+        showLineNumbers={false}
         codeTagProps={{
           style: {
             fontSize: '14px',
             lineHeight: '1.5',
+            wordBreak: 'break-all',
+            whiteSpace: 'pre-wrap',
+            wordWrap: 'break-word',
           },
+        }}
+        customStyle={{
+          margin: 0,
+          padding: '12px',
+          borderRadius: '6px',
+          maxWidth: '100%',
         }}
       >
         {String(children).replace(/\n$/, '')}
       </SyntaxHighlighter>
     </div>
   ) : (
-    <code className={className}>{children}</code>
+    <code className={`${className} break-all`}>{children}</code>
   );
 };
 
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className }) => {
   return (
-    <div className={className}>
+    <div className={className} style={{ maxWidth: '100%', wordBreak: 'break-word', whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

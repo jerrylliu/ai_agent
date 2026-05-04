@@ -269,14 +269,16 @@ const ChatAgent: React.FC = () => {
         </div>
 
         {/* 消息区域 */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto p-6 space-y-4" style={{ maxWidth: '100%', wordBreak: 'break-all' }}>
           {messages.map((message) => (
             <div
               key={message.id}
               className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+              style={{ maxWidth: '100%' }}
             >
               <div
-                className={`flex max-w-[80%] ${message.role === "user" ? "flex-row-reverse" : "flex-row"} space-x-3`}
+                className={`flex ${message.role === "user" ? "flex-row-reverse" : "flex-row"} space-x-3`}
+                style={{ maxWidth: '80%', width: 'fit-content', flexShrink: 0 }}
               >
                 <Avatar className="h-8 w-8 flex-shrink-0">
                   {message.role === "user" ? (
@@ -291,18 +293,27 @@ const ChatAgent: React.FC = () => {
                     </>
                   )}
                 </Avatar>
-                <div className="flex flex-col">
-                  <div className="relative">
+                <div className="flex flex-col" style={{ maxWidth: 'calc(100% - 48px)', minWidth: 0 }}>
+                  <div className="relative" style={{ maxWidth: '100%' }}>
                     <div
                       className={`rounded-lg p-3 shadow-sm transition-all duration-200 ${message.role === "user" 
                         ? "bg-primary text-white rounded-tr-none" 
                         : "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-white rounded-tl-none"
                       }`}
+                      style={{ 
+                        maxWidth: '100%',
+                        wordBreak: 'break-word',
+                        overflowWrap: 'break-word',
+                        whiteSpace: 'pre-wrap',
+                        minWidth: 0,
+                      }}
                     >
                       {message.role === "assistant" ? (
-                        <MarkdownRenderer>{message.content.replace(/<think>[\s\S]*?<\/think>/gs, "")}</MarkdownRenderer>
+                        <div style={{ maxWidth: '100%', overflow: 'hidden', wordBreak: 'break-word' }}>
+                          <MarkdownRenderer>{message.content.replace(/<think>[\s\S]*?<\/think>/gs, "")}</MarkdownRenderer>
+                        </div>
                       ) : (
-                        <p className="break-words">{message.content}</p>
+                        <p style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap', maxWidth: '100%' }}>{message.content}</p>
                       )}
                     </div>
                     {message.role === "user" && (
