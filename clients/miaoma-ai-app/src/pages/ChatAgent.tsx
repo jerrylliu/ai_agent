@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Send, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Send, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText, Database, Upload, CheckCircle, AlertCircle } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -20,8 +20,11 @@ const ChatAgent: React.FC = () => {
     isTyping,
     isLoading,
     messagesEndRef,
+    knowledgeBaseStatus,
     sendMessage,
     sendFile,
+    uploadToKnowledgeBase,
+    checkKnowledgeBaseStatus,
     updateMessage,
     deleteMessage,
     clearHistory,
@@ -30,6 +33,17 @@ const ChatAgent: React.FC = () => {
     deleteSession,
     toggleSessionPin,
   } = useChat();
+
+  const [kbFeedback, setKbFeedback] = useState<{
+    show: boolean;
+    success: boolean;
+    message: string;
+  }>({ show: false, success: false, message: '' });
+
+  useEffect(() => {
+    checkKnowledgeBaseStatus();
+  }, []);
+
   const { darkMode, toggleTheme } = useTheme();
 
   // 过滤会话列表
@@ -150,9 +164,9 @@ const ChatAgent: React.FC = () => {
                   }`}
                   onClick={() => switchSession(session.sessionId)}
                 >
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-1 line-clamp-1">
+                  <div className="flex justify-between items-center min-w-0">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-1 truncate">
                         {session.title}
                       </p>
                     </div>
@@ -261,12 +275,79 @@ const ChatAgent: React.FC = () => {
               </div>
             </div>
             <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1 px-3 py-1 rounded-full bg-gray-100 dark:bg-gray-700">
+                <Database className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+                <span className="text-xs text-gray-600 dark:text-gray-300">
+                  知识库:
+                </span>
+                {knowledgeBaseStatus.status === 'ready' && knowledgeBaseStatus.stats && (
+                  <span className="text-xs font-medium text-green-600 dark:text-green-400">
+                    {knowledgeBaseStatus.stats.documentCount} 个文档
+                  </span>
+                )}
+                {knowledgeBaseStatus.status === 'empty' && (
+                  <span className="text-xs text-yellow-600 dark:text-yellow-400">空</span>
+                )}
+                {knowledgeBaseStatus.status === 'error' && (
+                  <span className="text-xs text-red-600 dark:text-red-400">错误</span>
+                )}
+                {knowledgeBaseStatus.status === 'unknown' && (
+                  <span className="text-xs text-gray-500 dark:text-gray-400">检查中...</span>
+                )}
+              </div>
+              <label className="cursor-pointer">
+                <input
+                  type="file"
+                  accept=".txt,.pdf,.doc,.docx"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const result = await uploadToKnowledgeBase(file);
+                      setKbFeedback({
+                        show: true,
+                        success: result.success,
+                        message: result.message,
+                      });
+                      setTimeout(() => setKbFeedback(prev => ({ ...prev, show: false })), 3000);
+                    }
+                  }}
+                />
+                <Button asChild variant="ghost" size="sm" className="rounded-full">
+                  <span>
+                    <Upload className="h-4 w-4 mr-1" />
+                    上传知识库
+                  </span>
+                </Button>
+              </label>
               <Button variant="ghost" size="sm" className="rounded-full">
                 <MoreHorizontal className="h-5 w-5" />
               </Button>
             </div>
           </div>
         </div>
+
+        {/* 知识库上传反馈 */}
+        {kbFeedback.show && (
+          <div className={`mx-6 mt-4 p-3 rounded-lg flex items-center space-x-2 ${
+            kbFeedback.success
+              ? 'bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800'
+              : 'bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800'
+          }`}>
+            {kbFeedback.success ? (
+              <CheckCircle className="h-5 w-5 text-green-600 dark:text-green-400" />
+            ) : (
+              <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+            )}
+            <span className={`text-sm ${
+              kbFeedback.success
+                ? 'text-green-700 dark:text-green-300'
+                : 'text-red-700 dark:text-red-300'
+            }`}>
+              {kbFeedback.message}
+            </span>
+          </div>
+        )}
 
         {/* 消息区域 */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4" style={{ maxWidth: '100%', wordBreak: 'break-all' }}>
@@ -313,7 +394,7 @@ const ChatAgent: React.FC = () => {
                           <MarkdownRenderer>{message.content.replace(/<think>[\s\S]*?<\/think>/gs, "")}</MarkdownRenderer>
                         </div>
                       ) : (
-                        <p style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap', maxWidth: '100%' }}>{message.content}</p>
+                        <MarkdownRenderer>{message.content}</MarkdownRenderer>
                       )}
                     </div>
                     {message.role === "user" && (
@@ -404,32 +485,61 @@ const ChatAgent: React.FC = () => {
         <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4">
           <div className="flex items-end space-x-2">
             <div className="flex space-x-1">
+              {/* 表情选择按钮（预留功能，暂未实现） */}
               <Button variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
                 <Smile className="h-5 w-5" />
               </Button>
+
+              {/* ============================================
+                  图片上传按钮
+                  实现原理：
+                  1. 使用 <label> 标签包裹按钮，使其可点击
+                  2. 内部的 <input type="file"> 实际处理文件选择
+                  3. accept="image/*" 限制只能选择图片文件
+                  4. className="hidden" 隐藏原生的文件选择框
+                  5. onChange 事件获取选中的文件并调用 sendFile 上传
+              */}
               <label className="cursor-pointer">
-                <input type="file" accept="image/*" className="hidden" onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    sendFile(file);
-                  }
-                }} />
+                {/* hidden 属性隐藏文件输入框，但label仍可触发点击 */}
+                <input
+                  type="file"                  // 文件输入框类型
+                  accept="image/*"             // 限制只能选择图片文件（image/* 匹配所有图片格式）
+                  className="hidden"            // 隐藏原生的文件选择框（用图标按钮代替）
+                  onChange={(e) => {           // 文件选择改变时触发
+                    const file = e.target.files?.[0]; // 获取选择的第一个文件
+                    if (file) {                // 确保文件存在
+                      sendFile(file);          // 调用 sendFile 函数上传文件
+                    }
+                  }}
+                />
+                {/* 使用 Button 组件的 asChild 属性，将span的内容作为子元素渲染 */}
                 <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
                   <span>
-                    <Image className="h-5 w-5" />
+                    <Image className="h-5 w-5" />  {/* 图片图标 */}
                   </span>
                 </Button>
               </label>
+
+              {/* ============================================
+                  文件上传按钮
+                  与图片上传按钮类似，但有一下区别：
+                  1. accept 未指定，可以选择任意类型的文件
+                  2. 图标使用 FileText（文件图标）而非 Image（图片图标）
+              */}
               <label className="cursor-pointer">
-                <input type="file" className="hidden" onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    sendFile(file);
-                  }
-                }} />
+                <input
+                  type="file"                  // 文件输入框类型
+                  className="hidden"            // 隐藏原生的文件选择框
+                  onChange={(e) => {           // 文件选择改变时触发
+                    const file = e.target.files?.[0]; // 获取选择的第一个文件
+                    if (file) {                // 确保文件存在
+                      sendFile(file);          // 调用 sendFile 函数上传文件
+                    }
+                  }}
+                />
                 <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
                   <span>
-                    <FileText className="h-5 w-5" />
+                    <FileText className="h-5 w-5" />  {/* 文件图标 */}
                   </span>
                 </Button>
               </label>

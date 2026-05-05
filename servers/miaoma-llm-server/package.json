@@ -20,17 +20,21 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@langchain/classic": "^1.0.29",
+    "@langchain/community": "^1.0.0",
+    "@langchain/core": "^1.1.39",
+    "@langchain/ollama": "^1.1.39",
     "@nestjs/common": "^11.1.18",
     "@nestjs/core": "^11.1.18",
     "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/typeorm": "^11.0.1",
+    "chromadb": "^3.4.3",
+    "mammoth": "^1.6.0",
+    "mysql2": "^3.21.0",
+    "pdf-parse": "^1.1.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "@langchain/core": "^1.1.39",
-    "@langchain/ollama": "^1.1.39",
-    "@langchain/classic": "^1.0.29",
-    "mysql2": "^3.21.0",
-    "typeorm": "^0.3.28",
-    "@nestjs/typeorm": "^11.0.1"
+    "typeorm": "^0.3.28"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

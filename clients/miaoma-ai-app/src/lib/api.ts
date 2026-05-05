@@ -223,3 +223,95 @@ export async function deleteMessage(id: string): Promise<void> {
     throw new Error('删除消息失败');
   }
 }
+
+// ============================================
+// 知识库相关 API
+// ============================================
+
+/**
+ * 上传文档到知识库
+ * @param file 要上传的文档文件
+ * @returns 上传结果，包含是否成功、消息和文档数量
+ */
+export async function uploadToKnowledgeBase(file: File): Promise<{
+  success: boolean;
+  message: string;
+  documentCount?: number;
+}> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_UPLOAD, {
+    method: 'POST',
+    body: formData,
+  });
+
+  return handleResponse<{
+    success: boolean;
+    message: string;
+    documentCount?: number;
+  }>(response);
+}
+
+/**
+ * 获取知识库状态
+ * @returns 知识库状态信息
+ */
+export async function getKnowledgeBaseStatus(): Promise<{
+  status: 'ready' | 'empty' | 'error';
+  message: string;
+  stats?: {
+    documentCount: number;
+    collectionName: string;
+  };
+}> {
+  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_STATUS, {
+    method: 'GET',
+  });
+
+  return handleResponse<{
+    status: 'ready' | 'empty' | 'error';
+    message: string;
+    stats?: {
+      documentCount: number;
+      collectionName: string;
+    };
+  }>(response);
+}
+
+/**
+ * 搜索知识库
+ * @param query 搜索查询
+ * @param topK 返回结果数量（默认3）
+ * @returns 搜索结果
+ */
+export async function searchKnowledgeBase(
+  query: string,
+  topK: number = 3
+): Promise<{
+  success: boolean;
+  query: string;
+  results: Array<{
+    content: string;
+    metadata: any;
+    score: number;
+  }>;
+  context: string;
+}> {
+  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SEARCH, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, topK }),
+  });
+
+  return handleResponse<{
+    success: boolean;
+    query: string;
+    results: Array<{
+      content: string;
+      metadata: any;
+      score: number;
+    }>;
+    context: string;
+  }>(response);
+}

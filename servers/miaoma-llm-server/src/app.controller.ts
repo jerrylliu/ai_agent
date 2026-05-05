@@ -103,19 +103,165 @@ export class AppController {
     return this.appService.getAllChatHistory();
   }
 
-  // 上传文件
-  @Post('upload')
-  @UseInterceptors(FileInterceptor('file'))
-  async uploadFile(@UploadedFile() file: any) {
+  // ============================================
+  // 上传文件接口
+  // 路由：POST /upload
+  // 功能：接收前端上传的文件，保存到服务器的 uploads 目录
+  //
+  // 实现原理：
+  // 1. 使用 @UseInterceptors(FileInterceptor('file')) 拦截器处理文件上传
+  // 2. @UploadedFile() decorator 获取上传的文件对象
+  // 3. 确保 uploads 目录存在（如果不存在则创建）
+  // 4. 将文件写入到 uploads 目录
+  // 5. 返回文件的访问 URL
+  // ============================================
+  @Post('upload')                                    // 定义 POST 路由为 /upload
+  @UseInterceptors(FileInterceptor('file'))         // 使用 Multer 拦截器处理文件上传，'file' 是字段名
+  async uploadFile(@UploadedFile() file: any) {     // @UploadedFile() 获取上传的文件对象，类型为 any
+
+    // 拼接上传目录的绝对路径
+    // __dirname: 当前文件的目录（src/app/）
+    // '..': 向上两级目录
+    // '..': 回到项目根目录（servers/miaoma-llm-server/）
+    // 'uploads': 上传文件的存储目录
     const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+
+    // 检查上传目录是否存在
+    // fs.existsSync() 同步检查目录是否存在
     if (!fs.existsSync(uploadDir)) {
+      // 如果目录不存在，使用 recursive: true 创建目录
+      // recursive: true 会自动创建所有不存在的父级目录
       fs.mkdirSync(uploadDir, { recursive: true });
     }
 
-    const filePath = path.join(uploadDir, file.originalname);
+    // 生成唯一的文件名（避免中文名和特殊字符问题）
+    // 使用时间戳 + 随机数 + 原始扩展名
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(2, 8);
+    const ext = path.extname(file.originalname); // 获取文件扩展名
+    const safeFilename = `${timestamp}_${randomStr}${ext}`; // 安全文件名
+
+    // 拼接文件的完整保存路径（使用安全的文件名）
+    // path.join() 跨平台路径拼接
+    const filePath = path.join(uploadDir, safeFilename);
+
+    // 将文件内容写入到目标路径
+    // file.buffer 是文件的二进制内容（Node.js Buffer 对象）
+    // writeFileSync 同步写入文件（简单场景下使用，生产环境建议用异步）
     fs.writeFileSync(filePath, file.buffer);
 
-    return { url: `http://localhost:3000/files/${file.originalname}` };
+    // 返回文件的访问 URL
+    // 使用 encodeURIComponent 对文件名进行编码，避免中文和特殊字符导致 URL 无法访问
+    // 格式：http://localhost:3000/files/时间戳_随机数.扩展名
+    return { url: `http://localhost:3000/files/${safeFilename}` };
+  }
+
+  // ============================================
+  // 上传文档到知识库
+  // 路由：POST /knowledge/upload
+  // 功能：接收文档文件，解析内容，添加到向量知识库
+  // 支持格式：TXT、PDF、Word (.doc/.docx)
+  // ============================================
+  @Post('knowledge/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadToKnowledgeBase(@UploadedFile() file: any) {
+    try {
+      // 动态导入 rag-service（避免循环依赖）
+      const { handleDocumentUpload } = await import('./fundamentals/rag-service.js');
+
+      const result = await handleDocumentUpload(file);
+
+      return {
+        success: result.success,
+        message: result.message,
+        documentCount: result.documentCount,
+      };
+    } catch (error: any) {
+      console.error('上传到知识库失败:', error);
+      return {
+        success: false,
+        message: `上传失败: ${error.message}`,
+      };
+    }
+  }
+
+  // ============================================
+  // 获取知识库状态
+  // 路由：GET /knowledge/status
+  // 功能：查询当前知识库的状态和统计信息
+  // ============================================
+  @Get('knowledge/status')
+  async getKnowledgeBaseStatus() {
+    try {
+      const { getKnowledgeBaseStatus } = await import('./fundamentals/rag-service.js');
+      return await getKnowledgeBaseStatus();
+    } catch (error: any) {
+      console.error('获取知识库状态失败:', error);
+      return {
+        status: 'error',
+        message: `获取状态失败: ${error.message}`,
+      };
+    }
+  }
+
+  // ============================================
+  // 搜索知识库
+  // 路由：POST /knowledge/search
+  // 功能：在知识库中搜索相关内容
+  // ============================================
+  @Post('knowledge/search')
+  async searchKnowledgeBase(@Body() body: { query: string; topK?: number }) {
+    try {
+      const { retrieveFromKnowledgeBase } = await import('./fundamentals/rag-service.js');
+      const { query, topK = 3 } = body;
+
+      if (!query) {
+        return {
+          success: false,
+          message: '请提供搜索查询内容',
+        };
+      }
+
+      const result = await retrieveFromKnowledgeBase(query, topK);
+
+      return {
+        success: true,
+        query: result.query,
+        results: result.results,
+        context: result.context,
+      };
+    } catch (error: any) {
+      console.error('搜索知识库失败:', error);
+      return {
+        success: false,
+        message: `搜索失败: ${error.message}`,
+      };
+    }
+  }
+
+  // ============================================
+  // 获取知识库所有文档
+  // 路由：GET /knowledge/documents
+  // 功能：列出知识库中存储的所有文档
+  // ============================================
+  @Get('knowledge/documents')
+  async getAllDocuments() {
+    try {
+      const { getAllDocuments } = await import('./fundamentals/vector-store.js');
+      const documents = await getAllDocuments();
+
+      return {
+        success: true,
+        documentCount: documents.length,
+        documents,
+      };
+    } catch (error: any) {
+      console.error('获取文档列表失败:', error);
+      return {
+        success: false,
+        message: `获取文档列表失败: ${error.message}`,
+      };
+    }
   }
 
   // 更新消息

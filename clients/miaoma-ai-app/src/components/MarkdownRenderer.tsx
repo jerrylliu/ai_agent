@@ -10,7 +10,7 @@ interface MarkdownRendererProps {
 }
 
 // 在 MarkdownRenderer.tsx 中添加代码块样式
-const CodeBlock: React.FC<any> = ({ node, inline, className, children }) => {
+const CodeBlock: React.FC<any> = ({ inline, className, children }) => {
   const match = /language-(\w+)/.exec(className || '');
   return !inline && match ? (
     <div className="mt-2 mb-4 rounded-lg overflow-hidden overflow-x-auto max-w-full break-all">
@@ -51,6 +51,21 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className
         remarkPlugins={[remarkGfm]}
         components={{
           code: CodeBlock,
+          // 添加图片组件支持，优化图片显示样式
+          img: ({ src, alt }) => (
+            <img
+              src={src}
+              alt={alt || '图片'}
+              style={{
+                maxWidth: '100%',        // 最大宽度为容器宽度
+                maxHeight: '300px',      // 最大高度300px
+                objectFit: 'contain',    // 保持宽高比
+                borderRadius: '8px',     // 圆角
+                margin: '8px 0',         // 上下间距
+                display: 'block'         // 块级显示
+              }}
+            />
+          ),
           a: ({ node, ...props }) => (
             <a
               {...props}

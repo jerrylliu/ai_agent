@@ -5,6 +5,10 @@ export const API_ENDPOINTS = {
   PROMPT: `${API_BASE_URL}/prompt`,
   CHAT_HISTORY: `${API_BASE_URL}/chat-history`,
   ALL_CHAT_HISTORY: `${API_BASE_URL}/all-chat-history`,
+  // 知识库相关接口
+  KNOWLEDGE_UPLOAD: `${API_BASE_URL}/knowledge/upload`,
+  KNOWLEDGE_STATUS: `${API_BASE_URL}/knowledge/status`,
+  KNOWLEDGE_SEARCH: `${API_BASE_URL}/knowledge/search`,
 } as const;
 
 export const MAX_HISTORY_ITEMS = 10;
