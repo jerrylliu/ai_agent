@@ -7,11 +7,13 @@ import { useChat } from "../hooks/useChat";
 import { useTheme } from "../hooks/useTheme";
 import { formatTime, formatDate } from "../lib/utils";
 import { API_BASE_URL } from "../lib/constants";
+import { clearKnowledgeBase } from "../lib/api";
 import MarkdownRenderer from "../components/MarkdownRenderer";
 
 const ChatAgent: React.FC = () => {
   const [inputValue, setInputValue] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const {
     sessions,
     currentSessionId,
@@ -21,8 +23,10 @@ const ChatAgent: React.FC = () => {
     isLoading,
     messagesEndRef,
     knowledgeBaseStatus,
+    pendingImages,
     sendMessage,
     sendFile,
+    clearPendingImages,
     uploadToKnowledgeBase,
     checkKnowledgeBaseStatus,
     updateMessage,
@@ -44,6 +48,23 @@ const ChatAgent: React.FC = () => {
     checkKnowledgeBaseStatus();
   }, []);
 
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.more-menu')) {
+        setShowMoreMenu(false);
+      }
+    };
+
+    if (showMoreMenu) {
+      document.addEventListener('click', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [showMoreMenu]);
+
   const { darkMode, toggleTheme } = useTheme();
 
   // 过滤会话列表
@@ -52,10 +73,10 @@ const ChatAgent: React.FC = () => {
   );
 
   const handleSend = async () => {
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() && pendingImages.length === 0) return;
     const userInput = inputValue;
     setInputValue("");
-    await sendMessage(userInput);
+    await sendMessage(userInput, pendingImages);
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -320,9 +341,47 @@ const ChatAgent: React.FC = () => {
                   </span>
                 </Button>
               </label>
-              <Button variant="ghost" size="sm" className="rounded-full">
-                <MoreHorizontal className="h-5 w-5" />
-              </Button>
+              <div className="relative more-menu">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="rounded-full"
+                  onClick={() => setShowMoreMenu(!showMoreMenu)}
+                >
+                  <MoreHorizontal className="h-5 w-5"/>
+                </Button>
+                {showMoreMenu && (
+                  <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50">
+                    <button
+                      className="w-full px-4 py-2 text-left text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center"
+                      onClick={async () => {
+                        setShowMoreMenu(false);
+                        if (confirm('确定要清空整个知识库吗？此操作不可恢复。')) {
+                          try {
+                            const result = await clearKnowledgeBase();
+                            setKbFeedback({
+                              show: true,
+                              success: result.success,
+                              message: result.message,
+                            });
+                            checkKnowledgeBaseStatus();
+                          } catch (error: any) {
+                            setKbFeedback({
+                              show: true,
+                              success: false,
+                              message: error.message || '清空失败',
+                            });
+                          }
+                          setTimeout(() => setKbFeedback(prev => ({ ...prev, show: false })), 3000);
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      清空知识库
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -394,7 +453,23 @@ const ChatAgent: React.FC = () => {
                           <MarkdownRenderer>{message.content.replace(/<think>[\s\S]*?<\/think>/gs, "")}</MarkdownRenderer>
                         </div>
                       ) : (
-                        <MarkdownRenderer>{message.content}</MarkdownRenderer>
+                        <>
+                          {message.images && message.images.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mb-2">
+                              {message.images.map((imgUrl, imgIdx) => (
+                                <img
+                                  key={imgIdx}
+                                  src={imgUrl}
+                                  alt={`图片 ${imgIdx + 1}`}
+                                  className="max-w-[200px] max-h-[200px] object-contain rounded"
+                                  style={{ cursor: 'pointer' }}
+                                  onClick={() => window.open(imgUrl, '_blank')}
+                                />
+                              ))}
+                            </div>
+                          )}
+                          <MarkdownRenderer>{message.content}</MarkdownRenderer>
+                        </>
                       )}
                     </div>
                     {message.role === "user" && (
@@ -448,6 +523,12 @@ const ChatAgent: React.FC = () => {
                     )}
                   </div>
                   <div className="flex items-center mt-1">
+                    {message.fromKnowledgeBase && (
+                      <span className="text-xs px-1.5 py-0.5 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded mr-2 flex items-center">
+                        <Database className="h-3 w-3 mr-0.5" />
+                        知识库
+                      </span>
+                    )}
                     <p className="text-xs text-gray-500 dark:text-gray-400 ml-2">
                       {formatTime(message.timestamp)}
                     </p>
@@ -483,6 +564,42 @@ const ChatAgent: React.FC = () => {
 
         {/* 输入区域 */}
         <div className="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-4">
+          {/* 待发送图片预览 */}
+          {pendingImages.length > 0 && (
+            <div className="mb-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-600 dark:text-gray-300">
+                  待发送图片 ({pendingImages.length})
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearPendingImages}
+                  className="h-6 text-xs text-gray-500 hover:text-red-500"
+                >
+                  <X className="h-3 w-3 mr-1" />
+                  清除全部
+                </Button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {pendingImages.map((url, index) => (
+                  <div key={index} className="relative group">
+                    <img
+                      src={url}
+                      alt={`待发送图片 ${index + 1}`}
+                      className="h-16 w-16 object-cover rounded-lg border border-gray-200 dark:border-gray-600"
+                    />
+                    <button
+                      onClick={() => clearPendingImages()}
+                      className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full h-5 w-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex items-end space-x-2">
             <div className="flex space-x-1">
               {/* 表情选择按钮（预留功能，暂未实现） */}
@@ -492,30 +609,23 @@ const ChatAgent: React.FC = () => {
 
               {/* ============================================
                   图片上传按钮
-                  实现原理：
-                  1. 使用 <label> 标签包裹按钮，使其可点击
-                  2. 内部的 <input type="file"> 实际处理文件选择
-                  3. accept="image/*" 限制只能选择图片文件
-                  4. className="hidden" 隐藏原生的文件选择框
-                  5. onChange 事件获取选中的文件并调用 sendFile 上传
+                  将图片添加到待发送列表
               */}
               <label className="cursor-pointer">
-                {/* hidden 属性隐藏文件输入框，但label仍可触发点击 */}
                 <input
-                  type="file"                  // 文件输入框类型
-                  accept="image/*"             // 限制只能选择图片文件（image/* 匹配所有图片格式）
-                  className="hidden"            // 隐藏原生的文件选择框（用图标按钮代替）
-                  onChange={(e) => {           // 文件选择改变时触发
-                    const file = e.target.files?.[0]; // 获取选择的第一个文件
-                    if (file) {                // 确保文件存在
-                      sendFile(file);          // 调用 sendFile 函数上传文件
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      sendFile(file);
                     }
                   }}
                 />
-                {/* 使用 Button 组件的 asChild 属性，将span的内容作为子元素渲染 */}
                 <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
                   <span>
-                    <Image className="h-5 w-5" />  {/* 图片图标 */}
+                    <Image className="h-5 w-5" />
                   </span>
                 </Button>
               </label>
@@ -562,7 +672,7 @@ const ChatAgent: React.FC = () => {
             </div>
             <Button
               onClick={handleSend}
-              disabled={!inputValue.trim()}
+              disabled={!inputValue.trim() && pendingImages.length === 0}
               className="rounded-full bg-primary hover:bg-primary/90 text-white p-3 transition-all duration-200 disabled:bg-gray-300 disabled:cursor-not-allowed"
             >
               <Send className="h-5 w-5" />

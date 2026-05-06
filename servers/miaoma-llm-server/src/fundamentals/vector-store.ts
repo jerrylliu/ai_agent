@@ -8,6 +8,7 @@ import { Chroma } from '@langchain/community/vectorstores/chroma';
 import { ChromaClient } from 'chromadb';
 import { OllamaEmbeddings } from '@langchain/ollama';
 import { Document } from '@langchain/core/documents';
+import { Embeddings } from '@langchain/core/embeddings';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -16,6 +17,9 @@ interface TextSplitterOptions {
   chunkOverlap: number;
   separators?: string[];
 }
+
+const MAX_CHUNK_SIZE = 256;
+const BATCH_SIZE = 1;
 
 class SimpleTextSplitter {
   private chunkSize: number;
@@ -52,23 +56,43 @@ class SimpleTextSplitter {
 
       if (endIndex >= text.length) {
         endIndex = text.length;
-        chunks.push(text.slice(startIndex, endIndex));
+        const finalChunk = text.slice(startIndex, endIndex);
+        if (finalChunk.length > MAX_CHUNK_SIZE) {
+          const truncated = finalChunk.slice(0, MAX_CHUNK_SIZE);
+          chunks.push(truncated);
+        } else {
+          chunks.push(finalChunk);
+        }
         break;
       }
 
+      let foundSeparator = false;
       for (const separator of this.separators) {
-        const lastSeparatorIndex = text.lastIndexOf(separator, endIndex);
+        if (separator === '') continue;
+        const lastSeparatorIndex = text.lastIndexOf(separator, endIndex - 1);
         if (lastSeparatorIndex > startIndex) {
           endIndex = lastSeparatorIndex + separator.length;
+          foundSeparator = true;
           break;
         }
       }
 
-      chunks.push(text.slice(startIndex, endIndex));
-      startIndex = endIndex - this.chunkOverlap;
+      if (endIndex <= startIndex) {
+        endIndex = startIndex + this.chunkSize;
+      }
 
-      if (this.chunkOverlap > 0 && startIndex < endIndex) {
-        startIndex = endIndex - this.chunkOverlap;
+      let chunk = text.slice(startIndex, endIndex);
+      if (chunk.length > MAX_CHUNK_SIZE) {
+        chunk = chunk.slice(0, MAX_CHUNK_SIZE);
+      }
+
+      chunks.push(chunk);
+
+      const nextStartIndex = endIndex - this.chunkOverlap;
+      if (nextStartIndex > startIndex) {
+        startIndex = nextStartIndex;
+      } else {
+        startIndex = startIndex + 1;
       }
     }
 
@@ -89,7 +113,7 @@ const embeddings = new OllamaEmbeddings({
 
 // 创建文本分割器
 const textSplitter = new SimpleTextSplitter({
-  chunkSize: 500, // 每个文本块的字符数
+  chunkSize: 256, // 每个文本块的字符数
   chunkOverlap: 50, // 相邻块的重叠字符数
   separators: ['\n\n', '\n', '。', '！', '？', '.', '!', '?', ' ', ''], // 分割符（按优先级）
 });
@@ -115,11 +139,37 @@ export async function initializeVectorStore(): Promise<Chroma> {
   }
 
   try {
+    // 首先尝试连接并检查集合是否存在
+    const client = new ChromaClient({ host: 'localhost', port: 8000 });
+    
+    let collectionExists = false;
+    try {
+      await client.getCollection({ name: COLLECTION_NAME });
+      collectionExists = true;
+      console.log('📂 发现已有知识库集合');
+    } catch {
+      collectionExists = false;
+      console.log('📂 知识库集合不存在，将创建新集合');
+    }
+
     // 创建 Chroma 向量存储
-    vectorStore = await Chroma.fromExistingCollection(embeddings, {
-      collectionName: COLLECTION_NAME,
-      url: 'http://localhost:8000',
-    });
+    if (collectionExists) {
+      vectorStore = await Chroma.fromExistingCollection(embeddings, {
+        collectionName: COLLECTION_NAME,
+        url: 'http://localhost:8000',
+      });
+    } else {
+      // 集合不存在，先创建集合
+      await client.createCollection({ 
+        name: COLLECTION_NAME,
+        embeddingFunction: embeddings as any,
+      });
+      console.log('✅ 新知识库集合已创建');
+      vectorStore = await Chroma.fromExistingCollection(embeddings, {
+        collectionName: COLLECTION_NAME,
+        url: 'http://localhost:8000',
+      });
+    }
 
     console.log('✅ 向量数据库初始化完成');
     return vectorStore;
@@ -174,11 +224,35 @@ export async function addDocuments(
     },
   }));
 
-  // 添加到向量存储
-  await store.addDocuments(documents);
+  // 分批添加到向量存储，避免超过上下文长度限制
+  let addedCount = 0;
+  for (let i = 0; i < documents.length; i += BATCH_SIZE) {
+    const batch = documents.slice(i, i + BATCH_SIZE);
+    try {
+      await store.addDocuments(batch);
+      addedCount += batch.length;
+      console.log(`📦 已处理 ${addedCount}/${documents.length} 个文本块`);
+    } catch (error: any) {
+      console.error(`❌ 批量添加失败 (${i}-${i + batch.length}):`, error.message);
+      const isContextError = error.message?.includes('context length') ||
+                            error.message?.includes('context') ||
+                            error.message?.includes('exceeds');
+      if (isContextError) {
+        console.log('⚠️ 检测到上下文长度错误，尝试逐个添加文档...');
+        for (let j = 0; j < batch.length; j++) {
+          try {
+            await store.addDocuments([batch[j]]);
+            addedCount++;
+          } catch (singleError: any) {
+            console.error(`❌ 文档 ${i + j + 1} 添加失败:`, singleError.message);
+          }
+        }
+      }
+    }
+  }
 
-  console.log(`✅ 成功添加 ${splitTexts.length} 个文本块到知识库`);
-  return splitTexts.length;
+  console.log(`✅ 成功添加 ${addedCount} 个文本块到知识库`);
+  return addedCount;
 }
 
 /**
@@ -225,7 +299,7 @@ export async function getAllDocuments(): Promise<Array<{ content: string; metada
   console.log('📋 获取知识库所有文档...');
 
   try {
-    const client = new ChromaClient({ path: 'http://localhost:8000' });
+    const client = new ChromaClient({ host: 'localhost', port: 8000 });
     const collection = await client.getCollection({
       name: COLLECTION_NAME,
     });
@@ -253,7 +327,7 @@ export async function getKnowledgeBaseStats(): Promise<{
   collectionName: string;
 }> {
   try {
-    const client = new ChromaClient({ path: 'http://localhost:8000' });
+    const client = new ChromaClient({ host: 'localhost', port: 8000 });
     const collection = await client.getCollection({
       name: COLLECTION_NAME,
     });
@@ -278,12 +352,29 @@ export async function getKnowledgeBaseStats(): Promise<{
  */
 export async function clearKnowledgeBase(): Promise<void> {
   console.log('⚠️ 即将清空整个知识库...');
-  const store = await initializeVectorStore();
 
   try {
-    // 删除所有文档（过滤条件为空会删除所有）
-    await store.delete({ filter: {} });
-    console.log('✅ 知识库已清空');
+    // 使用 ChromaDB 原生 API 删除整个集合
+    const client = new ChromaClient({ host: 'localhost', port: 8000 });
+    
+    // 检查集合是否存在并删除
+    try {
+      await client.deleteCollection({ name: COLLECTION_NAME });
+      console.log('✅ 知识库集合已删除');
+    } catch (error: any) {
+      if (error.message && error.message.includes('not found')) {
+        console.log('ℹ️ 知识库集合不存在，无需删除');
+      } else {
+        throw error;
+      }
+    }
+
+    // 重新创建空集合（指定嵌入函数）
+    await client.createCollection({ 
+      name: COLLECTION_NAME,
+      embeddingFunction: embeddings as any,
+    });
+    console.log('✅ 已创建新的空知识库集合');
   } catch (error) {
     console.error('❌ 清空知识库失败:', error);
   }

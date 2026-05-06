@@ -18,8 +18,13 @@ export class AppService {
   getHello(): string {
     return 'Hello World!';
   }
-  async prompt(message?: string, history?: Array<{ role: string, content: string }>, res?: Response) {
-    await promptInvoke(message, history, res);
+  async prompt(
+    message?: string,
+    images?: string[],
+    history?: Array<{ role: string, content: string, images?: string[] }>,
+    res?: Response
+  ) {
+    await promptInvoke(message, images, history, res);
   }
   rag(message?: string){
     return ragInvoke(message);

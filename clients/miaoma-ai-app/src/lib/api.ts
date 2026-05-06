@@ -7,6 +7,7 @@ export interface ChatHistoryItem {
   sessionId: string;
   role: 'user' | 'assistant';
   content: string;
+  images?: string[];
 }
 
 export interface ChatHistoryRecord extends ChatHistoryItem {
@@ -52,15 +53,20 @@ export async function saveChatHistory(data: ChatHistoryItem): Promise<void> {
 /**
  * 获取 AI 响应流
  * @param message 用户消息
+ * @param images 用户消息中的图片URL数组
  * @param history 历史消息列表
  * @returns 可读流，包含 AI 响应文本
  * @throws 获取失败时抛出错误
  */
-export async function getAIResponse(message: string, history: Message[] = []): Promise<ReadableStream<string>> {
+export async function getAIResponse(
+  message: string,
+  images: string[] = [],
+  history: Message[] = []
+): Promise<ReadableStream<string>> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, history }),
+    body: JSON.stringify({ message, images, history }),
   });
   if (!response.ok) {
     throw new Error('获取 AI 响应失败');
@@ -313,5 +319,19 @@ export async function searchKnowledgeBase(
       score: number;
     }>;
     context: string;
+  }>(response);
+}
+
+export async function clearKnowledgeBase(): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SEARCH.replace('/search', '/clear'), {
+    method: 'DELETE',
+  });
+
+  return handleResponse<{
+    success: boolean;
+    message: string;
   }>(response);
 }

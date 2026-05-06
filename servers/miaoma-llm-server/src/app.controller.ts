@@ -16,15 +16,19 @@ export class AppController {
 
   // 定义一个 POST 路由 'prompt'，用于处理提示相关的请求
   @Post('prompt')
-  // prompt 方法接收请求体中的 message 和 history，并调用 appService.prompt 方法
-  async prompt(@Body() body: { message?: string, history?: Array<{ role: string, content: string }> }, @Res() res:Response) {
-    // 设置响应头，支持流式返回
+  async prompt(
+    @Body() body: {
+      message?: string,
+      images?: string[],
+      history?: Array<{ role: string, content: string, images?: string[] }>
+    },
+    @Res() res: Response
+  ) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    
-    // 调用 appService 的 prompt 方法
-    await this.appService.prompt(body.message, body.history, res);
+
+    await this.appService.prompt(body.message, body.images, body.history, res);
   }
 
   // 定义一个 GET 路由 'rag'，用于处理 RAG（检索增强生成）相关的请求
@@ -260,6 +264,28 @@ export class AppController {
       return {
         success: false,
         message: `获取文档列表失败: ${error.message}`,
+      };
+    }
+  }
+
+  // 路由：DELETE /knowledge/clear
+  // 功能：清空知识库所有数据
+  // ============================================
+  @Delete('knowledge/clear')
+  async clearKnowledgeBase() {
+    try {
+      const { clearKnowledgeBase } = await import('./fundamentals/vector-store.js');
+      await clearKnowledgeBase();
+
+      return {
+        success: true,
+        message: '知识库已清空',
+      };
+    } catch (error: any) {
+      console.error('清空知识库失败:', error);
+      return {
+        success: false,
+        message: `清空知识库失败: ${error.message}`,
       };
     }
   }

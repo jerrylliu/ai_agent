@@ -11,8 +11,10 @@ export interface Session {
 export interface Message {
   id: string;
   content: string;
+  images?: string[];
   role: 'user' | 'assistant';
   timestamp: Date;
+  fromKnowledgeBase?: boolean;
 }
 
 export interface HistoryItem {

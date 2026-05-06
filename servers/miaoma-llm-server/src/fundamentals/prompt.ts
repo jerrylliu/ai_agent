@@ -9,6 +9,9 @@ import * as fs from 'fs';
 import * as https from 'https';
 import * as http from 'http';
 
+// 导入 RAG 服务
+import { retrieveFromKnowledgeBase } from './rag-service';
+
 // 创建 ChatOllama 实例，配置使用的本地模型为 minicpm1
 
 const llm = new ChatOllama({
@@ -223,6 +226,28 @@ async function downloadImageAsBase64(imageUrl: string): Promise<string> {
 }
 
 /**
+ * 处理图片 URL，转换为适合多模态模型的数据格式
+ * 本地图片会下载并转为 base64，远程图片保持原 URL
+ * @param imageUrl 图片的 URL 地址
+ * @returns 处理后的图片 URL（base64 或原始 URL）
+ */
+async function processImageUrl(imageUrl: string): Promise<string> {
+  if (imageUrl.startsWith('http://localhost:3000/files/') ||
+      imageUrl.startsWith('https://localhost:3000/files/')) {
+    console.log('📷 检测到本地图片，开始下载:', imageUrl);
+    try {
+      const base64DataUrl = await downloadImageAsBase64(imageUrl);
+      console.log('✅ 本地图片转换成功');
+      return base64DataUrl;
+    } catch (error) {
+      console.error('❌ 本地图片下载失败，使用原始 URL:', error);
+      return imageUrl;
+    }
+  }
+  return imageUrl;
+}
+
+/**
  * 将 Markdown 格式的消息转换为 LangChain 多模态消息格式
  * 支持的图片格式：
  * - Markdown 图片：![alt](url)
@@ -329,14 +354,60 @@ async function createUserMessage(promptText: string): Promise<HumanMessage> {
   });
 }
 
-export const promptTemplate = async (promptText?: string, history?: Array<{ role: string, content: string }>, res?: Response) => {
+export const promptTemplate = async (
+  promptText?: string,
+  images?: string[],
+  history?: Array<{ role: string, content: string, images?: string[] }>,
+  res?: Response
+) => {
   const conversions: Array<SystemMessage | HumanMessage | AIMessage> = [];
 
-  // 添加系统提示词（必须放在最前面）
-  conversions.push(new SystemMessage(SYSTEM_PROMPT));
+  // ==================== 步骤1: 从知识库检索相关文档 ====================
+  let retrievedContext = '';
+  let hasRetrievedContent = false;
+  let ragContextCount = 0;
+  
+  if (promptText && promptText.trim()) {
+    try {
+      console.log('🔍 正在从知识库检索相关文档...');
+      const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);
+      
+      if (retrieval.results && retrieval.results.length > 0) {
+        hasRetrievedContent = true;
+        ragContextCount = retrieval.results.length;
+        retrievedContext = retrieval.context;
+        console.log(`✅ 知识库检索完成，找到 ${retrieval.results.length} 个相关文档`);
+      } else {
+        console.log('ℹ️ 知识库中没有找到相关内容');
+      }
+    } catch (error) {
+      console.warn('⚠️ 知识库检索失败（可能未启动）:', error.message);
+    }
+  }
 
-  // 添加历史消息（限制为最近 2 条，避免上下文过长）
-  // 注意：对于视觉模型，每条消息都包含图片 base64，上下文会快速增长
+  // ==================== 步骤2: 构建系统提示词 ====================
+  let systemPrompt = SYSTEM_PROMPT;
+  
+  if (hasRetrievedContent) {
+    // 如果有检索到的内容，添加 RAG 指令
+    systemPrompt = `你是一个智能助手，擅长根据提供的参考文档回答问题。
+
+【核心指令】：
+1. 首先参考提供的知识库内容进行回答
+2. 如果知识库内容足够回答问题，优先使用知识库信息
+3. 如果知识库内容不足或不相关，可以结合你的内部知识补充
+4. 如果完全无法回答，请明确说明
+
+【参考文档】：
+${retrievedContext}
+
+---
+
+${SYSTEM_PROMPT}`;
+  }
+
+  conversions.push(new SystemMessage(systemPrompt));
+
   const MAX_HISTORY = 2;
   const recentHistory = history ? history.slice(-MAX_HISTORY) : [];
 
@@ -344,8 +415,19 @@ export const promptTemplate = async (promptText?: string, history?: Array<{ role
     console.log(`📜 添加最近 ${recentHistory.length} 条历史消息（总共限制 ${MAX_HISTORY} 条）`);
     for (const msg of recentHistory) {
       if (msg.role === 'user') {
-        // 历史消息也需要支持多模态格式
-        const content = await convertToMultimodalContent(msg.content);
+        let content: any;
+        if (msg.images && msg.images.length > 0) {
+          content = [];
+          for (const imgUrl of msg.images) {
+            const processedUrl = await processImageUrl(imgUrl);
+            content.push({ type: 'image_url', image_url: { url: processedUrl } });
+          }
+          if (msg.content) {
+            content.unshift({ type: 'text', text: msg.content });
+          }
+        } else {
+          content = await convertToMultimodalContent(msg.content);
+        }
         conversions.push(new HumanMessage({ content }));
       } else if (msg.role === 'assistant') {
         conversions.push(new AIMessage(msg.content));
@@ -353,10 +435,22 @@ export const promptTemplate = async (promptText?: string, history?: Array<{ role
     }
   }
 
-  // 添加当前消息（支持多模态内容）
-  const userMessage = await createUserMessage(promptText || '');
-  // console.log('📨 用户消息内容:', JSON.stringify(userMessage.content, null, 2));
-  conversions.push(userMessage);
+  // ==================== 步骤3: 构建用户消息 ====================
+  let userContent: any;
+  if (images && images.length > 0) {
+    userContent = [];
+    if (promptText) {
+      userContent.push({ type: 'text', text: promptText });
+    }
+    for (const imgUrl of images) {
+      const processedUrl = await processImageUrl(imgUrl);
+      userContent.push({ type: 'image_url', image_url: { url: processedUrl } });
+    }
+  } else {
+    userContent = await convertToMultimodalContent(promptText || '');
+  }
+
+  conversions.push(new HumanMessage({ content: userContent }));
 
   console.log('📋 完整的对话消息列表:');
   console.log('消息数量:', conversions.length);
@@ -371,7 +465,7 @@ export const promptTemplate = async (promptText?: string, history?: Array<{ role
           if (block.type === 'text') {
             console.log(`    块[${i}]: 文本 - "${block.text?.substring(0, 50)}..."`);
           } else if (block.type === 'image_url') {
-            console.log(`    块[${i}]: 图片 - ${block.image_url?.substring(0, 50)}...`);
+            console.log(`    块[${i}]: 图片 - ${block.image_url?.url?.substring(0, 50)}...`);
           }
         });
       } else {
@@ -385,14 +479,29 @@ export const promptTemplate = async (promptText?: string, history?: Array<{ role
   if (res) {
     // 流式调用
     console.log('🚀 开始流式调用模型...');
+    
+    // RAG 元数据
+    const ragMetadata = {
+      usedKnowledgeBase: hasRetrievedContent,
+      contextCount: hasRetrievedContent ? ragContextCount : 0,
+    };
+    const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]`;
+    
     const stream = await llm.stream(conversions);
     let chunkCount = 0;
+    let isFirstChunk = true;
     for await (const chunk of stream) {
       chunkCount++;
       const content = chunk.content?.toString() || '';
       const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
       if (cleanContent) {
-        res.write(cleanContent);
+        // 第一个块附加 RAG 元数据
+        if (isFirstChunk) {
+          res.write(metadataPrefix + cleanContent);
+          isFirstChunk = false;
+        } else {
+          res.write(cleanContent);
+        }
         process.stdout.write(cleanContent);
       }
     }

@@ -25,6 +25,7 @@ export function useChat() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
   const [knowledgeBaseStatus, setKnowledgeBaseStatus] = useState<{
     status: 'ready' | 'empty' | 'error' | 'unknown';
     message: string;
@@ -127,24 +128,27 @@ export function useChat() {
     }
   };
 
-  const sendMessage = async (userInput: string) => {
-    if (!userInput.trim()) return;
+  const sendMessage = async (userInput: string, images: string[] = []) => {
+    if (!userInput.trim() && images.length === 0) return;
 
     const userMessage: Message = {
       id: generateId(),
       content: userInput,
+      images: images.length > 0 ? images : undefined,
       role: 'user',
       timestamp: new Date(),
     };
 
     setMessages(prev => [...prev, userMessage]);
     setIsTyping(true);
+    setPendingImages([]);
 
     try {
       await saveChatHistory({
         sessionId: currentSessionId,
         role: 'user',
         content: userInput,
+        images,
       });
 
       // 检查是否是第一条消息（除了默认消息）
@@ -164,28 +168,48 @@ export function useChat() {
 
       // 准备历史消息（排除默认消息）
       const chatHistory = messages.filter(msg => msg.id !== DEFAULT_MESSAGE.id);
-      
+
       // 创建一个临时的助手消息 ID
       const assistantMessageId = generateId();
+      let ragMetadata = { usedKnowledgeBase: false, contextCount: 0 };
       const tempAssistantMessage: Message = {
         id: assistantMessageId,
         content: '',
         role: 'assistant',
         timestamp: new Date(),
+        fromKnowledgeBase: false,
       };
       setMessages(prev => [...prev, tempAssistantMessage]);
 
-      // 处理流式响应
-      const stream = await getAIResponse(userInput, chatHistory);
+      // 处理流式响应（传入图片）
+      const stream = await getAIResponse(userInput, images, chatHistory);
       const reader = stream.getReader();
       let fullResponse = '';
+      let metadataParsed = false;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        
+        // 检查是否是 RAG 元数据前缀
+        if (!metadataParsed && value.startsWith('[RAG_METADATA:')) {
+          try {
+            const jsonStr = value.slice('[RAG_METADATA:'.length);
+            ragMetadata = JSON.parse(jsonStr);
+            tempAssistantMessage.fromKnowledgeBase = ragMetadata.usedKnowledgeBase;
+            setMessages(prev => prev.map(msg =>
+              msg.id === assistantMessageId ? { ...msg, fromKnowledgeBase: ragMetadata.usedKnowledgeBase } : msg
+            ));
+            metadataParsed = true;
+          } catch (e) {
+            console.error('解析 RAG 元数据失败:', e);
+          }
+          continue;
+        }
+        
         fullResponse += value;
         // 更新临时消息的内容
-        setMessages(prev => prev.map(msg => 
+        setMessages(prev => prev.map(msg =>
           msg.id === assistantMessageId ? { ...msg, content: fullResponse } : msg
         ));
       }
@@ -219,55 +243,75 @@ export function useChat() {
    * @param file 用户选择的文件（可以是图片或其他文件）
    *
    * 处理流程：
-   * 1. 设置加载状态（显示 AI 正在思考）
-   * 2. 调用 uploadFile API 上传文件到服务器
-   * 3. 根据文件类型生成不同的 Markdown 消息格式
-   *    - 图片：![图片](URL) - 会在聊天中直接显示图片
-   *    - 其他文件：[文件名](URL) - 会显示为可点击的链接
-   * 4. 调用 sendMessage 将文件消息发送给 AI
-   * 5. 捕获并处理上传失败的情况
+   * 1. 上传文件到服务器
+   * 2. 如果是图片，加入待发送图片列表
+   * 3. 如果是非图片文件，将其作为链接文本消息发送
    */
   const sendFile = async (file: File) => {
-    // 设置 isTyping 为 true，显示 AI 正在处理的加载状态
-    setIsTyping(true);
-
     try {
-      // 调用 uploadFile 函数上传文件到服务器
-      // uploadFile 会返回 { url: string }，包含文件的访问地址
       const uploadResult = await uploadFile(file);
 
-      // 根据文件类型生成不同的 Markdown 消息格式
-      // file.type.startsWith('image/') 判断是否为图片类型
-      // 图片使用 Markdown 图片语法：![替代文本](图片URL)
-      // 其他文件使用 Markdown 链接语法：[显示文本](文件URL)
-      const fileMessage = file.type.startsWith('image/')
-        ? `![图片](${uploadResult.url})` // 图片消息：会在聊天界面直接渲染为图片
-        : `[${file.name}](${uploadResult.url})`; // 文件消息：显示为可点击的下载链接
+      if (file.type.startsWith('image/')) {
+        setPendingImages(prev => [...prev, uploadResult.url]);
+      } else {
+        const fileMessage: Message = {
+          id: generateId(),
+          content: `[${file.name}](${uploadResult.url})`,
+          role: 'user',
+          timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, fileMessage]);
+        setIsTyping(true);
 
-      // 调用 sendMessage 函数，将文件消息（图片链接/文件链接）发送给 AI
-      // AI 会收到包含文件 URL 的消息，可以访问和分析这个文件
-      await sendMessage(fileMessage);
+        try {
+          const chatHistory = messages.filter(msg => msg.id !== DEFAULT_MESSAGE.id);
+          const assistantMessageId = generateId();
+          const tempAssistantMessage: Message = {
+            id: assistantMessageId,
+            content: '',
+            role: 'assistant',
+            timestamp: new Date(),
+          };
+          setMessages(prev => [...prev, tempAssistantMessage]);
 
+          const stream = await getAIResponse(fileMessage.content, [], chatHistory);
+          const reader = stream.getReader();
+          let fullResponse = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            fullResponse += value;
+            setMessages(prev => prev.map(msg =>
+              msg.id === assistantMessageId ? { ...msg, content: fullResponse } : msg
+            ));
+          }
+
+          await saveChatHistory({
+            sessionId: currentSessionId,
+            role: 'assistant',
+            content: fullResponse,
+          });
+        } catch (error) {
+          console.error('处理文件消息失败:', error);
+        } finally {
+          setIsTyping(false);
+        }
+      }
     } catch (error) {
-      // 捕获上传过程中的错误（如网络错误、服务器错误等）
       console.error('上传文件失败:', error);
-
-      // 创建错误消息对象，用于在聊天界面显示错误提示
       const errorMessage: Message = {
-        id: generateId(), // 生成唯一的消息 ID
-        content: '文件上传失败，请重试', // 错误提示文本
-        role: 'assistant', // 角色为助手（AI 发送的）
-        timestamp: new Date(), // 错误发生的时间戳
+        id: generateId(),
+        content: '文件上传失败，请重试',
+        role: 'assistant',
+        timestamp: new Date(),
       };
-
-      // 将错误消息添加到消息列表中，在界面显示给用户
       setMessages(prev => [...prev, errorMessage]);
-
-    } finally {
-      // 无论成功还是失败，最后都会执行 finally 块
-      // 确保加载状态被重置为 false，关闭加载动画
-      setIsTyping(false);
     }
+  };
+
+  const clearPendingImages = () => {
+    setPendingImages([]);
   };
 
   const updateMessage = async (messageId: string, content: string) => {
@@ -352,8 +396,10 @@ export function useChat() {
     isLoading,
     messagesEndRef,
     knowledgeBaseStatus,
+    pendingImages,
     sendMessage,
     sendFile,
+    clearPendingImages,
     uploadToKnowledgeBase: uploadToKnowledgeBaseFromChat,
     checkKnowledgeBaseStatus,
     updateMessage,
