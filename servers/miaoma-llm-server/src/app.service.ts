@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { promptTemplate as promptInvoke } from './fundamentals/prompt';
-import { main as ragInvoke } from './fundamentals/rag';
+import { ragWithLLM } from './fundamentals/rag-service';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { Response } from 'express';
@@ -27,7 +27,7 @@ export class AppService {
     await promptInvoke(message, images, history, res);
   }
   rag(message?: string){
-    return ragInvoke(message);
+    return ragWithLLM(message || '');
   }
 
   // 保存对话记录

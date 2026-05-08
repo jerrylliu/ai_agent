@@ -225,18 +225,20 @@ export const promptTemplate = async (
   let retrievedContext = '';
   let hasRetrievedContent = false;
   let ragContextCount = 0;
+  let retrievalResults: Array<{ content: string; metadata: any; score: number }> = [];
   
   // 有图片时不检索知识库，避免上下文超限（图片已经包含大量信息）
   if (promptText && promptText.trim() && (!images || images.length === 0)) {
     try {
       console.log('🔍 正在从知识库检索相关文档...');
-      // 只检索 1 个最相关的文档，避免上下文超限
-      const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 1);
+      // 检索最多 3 个最相关的文档
+      const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);
       
       if (retrieval.results && retrieval.results.length > 0) {
         hasRetrievedContent = true;
         ragContextCount = retrieval.results.length;
         retrievedContext = retrieval.context;
+        retrievalResults = retrieval.results;
         console.log(`✅ 知识库检索完成，找到 ${retrieval.results.length} 个相关文档`);
       } else {
         console.log('ℹ️ 知识库中没有找到相关内容');
@@ -248,31 +250,33 @@ export const promptTemplate = async (
 
   // ==================== 步骤2: 构建系统提示词 ====================
   let systemPrompt = SYSTEM_PROMPT;
-  
-  if (hasRetrievedContent) {
-    // 如果有检索到的内容，严格要求基于知识库回答
-    systemPrompt = `【重要】你必须严格按照以下规则回答：
 
-=== 回答规则（必须遵守）===
-1. 你必须仔细阅读并严格按照【参考资料】中的内容回答问题
-2. 如果【参考资料】包含回答所需的信息，你必须从【参考资料】中提取相关信息进行回答
-3. 你必须使用【参考资料】中的原话或基于【参考资料】进行总结
-4. 你必须禁止编造、修改或补充【参考资料】中不存在的信息
-5. 如果【参考资料】中没有相关信息，你必须明确回复"根据提供的信息无法回答该问题"
+  if (hasRetrievedContent) {
+    const docList = retrievalResults
+      .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
+      .join('\n\n');
+
+    systemPrompt = `你是一个问答助手。请仔细阅读以下参考资料，然后回答用户问题。
 
 === 参考资料 ===
-${retrievedContext}
+${docList}
 === 参考资料结束 ===
 
-【你的基础角色】：
-${SYSTEM_PROMPT}`;
+回答要求：
+1. 只使用参考资料中的信息回答，不要编造内容
+2. 回答时在括号内标注参考来源，格式为：（【文档 X】）
+3. 如果参考资料中没有任何相关信息，请回复"抱歉，知识库中没有找到相关内容"
+
+【用户问题】：${promptText}
+【回答】：`;
   }
 
   conversions.push(new SystemMessage(systemPrompt));
 
-  // 有图片时不用历史记录，避免上下文超限
-  const MAX_HISTORY = (images && images.length > 0) ? 0 : 1;
-  const recentHistory = history ? history.slice(-MAX_HISTORY) : [];
+  // 有知识库检索结果时不用 history，避免历史 hallucinated 内容干扰
+  // 无检索结果时最多用 1 条 history
+  const MAX_HISTORY = hasRetrievedContent ? 0 : ((images && images.length > 0) ? 0 : 1);
+  const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
 
   if (recentHistory.length > 0) {
     console.log(`📜 添加最近 ${recentHistory.length} 条历史消息（总共限制 ${MAX_HISTORY} 条）`);

@@ -33,10 +33,9 @@ export class AppController {
 
   // 定义一个 GET 路由 'rag'，用于处理 RAG（检索增强生成）相关的请求
   @Get('rag')
-  // rag 方法接收查询参数中的 message，并调用 appService.rag 方法（无返回值）
+  // rag 方法接收查询参数中的 message，并调用 appService.rag 方法
   rag(@Query() { message }: { message?: string }) {
-    // 调用 appService 的 rag 方法，不返回结果
-    this.appService.rag(message);
+    return this.appService.rag(message);
   }
 
   // 定义根路径的 GET 路由，返回问候语

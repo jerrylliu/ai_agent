@@ -96,7 +96,7 @@ export async function getAIResponse(
           buffer += value;
 
           if (!metadataExtracted) {
-            const metadataMatch = buffer.match(/^\[RAG_METADATA:(\{.*?\})\]/);
+            const metadataMatch = buffer.match(/^\[RAG_METADATA:(\{[^}]*\})\]/);
             if (metadataMatch) {
               metadataExtracted = true;
               try {

@@ -30,9 +30,9 @@ const embeddings = new OllamaEmbeddings({
 
 // 创建文本分割器
 const textSplitter = new RecursiveCharacterTextSplitter({
-  chunkSize: 800, // 每个文本块的字符数
-  chunkOverlap: 200, // 相邻块的重叠字符数
-  separators: ['\n\n', '\n', '。', '！', '？', '.', '!', '?', ' ', ''], // 分割符（按优先级）
+  chunkSize: 256,
+  chunkOverlap: 50,
+  separators: ['\n\n', '\n', '。', '！', '？', '.', '!', '?', ' ', ''],
 });
 
 // 向量存储实例（单例）
@@ -50,12 +50,12 @@ const BM25_K1 = 1.5;
 const BM25_B = 0.75;
 
 // 混合搜索参数
-const RRF_K = 60; // RRF 融合参数，越大越平衡
+const RRF_K = 10; // RRF 融合参数，越小越重视各来源的排名差异
 
 /**
  * 初始化 BM25 索引
  */
-function initializeBM25Index(): MiniSearch {
+async function initializeBM25Index(): Promise<MiniSearch> {
   if (bm25Index) {
     return bm25Index;
   }
@@ -71,7 +71,7 @@ function initializeBM25Index(): MiniSearch {
     },
   });
 
-  loadBM25Index();
+  await loadBM25Index();
   return bm25Index;
 }
 
@@ -85,8 +85,8 @@ async function loadBM25Index(): Promise<void> {
       return;
     }
     const data = JSON.parse(fs.readFileSync(BM25_INDEX_PATH, 'utf-8'));
-    if (bm25Index && data) {
-      bm25Index.addAll(data.documents);
+    if (bm25Index && data?.index?.documents) {
+      bm25Index.addAll(data.index.documents);
       bm25DocumentStore = new Map(Object.entries(data.documentStore || {}));
       console.log(`✅ 已加载 BM25 索引，包含 ${bm25Index.documentCount} 个文档`);
     }
@@ -104,7 +104,7 @@ async function saveBM25Index(): Promise<void> {
       fs.mkdirSync(PERSIST_DIR, { recursive: true });
     }
     const data = {
-      documents: bm25Index ? bm25Index.toJSON() : [],
+      index: bm25Index ? bm25Index.toJSON() : null,
       documentStore: Object.fromEntries(bm25DocumentStore),
     };
     fs.writeFileSync(BM25_INDEX_PATH, JSON.stringify(data));
@@ -116,13 +116,13 @@ async function saveBM25Index(): Promise<void> {
 /**
  * 添加文档到 BM25 索引
  */
-function addToBM25Index(
+async function addToBM25Index(
   id: string,
   content: string,
   metadata: any
-): void {
+): Promise<void> {
   if (!bm25Index) {
-    initializeBM25Index();
+    await initializeBM25Index();
   }
 
   bm25Index!.add({
@@ -132,7 +132,7 @@ function addToBM25Index(
   });
 
   bm25DocumentStore.set(id, { content, metadata });
-  saveBM25Index();
+  await saveBM25Index();
 }
 
 /**
@@ -153,7 +153,7 @@ function deleteFromBM25Index(id: string): void {
 /**
  * 清空 BM25 索引
  */
-function clearBM25Index(): void {
+async function clearBM25Index(): Promise<void> {
   bm25Index = null;
   bm25DocumentStore.clear();
   try {
@@ -163,7 +163,7 @@ function clearBM25Index(): void {
   } catch (error) {
     console.error('❌ 删除 BM25 索引文件失败:', error);
   }
-  initializeBM25Index();
+  await initializeBM25Index();
 }
 
 /**
@@ -171,13 +171,13 @@ function clearBM25Index(): void {
  */
 async function rebuildBM25Index(): Promise<void> {
   console.log('🔄 正在重建 BM25 索引...');
-  clearBM25Index();
+  await clearBM25Index();
 
   const docs = await getAllDocuments();
-  docs.forEach((doc, i) => {
+  for (const [i, doc] of docs.entries()) {
     const id = `doc_${i}`;
-    addToBM25Index(id, doc.content, doc.metadata);
-  });
+    await addToBM25Index(id, doc.content, doc.metadata);
+  }
 
   console.log(`✅ BM25 索引重建完成，共 ${docs.length} 个文档`);
 }
@@ -325,21 +325,29 @@ export async function addDocuments(
 
   console.log(`✅ 成功添加 ${addedCount} 个文本块到知识库`);
 
-  // 添加到 BM25 索引
-  initializeBM25Index();
-  let bm25AddedCount = 0;
-  allChunks.forEach((chunk, i) => {
-    const id = `doc_${Date.now()}_${i}`;
-    const chunkMetadata = {
-      ...metadata[0],
-      chunk_index: i,
-      source: metadata[0]?.source || 'unknown',
-      doc_type: metadata[0]?.docType || 'general',
-    };
-    addToBM25Index(id, chunk, chunkMetadata);
-    bm25AddedCount++;
-  });
-  console.log(`🔍 已添加 ${bm25AddedCount} 个文档到 BM25 索引`);
+  if (addedCount === 0) {
+    throw new Error('所有文本块添加失败，ChromaDB 可能未启动或不可用');
+  }
+
+  // 添加到 BM25 索引（失败不影响主流程）
+  try {
+    await initializeBM25Index();
+    let bm25AddedCount = 0;
+    for (const [i, chunk] of allChunks.entries()) {
+      const id = `doc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}_${i}`;
+      const chunkMetadata = {
+        ...metadata[0],
+        chunk_index: i,
+        source: metadata[0]?.source || 'unknown',
+        doc_type: metadata[0]?.docType || 'general',
+      };
+      await addToBM25Index(id, chunk, chunkMetadata);
+      bm25AddedCount++;
+    }
+    console.log(`🔍 已添加 ${bm25AddedCount} 个文档到 BM25 索引`);
+  } catch (bm25Error: any) {
+    console.warn('⚠️ BM25 索引添加失败，不影响文档存储:', bm25Error.message);
+  }
 
   return addedCount;
 }
@@ -375,11 +383,12 @@ export async function searchKnowledgeBase(
   const store = await initializeVectorStore();
 
   const prefixedQuery = QUERY_PREFIX + query;
+
   console.log(`🔍 搜索知识库: "${query}"`);
+  console.log(`   📝 带前缀查询: "${prefixedQuery.substring(0, 80)}..."`);
   if (filter) {
     console.log(`   📋 过滤条件: ${JSON.stringify(filter)}`);
   }
-  console.log(`   (带前缀查询: "${prefixedQuery}")`);
 
   try {
     const results = await store.similaritySearchWithScore(prefixedQuery, topK * 2, filter);
@@ -432,16 +441,14 @@ export async function hybridSearchKnowledgeBase(
   console.log('='.repeat(50));
 
   const store = await initializeVectorStore();
-  initializeBM25Index();
-
-  const prefixedQuery = QUERY_PREFIX + query;
+  await initializeBM25Index();
 
   // 1. 向量检索
   let vectorResults: Array<{ content: string; metadata: any; score: number; rank: number }> = [];
   try {
-    const rawVectorResults = await store.similaritySearchWithScore(prefixedQuery, topK * 3, filter);
+    const rawVectorResults = await store.similaritySearchWithScore(QUERY_PREFIX + query, topK * 3, filter);
     vectorResults = rawVectorResults
-      .filter(([_, score]) => score <= 1.0)
+      .filter(([_, score]) => score <= 0.7)
       .slice(0, topK * 2)
       .map(([doc, score], rank) => ({
         content: doc.pageContent,
@@ -464,7 +471,7 @@ export async function hybridSearchKnowledgeBase(
       prefix: true,
     });
 
-    bm25Results = searchResults.slice(0, topK * 2).map((result, rank) => {
+    bm25Results = searchResults.slice(0, topK * 3).map((result, rank) => {
       const stored = bm25DocumentStore.get(result.id);
       return {
         content: stored?.content || result.content || '',
@@ -473,6 +480,26 @@ export async function hybridSearchKnowledgeBase(
         rank: rank + 1,
       };
     });
+
+    // 应用元数据过滤到 BM25 结果
+    if (filter) {
+      const beforeFilter = bm25Results.length;
+      bm25Results = bm25Results.filter((result) => {
+        for (const [key, value] of Object.entries(filter)) {
+          if (result.metadata?.[key] !== value) {
+            return false;
+          }
+        }
+        return true;
+      });
+      console.log(`📋 BM25 过滤: ${beforeFilter} -> ${bm25Results.length} 个结果 (filter: ${JSON.stringify(filter)})`);
+    }
+
+    // 重新分配 rank（过滤后）
+    bm25Results = bm25Results.slice(0, topK * 2).map((result, rank) => ({
+      ...result,
+      rank: rank + 1,
+    }));
 
     console.log(`📊 BM25 检索: ${bm25Results.length} 个结果`);
   } catch (error: any) {
@@ -491,7 +518,7 @@ export async function hybridSearchKnowledgeBase(
 
   // 添加向量结果
   vectorResults.forEach((result) => {
-    const key = result.content.substring(0, 100);
+    const key = `${result.metadata?.source}_${result.metadata?.chunk_index}`;
     const rrfScore = vectorWeight / (RRF_K + result.rank);
     const existing = scoreMap.get(key);
     if (existing) {
@@ -514,7 +541,7 @@ export async function hybridSearchKnowledgeBase(
 
   // 添加 BM25 结果
   bm25Results.forEach((result) => {
-    const key = result.content.substring(0, 100);
+    const key = `${result.metadata?.source}_${result.metadata?.chunk_index}`;
     const rrfScore = bm25Weight / (RRF_K + result.rank);
     const existing = scoreMap.get(key);
     if (existing) {
@@ -660,7 +687,7 @@ export async function clearKnowledgeBase(): Promise<void> {
     console.log('✅ 已创建新的空知识库集合');
 
     // 清空 BM25 索引
-    clearBM25Index();
+    await clearBM25Index();
     console.log('✅ BM25 索引已清空');
   } catch (error) {
     console.error('❌ 清空知识库失败:', error);
@@ -711,7 +738,6 @@ export async function debugSearch(
   minSimilarity: number = 0.4
 ): Promise<{
   originalQuery: string;
-  prefixedQuery: string;
   rawResults: Array<{
     content: string;
     score: number;
@@ -724,15 +750,12 @@ export async function debugSearch(
   }>;
 }> {
   const store = await initializeVectorStore();
-  const prefixedQuery = QUERY_PREFIX + query;
-
   console.log('='.repeat(50));
   console.log('🔍 调试搜索流程');
   console.log('='.repeat(50));
   console.log(`原始查询: "${query}"`);
-  console.log(`带前缀查询: "${prefixedQuery}"`);
 
-  const results = await store.similaritySearchWithScore(prefixedQuery, topK * 3);
+  const results = await store.similaritySearchWithScore(query, topK * 3);
 
   console.log(`\n📊 原始搜索结果: ${results.length} 个`);
   results.forEach(([doc, score], i) => {
@@ -742,10 +765,10 @@ export async function debugSearch(
     console.log(`元数据: ${JSON.stringify(doc.metadata)}`);
   });
   const filtered = results
-    .filter(([_, score]) => score >= minSimilarity)
+    .filter(([_, score]) => score <= minSimilarity)
     .slice(0, topK);
 
-  console.log(`\n✅ 通过阈值(${minSimilarity})过滤后: ${filtered.length} 个`);
+  console.log(`\n✅ 通过阈值(score<=${minSimilarity})过滤后: ${filtered.length} 个`);
 
   const rawResults = results.map(([doc, score]) => ({
     content: doc.pageContent,
@@ -761,7 +784,6 @@ export async function debugSearch(
 
   return {
     originalQuery: query,
-    prefixedQuery,
     rawResults,
     filteredResults,
   };

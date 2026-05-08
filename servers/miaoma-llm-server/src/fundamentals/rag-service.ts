@@ -3,8 +3,8 @@
  * 完整流程：上传文档 → 解析 → 向量化 → 存储 → 检索 → 生成
  */
 
-import { addDocuments, searchKnowledgeBase, hybridSearchKnowledgeBase, getKnowledgeBaseStats } from './vector-store';
-import { parseDocument, getMimeType, splitIntoChunks } from './document-parser';
+import { addDocuments, hybridSearchKnowledgeBase, getKnowledgeBaseStats } from './vector-store';
+import { parseDocument, getMimeType } from './document-parser';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { Response } from 'express';
@@ -69,26 +69,25 @@ export async function handleDocumentUpload(file: any): Promise<{
 
     console.log(`✂️ 文档解析完成，字符数: ${textContent.length}`);
 
-    // 分割文本
-    const chunks = splitIntoChunks(textContent, 500, 50);
-    console.log(`📑 文本分割完成，共 ${chunks.length} 个块`);
-
-    // 添加到知识库
+    // 添加到知识库（addDocuments 内部会用 RecursiveCharacterTextSplitter 统一切分）
     const metadata = {
       source: originalName,
       uploadTime: new Date().toISOString(),
       mimeType: mimeType,
-      chunkCount: chunks.length,
     };
 
-    const docCount = await addDocuments(chunks, [metadata]);
+    const docCount = await addDocuments([textContent], [metadata]);
 
     if (tempFilePath !== filePath) {
       fs.unlinkSync(tempFilePath);
     }
 
-    // 清理上传的文件（可选，保留原始文件以便审计）
-    // fs.unlinkSync(filePath);
+    if (docCount === 0) {
+      return {
+        success: false,
+        message: `文档 "${originalName}" 切片失败，请检查 ChromaDB 服务是否正常运行`,
+      };
+    }
 
     return {
       success: true,
@@ -121,10 +120,10 @@ export async function retrieveFromKnowledgeBase(
   context: string;
   hasResults: boolean;
 }> {
-  const results = await searchKnowledgeBase(query, topK, 1.0, filter);
+  const results = await hybridSearchKnowledgeBase(query, topK, 0.6, 0.4, filter);
 
   const context = results
-    .map((r, i) => `[文档 ${i + 1}] ${r.content}`)
+    .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
     .join('\n\n');
 
   return {
@@ -159,7 +158,7 @@ export async function hybridRetrieveFromKnowledgeBase(
   const results = await hybridSearchKnowledgeBase(query, topK, vectorWeight, bm25Weight, filter);
 
   const context = results
-    .map((r, i) => `[文档 ${i + 1}] ${r.content}`)
+    .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
     .join('\n\n');
 
   return {
@@ -169,7 +168,6 @@ export async function hybridRetrieveFromKnowledgeBase(
     hasResults: results.length > 0,
   };
 }
-
 /**
  * 使用 RAG 进行问答
  * 结合检索到的文档和 LLM 生成回答

@@ -116,8 +116,10 @@ export function getMimeType(fileName: string): string {
  * @returns 分割后的文本块数组
  */
 export function splitIntoChunks(text: string, chunkSize: number = 500, overlap: number = 50): string[] {
-  // 清理文本
-  const cleanText = text.replace(/\s+/g, ' ').trim();
+  const cleanText = text
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 
   if (cleanText.length <= chunkSize) {
     return [cleanText];
@@ -127,19 +129,17 @@ export function splitIntoChunks(text: string, chunkSize: number = 500, overlap: 
   let startIndex = 0;
 
   while (startIndex < cleanText.length) {
-    // 计算结束位置
     let endIndex = startIndex + chunkSize;
 
-    // 如果不是最后一块，尽量在句子边界分割
     if (endIndex < cleanText.length) {
-      // 向前查找最后一个句号、问号、感叹号或换行符
-      const boundaryChars = ['。', '！', '？', '.', '!', '?', '\n', '\r\n'];
+      const boundaryChars = ['\n\n', '\n', '。', '！', '？', '.', '!', '?'];
       let lastBoundary = -1;
 
-      for (let i = endIndex; i > endIndex - 100 && i > startIndex; i--) {
-        if (boundaryChars.includes(cleanText[i])) {
-          lastBoundary = i;
-          break;
+      for (const char of boundaryChars) {
+        const searchStart = Math.max(startIndex, endIndex - Math.min(200, chunkSize));
+        const pos = cleanText.lastIndexOf(char, endIndex);
+        if (pos > searchStart && pos > lastBoundary) {
+          lastBoundary = pos;
         }
       }
 
@@ -148,18 +148,16 @@ export function splitIntoChunks(text: string, chunkSize: number = 500, overlap: 
       }
     }
 
-    // 提取 chunk
     const chunk = cleanText.substring(startIndex, endIndex).trim();
     if (chunk) {
       chunks.push(chunk);
     }
 
-    // 移动起始位置（考虑重叠）
-    startIndex = endIndex - overlap;
-
-    // 确保不会陷入死循环
-    if (startIndex <= chunks.length && chunks.length > 0 && chunks[chunks.length - 1] === chunk) {
+    const nextStart = endIndex - overlap;
+    if (nextStart <= startIndex) {
       startIndex = endIndex;
+    } else {
+      startIndex = nextStart;
     }
   }
 
