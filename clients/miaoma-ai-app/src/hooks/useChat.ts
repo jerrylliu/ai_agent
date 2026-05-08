@@ -12,8 +12,12 @@ import {
   deleteMessage as deleteMessageApi,
   uploadFile,
   uploadToKnowledgeBase,
-  getKnowledgeBaseStatus
+  getKnowledgeBaseStatus,
+  getModelInfo,
+  switchModel as switchModelApi,
+  setModelApiKey,
 } from '../lib/api';
+import type { AvailableModel } from '../lib/api';
 import { generateId, generateSessionId } from '../lib/utils';
 import { DEFAULT_MESSAGE, ERROR_MESSAGE } from '../lib/constants';
 import { Session, Message, HistoryItem } from '../types/session';
@@ -31,7 +35,58 @@ export function useChat() {
     message: string;
     stats?: { documentCount: number; collectionName: string };
   }>({ status: 'unknown', message: '未检查知识库状态' });
+  const [currentModelId, setCurrentModelId] = useState<string>('ollama:minicpm');
+  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
+  const [hasDeepseekApiKey, setHasDeepseekApiKey] = useState(false);
+  const [supportsVision, setSupportsVision] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    loadModelInfo();
+  }, []);
+
+  const loadModelInfo = async () => {
+    try {
+      const info = await getModelInfo();
+      if (info.success) {
+        setCurrentModelId(info.currentModelId);
+        setAvailableModels(info.availableModels);
+        setHasDeepseekApiKey(info.hasDeepseekApiKey);
+        setSupportsVision(info.supportsVision);
+      }
+    } catch (error) {
+      console.error('加载模型信息失败:', error);
+    }
+  };
+
+  const switchModel = async (modelId: string) => {
+    try {
+      const result = await switchModelApi(modelId);
+      if (result.success) {
+        setCurrentModelId(modelId);
+        console.log(`✅ 已切换模型: ${modelId}`);
+      } else {
+        console.error('切换模型失败:', result.message);
+      }
+      return result;
+    } catch (error) {
+      console.error('切换模型失败:', error);
+      return { success: false, message: '切换模型失败' };
+    }
+  };
+
+  const configureApiKey = async (provider: string, apiKey: string) => {
+    try {
+      const result = await setModelApiKey(provider, apiKey);
+      if (result.success && provider === 'deepseek') {
+        setHasDeepseekApiKey(true);
+      }
+      return result;
+    } catch (error) {
+      console.error('设置 API Key 失败:', error);
+      return { success: false, message: '设置 API Key 失败' };
+    }
+  };
 
   // 加载所有会话
   useEffect(() => {
@@ -130,6 +185,17 @@ export function useChat() {
 
   const sendMessage = async (userInput: string, images: string[] = []) => {
     if (!userInput.trim() && images.length === 0) return;
+
+    if (images.length > 0 && !supportsVision) {
+      const errorMessage: Message = {
+        id: generateId(),
+        content: `⚠️ 当前模型不支持图片输入，请切换到支持图片的模型（如 MiniCPM）后再试。`,
+        role: 'assistant',
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      return;
+    }
 
     const userMessage: Message = {
       id: generateId(),
@@ -401,5 +467,11 @@ export function useChat() {
     switchSession,
     deleteSession: deleteSessionById,
     toggleSessionPin: toggleSessionPinById,
+    currentModelId,
+    availableModels,
+    hasDeepseekApiKey,
+    supportsVision,
+    switchModel,
+    configureApiKey,
   };
 }

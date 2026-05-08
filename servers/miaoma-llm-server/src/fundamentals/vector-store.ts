@@ -30,8 +30,8 @@ const embeddings = new OllamaEmbeddings({
 
 // 创建文本分割器
 const textSplitter = new RecursiveCharacterTextSplitter({
-  chunkSize: 256,
-  chunkOverlap: 50,
+  chunkSize: 400,
+  chunkOverlap: 80,
   separators: ['\n\n', '\n', '。', '！', '？', '.', '!', '?', ' ', ''],
 });
 
@@ -372,8 +372,6 @@ export async function deleteDocuments(filter: Record<string, any>): Promise<void
  * @param minSimilarity 最小相似度阈值（score越低越相似，建议 cosine: <=1.0, l2: 越小越好）
  * @param filter 元数据过滤条件，例如 { doc_type: "技术文档" } 或 { source: "xxx" }
  */
-const QUERY_PREFIX = '为这个句子生成表示以用于检索相关文章：';
-
 export async function searchKnowledgeBase(
   query: string,
   topK: number = 5,
@@ -382,16 +380,13 @@ export async function searchKnowledgeBase(
 ): Promise<Array<{ content: string; metadata: any; score: number }>> {
   const store = await initializeVectorStore();
 
-  const prefixedQuery = QUERY_PREFIX + query;
-
   console.log(`🔍 搜索知识库: "${query}"`);
-  console.log(`   📝 带前缀查询: "${prefixedQuery.substring(0, 80)}..."`);
   if (filter) {
     console.log(`   📋 过滤条件: ${JSON.stringify(filter)}`);
   }
 
   try {
-    const results = await store.similaritySearchWithScore(prefixedQuery, topK * 2, filter);
+    const results = await store.similaritySearchWithScore(query, topK * 2, filter);
 
     console.log(`📊 检索到 ${results.length} 个结果`);
 
@@ -446,9 +441,9 @@ export async function hybridSearchKnowledgeBase(
   // 1. 向量检索
   let vectorResults: Array<{ content: string; metadata: any; score: number; rank: number }> = [];
   try {
-    const rawVectorResults = await store.similaritySearchWithScore(QUERY_PREFIX + query, topK * 3, filter);
+    const rawVectorResults = await store.similaritySearchWithScore(query, topK * 3, filter);
     vectorResults = rawVectorResults
-      .filter(([_, score]) => score <= 0.7)
+      .filter(([_, score]) => score <= 0.55)
       .slice(0, topK * 2)
       .map(([doc, score], rank) => ({
         content: doc.pageContent,
@@ -565,17 +560,24 @@ export async function hybridSearchKnowledgeBase(
   // 排序并返回 topK
   const fusedResults = Array.from(scoreMap.values())
     .sort((a, b) => b.rrfScore - a.rrfScore)
+    .filter((item) => {
+      if (item.vectorScore > 0 && item.vectorScore > 0.55) {
+        return false;
+      }
+      return true;
+    })
     .slice(0, topK)
     .map((item) => ({
       content: item.content,
       metadata: item.metadata,
       score: item.rrfScore,
+      vectorScore: item.vectorScore,
       sources: item.sources,
     }));
 
   console.log(`✅ 混合搜索最终返回: ${fusedResults.length} 个结果`);
   fusedResults.forEach((result, i) => {
-    console.log(`   [${i + 1}] rrf=${result.score.toFixed(4)} | sources=${result.sources.join('+')} | "${result.content.substring(0, 40)}..."`);
+    console.log(`   [${i + 1}] rrf=${result.score.toFixed(4)} vec=${result.vectorScore.toFixed(4)} | sources=${result.sources.join('+')} | "${result.content.substring(0, 40)}..."`);
   });
 
   return fusedResults;
@@ -701,8 +703,8 @@ export async function clearKnowledgeBase(): Promise<void> {
  */
 export async function previewChunking(text: string): Promise<string[]> {
   const splitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 256,
-    chunkOverlap: 50,
+    chunkSize: 400,
+    chunkOverlap: 80,
   });
   return splitter.splitText(text);
 }

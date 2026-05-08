@@ -317,6 +317,67 @@ export async function uploadToKnowledgeBase(file: File): Promise<{
   }>(response);
 }
 
+// ============================================
+// 模型管理 API
+// ============================================
+
+export interface AvailableModel {
+  id: string;
+  provider: 'ollama' | 'deepseek';
+  name: string;
+  description: string;
+  requiresApiKey: boolean;
+  supportsVision: boolean;
+}
+
+export interface ModelInfoResponse {
+  success: boolean;
+  currentModelId: string;
+  availableModels: AvailableModel[];
+  hasDeepseekApiKey: boolean;
+  supportsVision: boolean;
+}
+
+export async function getModelInfo(): Promise<ModelInfoResponse> {
+  const response = await fetch(API_ENDPOINTS.MODELS);
+  return handleResponse<ModelInfoResponse>(response);
+}
+
+export async function switchModel(modelId: string): Promise<{
+  success: boolean;
+  message: string;
+  currentModel?: any;
+}> {
+  const response = await fetch(API_ENDPOINTS.MODELS_SWITCH, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ modelId }),
+  });
+  return handleResponse<{
+    success: boolean;
+    message: string;
+    currentModel?: any;
+  }>(response);
+}
+
+export async function setModelApiKey(
+  provider: string,
+  apiKey: string
+): Promise<{
+  success: boolean;
+  message: string;
+}> {
+  const response = await fetch(API_ENDPOINTS.MODELS_APIKEY, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, apiKey }),
+  });
+  return handleResponse<{
+    success: boolean;
+    message: string;
+  }>(response);
+}
+
 /**
  * 获取知识库状态
  * @returns 知识库状态信息

@@ -457,12 +457,90 @@ export class AppController {
     return this.appService.updateMessage(id, body.content);
   }
 
-  // 删除消息
   @Delete('messages/:id')
   async deleteMessage(@Param('id') id: string) {
     return this.appService.deleteMessage(id);
   }
 
+  // ============================================
+  // 模型管理接口
+  // ============================================
 
+  @Get('models')
+  async getModelInfo() {
+    try {
+      const { getModelInfo } = await import('./fundamentals/model-provider.js');
+      return {
+        success: true,
+        ...getModelInfo(),
+      };
+    } catch (error: any) {
+      console.error('获取模型信息失败:', error);
+      return {
+        success: false,
+        message: `获取模型信息失败: ${error.message}`,
+      };
+    }
+  }
+
+  @Post('models/switch')
+  async switchModel(@Body() body: { modelId: string }) {
+    try {
+      const { switchModel } = await import('./fundamentals/model-provider.js');
+
+      if (!body.modelId) {
+        return {
+          success: false,
+          message: '请提供 modelId 参数',
+        };
+      }
+
+      const config = switchModel(body.modelId);
+      return {
+        success: true,
+        message: `已切换到模型: ${body.modelId}`,
+        currentModel: config,
+      };
+    } catch (error: any) {
+      console.error('切换模型失败:', error);
+      return {
+        success: false,
+        message: `切换模型失败: ${error.message}`,
+      };
+    }
+  }
+
+  @Post('models/apikey')
+  async setApiKey(@Body() body: { provider: string; apiKey: string }) {
+    try {
+      const { setDeepseekApiKey } = await import('./fundamentals/model-provider.js');
+
+      if (!body.apiKey) {
+        return {
+          success: false,
+          message: '请提供 apiKey 参数',
+        };
+      }
+
+      if (body.provider === 'deepseek') {
+        setDeepseekApiKey(body.apiKey);
+        return {
+          success: true,
+          message: 'DeepSeek API Key 已设置',
+        };
+      }
+
+      return {
+        success: false,
+        message: `不支持的提供者: ${body.provider}`,
+      };
+    } catch (error: any) {
+      console.error('设置 API Key 失败:', error);
+      return {
+        success: false,
+        message: `设置 API Key 失败: ${error.message}`,
+      };
+    }
+  }
 
 }

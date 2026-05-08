@@ -1,28 +1,13 @@
-// 导入 ChatOllama 类，用于与 Ollama 本地大语言模型进行交互
-import { ChatOllama } from "@langchain/ollama";
-// 导入消息类型类，用于构建不同类型的对话消息
 import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import type { Response } from 'express';
-// 导入 Node.js 模块，用于处理文件路径和 HTTP 请求
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
 import * as http from 'http';
 
-// 导入 RAG 服务
 import { retrieveFromKnowledgeBase } from './rag-service';
-
-// 创建 ChatOllama 实例，配置使用的本地模型为 minicpm1
-
-const llm = new ChatOllama({
-  model: "minicpm",
-  temperature: 0.7,           // 温度参数
-  numCtx: 1024,              // 上下文长度（减小以避免内存溢出）
-  repeatPenalty: 1.1,        // 重复惩罚
-  topK: 20,                  // 采样候选数（减小）
-  topP: 0.9,                 // 核采样
-  numGpu: 0,                 // 禁用 GPU（如果适用）
-});
+import { getKnowledgeBaseStats } from './vector-store';
+import { createLLM, getCurrentModelId, getModelInfo } from './model-provider';
 
 // 系统提示词 - 定义模型的角色和任务
 // ### 注意事项
@@ -225,21 +210,34 @@ export const promptTemplate = async (
   let retrievedContext = '';
   let hasRetrievedContent = false;
   let ragContextCount = 0;
-  let retrievalResults: Array<{ content: string; metadata: any; score: number }> = [];
+  let retrievalResults: Array<{ content: string; metadata: any; score: number; vectorScore?: number }> = [];
   
-  // 有图片时不检索知识库，避免上下文超限（图片已经包含大量信息）
   if (promptText && promptText.trim() && (!images || images.length === 0)) {
     try {
       console.log('🔍 正在从知识库检索相关文档...');
-      // 检索最多 3 个最相关的文档
       const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);
       
       if (retrieval.results && retrieval.results.length > 0) {
-        hasRetrievedContent = true;
-        ragContextCount = retrieval.results.length;
-        retrievedContext = retrieval.context;
-        retrievalResults = retrieval.results;
-        console.log(`✅ 知识库检索完成，找到 ${retrieval.results.length} 个相关文档`);
+        const relevantResults = retrieval.results.filter((r: any) => {
+          const vecScore = r.vectorScore ?? r.score;
+          if (vecScore > 0 && vecScore > 0.55) {
+            console.log(`   ⚠️ 过滤不相关结果: vec=${vecScore.toFixed(4)} | "${r.content.substring(0, 40)}..."`);
+            return false;
+          }
+          return true;
+        });
+
+        if (relevantResults.length > 0) {
+          hasRetrievedContent = true;
+          ragContextCount = relevantResults.length;
+          retrievedContext = relevantResults
+            .map((r: any, i: number) => `【文档 ${i + 1}】\n${r.content}`)
+            .join('\n\n');
+          retrievalResults = relevantResults;
+          console.log(`✅ 知识库检索完成，找到 ${relevantResults.length} 个相关文档`);
+        } else {
+          console.log('ℹ️ 知识库检索到结果但均不相关，将使用模型自身知识回答');
+        }
       } else {
         console.log('ℹ️ 知识库中没有找到相关内容');
       }
@@ -256,25 +254,37 @@ export const promptTemplate = async (
       .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
       .join('\n\n');
 
-    systemPrompt = `你是一个问答助手。请仔细阅读以下参考资料，然后回答用户问题。
+    let kbStatsInfo = '';
+    try {
+      const stats = await getKnowledgeBaseStats();
+      kbStatsInfo = `\n知识库统计：共 ${stats.documentCount} 个文档块`;
+    } catch {}
 
-=== 参考资料 ===
+    systemPrompt = `你是一个问答助手。请仔细阅读以下参考资料，然后回答用户问题。
+${kbStatsInfo}
+=== 参考资料（以下仅为与问题最相关的部分片段，非完整内容）===
 ${docList}
 === 参考资料结束 ===
 
-回答要求：
-1. 只使用参考资料中的信息回答，不要编造内容
-2. 回答时在括号内标注参考来源，格式为：（【文档 X】）
-3. 如果参考资料中没有任何相关信息，请回复"抱歉，知识库中没有找到相关内容"
-
-【用户问题】：${promptText}
-【回答】：`;
+回答规则：
+1. 优先使用参考资料中的信息回答，回答时在括号内标注来源，格式为：（【文档 X】）
+2. 如果参考资料只覆盖问题的一部分，先列出资料中的信息，再说明"资料中未涉及以下方面：[缺失点]"
+3. 如果参考资料与用户问题完全无关，请回复"知识库中未找到相关信息，以下基于通用知识回答："，然后用自己的知识回答
+4. 当用户问知识库有多少文档时，请根据"知识库统计"信息回答，不要只数参考资料的条数`;
   }
 
   conversions.push(new SystemMessage(systemPrompt));
 
   // 有知识库检索结果时不用 history，避免历史 hallucinated 内容干扰
   // 无检索结果时最多用 1 条 history
+  const modelInfo = getModelInfo();
+  const supportsVision = modelInfo.supportsVision;
+
+  if (images && images.length > 0 && !supportsVision) {
+    console.log(`⚠️ 当前模型 ${getCurrentModelId()} 不支持图片输入，已忽略 ${images.length} 张图片`);
+    images = undefined;
+  }
+
   const MAX_HISTORY = hasRetrievedContent ? 0 : ((images && images.length > 0) ? 0 : 1);
   const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
 
@@ -283,7 +293,7 @@ ${docList}
     for (const msg of recentHistory) {
       if (msg.role === 'user') {
         let content: any;
-        if (msg.images && msg.images.length > 0) {
+        if (msg.images && msg.images.length > 0 && supportsVision) {
           content = [];
           for (const imgUrl of msg.images) {
             const processedUrl = await processImageUrl(imgUrl);
@@ -302,7 +312,6 @@ ${docList}
     }
   }
 
-  // ==================== 步骤3: 构建用户消息 ====================
   let userContent: any;
   if (images && images.length > 0) {
     userContent = [];
@@ -346,8 +355,10 @@ ${docList}
   if (res) {
     // 流式调用
     console.log('🚀 开始流式调用模型...');
+    console.log(`   📋 当前模型: ${getCurrentModelId()}`);
     
-    // RAG 元数据
+    const llm = createLLM();
+
     const ragMetadata = {
       usedKnowledgeBase: hasRetrievedContent,
       contextCount: hasRetrievedContent ? ragContextCount : 0,
@@ -387,7 +398,7 @@ ${docList}
       }
     }
   } else {
-    // 非流式调用（保持兼容性）
+    const llm = createLLM();
     const result = await llm.invoke(conversions);
     // 去除 <think> 标签
     if (typeof result.content === 'string') {

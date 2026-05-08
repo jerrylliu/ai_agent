@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Send, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText, Database, Upload, CheckCircle, AlertCircle } from "lucide-react";
+import { Send, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText, Database, Upload, CheckCircle, AlertCircle, Cpu, Cloud, Key, Settings, ChevronRight, ChevronLeft } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -14,6 +14,9 @@ const ChatAgent: React.FC = () => {
   const [inputValue, setInputValue] = useState("");
   const [searchKeyword, setSearchKeyword] = useState("");
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [showModelPanel, setShowModelPanel] = useState(false);
   const {
     sessions,
     currentSessionId,
@@ -36,6 +39,12 @@ const ChatAgent: React.FC = () => {
     switchSession,
     deleteSession,
     toggleSessionPin,
+    currentModelId,
+    availableModels,
+    hasDeepseekApiKey,
+    supportsVision,
+    switchModel,
+    configureApiKey,
   } = useChat();
 
   const [kbFeedback, setKbFeedback] = useState<{
@@ -56,14 +65,11 @@ const ChatAgent: React.FC = () => {
       }
     };
 
-    if (showMoreMenu) {
-      document.addEventListener('click', handleClickOutside);
-    }
-
+    document.addEventListener('click', handleClickOutside);
     return () => {
       document.removeEventListener('click', handleClickOutside);
     };
-  }, [showMoreMenu]);
+  }, []);
 
   const { darkMode, toggleTheme } = useTheme();
 
@@ -100,7 +106,7 @@ const ChatAgent: React.FC = () => {
   return (
     <div className="flex h-full bg-gray-50 dark:bg-gray-900">
       {/* 左侧会话列表 */}
-      <div className="w-72 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col">
+      <div className="w-72 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col flex-shrink-0">
         <div className="p-4 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">智能助手</h3>
@@ -614,11 +620,12 @@ const ChatAgent: React.FC = () => {
                   图片上传按钮
                   将图片添加到待发送列表
               */}
-              <label className="cursor-pointer">
+              <label className={`cursor-pointer ${!supportsVision ? 'opacity-40 pointer-events-none' : ''}`}>
                 <input
                   type="file"
                   accept="image/*"
                   className="hidden"
+                  disabled={!supportsVision}
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (file) {
@@ -626,7 +633,7 @@ const ChatAgent: React.FC = () => {
                     }
                   }}
                 />
-                <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
+                <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-gray-700" title={!supportsVision ? '当前模型不支持图片' : '上传图片'}>
                   <span>
                     <Image className="h-5 w-5" />
                   </span>
@@ -683,6 +690,184 @@ const ChatAgent: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* 右侧可折叠模型管理面板 */}
+      <div className="relative flex-shrink-0">
+        {/* 折叠/展开切换按钮 */}
+        <button
+          className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-full z-20 w-7 h-14 flex items-center justify-center bg-white dark:bg-gray-800 border border-r-0 border-gray-200 dark:border-gray-700 rounded-l-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
+          onClick={() => setShowModelPanel(!showModelPanel)}
+          title={showModelPanel ? '收起面板' : '展开模型设置'}
+        >
+          {showModelPanel ? (
+            <ChevronRight className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+          ) : (
+            <ChevronLeft className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+          )}
+        </button>
+
+        {/* 面板内容 */}
+        <div
+          className={`h-full bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 transition-all duration-300 ease-in-out overflow-hidden ${
+            showModelPanel ? 'w-64' : 'w-0'
+          }`}
+        >
+          <div className="w-64 h-full flex flex-col">
+            {/* 面板头部 */}
+            <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Settings className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">模型设置</h3>
+              </div>
+              <button
+                className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                onClick={() => setShowModelPanel(false)}
+              >
+                <X className="h-3.5 w-3.5 text-gray-400" />
+              </button>
+            </div>
+
+            {/* 当前模型 */}
+            <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700 bg-blue-50/50 dark:bg-blue-900/20">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">当前模型</p>
+              <div className="flex items-center space-x-2">
+                {currentModelId.startsWith('ollama') ? (
+                  <Cpu className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                ) : (
+                  <Cloud className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                )}
+                <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                  {availableModels.find(m => m.id === currentModelId)?.name || currentModelId}
+                </span>
+              </div>
+            </div>
+
+            {/* 模型列表 */}
+            <div className="flex-1 overflow-y-auto">
+              {availableModels.filter(m => m.provider === 'ollama').length > 0 && (
+                <div className="px-3 py-2">
+                  <p className="text-xs font-medium text-gray-400 dark:text-gray-500 px-1 mb-1 flex items-center">
+                    <Cpu className="h-3 w-3 mr-1" /> 本地模型
+                  </p>
+                  {availableModels.filter(m => m.provider === 'ollama').map(model => (
+                    <button
+                      key={model.id}
+                      className={`w-full px-3 py-2.5 text-left rounded-lg mb-1 transition-colors ${
+                        currentModelId === model.id
+                          ? 'bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800'
+                          : 'hover:bg-gray-50 dark:hover:bg-gray-700 border border-transparent'
+                      }`}
+                      onClick={async () => {
+                        const result = await switchModel(model.id);
+                        if (!result.success) alert(result.message);
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-gray-900 dark:text-white">{model.name}</p>
+                        {currentModelId === model.id && (
+                          <CheckCircle className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{model.description}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {availableModels.filter(m => m.provider === 'deepseek').length > 0 && (
+                <div className="px-3 py-2 border-t border-gray-100 dark:border-gray-700">
+                  <p className="text-xs font-medium text-gray-400 dark:text-gray-500 px-1 mb-1 flex items-center">
+                    <Cloud className="h-3 w-3 mr-1" /> 线上模型
+                  </p>
+                  {availableModels.filter(m => m.provider === 'deepseek').map(model => (
+                    <button
+                      key={model.id}
+                      className={`w-full px-3 py-2.5 text-left rounded-lg mb-1 transition-colors ${
+                        currentModelId === model.id
+                          ? 'bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800'
+                          : 'hover:bg-gray-50 dark:hover:bg-gray-700 border border-transparent'
+                      }`}
+                      onClick={async () => {
+                        if (!hasDeepseekApiKey) {
+                          setShowApiKeyDialog(true);
+                          return;
+                        }
+                        const result = await switchModel(model.id);
+                        if (!result.success) alert(result.message);
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm text-gray-900 dark:text-white flex items-center">
+                          {model.name}
+                          {!hasDeepseekApiKey && (
+                            <Key className="h-3 w-3 ml-1 text-yellow-500" />
+                          )}
+                        </p>
+                        {currentModelId === model.id && (
+                          <CheckCircle className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                        )}
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{model.description}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* API Key 配置 */}
+            {!hasDeepseekApiKey && (
+              <div className="px-3 py-2 border-t border-gray-100 dark:border-gray-700">
+                <button
+                  className="w-full px-3 py-2 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg flex items-center transition-colors"
+                  onClick={() => setShowApiKeyDialog(true)}
+                >
+                  <Key className="h-4 w-4 mr-2" />
+                  配置 DeepSeek API Key
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* API Key 对话框 */}
+      {showApiKeyDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowApiKeyDialog(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-96 shadow-xl" onClick={e => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">配置 DeepSeek API Key</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+              使用 DeepSeek 线上模型需要 API Key，
+              <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">点击获取</a>
+            </p>
+            <input
+              type="password"
+              value={apiKeyInput}
+              onChange={e => setApiKeyInput(e.target.value)}
+              placeholder="sk-..."
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4"
+            />
+            <div className="flex justify-end space-x-2">
+              <Button variant="ghost" size="sm" onClick={() => setShowApiKeyDialog(false)}>取消</Button>
+              <Button
+                size="sm"
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+                disabled={!apiKeyInput.trim()}
+                onClick={async () => {
+                  const result = await configureApiKey('deepseek', apiKeyInput.trim());
+                  if (result.success) {
+                    setShowApiKeyDialog(false);
+                    setApiKeyInput('');
+                  } else {
+                    alert(result.message);
+                  }
+                }}
+              >
+                保存
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

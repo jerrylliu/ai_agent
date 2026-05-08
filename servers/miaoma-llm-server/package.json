@@ -24,6 +24,7 @@
     "@langchain/community": "^1.1.28",
     "@langchain/core": "^1.1.39",
     "@langchain/ollama": "^1.1.39",
+    "@langchain/openai": "^1.4.5",
     "@langchain/textsplitters": "^1.0.1",
     "@nestjs/common": "^11.1.18",
     "@nestjs/core": "^11.1.18",
