@@ -15,6 +15,7 @@ export interface Message {
   role: 'user' | 'assistant';
   timestamp: Date;
   fromKnowledgeBase?: boolean;
+  contextCount?: number;
 }
 
 export interface HistoryItem {

@@ -211,13 +211,17 @@ export class AppController {
   // ============================================
   // 搜索知识库
   // 路由：POST /knowledge/search
-  // 功能：在知识库中搜索相关内容
+  // 功能：在知识库中搜索相关内容（支持元数据过滤）
   // ============================================
   @Post('knowledge/search')
-  async searchKnowledgeBase(@Body() body: { query: string; topK?: number }) {
+  async searchKnowledgeBase(@Body() body: {
+    query: string;
+    topK?: number;
+    filter?: Record<string, any>;
+  }) {
     try {
       const { retrieveFromKnowledgeBase } = await import('./fundamentals/rag-service.js');
-      const { query, topK = 3 } = body;
+      const { query, topK = 3, filter } = body;
 
       if (!query) {
         return {
@@ -226,19 +230,86 @@ export class AppController {
         };
       }
 
-      const result = await retrieveFromKnowledgeBase(query, topK);
+      const result = await retrieveFromKnowledgeBase(query, topK, filter);
 
       return {
         success: true,
         query: result.query,
         results: result.results,
         context: result.context,
+        hasResults: result.hasResults,
       };
     } catch (error: any) {
       console.error('搜索知识库失败:', error);
       return {
         success: false,
         message: `搜索失败: ${error.message}`,
+      };
+    }
+  }
+
+  // ============================================
+  // 混合搜索知识库（向量 + BM25）
+  // 路由：POST /knowledge/hybrid-search
+  // 功能：使用混合检索方式搜索知识库
+  // ============================================
+  @Post('knowledge/hybrid-search')
+  async hybridSearchKnowledgeBase(@Body() body: {
+    query: string;
+    topK?: number;
+    vectorWeight?: number;
+    bm25Weight?: number;
+    filter?: Record<string, any>;
+  }) {
+    try {
+      const { hybridRetrieveFromKnowledgeBase } = await import('./fundamentals/rag-service.js');
+      const { query, topK = 3, vectorWeight = 0.7, bm25Weight = 0.3, filter } = body;
+
+      if (!query) {
+        return {
+          success: false,
+          message: '请提供搜索查询内容',
+        };
+      }
+
+      const result = await hybridRetrieveFromKnowledgeBase(query, topK, vectorWeight, bm25Weight, filter);
+
+      return {
+        success: true,
+        query: result.query,
+        results: result.results,
+        context: result.context,
+        hasResults: result.hasResults,
+      };
+    } catch (error: any) {
+      console.error('混合搜索知识库失败:', error);
+      return {
+        success: false,
+        message: `搜索失败: ${error.message}`,
+      };
+    }
+  }
+
+  // ============================================
+  // 获取知识库所有文档类型
+  // 路由：GET /knowledge/types
+  // 功能：获取知识库中所有可用的文档类型
+  // ============================================
+  @Get('knowledge/types')
+  async getDocumentTypes() {
+    try {
+      const { getDocumentTypes } = await import('./fundamentals/vector-store.js');
+      const types = await getDocumentTypes();
+
+      return {
+        success: true,
+        types,
+      };
+    } catch (error: any) {
+      console.error('获取文档类型失败:', error);
+      return {
+        success: false,
+        message: `获取失败: ${error.message}`,
       };
     }
   }
@@ -264,6 +335,97 @@ export class AppController {
       return {
         success: false,
         message: `获取文档列表失败: ${error.message}`,
+      };
+    }
+  }
+
+  // 路由：GET /knowledge/debug
+  // 功能：调试搜索流程，查看切片和检索详情
+  // ============================================
+  @Get('knowledge/debug')
+  async debugKnowledge(@Query('query') query: string) {
+    try {
+      const { debugSearch, getAllDocumentsWithDebug } = await import('./fundamentals/vector-store.js');
+
+      const debugInfo = await debugSearch(query || '测试查询', 5);
+      const documentsInfo = await getAllDocumentsWithDebug();
+
+      return {
+        success: true,
+        searchDebug: debugInfo,
+        documentsInfo,
+      };
+    } catch (error: any) {
+      console.error('调试失败:', error);
+      return {
+        success: false,
+        message: `调试失败: ${error.message}`,
+      };
+    }
+  }
+
+  // 路由：POST /knowledge/preview-chunk
+  // 功能：预览文本切片效果
+  // ============================================
+  @Post('knowledge/preview-chunk')
+  async previewChunk(@Body() body: { text: string }) {
+    try {
+      const { previewChunking } = await import('./fundamentals/vector-store.js');
+
+      if (!body.text) {
+        return {
+          success: false,
+          message: '请提供 text 参数',
+        };
+      }
+
+      const chunks = await previewChunking(body.text);
+
+      return {
+        success: true,
+        originalLength: body.text.length,
+        chunkCount: chunks.length,
+        chunks: chunks.map((chunk, i) => ({
+          index: i,
+          length: chunk.length,
+          content: chunk,
+        })),
+      };
+    } catch (error: any) {
+      console.error('预览切片失败:', error);
+      return {
+        success: false,
+        message: `预览切片失败: ${error.message}`,
+      };
+    }
+  }
+
+  // 路由：POST /knowledge/preview-embedding
+  // 功能：预览 Embedding 向量
+  // ============================================
+  @Post('knowledge/preview-embedding')
+  async previewEmbedding(@Body() body: { text: string }) {
+    try {
+      const { previewEmbedding } = await import('./fundamentals/vector-store.js');
+
+      if (!body.text) {
+        return {
+          success: false,
+          message: '请提供 text 参数',
+        };
+      }
+
+      const embedding = await previewEmbedding(body.text);
+
+      return {
+        success: true,
+        embedding,
+      };
+    } catch (error: any) {
+      console.error('预览 Embedding 失败:', error);
+      return {
+        success: false,
+        message: `预览 Embedding 失败: ${error.message}`,
       };
     }
   }

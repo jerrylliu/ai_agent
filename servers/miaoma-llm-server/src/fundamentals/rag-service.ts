@@ -3,7 +3,7 @@
  * 完整流程：上传文档 → 解析 → 向量化 → 存储 → 检索 → 生成
  */
 
-import { addDocuments, searchKnowledgeBase, getKnowledgeBaseStats } from './vector-store';
+import { addDocuments, searchKnowledgeBase, hybridSearchKnowledgeBase, getKnowledgeBaseStats } from './vector-store';
 import { parseDocument, getMimeType, splitIntoChunks } from './document-parser';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -108,20 +108,21 @@ export async function handleDocumentUpload(file: any): Promise<{
  * RAG 检索与生成
  * @param query 用户查询
  * @param topK 检索的文档数量
+ * @param filter 元数据过滤条件
  * @returns 检索到的相关文档内容
  */
 export async function retrieveFromKnowledgeBase(
   query: string,
-  topK: number = 3
+  topK: number = 3,
+  filter?: Record<string, any>,
 ): Promise<{
   query: string;
   results: Array<{ content: string; metadata: any; score: number }>;
   context: string;
+  hasResults: boolean;
 }> {
-  // 搜索知识库
-  const results = await searchKnowledgeBase(query, topK);
+  const results = await searchKnowledgeBase(query, topK, 1.0, filter);
 
-  // 构建上下文
   const context = results
     .map((r, i) => `[文档 ${i + 1}] ${r.content}`)
     .join('\n\n');
@@ -130,6 +131,42 @@ export async function retrieveFromKnowledgeBase(
     query,
     results,
     context,
+    hasResults: results.length > 0,
+  };
+}
+
+/**
+ * 混合检索（RAG 增强）
+ * @param query 用户查询
+ * @param topK 检索的文档数量
+ * @param vectorWeight 向量检索权重
+ * @param bm25Weight BM25 检索权重
+ * @param filter 元数据过滤条件
+ * @returns 检索到的相关文档内容
+ */
+export async function hybridRetrieveFromKnowledgeBase(
+  query: string,
+  topK: number = 3,
+  vectorWeight: number = 0.7,
+  bm25Weight: number = 0.3,
+  filter?: Record<string, any>,
+): Promise<{
+  query: string;
+  results: Array<{ content: string; metadata: any; score: number; sources: string[] }>;
+  context: string;
+  hasResults: boolean;
+}> {
+  const results = await hybridSearchKnowledgeBase(query, topK, vectorWeight, bm25Weight, filter);
+
+  const context = results
+    .map((r, i) => `[文档 ${i + 1}] ${r.content}`)
+    .join('\n\n');
+
+  return {
+    query,
+    results,
+    context,
+    hasResults: results.length > 0,
   };
 }
 
@@ -158,20 +195,31 @@ export async function ragWithLLM(
 
   // 2. 构建增强后的提示词
   const augmentedPrompt = `
-请根据以下参考文档回答用户的问题。
+你是一个智能知识库助手。你会优先依据【参考资料】回答，但在资料完全无关联时，会动用自身知识帮助用户。请严格遵守以下决策规则：
+
+### 第一步：判断资料相关性
+在回答前，先快速评估【参考资料】是否与用户问题有任何实质关联（哪怕只涉及部分关键词或侧面信息）。
+- 如果存在**任何一点**关联，进入“基于资料模式”。
+- 如果**完全无关**（连一个相关词、相关概念都没有），进入“自主回答模式”。
+
+### 第二步：按模式回答
+**基于资料模式**（资料有任一部分相关）：
+- 必须100%扎根于资料，不添加任何外部知识。
+- 穷尽资料中所有相关条目，逐条完整列出，不得省略、概括或缩减。
+- 若资料只覆盖问题的一部分，请先列出已有信息，再明确说明：“资料中未涉及以下方面：[具体缺失点]”。
+- 若资料存在矛盾，请将矛盾点并列陈述，不加主观评判。
+- 格式纯净：不要有任何寒暄、自我评价或补充建议。
+
+**自主回答模式**（资料完全无关）：
+- 首先明确告知：“知识库中未找到相关信息，以下回答基于我的通用知识，请谨慎参考。”
+- 然后使用你自己的知识尽量回答问题，力求准确、完整。
+- 如果连通用知识也无法给出确定答案，请如实说明不确定性。
 
 【参考文档】：
 ${retrieval.context}
 
 【用户问题】：${query}
-
-【回答要求】：
-1. 基于参考文档的内容进行回答
-2. 如果参考文档中没有相关信息，请明确说明"根据当前知识库没有找到相关内容"
-3. 回答要准确、简洁、有条理
-4. 如果涉及代码，请提供完整的代码示例
-
-请开始回答：
+你的回答：
 `;
 
   // 3. 这里可以调用 LLM 生成回答

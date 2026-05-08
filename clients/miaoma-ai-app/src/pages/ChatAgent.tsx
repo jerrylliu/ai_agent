@@ -527,6 +527,9 @@ const ChatAgent: React.FC = () => {
                       <span className="text-xs px-1.5 py-0.5 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded mr-2 flex items-center">
                         <Database className="h-3 w-3 mr-0.5" />
                         知识库
+                        {message.contextCount && message.contextCount > 0 && (
+                          <span className="ml-1 text-xs opacity-75">({message.contextCount}条)</span>
+                        )}
                       </span>
                     )}
                     <p className="text-xs text-gray-500 dark:text-gray-400 ml-2">

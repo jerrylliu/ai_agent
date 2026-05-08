@@ -1,3 +1,4 @@
+//整个文件是测试文件
 import { OllamaEmbeddings } from "@langchain/ollama";
 import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
 // 创建 Ollama 嵌入模型实例

@@ -50,19 +50,25 @@ export async function saveChatHistory(data: ChatHistoryItem): Promise<void> {
   }
 }
 
+export interface AIStreamResponse {
+  stream: ReadableStream<string>;
+  usedKnowledgeBase: boolean;
+  contextCount: number;
+}
+
 /**
  * 获取 AI 响应流
  * @param message 用户消息
  * @param images 用户消息中的图片URL数组
  * @param history 历史消息列表
- * @returns 可读流，包含 AI 响应文本
+ * @returns 包含流和RAG元数据的对象
  * @throws 获取失败时抛出错误
  */
 export async function getAIResponse(
   message: string,
   images: string[] = [],
   history: Message[] = []
-): Promise<ReadableStream<string>> {
+): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -71,7 +77,59 @@ export async function getAIResponse(
   if (!response.ok) {
     throw new Error('获取 AI 响应失败');
   }
-  return response.body!.pipeThrough(new TextDecoderStream());
+
+  const stream = response.body!.pipeThrough(new TextDecoderStream());
+  let usedKnowledgeBase = false;
+  let contextCount = 0;
+
+  const modifiedStream = new ReadableStream<string>({
+    async start(controller) {
+      const reader = stream.getReader();
+      let buffer = '';
+      let metadataExtracted = false;
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += value;
+
+          if (!metadataExtracted) {
+            const metadataMatch = buffer.match(/^\[RAG_METADATA:(\{.*?\})\]/);
+            if (metadataMatch) {
+              metadataExtracted = true;
+              try {
+                const metadata = JSON.parse(metadataMatch[1]);
+                usedKnowledgeBase = metadata.usedKnowledgeBase || false;
+                contextCount = metadata.contextCount || 0;
+              } catch (e) {
+                console.warn('解析RAG元数据失败:', e);
+              }
+              buffer = buffer.substring(metadataMatch[0].length);
+            }
+          }
+
+          if (buffer) {
+            controller.enqueue(buffer);
+            buffer = '';
+          }
+        }
+        if (buffer) {
+          controller.enqueue(buffer);
+        }
+        controller.close();
+      } catch (e) {
+        controller.error(e);
+      }
+    },
+  });
+
+  return {
+    stream: modifiedStream,
+    usedKnowledgeBase,
+    contextCount,
+  };
 }
 
 /**

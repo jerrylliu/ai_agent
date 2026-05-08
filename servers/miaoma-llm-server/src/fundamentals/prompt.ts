@@ -17,155 +17,14 @@ import { retrieveFromKnowledgeBase } from './rag-service';
 const llm = new ChatOllama({
   model: "minicpm",
   temperature: 0.7,           // 温度参数
-  numCtx: 2048,               // 上下文长度
-  repeatPenalty: 1.1,         // 重复惩罚
-  topK: 40,                   // 采样候选数
-  topP: 0.9,                  // 核采样
+  numCtx: 1024,              // 上下文长度（减小以避免内存溢出）
+  repeatPenalty: 1.1,        // 重复惩罚
+  topK: 20,                  // 采样候选数（减小）
+  topP: 0.9,                 // 核采样
+  numGpu: 0,                 // 禁用 GPU（如果适用）
 });
 
 // 系统提示词 - 定义模型的角色和任务
-// const SYSTEM_PROMPT = `你是一个专业的UI/UX设计师和前端开发专家，擅长将设计稿转换为高质量的前端代码。
-
-// ## 核心能力
-// 1. 精确分析设计稿：布局结构、组件构成、颜色值、字体大小、间距、视觉层次
-// 2. 生成生产级代码：可运行、可维护、符合最佳实践的前端页面
-
-// ## 分析要求
-// 分析设计图时，请提供：
-// - **布局结构**：页面整体布局、各区域尺寸和位置
-// - **组件拆分**：可复用的组件列表及其属性
-// - **颜色体系**：所有颜色对应的 hex 值（如 #2D2B3C）
-// - **文字规范**：字号、字重、颜色、行高
-// - **间距系统**：padding、margin、gap 的具体数值
-// - **交互细节**：hover、active、focus 等状态
-
-// ## 代码生成规范（默认生成纯 HTML/CSS）
-
-// ### 语言选择规则（重要）
-// 1. **若用户明确指定了语言/框架，则按用户要求生成**
-//    - 例如：用户说"用 React" → 生成 React + TypeScript 代码
-//    - 例如：用户说"用 Vue" → 生成 Vue 代码
-//    - 例如：用户说"小程序" → 生成微信小程序代码
-
-// 2. **若用户未指定语言/框架，则默认生成原生 HTML/CSS（推荐）**
-//    - 原因：HTML/CSS 是最通用、最易运行的方案
-//    - 包含：HTML 结构 + CSS 样式（内联或 <style> 标签）
-
-// 3. **禁止使用任何前端框架或库**（除非用户明确指定）
-//    - 禁止：React、Vue、Angular、Svelte 等
-//    - 禁止：Tailwind CSS（除非用户指定）
-//    - 禁止：Bootstrap、Element UI 等 UI 库
-
-// ### 默认语言规范（原生 HTML/CSS）
-
-// #### HTML 规范
-// 1. **语义化标签**：使用 header、nav、main、section、article、footer 等语义化标签
-// 2. **结构清晰**：合理嵌套，缩进规范
-// 3. **可访问性**：添加适当的 aria-label、alt 等属性
-
-// #### CSS 规范
-// 1. **使用 <style> 标签**：将 CSS 放在 HTML 文件的 <head> 中
-// 2. **使用 Flexbox 布局**：主流布局方案，简洁高效
-// 3. **使用 CSS 变量**：统一管理颜色和间距
-// 4. **命名规范**：使用 kebab-case（如 header-nav、main-content）
-// 5. **响应式设计**：添加媒体查询支持不同屏幕尺寸
-
-// ### 输出格式（默认使用 HTML/CSS）
-
-// 当用户要求生成代码时，请按以下格式输出：
-
-// \`\`\`html
-// <!DOCTYPE html>
-// <html lang="zh-CN">
-// <head>
-//   <meta charset="UTF-8">
-//   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-//   <title>页面标题</title>
-//   <style>
-//     /* CSS 变量定义 */
-//     :root {
-//       --primary-color: #233E5A;
-//       --secondary-color: #00FF9B;
-//       --text-color: #333333;
-//       --bg-color: #ffffff;
-//     }
-
-//     /* 重置样式 */
-//     * {
-//       margin: 0;
-//       padding: 0;
-//       box-sizing: border-box;
-//     }
-
-//     body {
-//       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-//       color: var(--text-color);
-//       background-color: var(--bg-color);
-//     }
-
-//     /* 布局容器 */
-//     .container {
-//       max-width: 1200px;
-//       margin: 0 auto;
-//       padding: 0 20px;
-//     }
-
-//     /* 组件样式 */
-//     .header {
-//       width: 100%;
-//       height: 64px;
-//       background-color: var(--primary-color);
-//       display: flex;
-//       align-items: center;
-//       justify-content: space-between;
-//       padding: 0 24px;
-//     }
-
-//     .header-logo {
-//       font-size: 20px;
-//       font-weight: bold;
-//       color: white;
-//     }
-
-//     /* 响应式设计 */
-//     @media (max-width: 768px) {
-//       .header {
-//         padding: 0 16px;
-//       }
-//     }
-//   </style>
-// </head>
-// <body>
-//   <!-- 页面内容 -->
-//   <header class="header">
-//     <div class="container">
-//       <div class="header-logo">Logo</div>
-//       <nav class="header-nav">
-//         <a href="#">首页</a>
-//         <a href="#">关于我们</a>
-//         <a href="#">联系</a>
-//       </nav>
-//     </div>
-//   </header>
-
-//   <main>
-//     <section class="hero">
-//       <div class="container">
-//         <h1>欢迎来到我们的网站</h1>
-//         <p>这里是网站描述文字</p>
-//       </div>
-//     </section>
-//   </main>
-
-//   <footer class="footer">
-//     <div class="container">
-//       <p>&copy; 2024 公司名称. All rights reserved.</p>
-//     </div>
-//   </footer>
-// </body>
-// </html>
-// \`\`\`
-
 // ### 注意事项
 // 1. **代码必须可直接运行**：复制粘贴到浏览器即可运行
 // 2. **包含完整样式**：不要让用户补充任何 CSS
@@ -367,10 +226,12 @@ export const promptTemplate = async (
   let hasRetrievedContent = false;
   let ragContextCount = 0;
   
-  if (promptText && promptText.trim()) {
+  // 有图片时不检索知识库，避免上下文超限（图片已经包含大量信息）
+  if (promptText && promptText.trim() && (!images || images.length === 0)) {
     try {
       console.log('🔍 正在从知识库检索相关文档...');
-      const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);
+      // 只检索 1 个最相关的文档，避免上下文超限
+      const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 1);
       
       if (retrieval.results && retrieval.results.length > 0) {
         hasRetrievedContent = true;
@@ -389,26 +250,28 @@ export const promptTemplate = async (
   let systemPrompt = SYSTEM_PROMPT;
   
   if (hasRetrievedContent) {
-    // 如果有检索到的内容，添加 RAG 指令
-    systemPrompt = `你是一个智能助手，擅长根据提供的参考文档回答问题。
+    // 如果有检索到的内容，严格要求基于知识库回答
+    systemPrompt = `【重要】你必须严格按照以下规则回答：
 
-【核心指令】：
-1. 首先参考提供的知识库内容进行回答
-2. 如果知识库内容足够回答问题，优先使用知识库信息
-3. 如果知识库内容不足或不相关，可以结合你的内部知识补充
-4. 如果完全无法回答，请明确说明
+=== 回答规则（必须遵守）===
+1. 你必须仔细阅读并严格按照【参考资料】中的内容回答问题
+2. 如果【参考资料】包含回答所需的信息，你必须从【参考资料】中提取相关信息进行回答
+3. 你必须使用【参考资料】中的原话或基于【参考资料】进行总结
+4. 你必须禁止编造、修改或补充【参考资料】中不存在的信息
+5. 如果【参考资料】中没有相关信息，你必须明确回复"根据提供的信息无法回答该问题"
 
-【参考文档】：
+=== 参考资料 ===
 ${retrievedContext}
+=== 参考资料结束 ===
 
----
-
+【你的基础角色】：
 ${SYSTEM_PROMPT}`;
   }
 
   conversions.push(new SystemMessage(systemPrompt));
 
-  const MAX_HISTORY = 2;
+  // 有图片时不用历史记录，避免上下文超限
+  const MAX_HISTORY = (images && images.length > 0) ? 0 : 1;
   const recentHistory = history ? history.slice(-MAX_HISTORY) : [];
 
   if (recentHistory.length > 0) {
@@ -472,7 +335,7 @@ ${SYSTEM_PROMPT}`;
         console.log(`  [${index}] HumanMessage:`, content);
       }
     } else if (msg instanceof AIMessage) {
-      console.log(`  [${index}] AIMessage:`, (msg.content as string).substring(0, 100) + '...');
+      console.log(`  [${index}] AIMessage:`, (msg.content as string).substring(0, 200) + '...');
     }
   });
 
@@ -485,28 +348,40 @@ ${SYSTEM_PROMPT}`;
       usedKnowledgeBase: hasRetrievedContent,
       contextCount: hasRetrievedContent ? ragContextCount : 0,
     };
+    console.log(`📤 发送 RAG 元数据: usedKnowledgeBase=${hasRetrievedContent}, contextCount=${ragMetadata.contextCount}`);
     const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]`;
     
-    const stream = await llm.stream(conversions);
-    let chunkCount = 0;
-    let isFirstChunk = true;
-    for await (const chunk of stream) {
-      chunkCount++;
-      const content = chunk.content?.toString() || '';
-      const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
-      if (cleanContent) {
-        // 第一个块附加 RAG 元数据
-        if (isFirstChunk) {
-          res.write(metadataPrefix + cleanContent);
-          isFirstChunk = false;
-        } else {
-          res.write(cleanContent);
+    try {
+      const stream = await llm.stream(conversions);
+      let chunkCount = 0;
+      let isFirstChunk = true;
+      for await (const chunk of stream) {
+        chunkCount++;
+        const content = chunk.content?.toString() || '';
+        const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
+        if (cleanContent) {
+          if (isFirstChunk) {
+            res.write(metadataPrefix + cleanContent);
+            isFirstChunk = false;
+          } else {
+            res.write(cleanContent);
+          }
+          process.stdout.write(cleanContent);
         }
-        process.stdout.write(cleanContent);
+      }
+      console.log(`\n✅ 流式响应完成，共 ${chunkCount} 个 chunk`);
+      res.end();
+    } catch (streamError: any) {
+      console.error('❌ 流式调用失败:', streamError.message);
+      if (!res.headersSent) {
+        res.status(500).json({ 
+          error: '模型调用失败', 
+          message: streamError.message 
+        });
+      } else {
+        res.end();
       }
     }
-    console.log(`\n✅ 流式响应完成，共 ${chunkCount} 个 chunk`);
-    res.end();
   } else {
     // 非流式调用（保持兼容性）
     const result = await llm.invoke(conversions);

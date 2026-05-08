@@ -171,7 +171,6 @@ export function useChat() {
 
       // 创建一个临时的助手消息 ID
       const assistantMessageId = generateId();
-      let ragMetadata = { usedKnowledgeBase: false, contextCount: 0 };
       const tempAssistantMessage: Message = {
         id: assistantMessageId,
         content: '',
@@ -182,33 +181,26 @@ export function useChat() {
       setMessages(prev => [...prev, tempAssistantMessage]);
 
       // 处理流式响应（传入图片）
-      const stream = await getAIResponse(userInput, images, chatHistory);
-      const reader = stream.getReader();
+      const aiResponse = await getAIResponse(userInput, images, chatHistory);
+      
+      // 设置知识库来源标记
+      const usedKnowledgeBase = aiResponse.usedKnowledgeBase;
+      const contextCount = aiResponse.contextCount;
+      
+      setMessages(prev => prev.map(msg =>
+        msg.id === assistantMessageId 
+          ? { ...msg, fromKnowledgeBase: usedKnowledgeBase, contextCount } 
+          : msg
+      ));
+      
+      const reader = aiResponse.stream.getReader();
       let fullResponse = '';
-      let metadataParsed = false;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         
-        // 检查是否是 RAG 元数据前缀
-        if (!metadataParsed && value.startsWith('[RAG_METADATA:')) {
-          try {
-            const jsonStr = value.slice('[RAG_METADATA:'.length);
-            ragMetadata = JSON.parse(jsonStr);
-            tempAssistantMessage.fromKnowledgeBase = ragMetadata.usedKnowledgeBase;
-            setMessages(prev => prev.map(msg =>
-              msg.id === assistantMessageId ? { ...msg, fromKnowledgeBase: ragMetadata.usedKnowledgeBase } : msg
-            ));
-            metadataParsed = true;
-          } catch (e) {
-            console.error('解析 RAG 元数据失败:', e);
-          }
-          continue;
-        }
-        
         fullResponse += value;
-        // 更新临时消息的内容
         setMessages(prev => prev.map(msg =>
           msg.id === assistantMessageId ? { ...msg, content: fullResponse } : msg
         ));
@@ -274,8 +266,8 @@ export function useChat() {
           };
           setMessages(prev => [...prev, tempAssistantMessage]);
 
-          const stream = await getAIResponse(fileMessage.content, [], chatHistory);
-          const reader = stream.getReader();
+          const aiResponse = await getAIResponse(fileMessage.content, [], chatHistory);
+          const reader = aiResponse.stream.getReader();
           let fullResponse = '';
 
           while (true) {
