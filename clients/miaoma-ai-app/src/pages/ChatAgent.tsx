@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Send, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText, Database, Upload, CheckCircle, AlertCircle, Cpu, Cloud, Key, Settings, ChevronRight, ChevronLeft } from "lucide-react";
+import { Send, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText, Database, Upload, CheckCircle, AlertCircle, Cpu, Cloud, Key, Settings, ChevronRight, ChevronLeft, ChevronUp, ChevronDown } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
@@ -17,6 +17,9 @@ const ChatAgent: React.FC = () => {
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [showModelPanel, setShowModelPanel] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(true);
+  const [showHistoryList, setShowHistoryList] = useState(true);
+  const [showRecentQuestions, setShowRecentQuestions] = useState(true);
   const {
     sessions,
     currentSessionId,
@@ -104,185 +107,310 @@ const ChatAgent: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full bg-gray-50 dark:bg-gray-900">
-      {/* 左侧会话列表 */}
-      <div className="w-72 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col flex-shrink-0">
-        <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">智能助手</h3>
-            <Button variant="ghost" size="icon" onClick={toggleTheme}>
-              {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
-            </Button>
-          </div>
-          <div className="flex space-x-2 mb-4">
-            <Button 
-              onClick={createNewSession}
-              className="flex-1 bg-primary hover:bg-primary/90 text-white"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              新对话
-            </Button>
-          </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <Input
-              placeholder="搜索会话..."
-              className="pl-10"
-              value={searchKeyword}
-              onChange={(e) => setSearchKeyword(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          <div className="flex items-center justify-between mb-4">
-            <h4 className="font-medium text-gray-700 dark:text-gray-300 flex items-center">
-              <History className="h-4 w-4 mr-2" />
-              对话历史
-            </h4>
-            {history.length > 0 && (
-              <Button variant="ghost" size="sm" onClick={clearHistory}>
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-          
-          {/* 历史记录列表 */}
-          {history.length > 0 && (
-            <div className="mb-6">
-              <h5 className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2 flex items-center">
-                <History className="h-3 w-3 mr-1" />
-                最近的问题
-              </h5>
-              <div className="space-y-2">
-                {history.map((item) => (
-                  <div
-                    key={item.id}
-                    className="p-2 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors duration-200"
-                    onClick={() => handleHistoryClick(item.query)}
-                  >
-                    <div className="line-clamp-1" dangerouslySetInnerHTML={{
-                      __html: searchKeyword 
-                        ? item.query.replace(new RegExp(`(${searchKeyword})`, 'gi'), '<mark style="background-color: #fef3c7; color: #92400e;">$1</mark>')
-                        : item.query
-                    }} />
+    <div className="flex h-full bg-gray-50 dark:bg-gray-900 relative">
+      {/* 左侧可折叠会话列表 */}
+      <div className="relative h-full">
+        {/* 切换按钮 - 放在左侧栏右边缘，始终可见 */}
+        <button
+          className={`absolute left-0 top-1/2 -translate-y-1/2 z-30 w-7 h-14 flex items-center justify-center bg-white dark:bg-gray-800 border border-r-0 border-gray-200 dark:border-gray-700 rounded-r-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm ${
+            showSidebar ? 'translate-x-0' : 'translate-x-0'
+          }`}
+          style={{ left: showSidebar ? '288px' : '0px' }}
+          onClick={() => setShowSidebar(!showSidebar)}
+          title={showSidebar ? '收起侧边栏' : '展开侧边栏'}
+        >
+          {showSidebar ? (
+            <ChevronLeft className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+          )}
+        </button>
 
-                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {formatTime(item.timestamp)}
+        {/* 侧边栏内容 */}
+        <div
+          className={`h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transition-all duration-300 ease-in-out overflow-hidden shadow-lg ${
+            showSidebar ? 'w-72' : 'w-0'
+          }`}
+        >
+          {showSidebar && (
+            <div className="w-72 h-full flex flex-col">
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">智能助手</h3>
+                  <Button variant="ghost" size="icon" onClick={toggleTheme}>
+                    {darkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+                  </Button>
+                </div>
+                <div className="flex space-x-2 mb-4">
+                  <Button
+                    onClick={createNewSession}
+                    className="flex-1 bg-primary hover:bg-primary/90 text-white"
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    新对话
+                  </Button>
+                </div>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  <Input
+                    placeholder="搜索会话..."
+                    className="pl-10"
+                    value={searchKeyword}
+                    onChange={(e) => setSearchKeyword(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h4 className="font-medium text-gray-700 dark:text-gray-300 flex items-center">
+                    <History className="h-4 w-4 mr-2" />
+                    对话历史
+                  </h4>
+                  <div className="flex items-center space-x-1">
+                    <button
+                      onClick={() => setShowHistoryList(!showHistoryList)}
+                      className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                      title={showHistoryList ? '收起' : '展开'}
+                    >
+                      {showHistoryList ? (
+                        <ChevronUp className="h-4 w-4 text-gray-500" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4 text-gray-500" />
+                      )}
+                    </button>
+                    {history.length > 0 && (
+                      <Button variant="ghost" size="sm" onClick={clearHistory}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* 历史记录列表 - 可折叠 */}
+                <div
+                  className="overflow-hidden transition-all duration-300 ease-in-out"
+                  style={{ maxHeight: showHistoryList ? '500px' : '0', opacity: showHistoryList ? 1 : 0 }}
+                >
+                  {history.length > 0 && (
+                    <div className="mb-6">
+                      <div className="flex items-center justify-between mb-2">
+                        <h5 className="text-sm font-medium text-gray-600 dark:text-gray-400 flex items-center">
+                          <History className="h-3 w-3 mr-1" />
+                          最近的问题
+                        </h5>
+                        <button
+                          onClick={() => setShowRecentQuestions(!showRecentQuestions)}
+                          className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                          title={showRecentQuestions ? '收起' : '展开'}
+                        >
+                          {showRecentQuestions ? (
+                            <ChevronUp className="h-3 w-3 text-gray-400" />
+                          ) : (
+                            <ChevronDown className="h-3 w-3 text-gray-400" />
+                          )}
+                        </button>
+                      </div>
+                      <div
+                        className="overflow-hidden transition-all duration-300 ease-in-out"
+                        style={{ maxHeight: showRecentQuestions ? '300px' : '0', opacity: showRecentQuestions ? 1 : 0 }}
+                      >
+                        <div className="space-y-2">
+                          {history.map((item) => (
+                            <div
+                              key={item.id}
+                              className="p-2 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors duration-200"
+                              onClick={() => handleHistoryClick(item.query)}
+                            >
+                              <div className="line-clamp-1" dangerouslySetInnerHTML={{
+                                __html: searchKeyword
+                                  ? item.query.replace(new RegExp(`(${searchKeyword})`, 'gi'), '<mark style="background-color: #fef3c7; color: #92400e;">$1</mark>')
+                                  : item.query
+                              }} />
+
+                              <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                {formatTime(item.timestamp)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 会话列表 - 也被折叠控制 */}
+                  {isLoading ? (
+                    <div className="flex justify-center items-center py-8">
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                    </div>
+                  ) : filteredSessions.length > 0 ? (
+                    <div className="space-y-2">
+                      {filteredSessions.map((session) => (
+                      <div
+                        key={session.sessionId}
+                        className={`p-3 rounded-lg cursor-pointer transition-all duration-200 relative ${session.sessionId === currentSessionId
+                          ? 'bg-primary/10 dark:bg-primary/20 border border-primary/30 shadow-sm'
+                          : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+                        }`}
+                        onClick={() => switchSession(session.sessionId)}
+                      >
+                        <div className="flex justify-between items-center min-w-0">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-gray-900 dark:text-white mb-1 truncate">
+                              {session.title}
+                            </p>
+                          </div>
+                          <div className="flex space-x-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-gray-400 hover:text-blue-500"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const newTitle = prompt('请输入新的会话标题:', session.title);
+                                if (newTitle && newTitle.trim()) {
+                                  fetch(`${API_BASE_URL}/sessions/${session.sessionId}`, {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ title: newTitle.trim() }),
+                                  }).then(() => {
+                                    window.location.reload();
+                                  });
+                                }
+                              }}
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className={`h-6 w-6 ${session.isPinned ? 'text-yellow-500' : 'text-gray-400 hover:text-yellow-500'}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSessionPin(session.sessionId);
+                              }}
+                            >
+                              {session.isPinned ? (
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                              ) : (
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                                </svg>
+                              )}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-gray-400 hover:text-red-500"
+                              onClick={(e) => handleDeleteSession(session.sessionId, e)}
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {formatDate(new Date(session.updatedAt))}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) :
+                  <div className="text-center py-12 text-gray-500 dark:text-gray-400">
+                    {searchKeyword ? (
+                      <>
+                        <p>无匹配会话</p>
+                        <Button
+                          onClick={() => setSearchKeyword("")}
+                          className="mt-4 bg-primary hover:bg-primary/90 text-white"
+                        >
+                          清除搜索
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <p>暂无对话历史</p>
+                        <Button
+                          onClick={createNewSession}
+                          className="mt-4 bg-primary hover:bg-primary/90 text-white"
+                        >
+                          开始新对话
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                }
+                </div>
+              </div>
+
+              {/* 用户资料区域 - 固定在底部 */}
+              <div className="flex-shrink-0 border-t border-gray-200 dark:border-gray-700 p-4">
+                <div className="flex items-center space-x-3">
+                  {/* 头像 */}
+                  <div className="relative">
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src="https://api.dicebear.com/7.x/avataaars/svg?seed=user" />
+                      <AvatarFallback>用户</AvatarFallback>
+                    </Avatar>
+                    <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 border-2 border-white dark:border-gray-800 rounded-full"></div>
+                  </div>
+
+                  {/* 用户信息 */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">用户名</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">在线</p>
+                  </div>
+
+                  {/* 设置按钮 */}
+                  <div className="flex items-center space-x-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8" title="主题设置">
+                      <Sun className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" title="系统设置">
+                      <Settings className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* 展开更多设置 */}
+                {false && (
+                  <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
+                    <div className="space-y-3">
+                      {/* 主题切换 */}
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600 dark:text-gray-300">深色模式</span>
+                        <div className="relative">
+                          <button
+                            className={`w-10 h-5 rounded-full transition-colors duration-200 ${true ? 'bg-primary' : 'bg-gray-300'}`}
+                            onClick={() => toggleTheme()}
+                          >
+                            <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${true ? 'translate-x-5' : 'translate-x-0.5'}`}></div>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 语言设置 */}
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600 dark:text-gray-300">语言</span>
+                        <select className="text-sm bg-gray-100 dark:bg-gray-700 border-none rounded px-2 py-1 text-gray-700 dark:text-gray-300">
+                          <option value="zh">中文</option>
+                          <option value="en">English</option>
+                        </select>
+                      </div>
+
+                      {/* 模型选择快捷入口 */}
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600 dark:text-gray-300">当前模型</span>
+                        <span className="text-sm text-primary font-medium">DeepSeek-V4</span>
+                      </div>
                     </div>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           )}
-          
-          {/* 会话列表 */}
-          {isLoading ? (
-            <div className="flex justify-center items-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-            </div>
-          ) : filteredSessions.length > 0 ? (
-            <div className="space-y-2">
-              {filteredSessions.map((session) => (
-                <div
-                  key={session.sessionId}
-                  className={`p-3 rounded-lg cursor-pointer transition-all duration-200 relative ${session.sessionId === currentSessionId
-                    ? 'bg-primary/10 dark:bg-primary/20 border border-primary/30 shadow-sm'
-                    : 'hover:bg-gray-100 dark:hover:bg-gray-700'
-                  }`}
-                  onClick={() => switchSession(session.sessionId)}
-                >
-                  <div className="flex justify-between items-center min-w-0">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-1 truncate">
-                        {session.title}
-                      </p>
-                    </div>
-                    <div className="flex space-x-1">
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className="h-6 w-6 text-gray-400 hover:text-blue-500"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // 实现会话标题编辑功能
-                          const newTitle = prompt('请输入新的会话标题:', session.title);
-                          if (newTitle && newTitle.trim()) {
-                            // 调用更新会话标题的 API
-                            fetch(`${API_BASE_URL}/sessions/${session.sessionId}`, {
-                              method: 'PUT',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ title: newTitle.trim() }),
-                            }).then(() => {
-                              // 重新加载会话列表
-                              window.location.reload();
-                            });
-                          }
-                        }}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                      </Button>
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className={`h-6 w-6 ${session.isPinned ? 'text-yellow-500' : 'text-gray-400 hover:text-yellow-500'}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleSessionPin(session.sessionId);
-                        }}
-                      >
-                        {session.isPinned ? (
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        ) : (
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                          </svg>
-                        )}
-                      </Button>
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className="h-6 w-6 text-gray-400 hover:text-red-500"
-                        onClick={(e) => handleDeleteSession(session.sessionId, e)}
-                      >
-                        <X className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {formatDate(new Date(session.updatedAt))}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) :
-            <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-              {searchKeyword ? (
-                <>
-                  <p>无匹配会话</p>
-                  <Button 
-                    onClick={() => setSearchKeyword("")}
-                    className="mt-4 bg-primary hover:bg-primary/90 text-white"
-                  >
-                    清除搜索
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <p>暂无对话历史</p>
-                  <Button 
-                    onClick={createNewSession}
-                    className="mt-4 bg-primary hover:bg-primary/90 text-white"
-                  >
-                    开始新对话
-                  </Button>
-                </>
-              )}
-            </div>
-          }
         </div>
       </div>
 
@@ -691,8 +819,8 @@ const ChatAgent: React.FC = () => {
         </div>
       </div>
 
-      {/* 右侧可折叠模型管理面板 */}
-      <div className="relative flex-shrink-0">
+      {/* 右侧可折叠模型管理面板 - 绝对定位，覆盖在聊天内容上方 */}
+      <div className="absolute right-0 top-0 h-full z-20">
         {/* 折叠/展开切换按钮 */}
         <button
           className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-full z-20 w-7 h-14 flex items-center justify-center bg-white dark:bg-gray-800 border border-r-0 border-gray-200 dark:border-gray-700 rounded-l-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-sm"
@@ -708,7 +836,7 @@ const ChatAgent: React.FC = () => {
 
         {/* 面板内容 */}
         <div
-          className={`h-full bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 transition-all duration-300 ease-in-out overflow-hidden ${
+          className={`h-full bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 transition-all duration-300 ease-in-out overflow-hidden shadow-lg ${
             showModelPanel ? 'w-64' : 'w-0'
           }`}
         >
