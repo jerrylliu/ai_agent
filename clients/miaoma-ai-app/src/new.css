@@ -270,6 +270,130 @@
   border-color: #5FF6FF22;
 }
 
+/* ---------- cyberpunk-history：对话历史模块（#5FF6FF） ---------- */
+.cyberpunk .cyberpunk-history svg,
+.cyberpunk .cyberpunk-history .lucide {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+}
+
+.cyberpunk .cyberpunk-history {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+/* ---------- cyberpunk-recent：最近的问题模块（#FFFF7A） ---------- */
+.cyberpunk .cyberpunk-recent svg,
+.cyberpunk .cyberpunk-recent .lucide {
+  color: #FFFF7A;
+  filter: drop-shadow(0 0 3px #FFFF7A66) drop-shadow(0 0 6px #FFFF7A33);
+}
+
+.cyberpunk .cyberpunk-recent {
+  color: #FFFF7A;
+  text-shadow: 0 0 4px #FFFF7A66, 0 0 8px #FFFF7A33;
+}
+
+/* ---------- cyberpunk-unauth：未登录状态文字（#ff5247） ---------- */
+.cyberpunk .cyberpunk-unauth {
+  color: #ff5247;
+  text-shadow: 0 0 4px #ff524766, 0 0 8px #ff524733;
+}
+
+/* ---------- cyberpunk-user-info：左侧栏用户信息发光效果 ---------- */
+/* 用户名：#5FF6FF 颜色 + 微发光 */
+.cyberpunk .cyberpunk-username {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+/* 用户邮箱：#FFFF7A 颜色 + 微发光 */
+.cyberpunk .cyberpunk-useremail {
+  color: #FFFF7A;
+  text-shadow: 0 0 4px #FFFF7A66, 0 0 8px #FFFF7A33;
+}
+
+/* ---------- cyberpunk-model-panel：右侧模型设置面板样式 ---------- */
+
+/* 本地模型/线上模型 分组标签：#5FF6FF 颜色 + 发光 */
+.cyberpunk .cyberpunk-model-group-label {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+.cyberpunk .cyberpunk-model-group-label svg {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+}
+
+/* 当前模型标签"当前模型"：#5FF6FF 颜色 + 发光 */
+.cyberpunk .cyberpunk-model-current-label {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+/* 当前模型图标和名称：#33ff00 颜色 + 发光 */
+.cyberpunk .cyberpunk-model-current-icon {
+  color: #33ff00;
+  filter: drop-shadow(0 0 3px #33ff0066) drop-shadow(0 0 6px #33ff0033);
+}
+
+.cyberpunk .cyberpunk-model-current-name {
+  color: #33ff00;
+  text-shadow: 0 0 4px #33ff0066, 0 0 8px #33ff0033;
+}
+
+/* 配置 DeepSeek API Key 按钮：#FFFF7A 颜色 + 发光 */
+.cyberpunk .cyberpunk-model-apikey-btn {
+  color: #FFFF7A;
+  text-shadow: 0 0 4px #FFFF7A66, 0 0 8px #FFFF7A33;
+}
+
+.cyberpunk .cyberpunk-model-apikey-btn svg {
+  color: #FFFF7A;
+  filter: drop-shadow(0 0 3px #FFFF7A66) drop-shadow(0 0 6px #FFFF7A33);
+}
+
+/* 本地模型/线上模型 列表项内容：#5FF6FF 颜色 + 发光 */
+.cyberpunk .cyberpunk-model-item-name {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+.cyberpunk .cyberpunk-model-item-desc {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+.cyberpunk .cyberpunk-model-item-check {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+}
+
+/* ---------- 模型列表项选中状态（赛博朋克主题） ---------- */
+/* 选中状态背景：#5FF6FF 高透明度，边框发光 */
+.cyberpunk .dark\:bg-blue-900\/30 {
+  background-color: #5FF6FF33 !important;
+}
+
+.cyberpunk .dark\:border-blue-800 {
+  border-color: #5FF6FF66 !important;
+  box-shadow: 0 0 6px #5FF6FF44, 0 0 12px #5FF6FF22;
+}
+
+/* 选中状态下文字变为黑色 */
+.cyberpunk .dark\:bg-blue-900\/30 .cyberpunk-model-item-name,
+.cyberpunk .dark\:bg-blue-900\/30 .cyberpunk-model-item-desc {
+  color: #5FF6FF;
+  text-shadow: none;
+}
+
+/* 选中状态下CheckCircle图标变为黑色 */
+.cyberpunk .dark\:bg-blue-900\/30 .cyberpunk-model-item-check {
+  color: #5FF6FF;
+  filter: none;
+}
+
 /* ---------- 赛博朋克模式：背景覆盖（仍需用 Tailwind 类选择器） ---------- */
 .cyberpunk .dark\:hover\:bg-slate-700:hover {
   background-color: #2A1A2E;
@@ -290,7 +414,9 @@
 
 /* ---------- cyberpunk-scrollbar：赛博朋克滚动条样式 ---------- */
 /* 默认：#5FF6FF 霓虹青 + 发光；悬停/点击：#ff5247 红色 + 红色发光（与按钮一致） */
-.cyberpunk * {
+.cyberpunk .overflow-y-auto,
+.cyberpunk .overflow-x-auto,
+.cyberpunk .overflow-auto {
   scrollbar-width: thin;
   scrollbar-color: #5FF6FF transparent;
   scrollbar-gutter: stable;
@@ -319,6 +445,126 @@
 
 .cyberpunk ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* ---------- cyberpunk-header：聊天头部信息栏赛博朋克样式 ---------- */
+/* 智能助手标题：#5FF6FF 颜色 + 发光 */
+.cyberpunk .cyberpunk-header-title {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33, 0 0 12px #5FF6FF22;
+}
+
+/* 在线状态：#33ff00 颜色 + 发光 */
+.cyberpunk .cyberpunk-header-online {
+  color: #33ff00;
+  text-shadow: 0 0 4px #33ff0066, 0 0 8px #33ff0033, 0 0 12px #33ff0022;
+}
+
+/* 知识库标签和图标：#5FF6FF 颜色 + 发光 */
+.cyberpunk .cyberpunk-header-kb-label,
+.cyberpunk .cyberpunk-header-kb-label svg {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+}
+
+.cyberpunk .cyberpunk-header-kb-label span {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+/* 文档数量：#33ff00 颜色 + 发光 */
+.cyberpunk .cyberpunk-header-kb-count {
+  color: #33ff00;
+  text-shadow: 0 0 4px #33ff0066, 0 0 8px #33ff0033, 0 0 12px #33ff0022;
+}
+
+/* 上传知识库按钮文字和图标：#5FF6FF 颜色 + 发光 */
+.cyberpunk .cyberpunk-header-upload-btn,
+.cyberpunk .cyberpunk-header-upload-btn span,
+.cyberpunk .cyberpunk-header-upload-btn svg {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+.cyberpunk .cyberpunk-header-upload-btn svg {
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+}
+
+/* ---------- cyberpunk-apikey-dialog：DeepSeek API Key 配置弹窗赛博朋克样式 ---------- */
+/* 弹窗背景：深紫色半透明 */
+.cyberpunk .cyberpunk-apikey-dialog-bg {
+  background-color: #1F111EE6;
+}
+
+/* 弹窗卡片：深紫色背景 + 青色边框发光 */
+.cyberpunk .cyberpunk-apikey-dialog-card {
+  background-color: #1F111E;
+  border: 1px solid #5FF6FF66;
+  box-shadow: 0 0 10px #5FF6FF44, 0 0 20px #5FF6FF22, 0 0 40px #5FF6FF11;
+}
+
+/* 弹窗标题：#5FF6FF 青色 + 发光 */
+.cyberpunk .cyberpunk-apikey-dialog-title {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33, 0 0 12px #5FF6FF22;
+}
+
+/* 弹窗描述文字：#5FF6FF 青色（低饱和度） */
+.cyberpunk .cyberpunk-apikey-dialog-desc {
+  color: #5FF6FFCC;
+}
+
+/* 弹窗链接：#FFFF7A 黄色 + 发光 */
+.cyberpunk .cyberpunk-apikey-dialog-desc a {
+  color: #FFFF7A;
+  text-shadow: 0 0 4px #FFFF7A66, 0 0 8px #FFFF7A33;
+}
+
+/* 输入框：深色背景 + 青色边框 */
+.cyberpunk .cyberpunk-apikey-dialog-input {
+  background-color: #2A1A2E;
+  border-color: #5FF6FF44;
+  color: #5FF6FF;
+  box-shadow: 0 0 5px #5FF6FF22;
+}
+
+.cyberpunk .cyberpunk-apikey-dialog-input::placeholder {
+  color: #5FF6FF66;
+}
+
+.cyberpunk .cyberpunk-apikey-dialog-input:focus {
+  border-color: #5FF6FF;
+  box-shadow: 0 0 8px #5FF6FF66, 0 0 16px #5FF6FF33;
+  outline: none;
+}
+
+/* 取消按钮：灰色文字 + 悬停发光 */
+.cyberpunk .cyberpunk-apikey-dialog-cancel {
+  color: #5FF6FF99;
+}
+
+.cyberpunk .cyberpunk-apikey-dialog-cancel:hover {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+  background-color: #5FF6FF11;
+}
+
+/* 保存按钮：青色背景 + 发光 */
+.cyberpunk .cyberpunk-apikey-dialog-save {
+  background-color: #5FF6FF;
+  color: #1F111E;
+  box-shadow: 0 0 8px #5FF6FF66, 0 0 16px #5FF6FF33;
+}
+
+.cyberpunk .cyberpunk-apikey-dialog-save:hover {
+  background-color: #7FF8FF;
+  box-shadow: 0 0 10px #5FF6FF88, 0 0 20px #5FF6FF66, 0 0 40px #5FF6FF44;
+}
+
+.cyberpunk .cyberpunk-apikey-dialog-save:disabled {
+  background-color: #5FF6FF33;
+  color: #5FF6FF66;
+  box-shadow: none;
 }
 
 /* ==================== 全局基础样式 ==================== */
