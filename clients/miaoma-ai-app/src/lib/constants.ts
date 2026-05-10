@@ -11,6 +11,12 @@ export const API_ENDPOINTS = {
   MODELS: `${API_BASE_URL}/models`,
   MODELS_SWITCH: `${API_BASE_URL}/models/switch`,
   MODELS_APIKEY: `${API_BASE_URL}/models/apikey`,
+  AUTH_REGISTER: `${API_BASE_URL}/auth/register`,
+  AUTH_LOGIN: `${API_BASE_URL}/auth/login`,
+  AUTH_PROFILE: `${API_BASE_URL}/auth/profile`,
+  AUTH_VERIFY: `${API_BASE_URL}/auth/verify`,
+  AUTH_CHANGE_PASSWORD: `${API_BASE_URL}/auth/password`,
+  AUTH_AVATAR: `${API_BASE_URL}/auth/avatar`,
 } as const;
 
 export const MAX_HISTORY_ITEMS = 10;

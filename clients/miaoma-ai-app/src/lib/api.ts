@@ -378,6 +378,126 @@ export async function setModelApiKey(
   }>(response);
 }
 
+// ============================================
+// 认证相关 API
+// ============================================
+
+export interface UserInfo {
+  id: number;
+  email: string | null;
+  phone: string | null;
+  username: string | null;
+  avatar: string | null;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthResponse {
+  success: boolean;
+  message: string;
+  user: UserInfo;
+  token: string;
+}
+
+export async function register(body: {
+  email?: string;
+  phone?: string;
+  password: string;
+  username?: string;
+}): Promise<AuthResponse> {
+  const response = await fetch(API_ENDPOINTS.AUTH_REGISTER, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<AuthResponse>(response);
+}
+
+export async function login(body: {
+  account: string;
+  password: string;
+}): Promise<AuthResponse> {
+  const response = await fetch(API_ENDPOINTS.AUTH_LOGIN, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<AuthResponse>(response);
+}
+
+export async function getProfile(token: string): Promise<UserInfo> {
+  const response = await fetch(API_ENDPOINTS.AUTH_PROFILE, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  return handleResponse<UserInfo>(response);
+}
+
+export async function updateProfile(
+  token: string,
+  body: { username?: string; avatar?: string },
+): Promise<{ success: boolean; message: string; user: UserInfo }> {
+  const response = await fetch(API_ENDPOINTS.AUTH_PROFILE, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<{ success: boolean; message: string; user: UserInfo }>(response);
+}
+
+export async function verifyToken(token: string): Promise<{
+  success: boolean;
+  valid: boolean;
+  user: UserInfo;
+}> {
+  const response = await fetch(API_ENDPOINTS.AUTH_VERIFY, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  return handleResponse<{ success: boolean; valid: boolean; user: UserInfo }>(response);
+}
+
+export async function changePassword(
+  token: string,
+  body: { oldPassword: string; newPassword: string },
+): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(API_ENDPOINTS.AUTH_CHANGE_PASSWORD, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+export async function uploadAvatar(
+  token: string,
+  file: File,
+): Promise<{ success: boolean; message: string; user: UserInfo }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetch(API_ENDPOINTS.AUTH_AVATAR, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+  return handleResponse<{ success: boolean; message: string; user: UserInfo }>(response);
+}
+
 /**
  * 获取知识库状态
  * @returns 知识库状态信息

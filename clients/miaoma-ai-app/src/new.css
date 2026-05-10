@@ -1,134 +1,337 @@
 /* stylelint-disable custom-property-pattern, rule-empty-line-before */
-/* @import "tailwindcss/base"; */
-/* @import "tailwindcss/components"; */
-/* @import "tailwindcss/utilities"; */
-/* @import "tw-animate-css"; */
 
+/* ==================== Tailwind CSS 基础导入 ==================== */
 @import "tailwindcss";
-/* @import "shadcn/tailwind.css"; */
 
+/* ==================== 暗色模式自定义变体 ==================== */
+/* 当父元素包含 .dark 类时，应用暗色主题样式 */
 @custom-variant dark (&:is(.dark *));
 
+/* ==================== 赛博朋克模式自定义变体 ==================== */
+/* 当父元素包含 .cyberpunk 类时，应用赛博朋克主题样式 */
+@custom-variant cyberpunk (&:is(.cyberpunk *));
+
+/* ==================== 主题变量映射（Tailwind 颜色令牌） ==================== */
+/* 将 CSS 变量映射为 Tailwind 可用的颜色类名，如 bg-background、text-foreground 等 */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --color-background: var(--background);              /* 页面整体背景色，用于 bg-background */
+  --color-foreground: var(--foreground);              /* 页面整体前景色（主文字颜色），用于 text-foreground */
+  --color-card: var(--card);                          /* 卡片组件背景色，用于 bg-card */
+  --color-card-foreground: var(--card-foreground);    /* 卡片组件文字颜色，用于 text-card-foreground */
+  --color-popover: var(--popover);                    /* 弹出层/浮层背景色（如下拉菜单、工具提示），用于 bg-popover */
+  --color-popover-foreground: var(--popover-foreground); /* 弹出层/浮层文字颜色，用于 text-popover-foreground */
+  --color-primary: var(--primary);                    /* 主色调/品牌色（按钮、链接、强调元素），用于 bg-primary */
+  --color-primary-foreground: var(--primary-foreground); /* 主色调上的文字颜色（通常为白色），用于 text-primary-foreground */
+  --color-secondary: var(--secondary);                /* 次要色调（次要按钮、标签背景），用于 bg-secondary */
+  --color-secondary-foreground: var(--secondary-foreground); /* 次要色调上的文字颜色，用于 text-secondary-foreground */
+  --color-muted: var(--muted);                        /* 柔和/弱化背景色（禁用状态、占位区域），用于 bg-muted */
+  --color-muted-foreground: var(--muted-foreground);  /* 柔和/弱化文字颜色（辅助说明文字），用于 text-muted-foreground */
+  --color-accent: var(--accent);                      /* 强调色/高亮背景色（悬停状态、选中项背景），用于 bg-accent */
+  --color-accent-foreground: var(--accent-foreground); /* 强调色上的文字颜色，用于 text-accent-foreground */
+  --color-destructive: var(--destructive);            /* 危险/删除/错误色（删除按钮、错误提示），用于 bg-destructive */
+  --color-border: var(--border);                      /* 边框颜色，用于 border-border */
+  --color-input: var(--input);                        /* 输入框边框颜色，用于 border-input */
+  --color-ring: var(--ring);                          /* 焦点环颜色（输入框/按钮聚焦时的外圈），用于 ring-ring */
+  --color-chart-1: var(--chart-1);                    /* 图表数据系列1颜色（柱状图/折线图第一组数据） */
+  --color-chart-2: var(--chart-2);                    /* 图表数据系列2颜色 */
+  --color-chart-3: var(--chart-3);                    /* 图表数据系列3颜色 */
+  --color-chart-4: var(--chart-4);                    /* 图表数据系列4颜色 */
+  --color-chart-5: var(--chart-5);                    /* 图表数据系列5颜色 */
+  --color-sidebar: var(--sidebar);                    /* 侧边栏整体背景色，用于 bg-sidebar */
+  --color-sidebar-foreground: var(--sidebar-foreground); /* 侧边栏主文字颜色，用于 text-sidebar-foreground */
+  --color-sidebar-primary: var(--sidebar-primary);    /* 侧边栏主色调（激活菜单项、侧边栏按钮），用于 bg-sidebar-primary */
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground); /* 侧边栏主色调上的文字颜色，用于 text-sidebar-primary-foreground */
+  --color-sidebar-accent: var(--sidebar-accent);      /* 侧边栏强调色（菜单项悬停/选中背景），用于 bg-sidebar-accent */
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground); /* 侧边栏强调色上的文字颜色，用于 text-sidebar-accent-foreground */
+  --color-sidebar-border: var(--sidebar-border);      /* 侧边栏边框颜色，用于 border-sidebar-border */
+  --color-sidebar-ring: var(--sidebar-ring);          /* 侧边栏焦点环颜色，用于 ring-sidebar-ring */
+
+  /* ==================== 圆角大小（基于 --radius 基准值计算） ==================== */
+  --radius-sm: calc(var(--radius) * 0.6);   /* 小圆角，用于 rounded-sm */
+  --radius-md: calc(var(--radius) * 0.8);   /* 中圆角，用于 rounded-md */
+  --radius-lg: var(--radius);               /* 大圆角（基准值），用于 rounded-lg */
+  --radius-xl: calc(var(--radius) * 1.4);   /* 超大圆角，用于 rounded-xl */
+  --radius-2xl: calc(var(--radius) * 1.8);  /* 2倍超大圆角，用于 rounded-2xl */
+  --radius-3xl: calc(var(--radius) * 2.2);  /* 3倍超大圆角，用于 rounded-3xl */
+  --radius-4xl: calc(var(--radius) * 2.6);  /* 4倍超大圆角，用于 rounded-4xl */
 }
 
+/* ==================== 亮色模式（默认）颜色定义 ==================== */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.625rem;                          /* 圆角基准值 = 10px，所有圆角基于此计算 */
+
+  --background: oklch(1 0 0);                  /* 页面背景：纯白色 */
+  --foreground: oklch(0.145 0 0);              /* 主文字：深灰/近黑色 */
+  --card: oklch(1 0 0);                        /* 卡片背景：纯白色 */
+  --card-foreground: oklch(0.145 0 0);         /* 卡片文字：深灰/近黑色 */
+  --popover: oklch(1 0 0);                     /* 弹出层背景：纯白色 */
+  --popover-foreground: oklch(0.145 0 0);      /* 弹出层文字：深灰/近黑色 */
+  --primary: oklch(0.205 0 0);                 /* 主色调：深灰/近黑色（用于主按钮背景） */
+  --primary-foreground: oklch(0.985 0 0);      /* 主色调文字：近白色（主按钮上的文字） */
+  --secondary: oklch(0.97 0 0);                /* 次要背景：浅灰色 */
+  --secondary-foreground: oklch(0.205 0 0);    /* 次要文字：深灰/近黑色 */
+  --muted: oklch(0.97 0 0);                    /* 弱化背景：浅灰色（禁用项、占位区域） */
+  --muted-foreground: oklch(0.556 0 0);        /* 弱化文字：中灰色（辅助说明文字） */
+  --accent: oklch(0.97 0 0);                   /* 强调背景：浅灰色（悬停、选中高亮） */
+  --accent-foreground: oklch(0.205 0 0);       /* 强调文字：深灰/近黑色 */
+  --destructive: oklch(0.577 0.245 27.325);    /* 危险色：红色（删除、错误提示） */
+  --border: oklch(0.922 0 0);                  /* 边框：浅灰色 */
+  --input: oklch(0.922 0 0);                   /* 输入框边框：浅灰色 */
+  --ring: oklch(0.708 0 0);                    /* 焦点环：中灰色 */
+  --chart-1: oklch(0.646 0.222 41.116);        /* 图表色1：橙红色 */
+  --chart-2: oklch(0.6 0.118 184.704);         /* 图表色2：青蓝色 */
+  --chart-3: oklch(0.398 0.07 227.392);        /* 图表色3：深蓝色 */
+  --chart-4: oklch(0.828 0.189 84.429);        /* 图表色4：黄绿色 */
+  --chart-5: oklch(0.769 0.188 70.08);         /* 图表色5：金黄色 */
+  --sidebar: oklch(0.985 0 0);                 /* 侧边栏背景：近白色 */
+  --sidebar-foreground: oklch(0.145 0 0);      /* 侧边栏文字：深灰/近黑色 */
+  --sidebar-primary: oklch(0.205 0 0);         /* 侧边栏主色调：深灰/近黑色 */
+  --sidebar-primary-foreground: oklch(0.985 0 0); /* 侧边栏主色调文字：近白色 */
+  --sidebar-accent: oklch(0.97 0 0);           /* 侧边栏强调背景：浅灰色（菜单悬停） */
+  --sidebar-accent-foreground: oklch(0.205 0 0); /* 侧边栏强调文字：深灰/近黑色 */
+  --sidebar-border: oklch(0.922 0 0);          /* 侧边栏边框：浅灰色 */
+  --sidebar-ring: oklch(0.708 0 0);            /* 侧边栏焦点环：中灰色 */
 }
 
+/* ==================== 暗色模式颜色定义 ==================== */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: oklch(0.15 0.005 270);              /* 页面背景：深紫黑色（主背景） */
+  --foreground: oklch(0.97 0 0);                     /* 主文字：近白色 */
+  --card: oklch(0.21 0.005 270);                     /* 卡片背景：深灰色（比背景稍亮，形成层次） */
+  --card-foreground: oklch(0.97 0 0);                /* 卡片文字：近白色 */
+  --popover: oklch(0.21 0.005 270);                  /* 弹出层背景：深灰色 */
+  --popover-foreground: oklch(0.97 0 0);             /* 弹出层文字：近白色 */
+  --primary: oklch(0.75 0.15 270);                   /* 主色调：亮紫色（暗色模式下的品牌色/主按钮） */
+  --primary-foreground: oklch(0.98 0 0);             /* 主色调文字：近白色 */
+  --secondary: oklch(0.25 0.008 270);                /* 次要背景：暗灰色（次要按钮、标签） */
+  --secondary-foreground: oklch(0.94 0 0);           /* 次要文字：亮灰色 */
+  --muted: oklch(0.25 0.008 270);                    /* 弱化背景：暗灰色（禁用项、占位区域） */
+  --muted-foreground: oklch(0.80 0 0);               /* 弱化文字：中亮灰色（辅助说明文字） */
+  --accent: oklch(0.28 0.01 270);                    /* 强调背景：暗灰色（悬停、选中高亮） */
+  --accent-foreground: oklch(0.97 0 0);              /* 强调文字：近白色 */
+  --destructive: oklch(0.704 0.191 22.216);           /* 危险色：暗红色（删除、错误提示） */
+  --border: oklch(1 0 0 / 22%);                      /* 边框：白色半透明22%（暗色下用半透明实现边框） */
+  --input: oklch(1 0 0 / 26%);                       /* 输入框边框：白色半透明26% */
+  --ring: oklch(0.75 0.15 270);                      /* 焦点环：亮紫色（与主色调一致） */
+  --chart-1: oklch(0.55 0.243 264.376);              /* 图表色1：蓝紫色 */
+  --chart-2: oklch(0.696 0.17 162.48);               /* 图表色2：青绿色 */
+  --chart-3: oklch(0.769 0.188 70.08);               /* 图表色3：金黄色 */
+  --chart-4: oklch(0.627 0.265 303.9);               /* 图表色4：粉紫色 */
+  --chart-5: oklch(0.645 0.246 16.439);              /* 图表色5：橙红色 */
+  --sidebar: oklch(0.18 0.005 270);                  /* 侧边栏背景：深紫黑色（比主背景稍亮） */
+  --sidebar-foreground: oklch(0.97 0 0);             /* 侧边栏文字：近白色 */
+  --sidebar-primary: oklch(0.75 0.15 270);           /* 侧边栏主色调：亮紫色 */
+  --sidebar-primary-foreground: oklch(0.98 0 0);     /* 侧边栏主色调文字：近白色 */
+  --sidebar-accent: oklch(0.28 0.01 270);            /* 侧边栏强调背景：暗灰色（菜单悬停） */
+  --sidebar-accent-foreground: oklch(0.97 0 0);      /* 侧边栏强调文字：近白色 */
+  --sidebar-border: oklch(1 0 0 / 22%);              /* 侧边栏边框：白色半透明22% */
+  --sidebar-ring: oklch(0.75 0.15 270);              /* 侧边栏焦点环：亮紫色 */
 }
 
+/* ==================== 赛博朋克模式颜色定义 ==================== */
+/* 风格：#1F111E 深紫黑底色 + #5FF6FF 霓虹青高亮 + 发光效果，营造未来科技感 */
+.cyberpunk {
+  --background: #1F111E;                             /* 页面背景：深紫黑色 #1F111E */
+  --foreground: #E8E0F0;                             /* 主文字：淡紫白色 */
+  --card: #1F111E;                                   /* 卡片背景：与主背景一致 #1F111E */
+  --card-foreground: #E8E0F0;                        /* 卡片文字：淡紫白色 */
+  --popover: #1F111E;                                /* 弹出层背景：与主背景一致 #1F111E */
+  --popover-foreground: #E8E0F0;                     /* 弹出层文字：淡紫白色 */
+  --primary: #5FF6FF;                                /* 主色调：霓虹青色 #5FF6FF（按钮、品牌色） */
+  --primary-foreground: #000000;                     /* 主色调文字：黑色（按钮文字） */
+  --secondary: #3A1F3E;                              /* 次要背景：暗紫色（次要按钮、标签） */
+  --secondary-foreground: #C8B8D8;                   /* 次要文字：淡紫色 */
+  --muted: #2A1A2E;                                  /* 弱化背景：暗紫灰色（禁用项、占位区域） */
+  --muted-foreground: #8A7A9A;                       /* 弱化文字：暗紫色（辅助说明文字） */
+  --accent: #3A1F3E;                                 /* 强调背景：暗紫色（悬停、选中高亮） */
+  --accent-foreground: #5FF6FF;                      /* 强调文字：霓虹青色 */
+  --destructive: #FF4466;                            /* 危险色：霓虹红色（删除、错误提示） */
+  --border: #5FF6FF33;                               /* 边框：霓虹青色半透明20%（赛博朋克发光边框感） */
+  --input: #5FF6FF2B;                                /* 输入框边框：霓虹青色半透明17% */
+  --ring: #5FF6FF;                                   /* 焦点环：霓虹青色 */
+  --chart-1: #5FF6FF;                                /* 图表色1：霓虹青色 */
+  --chart-2: #FF6EC7;                                /* 图表色2：霓虹品红色 */
+  --chart-3: #ADFF2F;                                /* 图表色3：霓虹黄绿色 */
+  --chart-4: #8A2BE2;                                /* 图表色4：电光蓝紫色 */
+  --chart-5: #FF6B35;                                /* 图表色5：霓虹橙红色 */
+  --sidebar: #1F111E;                                /* 侧边栏背景：与主背景一致 #1F111E */
+  --sidebar-foreground: #E8E0F0;                     /* 侧边栏文字：淡紫白色 */
+  --sidebar-primary: #5FF6FF;                        /* 侧边栏主色调：霓虹青色 */
+  --sidebar-primary-foreground: #1F111E;             /* 侧边栏主色调文字：深紫黑色 */
+  --sidebar-accent: #3A1F3E;                         /* 侧边栏强调背景：暗紫色（菜单悬停） */
+  --sidebar-accent-foreground: #5FF6FF;              /* 侧边栏强调文字：霓虹青色 */
+  --sidebar-border: #5FF6FF33;                       /* 侧边栏边框：霓虹青色半透明20% */
+  --sidebar-ring: #5FF6FF;                           /* 侧边栏焦点环：霓虹青色 */
+}
+
+/* ========================================================================
+   赛博朋克模式专属样式区
+   所有赛博朋克特效均使用专属类名，不会牵连其他模块
+   ======================================================================== */
+
+/* ---------- 发光变量 ---------- */
+.cyberpunk {
+  --cyberpunk-glow: #5FF6FF;
+  --cyberpunk-glow-sm: 0 0 5px #5FF6FF66, 0 0 10px #5FF6FF33;
+  --cyberpunk-glow-md: 0 0 8px #5FF6FF88, 0 0 16px #5FF6FF44, 0 0 24px #5FF6FF22;
+  --cyberpunk-glow-lg: 0 0 10px #5FF6FFAA, 0 0 20px #5FF6FF66, 0 0 40px #5FF6FF44, 0 0 60px #5FF6FF22;
+}
+
+/* ---------- cyberpunk-btn-glow：主按钮发光效果 ---------- */
+/* 针对 default 变体按钮（通过 data-variant 属性精确选择） */
+.cyberpunk button[data-variant="default"] {
+  box-shadow: var(--cyberpunk-glow-sm);
+  color: #000000;
+  transition: box-shadow 0.3s ease, background-color 0.3s ease;
+}
+
+.cyberpunk button[data-variant="default"]:hover {
+  background-color: #ff5247;
+  box-shadow: 0 0 10px #ff5247AA, 0 0 20px #ff524766, 0 0 40px #ff524744, 0 0 60px #ff524722;
+}
+
+/* ---------- cyberpunk-icon-glow：图标 #5FF6FF 本体 + #5FF6FF 发光 ---------- */
+/* 针对 ghost 按钮（通过 data-variant 属性精确选择） */
+.cyberpunk button[data-variant="ghost"] svg {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+  transition: filter 0.3s ease;
+}
+
+.cyberpunk button[data-variant="ghost"]:hover svg {
+  filter: drop-shadow(0 0 5px #5FF6FFAA) drop-shadow(0 0 10px #5FF6FF66) drop-shadow(0 0 15px #5FF6FF33);
+}
+
+/* 针对 asChild 按钮（渲染为 span，通过专属类名选择） */
+.cyberpunk .cyberpunk-icon-glow svg {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+  transition: filter 0.3s ease;
+}
+
+.cyberpunk .cyberpunk-icon-glow:hover svg {
+  filter: drop-shadow(0 0 5px #5FF6FFAA) drop-shadow(0 0 10px #5FF6FF66) drop-shadow(0 0 15px #5FF6FF33);
+}
+
+/* ---------- cyberpunk-ai-msg：AI消息卡片发光效果 ---------- */
+/* 白色底色 + #FFFF7A 发光边框 + #FFFF7A 微发光文字 */
+.cyberpunk .cyberpunk-ai-msg {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-color: #FFFF7A44;
+  box-shadow: 0 0 6px #FFFF7A44, 0 0 12px #FFFF7A22;
+  transition: box-shadow 0.3s ease;
+}
+
+.cyberpunk .cyberpunk-ai-msg:hover {
+  box-shadow: 0 0 8px #FFFF7A66, 0 0 16px #FFFF7A33;
+}
+
+.cyberpunk .cyberpunk-ai-msg p,
+.cyberpunk .cyberpunk-ai-msg li,
+.cyberpunk .cyberpunk-ai-msg span,
+.cyberpunk .cyberpunk-ai-msg h1,
+.cyberpunk .cyberpunk-ai-msg h2,
+.cyberpunk .cyberpunk-ai-msg h3,
+.cyberpunk .cyberpunk-ai-msg h4,
+.cyberpunk .cyberpunk-ai-msg td,
+.cyberpunk .cyberpunk-ai-msg th {
+  color: #FFFF7A;
+  text-shadow: 0 0 4px #FFFF7A66, 0 0 8px #FFFF7A33;
+}
+
+.cyberpunk .cyberpunk-ai-msg code,
+.cyberpunk .cyberpunk-ai-msg pre {
+  text-shadow: none;
+}
+
+/* ---------- cyberpunk-user-msg：用户消息卡片发光效果 ---------- */
+/* 白色底色 + #5FF6FF 发光边框 + #5FF6FF 微发光文字 */
+.cyberpunk .cyberpunk-user-msg {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid #5FF6FF44;
+  box-shadow: 0 0 6px #5FF6FF44, 0 0 12px #5FF6FF22;
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+  transition: box-shadow 0.3s ease;
+}
+
+.cyberpunk .cyberpunk-user-msg:hover {
+  box-shadow: 0 0 8px #5FF6FF66, 0 0 16px #5FF6FF33;
+}
+
+/* ---------- cyberpunk-input-glow：输入框聚焦发光 ---------- */
+.cyberpunk .cyberpunk-input-glow:focus {
+  box-shadow: var(--cyberpunk-glow-sm);
+  border-color: #5FF6FF66;
+}
+
+/* ---------- cyberpunk-border-glow：边框微发光 ---------- */
+.cyberpunk .cyberpunk-border-glow {
+  border-color: #5FF6FF22;
+}
+
+/* ---------- 赛博朋克模式：背景覆盖（仍需用 Tailwind 类选择器） ---------- */
+.cyberpunk .dark\:hover\:bg-slate-700:hover {
+  background-color: #2A1A2E;
+}
+
+.cyberpunk .bg-gray-50 {
+  background-color: #1F111E;
+}
+
+.cyberpunk .hover\:bg-gray-50:hover,
+.cyberpunk .hover\:bg-gray-100:hover {
+  background-color: #2A1A2E;
+}
+
+.cyberpunk .dark\:bg-slate-700 {
+  background-color: #2A1A2E;
+}
+
+/* ---------- cyberpunk-scrollbar：赛博朋克滚动条样式 ---------- */
+/* 默认：#5FF6FF 霓虹青 + 发光；悬停/点击：#ff5247 红色 + 红色发光（与按钮一致） */
+.cyberpunk * {
+  scrollbar-width: thin;
+  scrollbar-color: #5FF6FF transparent;
+  scrollbar-gutter: stable;
+}
+
+.cyberpunk ::-webkit-scrollbar {
+  width: 6px;
+}
+
+.cyberpunk ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cyberpunk ::-webkit-scrollbar-thumb {
+  background-color: #5FF6FF;
+  border-radius: 3px;
+  box-shadow: 0 0 5px #5FF6FF66, 0 0 10px #5FF6FF33;
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.cyberpunk ::-webkit-scrollbar-thumb:hover,
+.cyberpunk ::-webkit-scrollbar-thumb:active {
+  background-color: #ff5247;
+  box-shadow: 0 0 10px #ff5247AA, 0 0 20px #ff524766, 0 0 40px #ff524744;
+}
+
+.cyberpunk ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ==================== 全局基础样式 ==================== */
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring/50;   /* 所有元素默认边框色=border变量，聚焦轮廓=ring色50%透明度 */
   }
 
   html, body {
-    @apply h-full w-full;
+    @apply h-full w-full;                   /* html和body撑满整个视口 */
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground;   /* body使用主题背景色和前景文字色 */
   }
 }

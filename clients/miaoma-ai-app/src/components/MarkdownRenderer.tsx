@@ -9,7 +9,6 @@ interface MarkdownRendererProps {
   className?: string;
 }
 
-// 在 MarkdownRenderer.tsx 中添加代码块样式
 const CodeBlock: React.FC<any> = ({ inline, className, children }) => {
   const match = /language-(\w+)/.exec(className || '');
   return !inline && match ? (
@@ -51,18 +50,17 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className
         remarkPlugins={[remarkGfm]}
         components={{
           code: CodeBlock,
-          // 添加图片组件支持，优化图片显示样式
           img: ({ src, alt }) => (
             <img
               src={src}
               alt={alt || '图片'}
               style={{
-                maxWidth: '100%',        // 最大宽度为容器宽度
-                maxHeight: '300px',      // 最大高度300px
-                objectFit: 'contain',    // 保持宽高比
-                borderRadius: '8px',     // 圆角
-                margin: '8px 0',         // 上下间距
-                display: 'block'         // 块级显示
+                maxWidth: '100%',
+                maxHeight: '300px',
+                objectFit: 'contain',
+                borderRadius: '8px',
+                margin: '8px 0',
+                display: 'block'
               }}
             />
           ),
@@ -75,7 +73,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className
             />
           ),
           blockquote: ({ children }) => (
-            <blockquote className="border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic text-gray-600 dark:text-gray-400 my-4">
+            <blockquote className="border-l-4 border-gray-300 dark:border-slate-500 pl-4 italic text-gray-600 dark:text-gray-300 my-4">
               {children}
             </blockquote>
           ),
@@ -105,12 +103,12 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className
             </div>
           ),
           th: ({ children }) => (
-            <th className="border border-gray-300 dark:border-gray-600 px-4 py-2 bg-gray-100 dark:bg-gray-700 font-bold text-left">
+            <th className="border border-gray-300 dark:border-slate-500 px-4 py-2 bg-gray-100 dark:bg-slate-700 font-bold text-left">
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="border border-gray-300 dark:border-gray-600 px-4 py-2">
+            <td className="border border-gray-300 dark:border-slate-500 px-4 py-2">
               {children}
             </td>
           ),
