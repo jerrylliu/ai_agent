@@ -11,7 +11,7 @@ import type { Response } from 'express';
 
 // 配置
 const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB（与头像上传一致）
 
 // 确保上传目录存在
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -120,7 +120,7 @@ export async function retrieveFromKnowledgeBase(
   context: string;
   hasResults: boolean;
 }> {
-  const results = await hybridSearchKnowledgeBase(query, topK, 0.6, 0.4, filter);
+  const results = await hybridSearchKnowledgeBase(query, topK, 0.7, 0.3, filter);
 
   const context = results
     .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)

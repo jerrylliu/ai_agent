@@ -14,7 +14,6 @@ import MiniSearch from 'minisearch';
 import * as path from 'path';
 import * as fs from 'fs';
 
-const MAX_CHUNK_SIZE = 1000;
 const BATCH_SIZE = 1;
 
 // 配置
@@ -84,14 +83,32 @@ async function loadBM25Index(): Promise<void> {
       console.log('📂 BM25 索引文件不存在，将创建新索引');
       return;
     }
-    const data = JSON.parse(fs.readFileSync(BM25_INDEX_PATH, 'utf-8'));
+    
+    const fileContent = fs.readFileSync(BM25_INDEX_PATH, 'utf-8');
+    if (!fileContent || fileContent.trim().length === 0) {
+      console.log('📂 BM25 索引文件为空，将创建新索引');
+      return;
+    }
+    
+    const data = JSON.parse(fileContent);
     if (bm25Index && data?.index?.documents) {
       bm25Index.addAll(data.index.documents);
       bm25DocumentStore = new Map(Object.entries(data.documentStore || {}));
       console.log(`✅ 已加载 BM25 索引，包含 ${bm25Index.documentCount} 个文档`);
+    } else {
+      console.log('⚠️ BM25 索引数据格式不正确，将创建新索引');
     }
-  } catch (error) {
-    console.error('❌ 加载 BM25 索引失败:', error);
+  } catch (error: any) {
+    console.error('❌ 加载 BM25 索引失败:', error.message);
+    console.log('🔄 将删除损坏的索引文件并创建新索引');
+    try {
+      if (fs.existsSync(BM25_INDEX_PATH)) {
+        fs.unlinkSync(BM25_INDEX_PATH);
+        console.log('✅ 已删除损坏的索引文件');
+      }
+    } catch (deleteError) {
+      console.error('❌ 删除损坏索引文件失败:', deleteError.message);
+    }
   }
 }
 
@@ -144,7 +161,7 @@ function deleteFromBM25Index(id: string): void {
   try {
     bm25Index!.remove(id);
     bm25DocumentStore.delete(id);
-    saveBM25Index();
+    saveBM25Index().catch(err => console.error('❌ 保存 BM25 索引失败:', err));
   } catch (error) {
     console.log(`⚠️ 删除 BM25 文档失败 (可能不存在): ${id}`);
   }
@@ -273,26 +290,22 @@ export async function addDocuments(
 
   console.log(`📤 开始向量化 ${texts.length} 个文档...(docType: ${metadata[0]?.docType || 'general'})...`);
 
-  // 分割文本
-  const allChunks: string[] = [];
-  for (const text of texts) {
-    const chunks = await textSplitter.splitText(text);
-    allChunks.push(...chunks);
+  const allChunks: Array<{ text: string; metaIndex: number }> = [];
+  for (let t = 0; t < texts.length; t++) {
+    const chunks = await textSplitter.splitText(texts[t]);
+    for (const chunk of chunks) {
+      allChunks.push({ text: chunk, metaIndex: t });
+    }
   }
-  console.log('📋 分割后的文本块预览：');
-  allChunks.forEach((chunk, i) => {
-    console.log(`块${i}: ${chunk.substring(0, 100)}...`);
-  });
   console.log(`✂️ 文本分割完成，共 ${allChunks.length} 个文本块`);
 
-  // 为每个分割后的文本块创建文档
-  const documents = allChunks.map((text, i) => new Document({
-    pageContent: text,
+  const documents = allChunks.map((chunk, i) => new Document({
+    pageContent: chunk.text,
     metadata: {
-      ...metadata[0],
+      ...metadata[chunk.metaIndex],
       chunk_index: i,
-      source: metadata[0]?.source || 'unknown',
-      doc_type: metadata[0]?.docType || 'general',
+      source: metadata[chunk.metaIndex]?.source || 'unknown',
+      doc_type: metadata[chunk.metaIndex]?.docType || 'general',
     },
   }));
 
@@ -336,12 +349,12 @@ export async function addDocuments(
     for (const [i, chunk] of allChunks.entries()) {
       const id = `doc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}_${i}`;
       const chunkMetadata = {
-        ...metadata[0],
+        ...metadata[chunk.metaIndex],
         chunk_index: i,
-        source: metadata[0]?.source || 'unknown',
-        doc_type: metadata[0]?.docType || 'general',
+        source: metadata[chunk.metaIndex]?.source || 'unknown',
+        doc_type: metadata[chunk.metaIndex]?.docType || 'general',
       };
-      await addToBM25Index(id, chunk, chunkMetadata);
+      await addToBM25Index(id, chunk.text, chunkMetadata);
       bm25AddedCount++;
     }
     console.log(`🔍 已添加 ${bm25AddedCount} 个文档到 BM25 索引`);
@@ -426,7 +439,7 @@ export async function hybridSearchKnowledgeBase(
   vectorWeight: number = 0.7,
   bm25Weight: number = 0.3,
   filter?: Record<string, any>,
-): Promise<Array<{ content: string; metadata: any; score: number; sources: string[] }>> {
+): Promise<Array<{ content: string; metadata: any; score: number; vectorScore: number; sources: string[] }>> {
   console.log('='.repeat(50));
   console.log(`🔍 混合搜索: "${query}"`);
   console.log(`   权重配置: 向量=${vectorWeight}, BM25=${bm25Weight}`);
@@ -804,11 +817,6 @@ export async function getAllDocumentsWithDebug(): Promise<{
   }>;
 }> {
   const documents = await getAllDocuments();
-  documents.forEach(doc => {
-    if (doc.content.includes('迟到')) {
-      console.log('找到包含迟到的块:', doc.content.substring(0, 200));
-    }
-  });
   return {
     totalCount: documents.length,
     documents: documents.map(d => ({

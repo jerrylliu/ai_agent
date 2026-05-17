@@ -5,8 +5,12 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 async function bootstrap() {
-  // 创建 NestJS 应用实例
-  const app = await NestFactory.create(AppModule);
+  // 创建 NestJS 应用实例（禁用默认 bodyParser，使用自定义配置）
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  
+  // 配置 bodyParser，支持大文件上传
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // 配置 CORS（跨域资源共享）
   // 允许所有来源的请求访问 API（开发环境使用，生产环境应限制具体域名）

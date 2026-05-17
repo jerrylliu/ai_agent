@@ -212,7 +212,7 @@ export const promptTemplate = async (
   let ragContextCount = 0;
   let retrievalResults: Array<{ content: string; metadata: any; score: number; vectorScore?: number }> = [];
   
-  if (promptText && promptText.trim() && (!images || images.length === 0)) {
+  if (promptText && promptText.trim()) {
     try {
       console.log('🔍 正在从知识库检索相关文档...');
       const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);

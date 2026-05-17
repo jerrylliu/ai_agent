@@ -692,7 +692,7 @@ const ChatAgent: React.FC = () => {
               <label className="cursor-pointer">
                 <input
                   type="file"
-                  accept=".txt,.pdf,.doc,.docx"
+                  accept=".txt,.pdf,.doc,.docx,text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                   className="hidden"
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
