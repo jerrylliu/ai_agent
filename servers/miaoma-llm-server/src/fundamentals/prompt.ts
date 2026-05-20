@@ -285,7 +285,7 @@ ${docList}
     images = undefined;
   }
 
-  const MAX_HISTORY = hasRetrievedContent ? 0 : ((images && images.length > 0) ? 0 : 1);
+  const MAX_HISTORY = hasRetrievedContent ? 0 : ((images && images.length > 0) ? 0 : 5);
   const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
 
   if (recentHistory.length > 0) {
