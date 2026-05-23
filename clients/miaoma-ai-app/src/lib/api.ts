@@ -67,12 +67,15 @@ export interface AIStreamResponse {
 export async function getAIResponse(
   message: string,
   images: string[] = [],
-  history: Message[] = []
+  history: Message[] = [],
+  sessionId?: string,
+  signal?: AbortSignal
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, images, history }),
+    body: JSON.stringify({ message, images, history, sessionId }),
+    signal,
   });
   if (!response.ok) {
     throw new Error('获取 AI 响应失败');
@@ -573,4 +576,146 @@ export async function clearKnowledgeBase(): Promise<{
     success: boolean;
     message: string;
   }>(response);
+}
+
+// ============================================
+// 摘要相关 API
+// ============================================
+
+export interface SessionSummaryData {
+  id?: number;
+  sessionId: string;
+  summaryContent: string;
+  coveredMessageCount: number;
+  userId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * 获取指定会话的摘要
+ * @param sessionId 会话 ID
+ * @returns 摘要数据
+ */
+export async function getSessionSummary(sessionId: string): Promise<SessionSummaryData> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}/summary`);
+  return handleResponse<SessionSummaryData>(response);
+}
+
+/**
+ * 手动触发摘要生成/更新
+ * @param sessionId 会话 ID
+ * @returns 生成的摘要数据
+ */
+export async function generateSessionSummary(sessionId: string): Promise<SessionSummaryData> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}/summary`, {
+    method: 'POST',
+  });
+  return handleResponse<SessionSummaryData>(response);
+}
+
+// ============================================
+// 用户记忆相关 API
+// ============================================
+
+export interface UserMemoryData {
+  id: number;
+  content: string;
+  category: string;
+  sourceSessionId: string | null;
+  userId: string;
+  importance: number;
+  accessCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserMemoriesResponse {
+  success: boolean;
+  memories: UserMemoryData[];
+  count: number;
+}
+
+/**
+ * 获取用户的所有记忆
+ * @param userId 用户 ID（默认 'default'）
+ * @returns 记忆列表
+ */
+export async function getUserMemories(userId: string = 'default'): Promise<UserMemoriesResponse> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories?userId=${userId}`);
+  return handleResponse<UserMemoriesResponse>(response);
+}
+
+/**
+ * 手动添加一条用户记忆
+ * @param content 记忆内容
+ * @param category 分类（preference | fact | decision | context | skill）
+ * @param importance 重要性（1-5）
+ * @returns 新增的记忆
+ */
+export async function addUserMemory(
+  content: string,
+  category: string = 'fact',
+  importance: number = 3,
+): Promise<{ success: boolean; memory: UserMemoryData }> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, category, importance }),
+  });
+  return handleResponse<{ success: boolean; memory: UserMemoryData }>(response);
+}
+
+/**
+ * 删除一条用户记忆
+ * @param id 记忆 ID
+ */
+export async function deleteUserMemory(id: number): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories/${id}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+/**
+ * 更新一条用户记忆
+ * @param id 记忆 ID
+ * @param content 新内容
+ * @param category 新分类
+ * @param importance 新重要性
+ */
+export async function updateUserMemory(
+  id: number,
+  content: string,
+  category?: string,
+  importance?: number,
+): Promise<{ success: boolean; memory: UserMemoryData }> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, category, importance }),
+  });
+  return handleResponse<{ success: boolean; memory: UserMemoryData }>(response);
+}
+
+/**
+ * 清空用户所有记忆
+ * @param userId 用户 ID
+ */
+export async function clearUserMemories(userId: string = 'default'): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories?userId=${userId}`, {
+    method: 'DELETE',
+  });
+  return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+/**
+ * 手动触发记忆提取
+ * @param sessionId 会话 ID
+ */
+export async function extractMemories(sessionId: string): Promise<UserMemoriesResponse> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories/extract/${sessionId}`, {
+    method: 'POST',
+  });
+  return handleResponse<UserMemoriesResponse>(response);
 }

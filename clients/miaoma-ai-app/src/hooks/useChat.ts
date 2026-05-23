@@ -40,6 +40,7 @@ export function useChat() {
   const [hasDeepseekApiKey, setHasDeepseekApiKey] = useState(false);
   const [supportsVision, setSupportsVision] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     loadModelInfo();
@@ -209,6 +210,10 @@ export function useChat() {
     setIsTyping(true);
     setPendingImages([]);
 
+    // 创建 AbortController 用于取消请求
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+
     try {
       await saveChatHistory({
         sessionId: currentSessionId,
@@ -246,8 +251,8 @@ export function useChat() {
       };
       setMessages(prev => [...prev, tempAssistantMessage]);
 
-      // 处理流式响应（传入图片）
-      const aiResponse = await getAIResponse(userInput, images, chatHistory);
+      // 处理流式响应（传入图片和 signal）
+      const aiResponse = await getAIResponse(userInput, images, chatHistory, currentSessionId, abortController.signal);
       
       // 设置知识库来源标记
       const usedKnowledgeBase = aiResponse.usedKnowledgeBase;
@@ -282,17 +287,23 @@ export function useChat() {
       // 重新加载会话列表以更新会话标题和时间
       await loadSessions();
 
-    } catch (error) {
-      console.error('发送消息失败:', error);
-      const errorMessage: Message = {
-        id: generateId(),
-        content: ERROR_MESSAGE,
-        role: 'assistant',
-        timestamp: new Date(),
-      };
-      setMessages(prev => [...prev, errorMessage]);
+    } catch (error: any) {
+      // 用户主动取消，不显示错误
+      if (error.name === 'AbortError') {
+        console.log('🛑 用户停止了生成');
+      } else {
+        console.error('发送消息失败:', error);
+        const errorMessage: Message = {
+          id: generateId(),
+          content: ERROR_MESSAGE,
+          role: 'assistant',
+          timestamp: new Date(),
+        };
+        setMessages(prev => [...prev, errorMessage]);
+      }
     } finally {
       setIsTyping(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -321,6 +332,10 @@ export function useChat() {
         setMessages(prev => [...prev, fileMessage]);
         setIsTyping(true);
 
+        // 创建 AbortController 用于取消请求
+        const abortController = new AbortController();
+        abortControllerRef.current = abortController;
+
         try {
           const chatHistory = messages.filter(msg => msg.id !== DEFAULT_MESSAGE.id);
           const assistantMessageId = generateId();
@@ -332,7 +347,7 @@ export function useChat() {
           };
           setMessages(prev => [...prev, tempAssistantMessage]);
 
-          const aiResponse = await getAIResponse(fileMessage.content, [], chatHistory);
+          const aiResponse = await getAIResponse(fileMessage.content, [], chatHistory, currentSessionId, abortController.signal);
           const reader = aiResponse.stream.getReader();
           let fullResponse = '';
 
@@ -350,10 +365,15 @@ export function useChat() {
             role: 'assistant',
             content: fullResponse,
           });
-        } catch (error) {
-          console.error('处理文件消息失败:', error);
+        } catch (error: any) {
+          if (error.name === 'AbortError') {
+            console.log('🛑 用户停止了生成');
+          } else {
+            console.error('处理文件消息失败:', error);
+          }
         } finally {
           setIsTyping(false);
+          abortControllerRef.current = null;
         }
       }
     } catch (error) {
@@ -370,6 +390,13 @@ export function useChat() {
 
   const clearPendingImages = () => {
     setPendingImages([]);
+  };
+
+  const stopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
   };
 
   const updateMessage = async (messageId: string, content: string) => {
@@ -458,6 +485,7 @@ export function useChat() {
     sendMessage,
     sendFile,
     clearPendingImages,
+    stopGeneration,
     uploadToKnowledgeBase: uploadToKnowledgeBaseFromChat,
     checkKnowledgeBaseStatus,
     updateMessage,

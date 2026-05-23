@@ -1,7 +1,7 @@
 import React from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Button } from "../ui/button";
-import { MoreHorizontal, Database, Trash2 ,Upload} from "lucide-react";
+import { MoreHorizontal, Database, Trash2, Upload, Brain } from "lucide-react";
 interface KbFeedback {
     show: boolean;
     success: boolean;
@@ -19,9 +19,10 @@ interface HeaderContentProps {
     onClearKnowledgeBase: () => Promise<{ success: boolean; message: string }>;
     onCheckKnowledgeBaseStatus: () => void;
     onKbFeedback: (feedback: KbFeedback) => void;
+    onOpenMemorySummary?: () => void;
 }
 const HeaderContent: React.FC<HeaderContentProps> = (props) => {
-    const { knowledgeBaseStatus, showMoreMenu, onUploadToKnowledgeBase, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback } = props;
+    const { knowledgeBaseStatus, showMoreMenu, onUploadToKnowledgeBase, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary } = props;
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (file) {
@@ -120,6 +121,16 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                         </Button>
                         {showMoreMenu && (
                             <div className="absolute right-0 mt-2 w-48 bg-card border border-gray-200 dark:border-slate-600 rounded-lg shadow-lg z-50">
+                                <button
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center"
+                                    onClick={() => {
+                                        onToggleMoreMenu();
+                                        onOpenMemorySummary?.();
+                                    }}
+                                >
+                                    <Brain className="h-4 w-4 mr-2" />
+                                    记忆与摘要
+                                </button>
                                 <button
                                     className="w-full px-4 py-2 text-left text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center"
                                     onClick={() => handleClearKnowledgeBase()}

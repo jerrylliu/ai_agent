@@ -61,6 +61,7 @@ import { API_BASE_URL } from "../lib/constants";
 import { clearKnowledgeBase } from "../lib/api";
 import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
 import HeaderContent from '../components/Chat/HeaderContent';
+import MemorySummaryDialog from '../components/Chat/MemorySummaryDialog';
 // ==================== 组件主体：ChatAgent ====================
 // 智能助手聊天页面的主组件，负责整合所有子模块和状态管理
 const ChatAgent: React.FC = () => {
@@ -87,6 +88,7 @@ const ChatAgent: React.FC = () => {
   const [showHistoryList, setShowHistoryList] = useState(true);
   const [showRecentQuestions, setShowRecentQuestions] = useState(true);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
+  const [showMemorySummary, setShowMemorySummary] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
 
   // ==================== DOM引用 (useRef) ====================
@@ -132,6 +134,7 @@ const ChatAgent: React.FC = () => {
     sendMessage,
     sendFile,
     clearPendingImages,
+    stopGeneration,
     uploadToKnowledgeBase,
     checkKnowledgeBaseStatus,
     updateMessage,
@@ -808,6 +811,7 @@ const ChatAgent: React.FC = () => {
             onClearKnowledgeBase={clearKnowledgeBase}
             onCheckKnowledgeBaseStatus={checkKnowledgeBaseStatus}
             onKbFeedback={setKbFeedback}
+            onOpenMemorySummary={() => setShowMemorySummary(true)}
           />
 
           {/* ==================== 知识库操作反馈提示 ====================
@@ -1141,14 +1145,26 @@ const ChatAgent: React.FC = () => {
                 placeholder="输入消息..."
                 className="pr-24 py-3 rounded-full border-gray-300 dark:border-slate-500 focus:ring-2 focus:ring-primary focus:border-transparent cyberpunk-input-glow"
               />
-              {/* 发送按钮：当输入为空且没有待发送图片时禁用 */}
-              <Button
-                onClick={handleSend}
-                disabled={(!inputValue.trim() && pendingImages.length === 0) || isTyping}
-                className="rounded-full bg-primary hover:bg-primary/90 text-white p-3 transition-all duration-200 disabled:bg-gray-300 disabled:cursor-not-allowed"
-              >
-                <Send className="h-5 w-5" />
-              </Button>
+              {/* 发送/停止按钮：生成中显示停止按钮，否则显示发送按钮 */}
+              {isTyping ? (
+                <Button
+                  onClick={stopGeneration}
+                  className="rounded-full bg-red-500 hover:bg-red-600 text-white p-3 transition-all duration-200"
+                  title="停止生成"
+                >
+                  <div className="h-5 w-5 flex items-center justify-center">
+                    <div className="h-3 w-3 bg-white rounded-sm" />
+                  </div>
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleSend}
+                  disabled={!inputValue.trim() && pendingImages.length === 0}
+                  className="rounded-full bg-primary hover:bg-primary/90 text-white p-3 transition-all duration-200 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  <Send className="h-5 w-5" />
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -1371,6 +1387,11 @@ const ChatAgent: React.FC = () => {
         onClose={() => setShowAuthDialog(false)}
         onLogin={login}
         onRegister={register}
+      />
+      <MemorySummaryDialog
+        open={showMemorySummary}
+        onClose={() => setShowMemorySummary(false)}
+        currentSessionId={currentSessionId}
       />
     </>
   );

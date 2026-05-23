@@ -567,6 +567,94 @@
   box-shadow: none;
 }
 
+/* ---------- cyberpunk-ms：记忆与摘要弹窗赛博朋克样式 ---------- */
+
+/* 弹窗遮罩：深紫色半透明 */
+.cyberpunk .cyberpunk-ms-dialog-bg {
+  background-color: #1F111EE6;
+}
+
+/* 弹窗卡片：深紫黑底 + 青色边框发光 */
+.cyberpunk .cyberpunk-ms-dialog-card {
+  background-color: #1F111E;
+  border: 1px solid #5FF6FF66;
+  box-shadow: 0 0 10px #5FF6FF44, 0 0 20px #5FF6FF22, 0 0 40px #5FF6FF11;
+}
+
+/* 标题图标：#5FF6FF + 发光 */
+.cyberpunk .cyberpunk-ms-title-icon {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+}
+
+/* 标题文字：#5FF6FF + 发光 */
+.cyberpunk .cyberpunk-ms-title {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33, 0 0 12px #5FF6FF22;
+}
+
+/* 表单区域：暗紫色背景 */
+.cyberpunk .cyberpunk-ms-form {
+  background-color: #2A1A2E;
+  border-color: #5FF6FF44;
+}
+
+/* 输入框/选择框：深色背景 + 青色边框 */
+.cyberpunk .cyberpunk-ms-input {
+  background-color: #2A1A2E;
+  border-color: #5FF6FF44;
+  color: #5FF6FF;
+  box-shadow: 0 0 5px #5FF6FF22;
+}
+
+.cyberpunk .cyberpunk-ms-input::placeholder {
+  color: #5FF6FF66;
+}
+
+.cyberpunk .cyberpunk-ms-input:focus {
+  border-color: #5FF6FF;
+  box-shadow: 0 0 8px #5FF6FF66, 0 0 16px #5FF6FF33;
+  outline: none;
+}
+
+/* 记忆/摘要卡片：半透明底 + 青色边框微发光 */
+.cyberpunk .cyberpunk-ms-card {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-color: #5FF6FF33;
+  box-shadow: 0 0 4px #5FF6FF22;
+  transition: box-shadow 0.3s ease;
+}
+
+.cyberpunk .cyberpunk-ms-card:hover {
+  box-shadow: 0 0 6px #5FF6FF44, 0 0 12px #5FF6FF22;
+}
+
+/* 主要内容文字：#FFFF7A 霓虹黄 + 发光（与AI消息风格一致） */
+.cyberpunk .cyberpunk-ms-text {
+  color: #FFFF7A;
+  text-shadow: 0 0 4px #FFFF7A66, 0 0 8px #FFFF7A33;
+}
+
+/* 辅助说明文字：#5FF6FF 青色半透明 */
+.cyberpunk .cyberpunk-ms-subtext {
+  color: #5FF6FFCC;
+  text-shadow: 0 0 3px #5FF6FF44;
+}
+
+/* 空状态文字：#5FF6FF 青色 + 发光 */
+.cyberpunk .cyberpunk-ms-empty {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+/* 分类标签：统一暗紫底 + 青色文字 */
+.cyberpunk .cyberpunk-ms-badge {
+  background-color: #3A1F3E !important;
+  color: #5FF6FF !important;
+  border: 1px solid #5FF6FF33;
+  text-shadow: 0 0 3px #5FF6FF44;
+}
+
 /* ==================== 全局基础样式 ==================== */
 @layer base {
   * {

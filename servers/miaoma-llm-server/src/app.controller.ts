@@ -20,7 +20,8 @@ export class AppController {
     @Body() body: {
       message?: string,
       images?: string[],
-      history?: Array<{ role: string, content: string, images?: string[] }>
+      history?: Array<{ role: string, content: string, images?: string[] }>,
+      sessionId?: string
     },
     @Res() res: Response
   ) {
@@ -28,7 +29,14 @@ export class AppController {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    await this.appService.prompt(body.message, body.images, body.history, res);
+    // 监听客户端断开连接，标记请求已取消
+    let cancelled = false;
+    res.on('close', () => {
+      cancelled = true;
+      console.log('🛑 客户端断开连接，停止生成');
+    });
+
+    await this.appService.prompt(body.message, body.images, body.history, res, body.sessionId, () => cancelled);
   }
 
   // 定义一个 GET 路由 'rag'，用于处理 RAG（检索增强生成）相关的请求
@@ -98,6 +106,118 @@ export class AppController {
   @Get('sessions/:sessionId/messages')
   async getSessionMessages(@Param('sessionId') sessionId: string) {
     return this.appService.getSessionHistory(sessionId);
+  }
+
+  // ==================== 摘要相关接口 ====================
+
+  /**
+   * 获取指定会话的摘要
+   * 路由：GET /sessions/:sessionId/summary
+   */
+  @Get('sessions/:sessionId/summary')
+  async getSessionSummary(@Param('sessionId') sessionId: string) {
+    const summary = await this.appService.getSessionSummary(sessionId);
+    return summary || { sessionId, summaryContent: '', coveredMessageCount: 0 };
+  }
+
+  /**
+   * 手动触发摘要生成/更新
+   * 路由：POST /sessions/:sessionId/summary
+   */
+  @Post('sessions/:sessionId/summary')
+  async generateSessionSummary(@Param('sessionId') sessionId: string) {
+    try {
+      await this.appService.checkAndUpdateSummary(sessionId);
+      const summary = await this.appService.getSessionSummary(sessionId);
+      if (summary) {
+        return summary;
+      }
+      return { success: false, message: '摘要生成失败 - checkAndUpdateSummary 未抛异常但摘要为空' };
+    } catch (error: any) {
+      return { success: false, message: `摘要生成异常: ${error.message}`, stack: error.stack };
+    }
+  }
+
+  // ==================== 用户记忆相关接口 ====================
+
+  /**
+   * 获取用户的所有记忆
+   * 路由：GET /memories
+   */
+  @Get('memories')
+  async getUserMemories(@Query('userId') userId: string = 'default') {
+    const memories = await this.appService.getUserMemories(userId);
+    return { success: true, memories, count: memories.length };
+  }
+
+  /**
+   * 手动添加一条用户记忆
+   * 路由：POST /memories
+   */
+  @Post('memories')
+  async addUserMemory(@Body() body: { content: string; category?: string; importance?: number; userId?: string }) {
+    if (!body.content) {
+      return { success: false, message: '请提供 content 参数' };
+    }
+    const memory = await this.appService.addUserMemory(
+      body.content,
+      body.category || 'fact',
+      body.importance || 3,
+      body.userId || 'default',
+    );
+    return { success: true, memory };
+  }
+
+  /**
+   * 删除一条用户记忆
+   * 路由：DELETE /memories/:id
+   */
+  @Delete('memories/:id')
+  async deleteUserMemory(@Param('id') id: string) {
+    await this.appService.deleteUserMemory(parseInt(id));
+    return { success: true, message: '记忆已删除' };
+  }
+
+  /**
+   * 更新一条用户记忆
+   * 路由：PUT /memories/:id
+   */
+  @Put('memories/:id')
+  async updateUserMemory(
+    @Param('id') id: string,
+    @Body() body: { content: string; category?: string; importance?: number }
+  ) {
+    if (!body.content) {
+      return { success: false, message: '请提供 content 参数' };
+    }
+    const memory = await this.appService.updateUserMemory(
+      parseInt(id),
+      body.content,
+      body.category,
+      body.importance,
+    );
+    return { success: true, memory };
+  }
+
+  /**
+   * 清空用户所有记忆
+   * 路由：DELETE /memories
+   */
+  @Delete('memories')
+  async clearUserMemories(@Query('userId') userId: string = 'default') {
+    await this.appService.clearUserMemories(userId);
+    return { success: true, message: '所有记忆已清空' };
+  }
+
+  /**
+   * 手动触发记忆提取
+   * 路由：POST /memories/extract/:sessionId
+   */
+  @Post('memories/extract/:sessionId')
+  async extractMemories(@Param('sessionId') sessionId: string) {
+    await this.appService.checkAndExtractMemories(sessionId);
+    const memories = await this.appService.getUserMemories('default');
+    return { success: true, memories, count: memories.length };
   }
 
   // 获取所有聊天记录（用于调试）

@@ -114,7 +114,7 @@ export function buildModelConfig(modelId: string): ModelConfig {
   };
 
   if (provider === 'ollama') {
-    config.numCtx = 2048;
+    config.numCtx = 4096;
     config.baseUrl = OLLAMA_BASE_URL;
   } else if (provider === 'deepseek') {
     config.apiKey = deepseekApiKey;
@@ -131,7 +131,7 @@ export function createLLM(config?: ModelConfig): BaseChatModel {
     return new ChatOllama({
       model: modelConfig.model,
       temperature: modelConfig.temperature ?? 0.7,
-      numCtx: modelConfig.numCtx ?? 2048,
+      numCtx: modelConfig.numCtx ?? 8192,
       repeatPenalty: 1.1,
       topK: 20,
       topP: 0.9,

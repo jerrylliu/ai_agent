@@ -202,7 +202,10 @@ export const promptTemplate = async (
   promptText?: string,
   images?: string[],
   history?: Array<{ role: string, content: string, images?: string[] }>,
-  res?: Response
+  res?: Response,
+  sessionSummary?: string,
+  userMemories?: string[],
+  isCancelled?: () => boolean
 ) => {
   const conversions: Array<SystemMessage | HumanMessage | AIMessage> = [];
 
@@ -273,6 +276,22 @@ ${docList}
 4. 当用户问知识库有多少文档时，请根据"知识库统计"信息回答，不要只数参考资料的条数`;
   }
 
+  // ==================== 步骤2.5: 注入对话摘要 ====================
+  // 如果有摘要，将其追加到系统提示词中
+  // 摘要覆盖了早期对话的关键信息，使 AI 即使不看完整历史也能理解上下文
+  if (sessionSummary && sessionSummary.trim()) {
+    systemPrompt += `\n\n=== 之前对话的摘要 ===\n${sessionSummary}\n=== 摘要结束 ===\n\n请注意：以上摘要是之前对话的压缩版本，请结合摘要和最近的对话来理解用户的意图。`;
+    console.log(`📝 已注入对话摘要，长度: ${sessionSummary.length} 字符`);
+  }
+
+  // ==================== 步骤2.6: 注入用户记忆（长期记忆） ====================
+  // 用户记忆是跨会话积累的用户画像，帮助 AI 了解用户的偏好、背景和习惯
+  if (userMemories && userMemories.length > 0) {
+    const memoryText = userMemories.map((m, i) => `${i + 1}. ${m}`).join('\n');
+    systemPrompt += `\n\n=== 关于用户的记忆 ===\n以下是从历史对话中了解到的关于用户的信息，请在回答时参考：\n${memoryText}\n=== 用户记忆结束 ===`;
+    console.log(`🧠 已注入 ${userMemories.length} 条用户记忆`);
+  }
+
   conversions.push(new SystemMessage(systemPrompt));
 
   // 有知识库检索结果时不用 history，避免历史 hallucinated 内容干扰
@@ -285,7 +304,7 @@ ${docList}
     images = undefined;
   }
 
-  const MAX_HISTORY = hasRetrievedContent ? 0 : ((images && images.length > 0) ? 0 : 5);
+  const MAX_HISTORY = hasRetrievedContent ? 0 : ((images && images.length > 0) ? 0 : 10);
   const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
 
   if (recentHistory.length > 0) {
@@ -371,6 +390,11 @@ ${docList}
       let chunkCount = 0;
       let isFirstChunk = true;
       for await (const chunk of stream) {
+        // 检查客户端是否已断开连接
+        if (isCancelled && isCancelled()) {
+          console.log('🛑 检测到取消信号，停止生成');
+          break;
+        }
         chunkCount++;
         const content = chunk.content?.toString() || '';
         const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
