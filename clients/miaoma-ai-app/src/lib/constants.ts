@@ -2,9 +2,9 @@ export const API_BASE_URL = 'http://localhost:3000';
 
 export const API_ENDPOINTS = {
   BASE_URL: API_BASE_URL,
-  PROMPT: `${API_BASE_URL}/prompt`,
-  CHAT_HISTORY: `${API_BASE_URL}/chat-history`,
-  ALL_CHAT_HISTORY: `${API_BASE_URL}/all-chat-history`,
+  PROMPT: `${API_BASE_URL}/chat/prompt`,
+  CHAT_HISTORY: `${API_BASE_URL}/chat/history`,
+  ALL_CHAT_HISTORY: `${API_BASE_URL}/chat/all-history`,
   KNOWLEDGE_UPLOAD: `${API_BASE_URL}/knowledge/upload`,
   KNOWLEDGE_STATUS: `${API_BASE_URL}/knowledge/status`,
   KNOWLEDGE_SEARCH: `${API_BASE_URL}/knowledge/search`,

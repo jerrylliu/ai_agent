@@ -137,6 +137,7 @@ export function createLLM(config?: ModelConfig): BaseChatModel {
       topP: 0.9,
       numGpu: 0,
       baseUrl: modelConfig.baseUrl || OLLAMA_BASE_URL,
+      think: false, // 关闭 Qwen3.5 等模型的思考模式，避免输出 <tool_call>Thinking Process 内容和无限重复
     }) as unknown as BaseChatModel;
   }
 

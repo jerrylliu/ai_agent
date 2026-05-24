@@ -19,7 +19,6 @@ import React from "react";
 import { History, ChevronUp, ChevronDown, Trash2, X } from "lucide-react";
 import { Button } from "../ui/button";
 import { formatTime, formatDate } from "../../lib/utils";
-import { API_BASE_URL } from "../../lib/constants";
 import { Session, HistoryItem } from "../../types/session";
 
 // ==================== Props 接口定义 ====================
@@ -85,6 +84,9 @@ interface SessionListProps {
 
   /** 创建新会话 → 对应父组件的 createNewSession() */
   onCreateSession: () => void;
+
+  /** 重命名会话标题 → 对应父组件的 renameSession() */
+  onRenameSession: (sessionId: string, newTitle: string) => void;
 }
 
 // ==================== 组件主体 ====================
@@ -118,6 +120,7 @@ const SessionList: React.FC<SessionListProps> = ({
   onClearHistory,
   onClearSearch,
   onCreateSession,
+  onRenameSession,
 }) => {
   // ==================== 内部计算 ====================
 
@@ -146,22 +149,12 @@ const SessionList: React.FC<SessionListProps> = ({
   /**
    * 编辑会话标题处理
    * 弹出输入框让用户输入新标题
-   * 调用后端 API 更新标题后刷新页面
-   *
-   * 注意：此处直接调用 API 而非通过 props 回调，
-   * 因为这是临时实现，后续应改为通过 props 回调
-   * 让父组件统一管理 API 调用和数据刷新
+   * 通过 props 回调通知父组件统一处理
    */
   const handleRenameSession = (sessionId: string, currentTitle: string) => {
     const newTitle = prompt("请输入新的会话标题:", currentTitle);
     if (newTitle && newTitle.trim()) {
-      fetch(`${API_BASE_URL}/sessions/${sessionId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newTitle.trim() }),
-      }).then(() => {
-        window.location.reload();
-      });
+      onRenameSession(sessionId, newTitle.trim());
     }
   };
 

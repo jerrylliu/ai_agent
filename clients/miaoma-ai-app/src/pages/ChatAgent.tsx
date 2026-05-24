@@ -54,14 +54,13 @@ import MarkdownRenderer from "../components/MarkdownRenderer";
 
 // ==================== 工具函数和常量 ====================
 // formatTime/formatDate: 时间格式化工具，用于消息时间戳和会话日期
-// API_BASE_URL: 后端API基础地址常量
 // clearKnowledgeBase: 清空知识库API调用函数
 import { formatTime, formatDate } from "../lib/utils";
-import { API_BASE_URL } from "../lib/constants";
 import { clearKnowledgeBase } from "../lib/api";
 import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
 import HeaderContent from '../components/Chat/HeaderContent';
 import MemorySummaryDialog from '../components/Chat/MemorySummaryDialog';
+import SettingsDialog, { type AppSettings } from '../components/Settings/SettingsDialog';
 // ==================== 组件主体：ChatAgent ====================
 // 智能助手聊天页面的主组件，负责整合所有子模块和状态管理
 const ChatAgent: React.FC = () => {
@@ -89,7 +88,26 @@ const ChatAgent: React.FC = () => {
   const [showRecentQuestions, setShowRecentQuestions] = useState(true);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
   const [showMemorySummary, setShowMemorySummary] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
+
+  // ==================== 应用设置状态 (localStorage 持久化) ====================
+  // memoryEnabled: 记忆功能总开关，关闭后不提取/不注入记忆
+  // summaryEnabled: 摘要功能总开关，关闭后不生成摘要
+  // injectMemoryOnNewSession: 新会话是否自动注入记忆库内容
+  const [appSettings, setAppSettings] = useState<AppSettings>(() => {
+    try {
+      const saved = localStorage.getItem('app-settings');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return { memoryEnabled: true, summaryEnabled: true, injectMemoryOnNewSession: true };
+  });
+
+  // 设置变更时同步到 localStorage
+  const handleSettingsChange = (newSettings: AppSettings) => {
+    setAppSettings(newSettings);
+    localStorage.setItem('app-settings', JSON.stringify(newSettings));
+  };
 
   // ==================== DOM引用 (useRef) ====================
   // avatarInputRef: 头像文件上传input的DOM引用，用于触发文件选择
@@ -144,13 +162,14 @@ const ChatAgent: React.FC = () => {
     switchSession,
     deleteSession,
     toggleSessionPin,
+    renameSession,
     currentModelId,
     availableModels,
     hasDeepseekApiKey,
     supportsVision,
     switchModel,
     configureApiKey,
-  } = useChat();
+  } = useChat(isAuthenticated, appSettings);
 
   // ==================== 知识库操作反馈状态 ====================
   // 用于显示知识库上传/清空的成功或失败提示消息
@@ -188,7 +207,7 @@ const ChatAgent: React.FC = () => {
   // ==================== 自定义Hooks - 主题管理 ====================
   // theme: 当前主题('light'|'dark'|'cyberpunk')
   // cycleTheme: 循环切换主题的方法（light→dark→cyberpunk→light）
-  const { theme, cycleTheme } = useTheme();
+  const { theme, cycleTheme, setTheme } = useTheme();
 
   // ==================== 事件处理函数 ====================
 
@@ -486,13 +505,7 @@ const ChatAgent: React.FC = () => {
                                     e.stopPropagation();
                                     const newTitle = prompt('请输入新的会话标题:', session.title);
                                     if (newTitle && newTitle.trim()) {
-                                      fetch(`${API_BASE_URL}/sessions/${session.sessionId}`, {
-                                        method: 'PUT',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ title: newTitle.trim() }),
-                                      }).then(() => {
-                                        window.location.reload();
-                                      });
+                                      renameSession(session.sessionId, newTitle.trim());
                                     }
                                   }}
                                 >
@@ -581,6 +594,7 @@ const ChatAgent: React.FC = () => {
                   onClearHistory={clearHistory}
                   onClearSearch={() => setSearchKeyword("")}
                   onCreateSession={createNewSession}
+                  onRenameSession={renameSession}
                 />
 
                 {/* ==================== 左侧边栏 - 用户信息区域 ====================
@@ -664,10 +678,9 @@ const ChatAgent: React.FC = () => {
                   user={user}
                   avatarUploading={avatarUploading}
                   avatarInputRef={avatarInputRef}
-                  theme={theme}
                   onAvatarUpload={handleAvatarUpload}
                   onLogout={logout}
-                  onThemeToggle={cycleTheme}
+                  onOpenSettings={() => setShowSettings(true)}
                   onShowAuthDialog={() => setShowAuthDialog(true)}
                 />
               </div>
@@ -1392,6 +1405,14 @@ const ChatAgent: React.FC = () => {
         open={showMemorySummary}
         onClose={() => setShowMemorySummary(false)}
         currentSessionId={currentSessionId}
+      />
+      <SettingsDialog
+        open={showSettings}
+        onClose={() => setShowSettings(false)}
+        theme={theme}
+        onThemeChange={setTheme}
+        settings={appSettings}
+        onSettingsChange={handleSettingsChange}
       />
     </>
   );

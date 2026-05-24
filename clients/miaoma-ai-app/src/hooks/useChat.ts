@@ -18,11 +18,12 @@ import {
   setModelApiKey,
 } from '../lib/api';
 import type { AvailableModel } from '../lib/api';
+import type { AppSettings } from '../components/Settings/SettingsDialog';
 import { generateId, generateSessionId } from '../lib/utils';
 import { DEFAULT_MESSAGE, ERROR_MESSAGE } from '../lib/constants';
 import { Session, Message, HistoryItem } from '../types/session';
 
-export function useChat() {
+export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => generateSessionId());
   const [messages, setMessages] = useState<Message[]>([DEFAULT_MESSAGE]);
@@ -93,6 +94,19 @@ export function useChat() {
   useEffect(() => {
     loadSessions();
   }, []);
+
+  // 认证状态变化时重新加载会话（登录/登出/切换账号）
+  useEffect(() => {
+    if (isAuthenticated) {
+      loadSessions();
+    } else {
+      // 登出时清空会话和消息
+      setSessions([]);
+      setMessages([DEFAULT_MESSAGE]);
+      setHistory([]);
+      setCurrentSessionId(generateSessionId());
+    }
+  }, [isAuthenticated]);
 
   // 切换会话时加载消息
   useEffect(() => {
@@ -252,7 +266,11 @@ export function useChat() {
       setMessages(prev => [...prev, tempAssistantMessage]);
 
       // 处理流式响应（传入图片和 signal）
-      const aiResponse = await getAIResponse(userInput, images, chatHistory, currentSessionId, abortController.signal);
+      const aiResponse = await getAIResponse(userInput, images, chatHistory, currentSessionId, abortController.signal, {
+        memoryEnabled: appSettings?.memoryEnabled ?? true,
+        summaryEnabled: appSettings?.summaryEnabled ?? true,
+        injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
+      });
       
       // 设置知识库来源标记
       const usedKnowledgeBase = aiResponse.usedKnowledgeBase;
@@ -347,7 +365,11 @@ export function useChat() {
           };
           setMessages(prev => [...prev, tempAssistantMessage]);
 
-          const aiResponse = await getAIResponse(fileMessage.content, [], chatHistory, currentSessionId, abortController.signal);
+          const aiResponse = await getAIResponse(fileMessage.content, [], chatHistory, currentSessionId, abortController.signal, {
+            memoryEnabled: appSettings?.memoryEnabled ?? true,
+            summaryEnabled: appSettings?.summaryEnabled ?? true,
+            injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
+          });
           const reader = aiResponse.stream.getReader();
           let fullResponse = '';
 
@@ -436,6 +458,21 @@ export function useChat() {
     }
   };
 
+  const renameSession = async (sessionId: string, newTitle: string) => {
+    // 乐观更新：先更新本地状态
+    const prevSessions = sessions;
+    setSessions(prev => prev.map(s =>
+      s.sessionId === sessionId ? { ...s, title: newTitle } : s
+    ));
+    try {
+      await updateSessionTitle(sessionId, newTitle);
+    } catch (error) {
+      // 失败则回滚
+      console.error('更新会话标题失败:', error);
+      setSessions(prevSessions);
+    }
+  };
+
   const checkKnowledgeBaseStatus = async () => {
     try {
       const status = await getKnowledgeBaseStatus();
@@ -495,6 +532,7 @@ export function useChat() {
     switchSession,
     deleteSession: deleteSessionById,
     toggleSessionPin: toggleSessionPinById,
+    renameSession,
     currentModelId,
     availableModels,
     hasDeepseekApiKey,

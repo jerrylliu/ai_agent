@@ -32,6 +32,23 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+// ==================== 认证相关辅助函数 ====================
+
+const TOKEN_KEY = 'miaoma_auth_token';
+
+/**
+ * 获取认证请求头
+ * 如果本地存储中有 token，自动添加 Authorization header
+ */
+function getAuthHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 // API 调用函数
 
 /**
@@ -42,7 +59,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
 export async function saveChatHistory(data: ChatHistoryItem): Promise<void> {
   const response = await fetch(API_ENDPOINTS.CHAT_HISTORY, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(data),
   });
   if (!response.ok) {
@@ -69,12 +86,13 @@ export async function getAIResponse(
   images: string[] = [],
   history: Message[] = [],
   sessionId?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean }
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, images, history, sessionId }),
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ message, images, history, sessionId, ...options }),
     signal,
   });
   if (!response.ok) {
@@ -141,7 +159,9 @@ export async function getAIResponse(
  * @returns 聊天记录列表
  */
 export async function getSessionHistory(sessionId: string): Promise<ChatHistoryRecord[]> {
-  const response = await fetch(`${API_ENDPOINTS.CHAT_HISTORY}?sessionId=${sessionId}`);
+  const response = await fetch(`${API_ENDPOINTS.CHAT_HISTORY}?sessionId=${sessionId}`, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<ChatHistoryRecord[]>(response);
 }
 
@@ -150,7 +170,9 @@ export async function getSessionHistory(sessionId: string): Promise<ChatHistoryR
  * @returns 所有聊天记录列表
  */
 export async function getAllChatHistory(): Promise<ChatHistoryRecord[]> {
-  const response = await fetch(API_ENDPOINTS.ALL_CHAT_HISTORY);
+  const response = await fetch(API_ENDPOINTS.ALL_CHAT_HISTORY, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<ChatHistoryRecord[]>(response);
 }
 
@@ -161,7 +183,9 @@ export async function getAllChatHistory(): Promise<ChatHistoryRecord[]> {
  * @returns 会话列表
  */
 export async function getSessions(): Promise<Session[]> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions`);
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions`, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<Session[]>(response);
 }
 
@@ -172,9 +196,9 @@ export async function getSessions(): Promise<Session[]> {
  * @returns 创建的会话对象
  */
 export async function createSession(sessionId: string, title: string): Promise<Session> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ sessionId, title }),
   });
   return handleResponse<Session>(response);
@@ -186,7 +210,9 @@ export async function createSession(sessionId: string, title: string): Promise<S
  * @returns 会话对象
  */
 export async function getSession(sessionId: string): Promise<Session> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}`);
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<Session>(response);
 }
 
@@ -197,9 +223,9 @@ export async function getSession(sessionId: string): Promise<Session> {
  * @throws 更新失败时抛出错误
  */
 export async function updateSessionTitle(sessionId: string, title: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ title }),
   });
   if (!response.ok) {
@@ -213,8 +239,9 @@ export async function updateSessionTitle(sessionId: string, title: string): Prom
  * @throws 删除失败时抛出错误
  */
 export async function deleteSession(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`, {
     method: 'DELETE',
+    headers: getAuthHeaders(),
   });
   if (!response.ok) {
     throw new Error('删除会话失败');
@@ -227,8 +254,9 @@ export async function deleteSession(sessionId: string): Promise<void> {
  * @throws 操作失败时抛出错误
  */
 export async function toggleSessionPin(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}/pin`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/pin`, {
     method: 'PATCH',
+    headers: getAuthHeaders(),
   });
   if (!response.ok) {
     throw new Error('切换会话置顶状态失败');
@@ -241,7 +269,9 @@ export async function toggleSessionPin(sessionId: string): Promise<void> {
  * @returns 消息记录列表
  */
 export async function getSessionMessages(sessionId: string): Promise<ChatHistoryRecord[]> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}/messages`);
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/messages`, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<ChatHistoryRecord[]>(response);
 }
 
@@ -267,9 +297,9 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
  * @throws 更新失败时抛出错误
  */
 export async function updateMessage(id: string, content: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/messages/${id}`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/messages/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ content }),
   });
   if (!response.ok) {
@@ -283,7 +313,7 @@ export async function updateMessage(id: string, content: string): Promise<void> 
  * @throws 删除失败时抛出错误
  */
 export async function deleteMessage(id: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/messages/${id}`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/messages/${id}`, {
     method: 'DELETE',
   });
   if (!response.ok) {
@@ -353,7 +383,7 @@ export async function switchModel(modelId: string): Promise<{
 }> {
   const response = await fetch(API_ENDPOINTS.MODELS_SWITCH, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ modelId }),
   });
   return handleResponse<{
@@ -372,7 +402,7 @@ export async function setModelApiKey(
 }> {
   const response = await fetch(API_ENDPOINTS.MODELS_APIKEY, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ provider, apiKey }),
   });
   return handleResponse<{
@@ -411,7 +441,7 @@ export async function register(body: {
 }): Promise<AuthResponse> {
   const response = await fetch(API_ENDPOINTS.AUTH_REGISTER, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(body),
   });
   return handleResponse<AuthResponse>(response);
@@ -423,19 +453,18 @@ export async function login(body: {
 }): Promise<AuthResponse> {
   const response = await fetch(API_ENDPOINTS.AUTH_LOGIN, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify(body),
   });
   return handleResponse<AuthResponse>(response);
 }
 
 export async function getProfile(token: string): Promise<UserInfo> {
+  const headers = getAuthHeaders();
+  headers['Authorization'] = `Bearer ${token}`;
   const response = await fetch(API_ENDPOINTS.AUTH_PROFILE, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
   });
   return handleResponse<UserInfo>(response);
 }
@@ -444,12 +473,11 @@ export async function updateProfile(
   token: string,
   body: { username?: string; avatar?: string },
 ): Promise<{ success: boolean; message: string; user: UserInfo }> {
+  const headers = getAuthHeaders();
+  headers['Authorization'] = `Bearer ${token}`;
   const response = await fetch(API_ENDPOINTS.AUTH_PROFILE, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
     body: JSON.stringify(body),
   });
   return handleResponse<{ success: boolean; message: string; user: UserInfo }>(response);
@@ -460,12 +488,11 @@ export async function verifyToken(token: string): Promise<{
   valid: boolean;
   user: UserInfo;
 }> {
+  const headers = getAuthHeaders();
+  headers['Authorization'] = `Bearer ${token}`;
   const response = await fetch(API_ENDPOINTS.AUTH_VERIFY, {
     method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
   });
   return handleResponse<{ success: boolean; valid: boolean; user: UserInfo }>(response);
 }
@@ -474,12 +501,11 @@ export async function changePassword(
   token: string,
   body: { oldPassword: string; newPassword: string },
 ): Promise<{ success: boolean; message: string }> {
+  const headers = getAuthHeaders();
+  headers['Authorization'] = `Bearer ${token}`;
   const response = await fetch(API_ENDPOINTS.AUTH_CHANGE_PASSWORD, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-    },
+    headers,
     body: JSON.stringify(body),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
@@ -548,7 +574,7 @@ export async function searchKnowledgeBase(
 }> {
   const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SEARCH, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ query, topK }),
   });
 
@@ -598,7 +624,9 @@ export interface SessionSummaryData {
  * @returns 摘要数据
  */
 export async function getSessionSummary(sessionId: string): Promise<SessionSummaryData> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}/summary`);
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/sessions/${sessionId}/summary`, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<SessionSummaryData>(response);
 }
 
@@ -608,8 +636,9 @@ export async function getSessionSummary(sessionId: string): Promise<SessionSumma
  * @returns 生成的摘要数据
  */
 export async function generateSessionSummary(sessionId: string): Promise<SessionSummaryData> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/sessions/${sessionId}/summary`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/sessions/${sessionId}/summary`, {
     method: 'POST',
+    headers: getAuthHeaders(),
   });
   return handleResponse<SessionSummaryData>(response);
 }
@@ -641,8 +670,13 @@ export interface UserMemoriesResponse {
  * @param userId 用户 ID（默认 'default'）
  * @returns 记忆列表
  */
-export async function getUserMemories(userId: string = 'default'): Promise<UserMemoriesResponse> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories?userId=${userId}`);
+export async function getUserMemories(userId?: string): Promise<UserMemoriesResponse> {
+  const url = userId
+    ? `${API_ENDPOINTS.BASE_URL}/memory/memories?userId=${userId}`
+    : `${API_ENDPOINTS.BASE_URL}/memory/memories`;
+  const response = await fetch(url, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<UserMemoriesResponse>(response);
 }
 
@@ -658,9 +692,9 @@ export async function addUserMemory(
   category: string = 'fact',
   importance: number = 3,
 ): Promise<{ success: boolean; memory: UserMemoryData }> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/memories`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ content, category, importance }),
   });
   return handleResponse<{ success: boolean; memory: UserMemoryData }>(response);
@@ -671,8 +705,9 @@ export async function addUserMemory(
  * @param id 记忆 ID
  */
 export async function deleteUserMemory(id: number): Promise<{ success: boolean; message: string }> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories/${id}`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/memories/${id}`, {
     method: 'DELETE',
+    headers: getAuthHeaders(),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
 }
@@ -690,9 +725,9 @@ export async function updateUserMemory(
   category?: string,
   importance?: number,
 ): Promise<{ success: boolean; memory: UserMemoryData }> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories/${id}`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/memories/${id}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: getAuthHeaders(),
     body: JSON.stringify({ content, category, importance }),
   });
   return handleResponse<{ success: boolean; memory: UserMemoryData }>(response);
@@ -702,9 +737,13 @@ export async function updateUserMemory(
  * 清空用户所有记忆
  * @param userId 用户 ID
  */
-export async function clearUserMemories(userId: string = 'default'): Promise<{ success: boolean; message: string }> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories?userId=${userId}`, {
+export async function clearUserMemories(userId?: string): Promise<{ success: boolean; message: string }> {
+  const url = userId
+    ? `${API_ENDPOINTS.BASE_URL}/memory/memories?userId=${userId}`
+    : `${API_ENDPOINTS.BASE_URL}/memory/memories`;
+  const response = await fetch(url, {
     method: 'DELETE',
+    headers: getAuthHeaders(),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
 }
@@ -714,8 +753,9 @@ export async function clearUserMemories(userId: string = 'default'): Promise<{ s
  * @param sessionId 会话 ID
  */
 export async function extractMemories(sessionId: string): Promise<UserMemoriesResponse> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memories/extract/${sessionId}`, {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/memories/extract/${sessionId}`, {
     method: 'POST',
+    headers: getAuthHeaders(),
   });
   return handleResponse<UserMemoriesResponse>(response);
 }

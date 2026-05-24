@@ -32,32 +32,39 @@ export class AppService {
     history?: Array<{ role: string, content: string, images?: string[] }>,
     res?: Response,
     sessionId?: string,
-    isCancelled?: () => boolean
+    isCancelled?: () => boolean,
+    userId: string = 'default',
+    memoryEnabled?: boolean,
+    summaryEnabled?: boolean,
+    injectMemory?: boolean,
   ) {
-    // 获取会话摘要（如果有）
+    // 获取会话摘要（如果摘要功能已启用）
     let sessionSummary: string | undefined;
-    if (sessionId) {
+    if (sessionId && summaryEnabled !== false) {
       const summary = await this.getSessionSummary(sessionId);
       if (summary && summary.summaryContent) {
         sessionSummary = summary.summaryContent;
       }
     }
 
-    // 获取用户记忆（长期记忆）
-    const userMemories = await this.getUserMemories('default');
-    const memoryTexts = userMemories
-      .sort((a, b) => b.importance - a.importance)
-      .slice(0, 20) // 最多注入 20 条最重要的记忆
-      .map((m) => m.content);
+    // 获取用户记忆（如果记忆功能已启用且允许注入）
+    let memoryTexts: string[] = [];
+    if (memoryEnabled !== false && injectMemory !== false) {
+      const userMemories = await this.getUserMemories(userId);
+      const topMemories = userMemories
+        .sort((a, b) => b.importance - a.importance)
+        .slice(0, 20); // 最多注入 20 条最重要的记忆
+      memoryTexts = topMemories.map((m) => m.content);
 
-    // 更新被注入记忆的访问计数
-    if (userMemories.length > 0) {
-      const injectedIds = userMemories.slice(0, 20).map((m) => m.id);
-      await this.userMemoryRepository.increment(
-        { id: In(injectedIds) },
-        'accessCount',
-        1,
-      );
+      // 更新被注入记忆的访问计数
+      if (topMemories.length > 0) {
+        const injectedIds = topMemories.map((m) => m.id);
+        await this.userMemoryRepository.increment(
+          { id: In(injectedIds) },
+          'accessCount',
+          1,
+        );
+      }
     }
 
     await promptInvoke(message, images, history, res, sessionSummary, memoryTexts, isCancelled);
@@ -67,27 +74,27 @@ export class AppService {
   }
 
   // 保存对话记录
-  async saveChatHistory(sessionId: string, role: string, content: string) {
+  async saveChatHistory(sessionId: string, role: string, content: string, userId: string = 'default') {
     console.log(sessionId, role, content, 222222);
     const chatHistory = this.chatHistoryRepository.create({
-      userId: 'default', // 可根据实际情况修改
+      userId,
       sessionId,
       role,
       content,
     });
     const savedHistory = await this.chatHistoryRepository.save(chatHistory);
-    
+
     // 检查是否需要更新会话标题
     const session = await this.sessionRepository.findOne({
       where: { sessionId },
     });
-    
+
     if (!session) {
       // 创建新会话
       const newSession = this.sessionRepository.create({
         sessionId,
         title: content.substring(0, 50), // 使用第一条消息作为标题
-        userId: 'default',
+        userId,
       });
       await this.sessionRepository.save(newSession);
     } else {
@@ -101,8 +108,8 @@ export class AppService {
     // 异步检查并更新摘要（不阻塞主流程）
     // 只在 assistant 消息保存时触发，避免每条消息都检查
     if (role === 'assistant') {
-      this.checkAndUpdateSummary(sessionId).catch(() => {});
-      this.checkAndExtractMemories(sessionId).catch(() => {});
+      this.checkAndUpdateSummary(sessionId, userId).catch(() => {});
+      this.checkAndExtractMemories(sessionId, userId).catch(() => {});
     }
 
     return savedHistory;
@@ -117,9 +124,9 @@ export class AppService {
   }
 
   // 获取所有会话
-  async getSessions() {
+  async getSessions(userId: string = 'default') {
     return this.sessionRepository.find({
-      where: { userId: 'default' },
+      where: { userId },
       order: {
         isPinned: 'DESC',
         updatedAt: 'DESC',
@@ -128,11 +135,11 @@ export class AppService {
   }
 
   // 创建新会话
-  async createSession(sessionId: string, title: string) {
+  async createSession(sessionId: string, title: string, userId: string = 'default') {
     const session = this.sessionRepository.create({
       sessionId,
       title,
-      userId: 'default',
+      userId,
     });
     return this.sessionRepository.save(session);
   }
@@ -145,32 +152,35 @@ export class AppService {
   }
 
   // 更新会话标题
-  async updateSessionTitle(sessionId: string, title: string) {
-    return this.sessionRepository.update(
-      { sessionId },
-      { title }
-    );
+  async updateSessionTitle(sessionId: string, title: string, userId?: string) {
+    const where: any = { sessionId };
+    if (userId) {
+      where.userId = userId;
+    }
+    return this.sessionRepository.update(where, { title });
   }
 
   // 删除会话
-  async deleteSession(sessionId: string) {
+  async deleteSession(sessionId: string, userId?: string) {
+    const where: any = { sessionId };
+    if (userId) {
+      where.userId = userId;
+    }
     // 先删除相关的摘要
     await this.sessionSummaryRepository.delete({ sessionId });
     // 再删除相关的聊天记录
-    await this.chatHistoryRepository.delete({
-      sessionId,
-    });
+    await this.chatHistoryRepository.delete({ sessionId });
     // 最后删除会话
-    return this.sessionRepository.delete({
-      sessionId,
-    });
+    return this.sessionRepository.delete(where);
   }
 
   // 切换会话置顶状态
-  async toggleSessionPin(sessionId: string) {
-    const session = await this.sessionRepository.findOne({
-      where: { sessionId },
-    });
+  async toggleSessionPin(sessionId: string, userId?: string) {
+    const where: any = { sessionId };
+    if (userId) {
+      where.userId = userId;
+    }
+    const session = await this.sessionRepository.findOne({ where });
     if (session) {
       session.isPinned = !session.isPinned;
       return this.sessionRepository.save(session);
@@ -217,7 +227,7 @@ export class AppService {
    *
    * @param sessionId 会话 ID
    */
-  async checkAndUpdateSummary(sessionId: string): Promise<void> {
+  async checkAndUpdateSummary(sessionId: string, userId: string = 'default'): Promise<void> {
     try {
       // 获取该会话的总消息数
       const messageCount = await this.chatHistoryRepository.count({
@@ -282,7 +292,7 @@ export class AppService {
           sessionId,
           summaryContent,
           coveredMessageCount: messageCount,
-          userId: 'default',
+          userId,
         });
         await this.sessionSummaryRepository.save(newSummary);
       }
@@ -329,7 +339,7 @@ export class AppService {
    *
    * @param sessionId 会话 ID
    */
-  async checkAndExtractMemories(sessionId: string): Promise<void> {
+  async checkAndExtractMemories(sessionId: string, userId: string = 'default'): Promise<void> {
     try {
       // 获取该会话的消息总数
       const messageCount = await this.chatHistoryRepository.count({
@@ -375,7 +385,7 @@ export class AppService {
       }
 
       // 获取已有记忆用于去重/合并
-      const existingMemories = await this.getUserMemories('default');
+      const existingMemories = await this.getUserMemories(userId);
       const existingContents = existingMemories.map((m) => m.content);
 
       // 合并去重
@@ -393,7 +403,7 @@ export class AppService {
             category: newMemories.find((m) => m.content === action.newMemory)?.category || 'fact',
             importance: newMemories.find((m) => m.content === action.newMemory)?.importance || 3,
             sourceSessionId: sessionId,
-            userId: 'default',
+            userId,
           });
           await this.userMemoryRepository.save(memory);
           addedCount++;

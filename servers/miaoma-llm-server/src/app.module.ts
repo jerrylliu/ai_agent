@@ -1,6 +1,11 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
+import { ChatController } from './controllers/chat.controller.js';
+import { MemoryController } from './controllers/memory.controller.js';
+import { KnowledgeController } from './controllers/knowledge.controller.js';
+import { ModelController } from './controllers/model.controller.js';
+import { UploadController } from './controllers/upload.controller.js';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ChatHistory } from './entities/chat-history.entity.js';
 import { Session } from './entities/session.entity.js';
@@ -23,7 +28,7 @@ import { AuthModule } from './auth/auth.module.js';
     TypeOrmModule.forFeature([ChatHistory, Session, SessionSummary, UserMemory]),
     AuthModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController],
   providers: [AppService],
 })
 export class AppModule {}
