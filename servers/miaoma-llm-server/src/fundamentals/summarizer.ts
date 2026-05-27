@@ -17,6 +17,7 @@
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { getDeepseekApiKey } from './model-provider';
+import { logger } from './logger';
 
 // ==================== 配置常量 ====================
 
@@ -103,7 +104,7 @@ export async function generateSummary(
   const apiKey = getDeepseekApiKey();
 
   if (!apiKey || apiKey.trim() === '') {
-    console.warn('⚠️ 未配置 DeepSeek API Key，使用本地摘要（质量较低）');
+    logger.warn('未配置 DeepSeek API Key，使用本地摘要（质量较低）', { module: 'Summarizer' });
     return generateLocalSummary(messages, existingSummary);
   }
 
@@ -136,7 +137,7 @@ export async function generateSummary(
       userContent = `请为以下对话生成摘要：\n${conversationText}`;
     }
 
-    console.log(`📝 ${existingSummary ? '增量更新' : '首次生成'}摘要，消息数: ${messages.length}`);
+    logger.info('摘要生成', { module: 'Summarizer', type: existingSummary ? '增量更新' : '首次生成', messageCount: messages.length });
 
     const result = await llm.invoke([
       new SystemMessage(SUMMARIZER_SYSTEM_PROMPT),
@@ -147,11 +148,11 @@ export async function generateSummary(
       ? result.content
       : JSON.stringify(result.content);
 
-    console.log(`✅ 摘要生成完成，长度: ${summary.length} 字符`);
+    logger.info('摘要生成完成', { module: 'Summarizer', summaryLength: summary.length });
 
     return summary;
   } catch (error: any) {
-    console.error('❌ DeepSeek 摘要生成失败，降级为本地摘要:', error.message);
+    logger.error('DeepSeek 摘要生成失败，降级为本地摘要', { module: 'Summarizer', error: error.message });
     return generateLocalSummary(messages, existingSummary);
   }
 }

@@ -1,6 +1,7 @@
 //整个文件是测试文件
 import { OllamaEmbeddings } from "@langchain/ollama";
 import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
+import { logger } from './logger';
 // 创建 Ollama 嵌入模型实例
 const embeddings = new OllamaEmbeddings({
   model: "bge-large", // 使用的嵌入模型,中文支持力度大.
@@ -45,12 +46,11 @@ export async function main(message?: string) {
   // 使用向量存储进行相似性搜索，返回最相似的 3 个结果（带相似度分数）
   const results = await vectorStore.similaritySearchWithScore(query, 2);
 
-  console.log("查询:", query);
-  console.log("搜索结果:");
+  logger.debug('RAG 测试查询', { module: 'RagTest', query });
   results.forEach(([doc, score], index) => {
-    console.log(`${index + 1}. ${doc.pageContent} (相似度: ${score.toFixed(4)})`);
+    logger.debug('RAG 测试结果', { module: 'RagTest', index: index + 1, content: doc.pageContent, score: score.toFixed(4) });
   });
 }
 
 // 调用主函数
-main().catch(console.error);
+main().catch(err => logger.error('RAG 测试失败', { module: 'RagTest', error: String(err) }));

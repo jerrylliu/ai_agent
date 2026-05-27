@@ -4,7 +4,9 @@
 // 路由前缀：/knowledge
 
 // 从 @nestjs/common 导入控制器所需的装饰器
-import { Controller, Get, Post, Delete, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { logger } from '../fundamentals/logger';
 
 // @Controller('knowledge') 声明该类为 NestJS 控制器，路由前缀为 /knowledge
 // 即该控制器下所有路由都以 /knowledge 开头
@@ -18,9 +20,10 @@ export class KnowledgeController {
    * 文档会被自动切片、生成向量嵌入并存入 ChromaDB
    */
   @Post('upload') // 映射 POST 请求到 /knowledge/upload
+  @UseInterceptors(FileInterceptor('file')) // 使用 Multer 拦截器解析 multipart/form-data 中的文件
   async uploadToKnowledgeBase(
-    // @Body() 从请求体提取文件对象（由 Multer 中间件解析）
-    @Body() file: any,
+    // @UploadedFile() 注入 Multer 解析后的文件对象，包含 path/size/mimetype/originalname 等字段
+    @UploadedFile() file: any,
   ) {
     try {
       // 动态导入 rag-service，避免循环依赖问题
@@ -36,7 +39,7 @@ export class KnowledgeController {
       };
     } catch (error: any) {
       // 捕获并记录上传失败的错误
-      console.error('上传到知识库失败:', error);
+      logger.error('上传到知识库失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `上传失败: ${error.message}` };
     }
   }
@@ -54,7 +57,7 @@ export class KnowledgeController {
       // 调用服务层获取知识库状态
       return await getKnowledgeBaseStatus();
     } catch (error: any) {
-      console.error('获取知识库状态失败:', error);
+      logger.error('获取知识库状态失败', { module: 'KnowledgeController', error: error.message });
       return { status: 'error', message: `获取状态失败: ${error.message}` };
     }
   }
@@ -89,7 +92,7 @@ export class KnowledgeController {
         hasResults: result.hasResults,
       };
     } catch (error: any) {
-      console.error('搜索知识库失败:', error);
+      logger.error('搜索知识库失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `搜索失败: ${error.message}` };
     }
   }
@@ -130,7 +133,7 @@ export class KnowledgeController {
         hasResults: result.hasResults,
       };
     } catch (error: any) {
-      console.error('混合搜索知识库失败:', error);
+      logger.error('混合搜索知识库失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `搜索失败: ${error.message}` };
     }
   }
@@ -148,7 +151,7 @@ export class KnowledgeController {
       const types = await getDocumentTypes();
       return { success: true, types };
     } catch (error: any) {
-      console.error('获取文档类型失败:', error);
+      logger.error('获取文档类型失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `获取失败: ${error.message}` };
     }
   }
@@ -167,7 +170,7 @@ export class KnowledgeController {
       // 返回文档列表和文档总数
       return { success: true, documentCount: documents.length, documents };
     } catch (error: any) {
-      console.error('获取文档列表失败:', error);
+      logger.error('获取文档列表失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `获取文档列表失败: ${error.message}` };
     }
   }
@@ -191,7 +194,7 @@ export class KnowledgeController {
       const documentsInfo = await getAllDocumentsWithDebug();
       return { success: true, searchDebug: debugInfo, documentsInfo };
     } catch (error: any) {
-      console.error('调试失败:', error);
+      logger.error('调试失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `调试失败: ${error.message}` };
     }
   }
@@ -223,7 +226,7 @@ export class KnowledgeController {
         chunks: chunks.map((chunk, i) => ({ index: i, length: chunk.length, content: chunk })),
       };
     } catch (error: any) {
-      console.error('预览切片失败:', error);
+      logger.error('预览切片失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `预览切片失败: ${error.message}` };
     }
   }
@@ -249,7 +252,7 @@ export class KnowledgeController {
       const embedding = await previewEmbedding(body.text);
       return { success: true, embedding };
     } catch (error: any) {
-      console.error('预览 Embedding 失败:', error);
+      logger.error('预览 Embedding 失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `预览 Embedding 失败: ${error.message}` };
     }
   }
@@ -268,7 +271,7 @@ export class KnowledgeController {
       await clearKnowledgeBase();
       return { success: true, message: '知识库已清空' };
     } catch (error: any) {
-      console.error('清空知识库失败:', error);
+      logger.error('清空知识库失败', { module: 'KnowledgeController', error: error.message });
       return { success: false, message: `清空知识库失败: ${error.message}` };
     }
   }

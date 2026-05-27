@@ -4,12 +4,10 @@
 
 // 从 @nestjs/common 导入控制器所需的装饰器
 import { Controller, Get, Post, Put, Delete, Patch, Body, Query, Param, Res, UseGuards, Req } from '@nestjs/common';
-// 导入 Express 的 Response 类型，用于流式响应
 import type { Response } from 'express';
-// 导入应用服务层，提供业务逻辑
 import { AppService } from '../app.service';
-// 导入可选认证守卫
 import { OptionalAuthGuard } from '../auth/optional-auth.guard.js';
+import { logger } from '../fundamentals/logger';
 
 // @Controller('chat') 声明该类为 NestJS 控制器，路由前缀为 /chat
 // 即该控制器下所有路由都以 /chat 开头
@@ -52,16 +50,25 @@ export class ChatController {
 
     // 取消标志：当客户端断开连接时设为 true，通知服务端停止生成
     let cancelled = false;
+
+    // 创建 AbortController，用于中断 LLM 底层到 Ollama/DeepSeek 的 HTTP 连接
+    // 当调用 abort() 时：
+    // 1. 底层 HTTP 请求被立即销毁，Ollama 服务端停止推理，释放 GPU 资源
+    // 2. llm.stream() 会抛出 AbortError，被 prompt.ts 的 catch 块捕获
+    // 3. 配合 isCancelled 标志位形成双重保险，确保生成流程完全终止
+    const llmAbortController = new AbortController();
+
     // 监听连接关闭事件（客户端主动断开或网络中断）
     res.on('close', () => {
-      cancelled = true; // 标记请求已取消
-      console.log('🛑 客户端断开连接，停止生成');
+      cancelled = true; // 标记请求已取消（用于 isCancelled 回调判断）
+      llmAbortController.abort(); // 中断 LLM 底层 HTTP 连接，停止 Ollama 推理
+      logger.info('客户端断开连接，已发送中断信号到 LLM 底层连接', { module: 'ChatController' });
     });
 
-    // 调用服务层的 prompt 方法，传入取消回调函数、userId 和功能开关
+    // 调用服务层的 prompt 方法，传入取消回调函数、userId、功能开关和 AbortController
     await this.appService.prompt(
       body.message, body.images, body.history, res, body.sessionId, () => cancelled, req.userId,
-      body.memoryEnabled, body.summaryEnabled, body.injectMemory,
+      body.memoryEnabled, body.summaryEnabled, body.injectMemory, llmAbortController,
     );
   }
 

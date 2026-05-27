@@ -3,6 +3,7 @@ import { promptTemplate as promptInvoke } from './fundamentals/prompt';
 import { ragWithLLM } from './fundamentals/rag-service';
 import { generateSummary, shouldGenerateSummary } from './fundamentals/summarizer';
 import { extractMemories, mergeMemories, shouldExtractMemory } from './fundamentals/memory-extractor';
+import { logger } from './fundamentals/logger';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import type { Response } from 'express';
@@ -37,6 +38,7 @@ export class AppService {
     memoryEnabled?: boolean,
     summaryEnabled?: boolean,
     injectMemory?: boolean,
+    abortController?: AbortController, // 用于中断 LLM 底层 HTTP 连接的 AbortController
   ) {
     // 获取会话摘要（如果摘要功能已启用）
     let sessionSummary: string | undefined;
@@ -67,7 +69,7 @@ export class AppService {
       }
     }
 
-    await promptInvoke(message, images, history, res, sessionSummary, memoryTexts, isCancelled);
+    await promptInvoke(message, images, history, res, sessionSummary, memoryTexts, isCancelled, abortController);
   }
   rag(message?: string){
     return ragWithLLM(message || '');
@@ -75,7 +77,7 @@ export class AppService {
 
   // 保存对话记录
   async saveChatHistory(sessionId: string, role: string, content: string, userId: string = 'default') {
-    console.log(sessionId, role, content, 222222);
+    logger.debug('保存聊天记录', { module: 'AppService', sessionId, role, contentLength: content.length });
     const chatHistory = this.chatHistoryRepository.create({
       userId,
       sessionId,
@@ -241,15 +243,15 @@ export class AppService {
 
       const coveredCount = existingSummary?.coveredMessageCount || 0;
 
-      console.log(`📊 摘要检查: sessionId=${sessionId}, 总消息=${messageCount}, 已覆盖=${coveredCount}`);
+      logger.info('摘要检查', { module: 'AppService', sessionId, totalMessages: messageCount, coveredMessages: coveredCount });
 
       // 判断是否需要生成/更新摘要
       if (!shouldGenerateSummary(coveredCount, messageCount)) {
-        console.log(`⏭️ 不需要生成摘要 (条件未满足)`);
+        logger.debug('不需要生成摘要（条件未满足）', { module: 'AppService' });
         return;
       }
 
-      console.log(`🔄 会话 ${sessionId} 需要更新摘要 (已覆盖: ${coveredCount}, 总消息: ${messageCount})`);
+      logger.info('会话需要更新摘要', { module: 'AppService', sessionId, coveredCount, totalMessages: messageCount });
 
       // 获取需要摘要的消息（增量更新时只取新增部分）
       const messagesToSummarize = await this.chatHistoryRepository.find({
@@ -259,15 +261,15 @@ export class AppService {
         take: messageCount - coveredCount, // SQL Server 要求 skip 必须配合 take 使用
       });
 
-      console.log(`📋 获取到 ${messagesToSummarize.length} 条待摘要消息`);
+      logger.debug('获取待摘要消息', { module: 'AppService', messageCount: messagesToSummarize.length });
 
       if (messagesToSummarize.length === 0) {
-        console.log(`⏭️ 无待摘要消息，跳过`);
+        logger.debug('无待摘要消息，跳过', { module: 'AppService' });
         return;
       }
 
       // 调用摘要服务生成摘要
-      console.log(`🚀 开始调用 generateSummary...`);
+      logger.info('开始调用 generateSummary', { module: 'AppService' });
       const summaryContent = await generateSummary(
         messagesToSummarize.map((msg) => ({
           role: msg.role,
@@ -276,7 +278,7 @@ export class AppService {
         existingSummary?.summaryContent || '',
       );
 
-      console.log(`📝 摘要生成结果: 长度=${summaryContent?.length || 0}, 内容前100字=${summaryContent?.substring(0, 100) || '空'}`);
+      logger.info('摘要生成结果', { module: 'AppService', summaryLength: summaryContent?.length || 0, preview: summaryContent?.substring(0, 100) || '空' });
 
       // 保存或更新摘要
       if (existingSummary) {
@@ -297,9 +299,9 @@ export class AppService {
         await this.sessionSummaryRepository.save(newSummary);
       }
 
-      console.log(`✅ 会话 ${sessionId} 摘要已更新，覆盖 ${messageCount} 条消息`);
+      logger.info('会话摘要已更新', { module: 'AppService', sessionId, coveredMessages: messageCount });
     } catch (error: any) {
-      console.error(`❌ 更新会话摘要失败: ${error.message}`);
+      logger.error('更新会话摘要失败', { module: 'AppService', error: error.message });
       // 摘要失败不影响主流程，静默处理
     }
   }
@@ -359,7 +361,7 @@ export class AppService {
         return;
       }
 
-      console.log(`🧠 会话 ${sessionId} 需要提取记忆 (消息数: ${messageCount})`);
+      logger.info('会话需要提取记忆', { module: 'AppService', sessionId, messageCount });
 
       // 获取最近的对话消息用于提取
       const messages = await this.chatHistoryRepository.find({
@@ -380,7 +382,7 @@ export class AppService {
       );
 
       if (newMemories.length === 0) {
-        console.log(`ℹ️ 会话 ${sessionId} 未提取到新记忆`);
+        logger.info('会话未提取到新记忆', { module: 'AppService', sessionId });
         return;
       }
 
@@ -426,9 +428,9 @@ export class AppService {
         }
       }
 
-      console.log(`✅ 记忆提取完成: 新增 ${addedCount}, 更新 ${updatedCount}, 跳过 ${skippedCount}`);
+      logger.info('记忆提取完成', { module: 'AppService', added: addedCount, updated: updatedCount, skipped: skippedCount });
     } catch (error: any) {
-      console.error(`❌ 提取用户记忆失败: ${error.message}`);
+      logger.error('提取用户记忆失败', { module: 'AppService', error: error.message });
     }
   }
 

@@ -8,6 +8,7 @@ import * as http from 'http';
 import { retrieveFromKnowledgeBase } from './rag-service';
 import { getKnowledgeBaseStats } from './vector-store';
 import { createLLM, getCurrentModelId, getModelInfo } from './model-provider';
+import { logger } from './logger';
 
 // 系统提示词 - 定义模型的角色和任务
 // ### 注意事项
@@ -78,13 +79,13 @@ async function downloadImageAsBase64(imageUrl: string): Promise<string> {
 async function processImageUrl(imageUrl: string): Promise<string> {
   if (imageUrl.startsWith('http://localhost:3000/files/') ||
       imageUrl.startsWith('https://localhost:3000/files/')) {
-    console.log('📷 检测到本地图片，开始下载:', imageUrl);
+    logger.info('检测到本地图片，开始下载', { module: 'PromptService', imageUrl });
     try {
       const base64DataUrl = await downloadImageAsBase64(imageUrl);
-      console.log('✅ 本地图片转换成功');
+      logger.info('本地图片转换成功', { module: 'PromptService' });
       return base64DataUrl;
     } catch (error) {
-      console.error('❌ 本地图片下载失败，使用原始 URL:', error);
+      logger.error('本地图片下载失败，使用原始 URL', { module: 'PromptService', error: String(error) });
       return imageUrl;
     }
   }
@@ -101,22 +102,21 @@ async function processImageUrl(imageUrl: string): Promise<string> {
  * @returns LangChain 消息内容格式（数组，包含文本和图片）
  */
 async function convertToMultimodalContent(text: string): Promise<Array<{ type: string; text?: string; image_url?: string }>> {
-  console.log('========== 开始转换多模态内容 ==========');
-  console.log('原始文本:', text);
+  logger.debug('开始转换多模态内容', { module: 'PromptService', textLength: text.length });
 
   // 正则表达式匹配 Markdown 图片语法：![alt](url)
   const markdownImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
 
   // 如果没有匹配到图片，返回纯文本格式
   if (!markdownImageRegex.test(text)) {
-    console.log('⚠️ 未检测到 Markdown 图片语法，返回纯文本');
+    logger.debug('未检测到 Markdown 图片语法，返回纯文本', { module: 'PromptService' });
     return [{ type: "text", text }];
   }
 
   // 重置正则表达式的 lastIndex
   markdownImageRegex.lastIndex = 0;
 
-  console.log('✅ 检测到 Markdown 图片语法');
+  logger.info('检测到 Markdown 图片语法', { module: 'PromptService' });
 
   // 用于存储转换后的内容块
   const contentBlocks: Array<{ type: string; text?: string; image_url?: string }> = [];
@@ -137,23 +137,23 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
 
     // 获取图片 URL
     const imageUrl = match[2];
-    console.log('📷 检测到图片 URL:', imageUrl);
+    logger.debug('检测到图片 URL', { module: 'PromptService', imageUrl });
 
     // 检查是否是本地服务器的图片（http://localhost:3000/files/）
     if (imageUrl.startsWith('http://localhost:3000/files/') ||
         imageUrl.startsWith('https://localhost:3000/files/')) {
       try {
         // 下载图片并转换为 base64 格式
-        console.log('📥 开始下载图片并转换为 base64...');
+        logger.info('开始下载图片并转换为 base64', { module: 'PromptService' });
         const base64DataUrl = await downloadImageAsBase64(imageUrl);
-        console.log('✅ 图片下载并转换成功，base64 长度:', base64DataUrl.length);
+        logger.info('图片下载并转换成功', { module: 'PromptService', base64Length: base64DataUrl.length });
         contentBlocks.push({
           type: "image_url",
           image_url: base64DataUrl  // 使用 base64 数据 URL
         });
       } catch (error) {
         // 如果下载失败，记录错误但仍然添加原始 URL
-        console.error('❌ 下载图片失败:', error);
+        logger.error('下载图片失败', { module: 'PromptService', error: String(error) });
         contentBlocks.push({
           type: "image_url",
           image_url: imageUrl  // 降级使用原始 URL
@@ -161,7 +161,7 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
       }
     } else {
       // 对于外部 URL，直接使用原始 URL
-      console.log('🌐 使用外部图片 URL（未转换）');
+      logger.debug('使用外部图片 URL', { module: 'PromptService' });
       contentBlocks.push({
         type: "image_url",
         image_url: imageUrl
@@ -178,9 +178,7 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
     contentBlocks.push({ type: "text", text: remainingText });
   }
 
-  console.log('========== 多模态内容转换完成 ==========');
-  console.log('内容块数量:', contentBlocks.length);
-  // console.log('内容块详情:', JSON.stringify(contentBlocks, null, 2));
+  logger.debug('多模态内容转换完成', { module: 'PromptService', blockCount: contentBlocks.length });
 
   return contentBlocks;
 }
@@ -205,7 +203,8 @@ export const promptTemplate = async (
   res?: Response,
   sessionSummary?: string,
   userMemories?: string[],
-  isCancelled?: () => boolean
+  isCancelled?: () => boolean,
+  abortController?: AbortController, // 用于中断 LLM 底层 HTTP 连接的 AbortController
 ) => {
   const conversions: Array<SystemMessage | HumanMessage | AIMessage> = [];
 
@@ -217,14 +216,14 @@ export const promptTemplate = async (
   
   if (promptText && promptText.trim()) {
     try {
-      console.log('🔍 正在从知识库检索相关文档...');
+      logger.info('正在从知识库检索相关文档', { module: 'PromptService' });
       const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);
-      
+
       if (retrieval.results && retrieval.results.length > 0) {
         const relevantResults = retrieval.results.filter((r: any) => {
           const vecScore = r.vectorScore ?? r.score;
           if (vecScore > 0 && vecScore > 0.55) {
-            console.log(`   ⚠️ 过滤不相关结果: vec=${vecScore.toFixed(4)} | "${r.content.substring(0, 40)}..."`);
+            logger.debug('过滤不相关结果', { module: 'PromptService', vectorScore: vecScore.toFixed(4), content: r.content.substring(0, 40) });
             return false;
           }
           return true;
@@ -237,15 +236,15 @@ export const promptTemplate = async (
             .map((r: any, i: number) => `【文档 ${i + 1}】\n${r.content}`)
             .join('\n\n');
           retrievalResults = relevantResults;
-          console.log(`✅ 知识库检索完成，找到 ${relevantResults.length} 个相关文档`);
+          logger.info('知识库检索完成', { module: 'PromptService', resultCount: relevantResults.length });
         } else {
-          console.log('ℹ️ 知识库检索到结果但均不相关，将使用模型自身知识回答');
+          logger.info('知识库检索到结果但均不相关，将使用模型自身知识回答', { module: 'PromptService' });
         }
       } else {
-        console.log('ℹ️ 知识库中没有找到相关内容');
+        logger.info('知识库中没有找到相关内容', { module: 'PromptService' });
       }
     } catch (error) {
-      console.warn('⚠️ 知识库检索失败（可能未启动）:', error.message);
+      logger.warn('知识库检索失败（可能未启动）', { module: 'PromptService', error: error.message });
     }
   }
 
@@ -281,7 +280,7 @@ ${docList}
   // 摘要覆盖了早期对话的关键信息，使 AI 即使不看完整历史也能理解上下文
   if (sessionSummary && sessionSummary.trim()) {
     systemPrompt += `\n\n=== 之前对话的摘要 ===\n${sessionSummary}\n=== 摘要结束 ===\n\n请注意：以上摘要是之前对话的压缩版本，请结合摘要和最近的对话来理解用户的意图。`;
-    console.log(`📝 已注入对话摘要，长度: ${sessionSummary.length} 字符`);
+    logger.info('已注入对话摘要', { module: 'PromptService', summaryLength: sessionSummary.length });
   }
 
   // ==================== 步骤2.6: 注入用户记忆（长期记忆） ====================
@@ -289,7 +288,7 @@ ${docList}
   if (userMemories && userMemories.length > 0) {
     const memoryText = userMemories.map((m, i) => `${i + 1}. ${m}`).join('\n');
     systemPrompt += `\n\n=== 关于用户的记忆 ===\n以下是从历史对话中了解到的关于用户的信息，请在回答时参考：\n${memoryText}\n=== 用户记忆结束 ===`;
-    console.log(`🧠 已注入 ${userMemories.length} 条用户记忆`);
+    logger.info('已注入用户记忆', { module: 'PromptService', memoryCount: userMemories.length });
   }
 
   conversions.push(new SystemMessage(systemPrompt));
@@ -300,7 +299,7 @@ ${docList}
   const supportsVision = modelInfo.supportsVision;
 
   if (images && images.length > 0 && !supportsVision) {
-    console.log(`⚠️ 当前模型 ${getCurrentModelId()} 不支持图片输入，已忽略 ${images.length} 张图片`);
+    logger.warn('当前模型不支持图片输入，已忽略图片', { module: 'PromptService', modelId: getCurrentModelId(), imageCount: images.length });
     images = undefined;
   }
 
@@ -308,7 +307,7 @@ ${docList}
   const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
 
   if (recentHistory.length > 0) {
-    console.log(`📜 添加最近 ${recentHistory.length} 条历史消息（总共限制 ${MAX_HISTORY} 条）`);
+    logger.info('添加历史消息', { module: 'PromptService', historyCount: recentHistory.length, maxHistory: MAX_HISTORY });
     for (const msg of recentHistory) {
       if (msg.role === 'user') {
         let content: any;
@@ -347,34 +346,11 @@ ${docList}
 
   conversions.push(new HumanMessage({ content: userContent }));
 
-  console.log('📋 完整的对话消息列表:');
-  console.log('消息数量:', conversions.length);
-  conversions.forEach((msg, index) => {
-    if (msg instanceof SystemMessage) {
-      console.log(`  [${index}] SystemMessage:`, (msg.content as string).substring(0, 100) + '...');
-    } else if (msg instanceof HumanMessage) {
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        console.log(`  [${index}] HumanMessage (多模态):`, content.length, '个内容块');
-        content.forEach((block: any, i: number) => {
-          if (block.type === 'text') {
-            console.log(`    块[${i}]: 文本 - "${block.text?.substring(0, 50)}..."`);
-          } else if (block.type === 'image_url') {
-            console.log(`    块[${i}]: 图片 - ${block.image_url?.url?.substring(0, 50)}...`);
-          }
-        });
-      } else {
-        console.log(`  [${index}] HumanMessage:`, content);
-      }
-    } else if (msg instanceof AIMessage) {
-      console.log(`  [${index}] AIMessage:`, (msg.content as string).substring(0, 200) + '...');
-    }
-  });
+  logger.debug('对话消息列表构建完成', { module: 'PromptService', messageCount: conversions.length });
 
   if (res) {
     // 流式调用
-    console.log('🚀 开始流式调用模型...');
-    console.log(`   📋 当前模型: ${getCurrentModelId()}`);
+    logger.info('开始流式调用模型', { module: 'PromptService', modelId: getCurrentModelId() });
     
     const llm = createLLM();
 
@@ -382,17 +358,24 @@ ${docList}
       usedKnowledgeBase: hasRetrievedContent,
       contextCount: hasRetrievedContent ? ragContextCount : 0,
     };
-    console.log(`📤 发送 RAG 元数据: usedKnowledgeBase=${hasRetrievedContent}, contextCount=${ragMetadata.contextCount}`);
+    logger.debug('发送 RAG 元数据', { module: 'PromptService', usedKnowledgeBase: hasRetrievedContent, contextCount: ragMetadata.contextCount });
     const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]`;
     
     try {
-      const stream = await llm.stream(conversions);
+      // 将 AbortController 的 signal 传递给 LLM 的 stream 方法
+      // 当客户端断开连接时，调用 abortController.abort() 会：
+      // 1. 中断 LLM 底层到 Ollama/DeepSeek 的 HTTP 连接
+      // 2. Ollama 服务端检测到连接断开后自动停止推理，释放 GPU 资源
+      // 3. for await 循环会抛出 AbortError，被下方的 catch 捕获
+      const stream = await llm.stream(conversions, {
+        signal: abortController?.signal, // 绑定 abort 信号，中断时自动销毁底层 HTTP 请求
+      });
       let chunkCount = 0;
       let isFirstChunk = true;
       for await (const chunk of stream) {
-        // 检查客户端是否已断开连接
+        // 检查客户端是否已断开连接（双重保险：即使 abort 信号未生效，也能通过标志位退出循环）
         if (isCancelled && isCancelled()) {
-          console.log('🛑 检测到取消信号，停止生成');
+          logger.info('检测到取消信号，停止生成', { module: 'PromptService' });
           break;
         }
         chunkCount++;
@@ -408,17 +391,23 @@ ${docList}
           process.stdout.write(cleanContent);
         }
       }
-      console.log(`\n✅ 流式响应完成，共 ${chunkCount} 个 chunk`);
+      logger.info('流式响应完成', { module: 'PromptService', chunkCount });
       res.end();
     } catch (streamError: any) {
-      console.error('❌ 流式调用失败:', streamError.message);
-      if (!res.headersSent) {
-        res.status(500).json({ 
-          error: '模型调用失败', 
-          message: streamError.message 
-        });
-      } else {
+      // AbortError 是用户主动取消导致的，属于正常流程，不需要报错
+      if (streamError.name === 'AbortError' || streamError.code === 'ABORT_ERR') {
+        logger.info('LLM 推理已被中断（客户端断开连接），底层 HTTP 连接已销毁', { module: 'PromptService' });
         res.end();
+      } else {
+        logger.error('流式调用失败', { module: 'PromptService', error: streamError.message });
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: '模型调用失败',
+            message: streamError.message
+          });
+        } else {
+          res.end();
+        }
       }
     }
   } else {
@@ -428,7 +417,7 @@ ${docList}
     if (typeof result.content === 'string') {
       result.content = result.content.replace(/<think>[\s\S]*?<\/think>/gs, "");
     }
-    console.log(result);
+    logger.debug('非流式调用完成', { module: 'PromptService' });
     return result;
   }
 }

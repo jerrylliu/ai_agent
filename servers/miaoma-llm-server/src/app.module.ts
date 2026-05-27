@@ -13,8 +13,10 @@ import { User } from './entities/user.entity.js';
 import { SessionSummary } from './entities/session-summary.entity.js';
 import { UserMemory } from './entities/user-memory.entity.js';
 import { AuthModule } from './auth/auth.module.js';
+import { WinstonLoggerModule } from './fundamentals/logger.js';
 @Module({
   imports: [
+    WinstonLoggerModule, // Winston 结构化日志模块
     TypeOrmModule.forRoot({
       type: 'mysql',
       host: '127.0.0.1',

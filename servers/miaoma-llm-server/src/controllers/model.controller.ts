@@ -5,6 +5,7 @@
 
 // 从 @nestjs/common 导入控制器所需的装饰器
 import { Controller, Get, Post, Body } from '@nestjs/common';
+import { logger } from '../fundamentals/logger';
 
 // @Controller('models') 声明该类为 NestJS 控制器，路由前缀为 /models
 // 即该控制器下所有路由都以 /models 开头
@@ -24,7 +25,7 @@ export class ModelController {
       // 调用服务层获取模型信息，展开返回
       return { success: true, ...getModelInfo() };
     } catch (error: any) {
-      console.error('获取模型信息失败:', error);
+      logger.error('获取模型信息失败', { module: 'ModelController', error: error.message });
       return { success: false, message: `获取模型信息失败: ${error.message}` };
     }
   }
@@ -51,7 +52,7 @@ export class ModelController {
       // 返回切换结果：成功标志、提示消息、当前模型配置
       return { success: true, message: `已切换到模型: ${body.modelId}`, currentModel: config };
     } catch (error: any) {
-      console.error('切换模型失败:', error);
+      logger.error('切换模型失败', { module: 'ModelController', error: error.message });
       return { success: false, message: `切换模型失败: ${error.message}` };
     }
   }
@@ -82,7 +83,7 @@ export class ModelController {
       // 不支持的提供商类型
       return { success: false, message: `不支持的提供者: ${body.provider}` };
     } catch (error: any) {
-      console.error('设置 API Key 失败:', error);
+      logger.error('设置 API Key 失败', { module: 'ModelController', error: error.message });
       return { success: false, message: `设置 API Key 失败: ${error.message}` };
     }
   }

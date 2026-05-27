@@ -8,6 +8,7 @@ import { parseDocument, getMimeType } from './document-parser';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { Response } from 'express';
+import { logger } from './logger';
 
 // 配置
 const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
@@ -41,7 +42,7 @@ export async function handleDocumentUpload(file: any): Promise<{
     const mimeType = file.mimetype;
     const originalName = file.originalname;
 
-    console.log(`📄 收到文档上传: ${originalName} (${(file.size / 1024).toFixed(2)} KB)`);
+    logger.info('收到文档上传', { module: 'RagService', fileName: originalName, fileSizeKB: (file.size / 1024).toFixed(2) });
 
     let tempFilePath = filePath;
 
@@ -50,11 +51,11 @@ export async function handleDocumentUpload(file: any): Promise<{
       const ext = path.extname(originalName) || '.tmp';
       tempFilePath = path.join(UPLOAD_DIR, `temp_${timestamp}${ext}`);
       fs.writeFileSync(tempFilePath, file.buffer);
-      console.log(`📁 临时保存文件到: ${tempFilePath}`);
+      logger.debug('临时保存文件', { module: 'RagService', path: tempFilePath });
     }
 
     // 解析文档内容
-    console.log('📖 开始解析文档...');
+    logger.info('开始解析文档', { module: 'RagService' });
     const textContent = await parseDocument(tempFilePath, mimeType);
 
     if (!textContent || textContent.trim().length === 0) {
@@ -67,7 +68,7 @@ export async function handleDocumentUpload(file: any): Promise<{
       };
     }
 
-    console.log(`✂️ 文档解析完成，字符数: ${textContent.length}`);
+    logger.info('文档解析完成', { module: 'RagService', charCount: textContent.length });
 
     // 添加到知识库（addDocuments 内部会用 RecursiveCharacterTextSplitter 统一切分）
     const metadata = {
@@ -95,7 +96,7 @@ export async function handleDocumentUpload(file: any): Promise<{
       documentCount: docCount,
     };
   } catch (error: any) {
-    console.error('❌ 文档上传失败:', error);
+    logger.error('文档上传失败', { module: 'RagService', error: error.message });
     return {
       success: false,
       message: `文档上传失败: ${error.message}`,
@@ -178,18 +179,18 @@ export async function ragWithLLM(
   res?: Response
 ): Promise<any> {
   // 1. 检索相关文档
-  console.log('🔍 执行 RAG 检索...');
+  logger.info('执行 RAG 检索', { module: 'RagService' });
   const retrieval = await retrieveFromKnowledgeBase(query, 3);
 
   if (retrieval.results.length === 0) {
-    console.log('⚠️ 知识库中没有找到相关内容');
+    logger.warn('知识库中没有找到相关内容', { module: 'RagService' });
     return {
       success: false,
       message: '知识库中没有找到与您问题相关的内容，请先上传相关文档',
     };
   }
 
-  console.log(`✅ 找到 ${retrieval.results.length} 个相关文档`);
+  logger.info('找到相关文档', { module: 'RagService', resultCount: retrieval.results.length });
 
   // 2. 构建增强后的提示词
   const augmentedPrompt = `

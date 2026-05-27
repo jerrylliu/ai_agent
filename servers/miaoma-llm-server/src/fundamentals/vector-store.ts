@@ -13,6 +13,7 @@ import { Embeddings } from '@langchain/core/embeddings';
 import MiniSearch from 'minisearch';
 import * as path from 'path';
 import * as fs from 'fs';
+import { logger } from './logger';
 
 const BATCH_SIZE = 1;
 
@@ -27,12 +28,131 @@ const embeddings = new OllamaEmbeddings({
   baseUrl: 'http://localhost:11434',
 });
 
-// 创建文本分割器
-const textSplitter = new RecursiveCharacterTextSplitter({
-  chunkSize: 400,
-  chunkOverlap: 80,
+// ==================== P0: 优化切分参数 ====================
+// 原参数: chunkSize=400, chunkOverlap=80 (重叠率 20%)
+// 新参数: chunkSize=350, chunkOverlap=30 (重叠率 ~8.6%)
+// 理由:
+//   1. bge-large 嵌入模型上下文为 512 tokens，中文约 1.5-2 tokens/字符
+//      350 字符 ≈ 350-700 tokens，留有余量不会溢出
+//   2. 重叠从 80 降到 30，降低冗余存储（原 20% → 新 8.6%）
+//   3. 单个 chunk 较小不影响 LLM 回答质量，因为 P3 上下文扩展会合并相邻 chunk
+//      检索时命中 1 个 chunk → 返回前后各 1 个 → 共 3 个 chunk ≈ 1050 字符给 LLM
+export const DEFAULT_CHUNK_SIZE = 350;
+export const DEFAULT_CHUNK_OVERLAP = 30;
+
+// 创建默认文本分割器（用于通用文本：TXT、PDF、Word 等）
+export const textSplitter = new RecursiveCharacterTextSplitter({
+  chunkSize: DEFAULT_CHUNK_SIZE,
+  chunkOverlap: DEFAULT_CHUNK_OVERLAP,
   separators: ['\n\n', '\n', '。', '！', '？', '.', '!', '?', ' ', ''],
 });
+
+// ==================== P1: 按文档类型差异化切分 ====================
+// 不同文档类型使用不同的切分策略，避免"一刀切"导致语义断裂
+
+/**
+ * 代码文件切分器
+ * 优先按函数/类/方法边界切分，保持代码结构完整
+ * separators 优先级: 类定义 > 函数定义 > 代码块 > 语句 > 字符
+ */
+export const codeSplitter = new RecursiveCharacterTextSplitter({
+  chunkSize: DEFAULT_CHUNK_SIZE,
+  chunkOverlap: DEFAULT_CHUNK_OVERLAP,
+  separators: [
+    '\n\nclass ',      // Python/Java/TS 类定义
+    '\n\ndef ',        // Python 函数定义
+    '\n\nfunction ',   // JS/TS 函数定义
+    '\n\nconst ',      // JS/TS 常量定义
+    '\n\nlet ',        // JS/TS 变量定义
+    '\n\n// ',        // 注释块
+    '\n\n/*',         // 多行注释开始
+    '\n\n',           // 空行（代码块分隔）
+    '\n',             // 换行
+    ';',              // 语句结束（JS/TS/C/Java）
+    ' ',              // 空格
+    '',               // 字符级兜底
+  ],
+});
+
+/**
+ * Markdown 文件切分器
+ * 优先按标题层级切分，保留标题上下文
+ * 每个 chunk 会包含其所属的标题路径（如 "# 第一章 > ## 第二节"）
+ */
+export const markdownSplitter = new RecursiveCharacterTextSplitter({
+  chunkSize: DEFAULT_CHUNK_SIZE,
+  chunkOverlap: DEFAULT_CHUNK_OVERLAP,
+  separators: [
+    '\n# ',           // H1 标题
+    '\n## ',          // H2 标题
+    '\n### ',         // H3 标题
+    '\n#### ',        // H4 标题
+    '\n\n',           // 段落分隔
+    '\n',             // 换行
+    '。', '！', '？', '.', '!', '?', // 句子结束
+    ' ',              // 空格
+    '',               // 字符级兜底
+  ],
+});
+
+/**
+ * 根据文件扩展名获取对应的文本分割器
+ * @param fileName 文件名（含扩展名）
+ * @returns 适合该文件类型的 RecursiveCharacterTextSplitter 实例
+ */
+export function getSplitterByFileType(fileName: string): RecursiveCharacterTextSplitter {
+  const ext = fileName.toLowerCase();
+
+  // 代码文件: 优先按函数/类边界切分
+  if (ext.endsWith('.py') || ext.endsWith('.js') || ext.endsWith('.ts') ||
+      ext.endsWith('.jsx') || ext.endsWith('.tsx') || ext.endsWith('.java') ||
+      ext.endsWith('.cpp') || ext.endsWith('.c') || ext.endsWith('.h') ||
+      ext.endsWith('.cs') || ext.endsWith('.go') || ext.endsWith('.rs') ||
+      ext.endsWith('.php') || ext.endsWith('.rb') || ext.endsWith('.swift')) {
+    return codeSplitter;
+  }
+
+  // Markdown 文件: 优先按标题层级切分
+  if (ext.endsWith('.md') || ext.endsWith('.markdown') || ext.endsWith('.mdx')) {
+    return markdownSplitter;
+  }
+
+  // 默认: 使用通用文本切分器
+  return textSplitter;
+}
+
+/**
+ * 检测文本内容是否为 Markdown 格式
+ * 通过检查是否包含 Markdown 特有的语法标记来判断
+ * @param text 文本内容
+ * @returns 是否为 Markdown
+ */
+export function isMarkdownContent(text: string): boolean {
+  // 检查常见的 Markdown 语法标记
+  const markdownPatterns = [
+    /^#{1,6}\s+/m,           // 标题: # 标题
+    /^\*\*|^__/m,            // 粗体: **text** 或 __text__
+    /^\*|^_/m,               // 斜体: *text* 或 _text_
+    /^```/m,                 // 代码块: ```
+    /^\[.*?\]\(.*?\)/m,      // 链接: [text](url)
+    /^!\[.*?\]\(.*?\)/m,     // 图片: ![alt](url)
+    /^\s*[-*+]\s+/m,         // 列表: - item 或 * item
+    /^\s*\d+\.\s+/m,         // 有序列表: 1. item
+    /^\|.*\|/m,              // 表格: | col1 | col2 |
+    /^>/m,                   // 引用: > quote
+    /^---/m,                 // 分隔线: ---
+  ];
+
+  // 如果命中 2 个及以上模式，判定为 Markdown
+  let matchCount = 0;
+  for (const pattern of markdownPatterns) {
+    if (pattern.test(text)) {
+      matchCount++;
+      if (matchCount >= 2) return true;
+    }
+  }
+  return false;
+}
 
 // 向量存储实例（单例）
 let vectorStore: Chroma | null = null;
@@ -59,7 +179,7 @@ async function initializeBM25Index(): Promise<MiniSearch> {
     return bm25Index;
   }
 
-  console.log('🔍 初始化 BM25 索引...');
+  logger.info('初始化 BM25 索引', { module: 'VectorStore' });
   bm25Index = new MiniSearch({
     fields: ['content'],
     storeFields: ['content', 'metadata'],
@@ -80,13 +200,13 @@ async function initializeBM25Index(): Promise<MiniSearch> {
 async function loadBM25Index(): Promise<void> {
   try {
     if (!fs.existsSync(BM25_INDEX_PATH)) {
-      console.log('📂 BM25 索引文件不存在，将创建新索引');
+      logger.info('BM25 索引文件不存在，将创建新索引', { module: 'VectorStore' });
       return;
     }
     
     const fileContent = fs.readFileSync(BM25_INDEX_PATH, 'utf-8');
     if (!fileContent || fileContent.trim().length === 0) {
-      console.log('📂 BM25 索引文件为空，将创建新索引');
+      logger.info('BM25 索引文件为空，将创建新索引', { module: 'VectorStore' });
       return;
     }
     
@@ -94,20 +214,20 @@ async function loadBM25Index(): Promise<void> {
     if (bm25Index && data?.index?.documents) {
       bm25Index.addAll(data.index.documents);
       bm25DocumentStore = new Map(Object.entries(data.documentStore || {}));
-      console.log(`✅ 已加载 BM25 索引，包含 ${bm25Index.documentCount} 个文档`);
+      logger.info('已加载 BM25 索引', { module: 'VectorStore', documentCount: bm25Index.documentCount });
     } else {
-      console.log('⚠️ BM25 索引数据格式不正确，将创建新索引');
+      logger.warn('BM25 索引数据格式不正确，将创建新索引', { module: 'VectorStore' });
     }
   } catch (error: any) {
-    console.error('❌ 加载 BM25 索引失败:', error.message);
-    console.log('🔄 将删除损坏的索引文件并创建新索引');
+    logger.error('加载 BM25 索引失败', { module: 'VectorStore', error: error.message });
+    logger.info('将删除损坏的索引文件并创建新索引', { module: 'VectorStore' });
     try {
       if (fs.existsSync(BM25_INDEX_PATH)) {
         fs.unlinkSync(BM25_INDEX_PATH);
-        console.log('✅ 已删除损坏的索引文件');
+        logger.info('已删除损坏的索引文件', { module: 'VectorStore' });
       }
     } catch (deleteError) {
-      console.error('❌ 删除损坏索引文件失败:', deleteError.message);
+      logger.error('删除损坏索引文件失败', { module: 'VectorStore', error: deleteError.message });
     }
   }
 }
@@ -126,7 +246,7 @@ async function saveBM25Index(): Promise<void> {
     };
     fs.writeFileSync(BM25_INDEX_PATH, JSON.stringify(data));
   } catch (error) {
-    console.error('❌ 保存 BM25 索引失败:', error);
+    logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(error) });
   }
 }
 
@@ -161,9 +281,9 @@ function deleteFromBM25Index(id: string): void {
   try {
     bm25Index!.remove(id);
     bm25DocumentStore.delete(id);
-    saveBM25Index().catch(err => console.error('❌ 保存 BM25 索引失败:', err));
+    saveBM25Index().catch(err => logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(err) }));
   } catch (error) {
-    console.log(`⚠️ 删除 BM25 文档失败 (可能不存在): ${id}`);
+    logger.warn('删除 BM25 文档失败（可能不存在）', { module: 'VectorStore', id });
   }
 }
 
@@ -178,7 +298,7 @@ async function clearBM25Index(): Promise<void> {
       fs.unlinkSync(BM25_INDEX_PATH);
     }
   } catch (error) {
-    console.error('❌ 删除 BM25 索引文件失败:', error);
+    logger.error('删除 BM25 索引文件失败', { module: 'VectorStore', error: String(error) });
   }
   await initializeBM25Index();
 }
@@ -187,7 +307,7 @@ async function clearBM25Index(): Promise<void> {
  * 重建 BM25 索引（从 ChromaDB 中所有文档）
  */
 async function rebuildBM25Index(): Promise<void> {
-  console.log('🔄 正在重建 BM25 索引...');
+  logger.info('正在重建 BM25 索引', { module: 'VectorStore' });
   await clearBM25Index();
 
   const docs = await getAllDocuments();
@@ -196,7 +316,7 @@ async function rebuildBM25Index(): Promise<void> {
     await addToBM25Index(id, doc.content, doc.metadata);
   }
 
-  console.log(`✅ BM25 索引重建完成，共 ${docs.length} 个文档`);
+  logger.info('BM25 索引重建完成', { module: 'VectorStore', documentCount: docs.length });
 }
 
 /**
@@ -208,12 +328,12 @@ export async function initializeVectorStore(): Promise<Chroma> {
     return vectorStore;
   }
 
-  console.log('🗄️ 初始化向量数据库...');
+  logger.info('初始化向量数据库', { module: 'VectorStore' });
 
   // 确保持久化目录存在
   if (!fs.existsSync(PERSIST_DIR)) {
     fs.mkdirSync(PERSIST_DIR, { recursive: true });
-    console.log(`📁 创建 ChromaDB 数据目录: ${PERSIST_DIR}`);
+    logger.info('创建 ChromaDB 数据目录', { module: 'VectorStore', path: PERSIST_DIR });
   }
 
   try {
@@ -224,10 +344,10 @@ export async function initializeVectorStore(): Promise<Chroma> {
     try {
       await client.getCollection({ name: COLLECTION_NAME });
       collectionExists = true;
-      console.log('📂 发现已有知识库集合');
+      logger.info('发现已有知识库集合', { module: 'VectorStore' });
     } catch {
       collectionExists = false;
-      console.log('📂 知识库集合不存在，将创建新集合');
+      logger.info('知识库集合不存在，将创建新集合', { module: 'VectorStore' });
     }
 
     // 创建 Chroma 向量存储
@@ -237,7 +357,7 @@ export async function initializeVectorStore(): Promise<Chroma> {
         url: 'http://localhost:8000',
       });
       const coll = await client.getCollection({ name: COLLECTION_NAME });
-      console.log(`ℹ️ 当前集合空间: ${coll.metadata?.['hnsw:space'] || 'l2(默认)'}`);
+      logger.info('当前集合空间', { module: 'VectorStore', space: coll.metadata?.['hnsw:space'] || 'l2(默认)' });
     } else {
       // 集合不存在，先创建集合
       await client.createCollection({
@@ -245,20 +365,20 @@ export async function initializeVectorStore(): Promise<Chroma> {
         metadata: { "hnsw:space": "cosine" },
         embeddingFunction: embeddings as any,
       });
-      console.log('✅ 新知识库集合已创建');
+      logger.info('新知识库集合已创建', { module: 'VectorStore' });
       vectorStore = await Chroma.fromExistingCollection(embeddings, {
         collectionName: COLLECTION_NAME,
         url: 'http://localhost:8000',
       });
     }
 
-    console.log('✅ 向量数据库初始化完成');
+    logger.info('向量数据库初始化完成', { module: 'VectorStore' });
     return vectorStore;
   } catch (error) {
-    console.error('❌ 初始化向量数据库失败:', error);
+    logger.error('初始化向量数据库失败', { module: 'VectorStore', error: String(error) });
 
     // 如果 ChromaDB 连接失败，使用内存存储作为备选
-    console.log('⚠️ ChromaDB 不可用，尝试使用内存存储...');
+    logger.warn('ChromaDB 不可用，尝试使用内存存储', { module: 'VectorStore' });
     return await createMemoryVectorStore();
   }
 }
@@ -272,7 +392,7 @@ async function createMemoryVectorStore(): Promise<Chroma> {
   const store = new MemoryVectorStore(embeddings);
   vectorStore = store as unknown as Chroma;
 
-  console.log('✅ 内存向量存储初始化完成（注意：重启后数据会丢失）');
+  logger.info('内存向量存储初始化完成（注意：重启后数据会丢失）', { module: 'VectorStore' });
   return vectorStore;
 }
 
@@ -288,16 +408,37 @@ export async function addDocuments(
 ): Promise<number> {
   const store = await initializeVectorStore();
 
-  console.log(`📤 开始向量化 ${texts.length} 个文档...(docType: ${metadata[0]?.docType || 'general'})...`);
+  logger.info('开始向量化文档', { module: 'VectorStore', textCount: texts.length, docType: metadata[0]?.docType || 'general' });
 
-  const allChunks: Array<{ text: string; metaIndex: number }> = [];
+  // ==================== P1: 按文档类型选择切分器 ====================
+  // 根据文件名或内容类型选择最合适的切分策略
+  const allChunks: Array<{ text: string; metaIndex: number; splitterType: string }> = [];
   for (let t = 0; t < texts.length; t++) {
-    const chunks = await textSplitter.splitText(texts[t]);
+    const text = texts[t];
+    const fileName = metadata[t]?.source || '';
+
+    // 步骤1: 根据文件名扩展名选择切分器
+    let splitter = getSplitterByFileType(fileName);
+    let splitterType = 'general';
+
+    // 步骤2: 如果文件名无法判断（如 .txt），通过内容检测是否为 Markdown
+    if (splitter === textSplitter && isMarkdownContent(text)) {
+      splitter = markdownSplitter;
+      splitterType = 'markdown';
+    } else if (splitter === codeSplitter) {
+      splitterType = 'code';
+    } else if (splitter === markdownSplitter) {
+      splitterType = 'markdown';
+    }
+
+    logger.debug('文件切分策略', { module: 'VectorStore', fileName: fileName || 'unknown', splitterType });
+
+    const chunks = await splitter.splitText(text);
     for (const chunk of chunks) {
-      allChunks.push({ text: chunk, metaIndex: t });
+      allChunks.push({ text: chunk, metaIndex: t, splitterType });
     }
   }
-  console.log(`✂️ 文本分割完成，共 ${allChunks.length} 个文本块`);
+  logger.info('文本分割完成', { module: 'VectorStore', chunkCount: allChunks.length });
 
   const documents = allChunks.map((chunk, i) => new Document({
     pageContent: chunk.text,
@@ -306,6 +447,7 @@ export async function addDocuments(
       chunk_index: i,
       source: metadata[chunk.metaIndex]?.source || 'unknown',
       doc_type: metadata[chunk.metaIndex]?.docType || 'general',
+      splitter_type: chunk.splitterType, // P1: 记录使用的切分策略，便于调试和优化
     },
   }));
 
@@ -316,27 +458,27 @@ export async function addDocuments(
     try {
       await store.addDocuments(batch);
       addedCount += batch.length;
-      console.log(`📦 已处理 ${addedCount}/${documents.length} 个文本块`);
+      logger.debug('文本块处理进度', { module: 'VectorStore', addedCount, total: documents.length });
     } catch (error: any) {
-      console.error(`❌ 批量添加失败 (${i}-${i + batch.length}):`, error.message);
+      logger.error('批量添加失败', { module: 'VectorStore', start: i, end: i + batch.length, error: error.message });
       const isContextError = error.message?.includes('context length') ||
         error.message?.includes('context') ||
         error.message?.includes('exceeds');
       if (isContextError) {
-        console.log('⚠️ 检测到上下文长度错误，尝试逐个添加文档...');
+        logger.warn('检测到上下文长度错误，尝试逐个添加文档', { module: 'VectorStore' });
         for (let j = 0; j < batch.length; j++) {
           try {
             await store.addDocuments([batch[j]]);
             addedCount++;
           } catch (singleError: any) {
-            console.error(`❌ 文档 ${i + j + 1} 添加失败:`, singleError.message);
+            logger.error('文档添加失败', { module: 'VectorStore', index: i + j + 1, error: singleError.message });
           }
         }
       }
     }
   }
 
-  console.log(`✅ 成功添加 ${addedCount} 个文本块到知识库`);
+  logger.info('成功添加文本块到知识库', { module: 'VectorStore', addedCount });
 
   if (addedCount === 0) {
     throw new Error('所有文本块添加失败，ChromaDB 可能未启动或不可用');
@@ -357,9 +499,9 @@ export async function addDocuments(
       await addToBM25Index(id, chunk.text, chunkMetadata);
       bm25AddedCount++;
     }
-    console.log(`🔍 已添加 ${bm25AddedCount} 个文档到 BM25 索引`);
+    logger.info('已添加文档到 BM25 索引', { module: 'VectorStore', documentCount: bm25AddedCount });
   } catch (bm25Error: any) {
-    console.warn('⚠️ BM25 索引添加失败，不影响文档存储:', bm25Error.message);
+    logger.warn('BM25 索引添加失败，不影响文档存储', { module: 'VectorStore', error: bm25Error.message });
   }
 
   return addedCount;
@@ -372,7 +514,7 @@ export async function addDocuments(
 export async function deleteDocuments(filter: Record<string, any>): Promise<void> {
   const store = await initializeVectorStore();
   await store.delete({ filter });
-  console.log('🗑️ 已从知识库删除文档');
+  logger.info('已从知识库删除文档', { module: 'VectorStore' });
 
   // 重建 BM25 索引以保持同步
   await rebuildBM25Index();
@@ -393,25 +535,25 @@ export async function searchKnowledgeBase(
 ): Promise<Array<{ content: string; metadata: any; score: number }>> {
   const store = await initializeVectorStore();
 
-  console.log(`🔍 搜索知识库: "${query}"`);
+  logger.info('搜索知识库', { module: 'VectorStore', query });
   if (filter) {
-    console.log(`   📋 过滤条件: ${JSON.stringify(filter)}`);
+    logger.debug('搜索过滤条件', { module: 'VectorStore', filter });
   }
 
   try {
     const results = await store.similaritySearchWithScore(query, topK * 2, filter);
 
-    console.log(`📊 检索到 ${results.length} 个结果`);
+    logger.info('检索到结果', { module: 'VectorStore', resultCount: results.length });
 
     results.forEach(([doc, score], i) => {
-      console.log(`   [${i}] score=${score.toFixed(4)} | doc_type=${doc.metadata?.doc_type} | "${doc.pageContent.substring(0, 50)}..."`);
+      logger.debug('搜索结果', { module: 'VectorStore', index: i, score: score.toFixed(4), docType: doc.metadata?.doc_type });
     });
 
     const filtered = results
       .filter(([_, score]) => score <= minSimilarity)
       .slice(0, topK);
 
-    console.log(`✅ 通过阈值(score<=${minSimilarity})过滤后: ${filtered.length} 个结果`);
+    logger.info('搜索结果过滤完成', { module: 'VectorStore', minSimilarity, filteredCount: filtered.length });
 
     return filtered.map(([doc, score]) => ({
       content: doc.pageContent,
@@ -419,7 +561,7 @@ export async function searchKnowledgeBase(
       score,
     }));
   } catch (error: any) {
-    console.error('❌ 搜索失败:', error.message);
+    logger.error('搜索失败', { module: 'VectorStore', error: error.message });
     return [];
   }
 }
@@ -440,13 +582,13 @@ export async function hybridSearchKnowledgeBase(
   bm25Weight: number = 0.3,
   filter?: Record<string, any>,
 ): Promise<Array<{ content: string; metadata: any; score: number; vectorScore: number; sources: string[] }>> {
-  console.log('='.repeat(50));
-  console.log(`🔍 混合搜索: "${query}"`);
-  console.log(`   权重配置: 向量=${vectorWeight}, BM25=${bm25Weight}`);
+  
+  logger.info('混合搜索', { module: 'VectorStore', query });
+  logger.debug('混合搜索权重配置', { module: 'VectorStore', vectorWeight, bm25Weight });
   if (filter) {
-    console.log(`   过滤条件: ${JSON.stringify(filter)}`);
+    logger.debug('混合搜索过滤条件', { module: 'VectorStore', filter });
   }
-  console.log('='.repeat(50));
+  
 
   const store = await initializeVectorStore();
   await initializeBM25Index();
@@ -465,9 +607,9 @@ export async function hybridSearchKnowledgeBase(
         rank: rank + 1,
       }));
 
-    console.log(`📊 向量检索: ${vectorResults.length} 个结果`);
+    logger.info('向量检索结果', { module: 'VectorStore', resultCount: vectorResults.length });
   } catch (error: any) {
-    console.error('❌ 向量检索失败:', error.message);
+    logger.error('向量检索失败', { module: 'VectorStore', error: error.message });
   }
 
   // 2. BM25 检索
@@ -500,7 +642,7 @@ export async function hybridSearchKnowledgeBase(
         }
         return true;
       });
-      console.log(`📋 BM25 过滤: ${beforeFilter} -> ${bm25Results.length} 个结果 (filter: ${JSON.stringify(filter)})`);
+      logger.debug('BM25 过滤结果', { module: 'VectorStore', beforeFilter, afterFilter: bm25Results.length, filter });
     }
 
     // 重新分配 rank（过滤后）
@@ -509,9 +651,9 @@ export async function hybridSearchKnowledgeBase(
       rank: rank + 1,
     }));
 
-    console.log(`📊 BM25 检索: ${bm25Results.length} 个结果`);
+    logger.info('BM25 检索结果', { module: 'VectorStore', resultCount: bm25Results.length });
   } catch (error: any) {
-    console.error('❌ BM25 检索失败:', error.message);
+    logger.error('BM25 检索失败', { module: 'VectorStore', error: error.message });
   }
 
   // 3. RRF 融合
@@ -570,8 +712,12 @@ export async function hybridSearchKnowledgeBase(
     }
   });
 
-  // 排序并返回 topK
-  const fusedResults = Array.from(scoreMap.values())
+  // ==================== P3: 父文档引用 - 扩展上下文 ====================
+  // 核心思路: 用小块(chunk)做检索保证精度，返回时合并相邻块成大块(parent)保证上下文完整性
+  // 实现方式: 对融合后的 top 结果，获取同一文件(source)内相邻的 chunk，合并成更大的上下文
+
+  // 步骤1: 排序并初步过滤
+  const sortedResults = Array.from(scoreMap.values())
     .sort((a, b) => b.rrfScore - a.rrfScore)
     .filter((item) => {
       if (item.vectorScore > 0 && item.vectorScore > 0.55) {
@@ -579,21 +725,100 @@ export async function hybridSearchKnowledgeBase(
       }
       return true;
     })
-    .slice(0, topK)
-    .map((item) => ({
-      content: item.content,
-      metadata: item.metadata,
-      score: item.rrfScore,
-      vectorScore: item.vectorScore,
-      sources: item.sources,
-    }));
+    .slice(0, topK);
 
-  console.log(`✅ 混合搜索最终返回: ${fusedResults.length} 个结果`);
-  fusedResults.forEach((result, i) => {
-    console.log(`   [${i + 1}] rrf=${result.score.toFixed(4)} vec=${result.vectorScore.toFixed(4)} | sources=${result.sources.join('+')} | "${result.content.substring(0, 40)}..."`);
-  });
+  // 步骤2: 扩展上下文 - 为每个结果获取相邻 chunk 合并
+  // 从 ChromaDB 获取同一文件的所有 chunk，按 chunk_index 排序后合并相邻内容
+  const expandedResults = await Promise.all(
+    sortedResults.map(async (item) => {
+      const source = item.metadata?.source;
+      const currentIndex = item.metadata?.chunk_index;
 
-  return fusedResults;
+      // 如果没有 source 或 chunk_index，无法扩展，直接返回原内容
+      if (!source || currentIndex === undefined) {
+        return {
+          content: item.content,
+          metadata: item.metadata,
+          score: item.rrfScore,
+          vectorScore: item.vectorScore,
+          sources: item.sources,
+        };
+      }
+
+      try {
+        // 从 ChromaDB 获取同一文件的所有 chunk（最多取前后各1个，共3个 chunk 合并）
+        // 这样每个返回结果包含约 900 * 3 = 2700 字符的上下文
+        // 既保证了检索精度（用小块匹配），又保证了回答的完整性（用大块上下文）
+        const store = await initializeVectorStore();
+        const neighborResults = await store.similaritySearchWithScore(
+          '', // 空查询，只用 filter
+          100, // 取足够多的结果
+          { source } // 只过滤同一文件
+        );
+
+        // 按 chunk_index 排序，取当前 chunk 前后各1个邻居
+        const sameFileChunks = neighborResults
+          .map(([doc, _score]) => ({
+            content: doc.pageContent,
+            index: doc.metadata?.chunk_index ?? -1,
+          }))
+          .filter((c) => c.index !== -1)
+          .sort((a, b) => a.index - b.index);
+
+        // 找到当前 chunk 在排序后的位置
+        const currentPos = sameFileChunks.findIndex((c) => c.index === currentIndex);
+        if (currentPos === -1) {
+          // 未找到当前 chunk，返回原内容
+          return {
+            content: item.content,
+            metadata: item.metadata,
+            score: item.rrfScore,
+            vectorScore: item.vectorScore,
+            sources: item.sources,
+          };
+        }
+
+        // 取前后各1个邻居，合并成父文档
+        const startIdx = Math.max(0, currentPos - 1);
+        const endIdx = Math.min(sameFileChunks.length - 1, currentPos + 1);
+        const parentChunks = sameFileChunks.slice(startIdx, endIdx + 1);
+
+        // 合并邻居 chunk 的内容
+        const expandedContent = parentChunks.map((c) => c.content).join('\n\n');
+
+        // 记录扩展信息到 metadata
+        const expandedMetadata = {
+          ...item.metadata,
+          parent_chunk_count: parentChunks.length,
+          parent_chunk_range: `${parentChunks[0]?.index}-${parentChunks[parentChunks.length - 1]?.index}`,
+          original_chunk_index: currentIndex,
+        };
+
+        return {
+          content: expandedContent,
+          metadata: expandedMetadata,
+          score: item.rrfScore,
+          vectorScore: item.vectorScore,
+          sources: item.sources,
+        };
+      } catch (error: any) {
+        // 扩展失败时不影响主流程，返回原内容
+        logger.warn('扩展上下文失败', { module: 'VectorStore', source, chunkIndex: currentIndex, error: error.message });
+        return {
+          content: item.content,
+          metadata: item.metadata,
+          score: item.rrfScore,
+          vectorScore: item.vectorScore,
+          sources: item.sources,
+        };
+      }
+    })
+  );
+
+  logger.info('混合搜索最终返回', { module: 'VectorStore', resultCount: expandedResults.length });
+  expandedResults.forEach((result, i) => { logger.debug('搜索结果详情', { module: 'VectorStore', index: i + 1, rrfScore: result.score.toFixed(4), vectorScore: result.vectorScore.toFixed(4), sources: result.sources.join('+'), parentChunks: result.metadata?.parent_chunk_count }); });
+
+  return expandedResults;
 }
 
 /**
@@ -610,7 +835,7 @@ export async function getDocumentTypes(): Promise<string[]> {
     });
     return Array.from(types);
   } catch (error) {
-    console.error('❌ 获取文档类型失败:', error);
+    logger.error('获取文档类型失败', { module: 'VectorStore', error: String(error) });
     return [];
   }
 }
@@ -620,7 +845,7 @@ export async function getDocumentTypes(): Promise<string[]> {
  * @returns 所有文档的列表
  */
 export async function getAllDocuments(): Promise<Array<{ content: string; metadata: any }>> {
-  console.log('📋 获取知识库所有文档...');
+  logger.info('获取知识库所有文档', { module: 'VectorStore' });
 
   try {
     const client = new ChromaClient({ host: 'localhost', port: 8000 });
@@ -635,10 +860,10 @@ export async function getAllDocuments(): Promise<Array<{ content: string; metada
       metadata: results.metadatas?.[i] || {},
     }));
 
-    console.log(`✅ 知识库共有 ${documents.length} 个文档`);
+    logger.info('知识库文档统计', { module: 'VectorStore', documentCount: documents.length });
     return documents;
   } catch (error) {
-    console.error('❌ 获取文档列表失败:', error);
+    logger.error('获取文档列表失败', { module: 'VectorStore', error: String(error) });
     return [];
   }
 }
@@ -675,7 +900,7 @@ export async function getKnowledgeBaseStats(): Promise<{
  * 清空知识库（谨慎使用）
  */
 export async function clearKnowledgeBase(): Promise<void> {
-  console.log('⚠️ 即将清空整个知识库...');
+  logger.warn('即将清空整个知识库', { module: 'VectorStore' });
 
   try {
     // 使用 ChromaDB 原生 API 删除整个集合
@@ -684,10 +909,10 @@ export async function clearKnowledgeBase(): Promise<void> {
     // 检查集合是否存在并删除
     try {
       await client.deleteCollection({ name: COLLECTION_NAME });
-      console.log('✅ 知识库集合已删除');
+      logger.info('知识库集合已删除', { module: 'VectorStore' });
     } catch (error: any) {
       if (error.message && error.message.includes('not found')) {
-        console.log('ℹ️ 知识库集合不存在，无需删除');
+        logger.info('知识库集合不存在，无需删除', { module: 'VectorStore' });
       } else {
         throw error;
       }
@@ -699,13 +924,13 @@ export async function clearKnowledgeBase(): Promise<void> {
       metadata: { "hnsw:space": "cosine" },
       embeddingFunction: embeddings as any,
     });
-    console.log('✅ 已创建新的空知识库集合');
+    logger.info('已创建新的空知识库集合', { module: 'VectorStore' });
 
     // 清空 BM25 索引
     await clearBM25Index();
-    console.log('✅ BM25 索引已清空');
+    logger.info('BM25 索引已清空', { module: 'VectorStore' });
   } catch (error) {
-    console.error('❌ 清空知识库失败:', error);
+    logger.error('清空知识库失败', { module: 'VectorStore', error: String(error) });
   }
 }
 
@@ -765,25 +990,22 @@ export async function debugSearch(
   }>;
 }> {
   const store = await initializeVectorStore();
-  console.log('='.repeat(50));
-  console.log('🔍 调试搜索流程');
-  console.log('='.repeat(50));
-  console.log(`原始查询: "${query}"`);
+  
+  logger.debug('调试搜索流程', { module: 'VectorStore' });
+  
+  logger.debug('原始查询', { module: 'VectorStore', query });
 
   const results = await store.similaritySearchWithScore(query, topK * 3);
 
-  console.log(`\n📊 原始搜索结果: ${results.length} 个`);
+  logger.debug('原始搜索结果', { module: 'VectorStore', resultCount: results.length });
   results.forEach(([doc, score], i) => {
-    console.log(`\n--- 结果 ${i + 1} ---`);
-    console.log(`分数: ${score.toFixed(4)}`);
-    console.log(`内容: ${doc.pageContent.substring(0, 100)}...`);
-    console.log(`元数据: ${JSON.stringify(doc.metadata)}`);
+    logger.debug('调试搜索结果', { module: 'VectorStore', index: i + 1, score: score.toFixed(4), content: doc.pageContent.substring(0, 100), metadata: doc.metadata });
   });
   const filtered = results
     .filter(([_, score]) => score <= minSimilarity)
     .slice(0, topK);
 
-  console.log(`\n✅ 通过阈值(score<=${minSimilarity})过滤后: ${filtered.length} 个`);
+  logger.debug('过滤后搜索结果', { module: 'VectorStore', minSimilarity, filteredCount: filtered.length });
 
   const rawResults = results.map(([doc, score]) => ({
     content: doc.pageContent,

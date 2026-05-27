@@ -1,6 +1,7 @@
 import { ChatOllama } from "@langchain/ollama";
 import { ChatOpenAI } from "@langchain/openai";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { logger } from './logger';
 
 export type ModelProvider = 'ollama' | 'deepseek';
 
@@ -94,7 +95,7 @@ export function switchModel(modelId: string): ModelConfig {
   }
 
   currentModelId = modelId;
-  console.log(`🔄 已切换模型: ${available.name} (${modelId})`);
+  logger.info('已切换模型', { module: 'ModelProvider', modelName: available.name, modelId });
 
   return buildModelConfig(modelId);
 }

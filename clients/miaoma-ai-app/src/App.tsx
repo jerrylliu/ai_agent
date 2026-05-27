@@ -1,4 +1,3 @@
-// import "./new.css";
 import "./new.css";
 import ChatAgent from "./pages/ChatAgent";
 

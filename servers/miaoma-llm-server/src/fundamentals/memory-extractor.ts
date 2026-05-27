@@ -19,6 +19,7 @@
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { getDeepseekApiKey } from './model-provider';
+import { logger } from './logger';
 
 // ==================== 配置常量 ====================
 
@@ -121,7 +122,7 @@ export async function extractMemories(
   const apiKey = getDeepseekApiKey();
 
   if (!apiKey || apiKey.trim() === '') {
-    console.warn('⚠️ 未配置 DeepSeek API Key，跳过记忆提取');
+    logger.warn('未配置 DeepSeek API Key，跳过记忆提取', { module: 'MemoryExtractor' });
     return [];
   }
 
@@ -139,7 +140,7 @@ export async function extractMemories(
       .map((msg) => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}`)
       .join('\n');
 
-    console.log(`🧠 开始提取用户记忆，消息数: ${messages.length}`);
+    logger.info('开始提取用户记忆', { module: 'MemoryExtractor', messageCount: messages.length });
 
     const result = await llm.invoke([
       new SystemMessage(MEMORY_EXTRACTION_PROMPT),
@@ -153,10 +154,10 @@ export async function extractMemories(
     // 解析 JSON 结果
     const memories = parseJsonResponse<ExtractedMemory[]>(content, []);
 
-    console.log(`✅ 提取到 ${memories.length} 条用户记忆`);
+    logger.info('提取到用户记忆', { module: 'MemoryExtractor', memoryCount: memories.length });
     return memories;
   } catch (error: any) {
-    console.error('❌ 记忆提取失败:', error.message);
+    logger.error('记忆提取失败', { module: 'MemoryExtractor', error: error.message });
     return [];
   }
 }
@@ -229,7 +230,7 @@ export async function mergeMemories(
 
     return parseJsonResponse<MergeAction[]>(content, []);
   } catch (error: any) {
-    console.error('❌ 记忆合并失败，降级为简单去重:', error.message);
+    logger.error('记忆合并失败，降级为简单去重', { module: 'MemoryExtractor', error: error.message });
     return newMemories
       .filter((m) => !existingMemories.some((e) => e === m.content))
       .map((m) => ({
@@ -257,7 +258,7 @@ function parseJsonResponse<T>(text: string, fallback: T): T {
 
     return JSON.parse(cleaned);
   } catch {
-    console.warn('⚠️ JSON 解析失败，原始内容:', text.substring(0, 200));
+    logger.warn('JSON 解析失败', { module: 'MemoryExtractor', rawContent: text.substring(0, 200) });
     return fallback;
   }
 }

@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { AuthService } from './auth.service.js';
+import { logger } from '../fundamentals/logger';
 
 /**
  * 可选认证守卫
@@ -25,13 +26,13 @@ export class OptionalAuthGuard implements CanActivate {
       if (decoded) {
         // 登录用户：使用 user.id 转字符串作为 userId
         request.userId = String(decoded.sub);
-        console.log(`🔐 OptionalAuthGuard: 已登录用户, userId=${request.userId}, sub=${decoded.sub}`);
+        logger.debug('已登录用户', { module: 'OptionalAuthGuard', userId: request.userId, sub: decoded.sub });
         return true;
       } else {
-        console.log(`⚠️ OptionalAuthGuard: token 验证失败, token前20字符=${token.substring(0, 20)}...`);
+        logger.warn('token 验证失败', { module: 'OptionalAuthGuard', tokenPrefix: token.substring(0, 20) });
       }
     } else {
-      console.log(`⚠️ OptionalAuthGuard: 无 Authorization header, path=${request.url}`);
+      logger.debug('无 Authorization header', { module: 'OptionalAuthGuard', path: request.url });
     }
 
     // 未登录：使用默认 userId

@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import * as express from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -7,6 +8,10 @@ import * as fs from 'fs';
 async function bootstrap() {
   // 创建 NestJS 应用实例（禁用默认 bodyParser，使用自定义配置）
   const app = await NestFactory.create(AppModule, { bodyParser: false });
+
+  // 使用 Winston 替换 NestJS 默认 Logger
+  // 这样 NestJS 框架自身的日志（启动信息、路由注册等）也会走 Winston
+  app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
   
   // 配置 bodyParser，支持大文件上传
   app.use(express.json({ limit: '50mb' }));
