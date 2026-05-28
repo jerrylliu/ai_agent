@@ -57,6 +57,8 @@ import MarkdownRenderer from "../components/MarkdownRenderer";
 // clearKnowledgeBase: 清空知识库API调用函数
 import { formatTime, formatDate } from "../lib/utils";
 import { clearKnowledgeBase } from "../lib/api";
+import { DocumentManager } from '../components/Document';
+import { ErrorBoundary } from '../components/ui/error-boundary';
 import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
 import HeaderContent from '../components/Chat/HeaderContent';
 import MemorySummaryDialog from '../components/Chat/MemorySummaryDialog';
@@ -89,6 +91,7 @@ const ChatAgent: React.FC = () => {
   const [showAuthDialog, setShowAuthDialog] = useState(false);
   const [showMemorySummary, setShowMemorySummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showDocumentManager, setShowDocumentManager] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
 
   // ==================== 应用设置状态 (localStorage 持久化) ====================
@@ -153,7 +156,6 @@ const ChatAgent: React.FC = () => {
     sendFile,
     clearPendingImages,
     stopGeneration,
-    uploadToKnowledgeBase,
     checkKnowledgeBaseStatus,
     updateMessage,
     deleteMessage,
@@ -747,31 +749,15 @@ const ChatAgent: React.FC = () => {
                     <span className="text-xs text-gray-500 dark:text-gray-300">检查中...</span>
                   )}
                 </div>
-                <label className="cursor-pointer">
-                  <input
-                    type="file"
-                    accept=".txt,.pdf,.doc,.docx,text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    className="hidden"
-                    onChange={async (e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const result = await uploadToKnowledgeBase(file);
-                        setKbFeedback({
-                          show: true,
-                          success: result.success,
-                          message: result.message,
-                        });
-                        setTimeout(() => setKbFeedback(prev => ({ ...prev, show: false })), 3000);
-                      }
-                    }}
-                  />
-                  <Button asChild variant="ghost" size="sm" className="rounded-full cyberpunk-header-upload-btn">
-                    <span>
-                      <Upload className="h-4 w-4 mr-1" />
-                      上传知识库
-                    </span>
-                  </Button>
-                </label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="rounded-full"
+                  onClick={() => setShowDocumentManager(true)}
+                >
+                  <FileText className="h-4 w-4 mr-1" />
+                  文档管理
+                </Button>
                 <div className="relative more-menu">
                   <Button
                     variant="ghost"
@@ -819,12 +805,12 @@ const ChatAgent: React.FC = () => {
           <HeaderContent
             knowledgeBaseStatus={knowledgeBaseStatus}
             showMoreMenu={showMoreMenu}
-            onUploadToKnowledgeBase={uploadToKnowledgeBase}
             onToggleMoreMenu={() => setShowMoreMenu(!showMoreMenu)}
             onClearKnowledgeBase={clearKnowledgeBase}
             onCheckKnowledgeBaseStatus={checkKnowledgeBaseStatus}
             onKbFeedback={setKbFeedback}
             onOpenMemorySummary={() => setShowMemorySummary(true)}
+            onOpenDocumentManager={() => setShowDocumentManager(true)}
           />
 
           {/* ==================== 知识库操作反馈提示 ====================
@@ -1414,6 +1400,15 @@ const ChatAgent: React.FC = () => {
         settings={appSettings}
         onSettingsChange={handleSettingsChange}
       />
+      {showDocumentManager && (
+        <div className="fixed inset-0 z-50 bg-black/50">
+          <div className="absolute right-0 top-0 bottom-0 w-full max-w-4xl bg-card shadow-2xl">
+            <ErrorBoundary>
+              <DocumentManager onClose={() => setShowDocumentManager(false)} />
+            </ErrorBoundary>
+          </div>
+        </div>
+      )}
     </>
   );
 };

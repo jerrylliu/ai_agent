@@ -24,6 +24,11 @@ export async function parseDocument(filePath: string, mimeType: string): Promise
   // 根据文件类型选择解析方法
   switch (mimeType) {
     case 'text/plain':
+    case 'text/markdown':
+    case 'text/csv':
+    case 'application/json':
+    case 'text/html':
+    case 'text/xml':
       return await parseTextFile(filePath);
 
     case 'application/pdf':
@@ -34,11 +39,13 @@ export async function parseDocument(filePath: string, mimeType: string): Promise
       return await parseWordFile(filePath);
 
     default:
-      // 尝试作为文本文件解析
-      if (mimeType.startsWith('text/')) {
+      // 对于 application/octet-stream 等未知 MIME 类型，按扩展名回退解析
+      const ext = path.extname(filePath).toLowerCase();
+      const textExts = ['.txt', '.md', '.csv', '.json', '.html', '.htm', '.xml', '.log', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf'];
+      if (textExts.includes(ext)) {
         return await parseTextFile(filePath);
       }
-      throw new Error(`不支持的文件类型: ${mimeType}`);
+      throw new Error(`不支持的文件类型: ${mimeType}（扩展名: ${ext}）`);
   }
 }
 
@@ -99,9 +106,15 @@ export function getMimeType(fileName: string): string {
 
   const mimeTypes: Record<string, string> = {
     '.txt': 'text/plain',
+    '.md': 'text/markdown',
+    '.csv': 'text/csv',
     '.pdf': 'application/pdf',
     '.doc': 'application/msword',
     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.json': 'application/json',
+    '.html': 'text/html',
+    '.htm': 'text/html',
+    '.xml': 'text/xml',
   };
 
   return mimeTypes[ext] || 'application/octet-stream';

@@ -17,6 +17,7 @@ export const API_ENDPOINTS = {
   AUTH_VERIFY: `${API_BASE_URL}/auth/verify`,
   AUTH_CHANGE_PASSWORD: `${API_BASE_URL}/auth/password`,
   AUTH_AVATAR: `${API_BASE_URL}/auth/avatar`,
+  DOCUMENTS: `${API_BASE_URL}/documents`,
 } as const;
 
 export const MAX_HISTORY_ITEMS = 10;

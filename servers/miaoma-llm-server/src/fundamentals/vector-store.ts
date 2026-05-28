@@ -172,15 +172,10 @@ const BM25_B = 0.75;
 const RRF_K = 10; // RRF 融合参数，越小越重视各来源的排名差异
 
 /**
- * 初始化 BM25 索引
+ * 创建 BM25 索引实例
  */
-async function initializeBM25Index(): Promise<MiniSearch> {
-  if (bm25Index) {
-    return bm25Index;
-  }
-
-  logger.info('初始化 BM25 索引', { module: 'VectorStore' });
-  bm25Index = new MiniSearch({
+function createBM25Index(): MiniSearch<any> {
+  return new MiniSearch({
     fields: ['content'],
     storeFields: ['content', 'metadata'],
     searchOptions: {
@@ -189,6 +184,18 @@ async function initializeBM25Index(): Promise<MiniSearch> {
       prefix: true,
     },
   });
+}
+
+/**
+ * 初始化 BM25 索引
+ */
+async function initializeBM25Index(): Promise<MiniSearch> {
+  if (bm25Index) {
+    return bm25Index;
+  }
+
+  logger.info('初始化 BM25 索引', { module: 'VectorStore' });
+  bm25Index = createBM25Index();
 
   await loadBM25Index();
   return bm25Index;
@@ -541,16 +548,25 @@ export async function searchKnowledgeBase(
   }
 
   try {
-    const results = await store.similaritySearchWithScore(query, topK * 2, filter);
+    // 向量检索：不在 where 中过滤 versionStatus，改为结果后过滤（兼容旧数据无 versionStatus 字段）
+    const searchFilter = { ...filter };
+    const results = await store.similaritySearchWithScore(query, topK * 3, Object.keys(searchFilter).length > 0 ? searchFilter : undefined);
 
     logger.info('检索到结果', { module: 'VectorStore', resultCount: results.length });
 
     results.forEach(([doc, score], i) => {
-      logger.debug('搜索结果', { module: 'VectorStore', index: i, score: score.toFixed(4), docType: doc.metadata?.doc_type });
+      logger.debug('搜索结果', { module: 'VectorStore', index: i, score: score.toFixed(4), docType: doc.metadata?.doc_type, versionStatus: doc.metadata?.versionStatus });
     });
 
+    // 后过滤：只保留 active 版本（无 versionStatus 的旧数据视为 active）
     const filtered = results
-      .filter(([_, score]) => score <= minSimilarity)
+      .filter(([doc, score]) => {
+        // 相似度过滤
+        if (score > minSimilarity) return false;
+        // 版本状态过滤：无 versionStatus 或 versionStatus=active
+        const vs = doc.metadata?.versionStatus;
+        return !vs || vs === 'active';
+      })
       .slice(0, topK);
 
     logger.info('搜索结果过滤完成', { module: 'VectorStore', minSimilarity, filteredCount: filtered.length });
@@ -596,9 +612,17 @@ export async function hybridSearchKnowledgeBase(
   // 1. 向量检索
   let vectorResults: Array<{ content: string; metadata: any; score: number; rank: number }> = [];
   try {
-    const rawVectorResults = await store.similaritySearchWithScore(query, topK * 3, filter);
+    // 向量检索：不在 where 中过滤 versionStatus，改为结果后过滤（兼容旧数据无 versionStatus 字段）
+    const searchFilter = { ...filter };
+    const rawVectorResults = await store.similaritySearchWithScore(query, topK * 4, Object.keys(searchFilter).length > 0 ? searchFilter : undefined);
     vectorResults = rawVectorResults
-      .filter(([_, score]) => score <= 0.55)
+      .filter(([doc, score]) => {
+        // 相似度过滤
+        if (score > 0.55) return false;
+        // 版本状态过滤：无 versionStatus 或 versionStatus=active
+        const vs = doc.metadata?.versionStatus;
+        return !vs || vs === 'active';
+      })
       .slice(0, topK * 2)
       .map(([doc, score], rank) => ({
         content: doc.pageContent,
@@ -631,19 +655,22 @@ export async function hybridSearchKnowledgeBase(
       };
     });
 
-    // 应用元数据过滤到 BM25 结果
-    if (filter) {
-      const beforeFilter = bm25Results.length;
-      bm25Results = bm25Results.filter((result) => {
-        for (const [key, value] of Object.entries(filter)) {
-          if (result.metadata?.[key] !== value) {
-            return false;
-          }
+    // 应用元数据过滤到 BM25 结果（版本状态过滤：无 versionStatus 或 active 视为有效）
+    const bm25Filter = { ...filter };
+    const beforeFilter = bm25Results.length;
+    bm25Results = bm25Results.filter((result) => {
+      // 版本状态过滤：无 versionStatus 或 versionStatus=active
+      const vs = result.metadata?.versionStatus;
+      if (vs && vs !== 'active') return false;
+      // 其他自定义过滤条件
+      for (const [key, value] of Object.entries(bm25Filter)) {
+        if (result.metadata?.[key] !== value) {
+          return false;
         }
-        return true;
-      });
-      logger.debug('BM25 过滤结果', { module: 'VectorStore', beforeFilter, afterFilter: bm25Results.length, filter });
-    }
+      }
+      return true;
+    });
+    logger.debug('BM25 过滤结果', { module: 'VectorStore', beforeFilter, afterFilter: bm25Results.length, filter: bm25Filter });
 
     // 重新分配 rank（过滤后）
     bm25Results = bm25Results.slice(0, topK * 2).map((result, rank) => ({
@@ -746,23 +773,19 @@ export async function hybridSearchKnowledgeBase(
       }
 
       try {
-        // 从 ChromaDB 获取同一文件的所有 chunk（最多取前后各1个，共3个 chunk 合并）
-        // 这样每个返回结果包含约 900 * 3 = 2700 字符的上下文
-        // 既保证了检索精度（用小块匹配），又保证了回答的完整性（用大块上下文）
-        const store = await initializeVectorStore();
-        const neighborResults = await store.similaritySearchWithScore(
-          '', // 空查询，只用 filter
-          100, // 取足够多的结果
-          { source } // 只过滤同一文件
-        );
+        const client = new ChromaClient({ host: 'localhost', port: 8000 });
+        const collection = await client.getCollection({ name: COLLECTION_NAME });
+        const neighborResults = await collection.get({
+          where: { source },
+          limit: 100,
+        });
 
-        // 按 chunk_index 排序，取当前 chunk 前后各1个邻居
-        const sameFileChunks = neighborResults
-          .map(([doc, _score]) => ({
-            content: doc.pageContent,
-            index: doc.metadata?.chunk_index ?? -1,
+        const sameFileChunks = neighborResults.documents
+          .map((doc, i) => ({
+            content: doc || '',
+            index: (neighborResults.metadatas?.[i] as any)?.chunk_index ?? -1,
           }))
-          .filter((c) => c.index !== -1)
+          .filter((c) => c.index !== -1 && c.content.length > 0)
           .sort((a, b) => a.index - b.index);
 
         // 找到当前 chunk 在排序后的位置
@@ -1048,4 +1071,199 @@ export async function getAllDocumentsWithDebug(): Promise<{
       contentLength: d.content.length,
     })),
   };
+}
+
+// ==================== 版本化向量管理 ====================
+
+/**
+ * 按 versionId 从 ChromaDB + BM25 索引中批量删除
+ */
+export async function removeDocumentVersion(versionId: number): Promise<void> {
+  logger.info('开始删除版本向量数据', { module: 'VectorStore', versionId });
+
+  const store = await initializeVectorStore();
+  const collection = store.collection;
+  if (!collection) {
+    throw new Error('向量存储集合未初始化');
+  }
+
+  try {
+    // 从 ChromaDB 删除该版本的所有向量
+    const versionFilter = { versionId: String(versionId) };
+
+    // 先获取该版本的所有向量 ID
+    const existing = await collection.get({ where: versionFilter });
+    logger.info('查询到版本向量数据', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
+
+    if (existing.ids.length > 0) {
+      await collection.delete({ where: versionFilter });
+      logger.info('已从 ChromaDB 删除版本向量', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
+    } else {
+      logger.info('ChromaDB 中无该版本向量数据', { module: 'VectorStore', versionId });
+    }
+
+    // 从 BM25 索引中删除该版本的文档（使用 bm25DocumentStore 替代内部属性）
+    if (bm25Index) {
+      const idsToRemove: string[] = [];
+      for (const [id, doc] of bm25DocumentStore.entries()) {
+        if (doc.metadata?.versionId === String(versionId)) {
+          idsToRemove.push(id);
+        }
+      }
+      logger.info('BM25 索引中该版本文档数量', { module: 'VectorStore', versionId, docCount: idsToRemove.length });
+
+      if (idsToRemove.length > 0) {
+        for (const id of idsToRemove) {
+          try {
+            bm25Index.remove(id);
+          } catch {
+            logger.warn('BM25 删除文档失败（可能已不存在）', { module: 'VectorStore', id });
+          }
+          bm25DocumentStore.delete(id);
+        }
+        saveBM25Index().catch(err => logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(err) }));
+        logger.info('已从 BM25 索引删除版本文档', { module: 'VectorStore', versionId, docCount: idsToRemove.length });
+      }
+    } else {
+      logger.info('BM25 索引未初始化，跳过', { module: 'VectorStore', versionId });
+    }
+
+    logger.info('版本向量数据删除完成', { module: 'VectorStore', versionId });
+  } catch (error: any) {
+    logger.error('删除版本向量数据失败', { module: 'VectorStore', versionId, error: error.message, stack: error.stack });
+    throw error;
+  }
+}
+
+/**
+ * 按 versionId 批量更新向量的 versionStatus（回滚时用，不删除向量）
+ */
+export async function updateVersionVectorStatus(versionId: number, newStatus: string): Promise<void> {
+  logger.info('开始更新版本向量状态', { module: 'VectorStore', versionId, newStatus });
+
+  const store = await initializeVectorStore();
+  const collection = store.collection;
+  if (!collection) {
+    throw new Error('向量存储集合未初始化');
+  }
+
+  try {
+    const versionFilter = { versionId: String(versionId) };
+    const existing = await collection.get({ where: versionFilter });
+    logger.info('查询到版本向量数据', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
+
+    if (existing.ids.length > 0) {
+      // 更新 metadata 中的 versionStatus
+      const updatedMetadata = existing.metadatas.map((meta: any) => ({
+        ...meta,
+        versionStatus: newStatus,
+      }));
+
+      await collection.update({
+        ids: existing.ids,
+        metadatas: updatedMetadata,
+      });
+
+      logger.info('已更新 ChromaDB 版本向量状态', { module: 'VectorStore', versionId, newStatus, vectorCount: existing.ids.length });
+    } else {
+      logger.info('ChromaDB 中无该版本向量数据，跳过状态更新', { module: 'VectorStore', versionId });
+    }
+
+    // 同步更新 BM25 索引（使用 bm25DocumentStore 替代内部属性）
+    if (bm25Index) {
+      let updatedCount = 0;
+      for (const [id, doc] of bm25DocumentStore.entries()) {
+        if (doc.metadata?.versionId === String(versionId)) {
+          doc.metadata.versionStatus = newStatus;
+          updatedCount++;
+        }
+      }
+      if (updatedCount > 0) {
+        logger.info('已更新 BM25 索引中版本文档状态', { module: 'VectorStore', versionId, newStatus, updatedCount });
+        saveBM25Index().catch(err => logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(err) }));
+      }
+    }
+
+    logger.info('版本向量状态更新完成', { module: 'VectorStore', versionId, newStatus });
+  } catch (error: any) {
+    logger.error('更新版本向量状态失败', { module: 'VectorStore', versionId, newStatus, error: error.message, stack: error.stack });
+    throw error;
+  }
+}
+
+/**
+ * 重新向量化版本（先清理旧向量，再重新入库，保证幂等）
+ */
+export async function reindexVersion(
+  versionId: number,
+  documentId: number,
+  textContent: string,
+  versionStatus: string,
+  fileInfo: { source: string; fileType: string },
+): Promise<number> {
+  logger.info('开始重新向量化版本', { module: 'VectorStore', versionId, documentId, versionStatus, textLength: textContent.length });
+
+  // 1. 先清理旧向量
+  await removeDocumentVersion(versionId);
+
+  // 2. 重新向量化入库
+  const metadata = {
+    documentId: String(documentId),
+    versionId: String(versionId),
+    versionStatus,
+    source: fileInfo.source,
+    fileType: fileInfo.fileType,
+  };
+
+  logger.info('开始重新添加向量', { module: 'VectorStore', versionId, documentId });
+  const chunkCount = await addDocuments([textContent], [metadata]);
+  logger.info('版本重新向量化完成', { module: 'VectorStore', versionId, documentId, chunkCount });
+  return chunkCount;
+}
+
+/**
+ * 清理孤岛向量（ChromaDB 中存在但数据库无对应记录的向量）
+ * @param validVersionIds 数据库中存在的 versionId 列表
+ * @returns 清理的向量数量
+ */
+export async function cleanOrphanVectors(validVersionIds: string[]): Promise<number> {
+  logger.info('开始清理孤岛向量', { module: 'VectorStore', validVersionCount: validVersionIds.length });
+
+  const store = await initializeVectorStore();
+  const collection = store.collection;
+  if (!collection) {
+    throw new Error('向量存储集合未初始化');
+  }
+
+  try {
+    const allDocs = await collection.get();
+    const validSet = new Set(validVersionIds);
+    const orphanIds: string[] = [];
+    const orphanVersionIds = new Set<string>();
+
+    logger.info('ChromaDB 中总向量数', { module: 'VectorStore', totalVectors: allDocs.ids.length });
+
+    for (let i = 0; i < allDocs.ids.length; i++) {
+      const meta = allDocs.metadatas[i] as any;
+      const versionId = meta?.versionId;
+      // 如果有 versionId 但不在有效列表中，则为孤岛向量
+      if (versionId && !validSet.has(versionId)) {
+        orphanIds.push(allDocs.ids[i]);
+        orphanVersionIds.add(versionId);
+      }
+    }
+
+    if (orphanIds.length > 0) {
+      logger.info('发现孤岛向量', { module: 'VectorStore', orphanCount: orphanIds.length, orphanVersionIds: [...orphanVersionIds] });
+      await collection.delete({ ids: orphanIds });
+      logger.info('已清理孤岛向量', { module: 'VectorStore', count: orphanIds.length });
+    } else {
+      logger.info('未发现孤岛向量', { module: 'VectorStore' });
+    }
+
+    return orphanIds.length;
+  } catch (error: any) {
+    logger.error('清理孤岛向量失败', { module: 'VectorStore', error: error.message, stack: error.stack });
+    return 0;
+  }
 }

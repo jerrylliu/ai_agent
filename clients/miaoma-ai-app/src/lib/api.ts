@@ -27,7 +27,10 @@ async function handleResponse<T>(response: Response): Promise<T> {
     const errorData = await response.json().catch(() => ({
       message: '请求失败',
     }));
-    throw new Error(errorData.message || `请求失败: ${response.status}`);
+    const msg = Array.isArray(errorData.message)
+      ? errorData.message.join('; ')
+      : errorData.message || `请求失败: ${response.status}`;
+    throw new Error(msg);
   }
   return response.json() as Promise<T>;
 }
@@ -537,20 +540,34 @@ export async function getKnowledgeBaseStatus(): Promise<{
   stats?: {
     documentCount: number;
     collectionName: string;
+    activeVersionCount?: number;
+    totalVersionCount?: number;
+    totalChunkCount?: number;
+    lastUpdatedAt?: string | null;
   };
 }> {
   const response = await fetch(API_ENDPOINTS.KNOWLEDGE_STATUS, {
     method: 'GET',
   });
 
-  return handleResponse<{
-    status: 'ready' | 'empty' | 'error';
-    message: string;
-    stats?: {
-      documentCount: number;
-      collectionName: string;
-    };
-  }>(response);
+  const data = await handleResponse<any>(response);
+
+  // 兼容新旧两种返回格式
+  const documentCount = data.documentCount ?? data.stats?.documentCount ?? 0;
+  const isEmpty = documentCount === 0;
+
+  return {
+    status: isEmpty ? 'empty' : (data.status || 'ready'),
+    message: data.message || '',
+    stats: {
+      documentCount,
+      collectionName: data.collectionName || data.stats?.collectionName || '',
+      activeVersionCount: data.activeVersionCount,
+      totalVersionCount: data.totalVersionCount,
+      totalChunkCount: data.totalChunkCount,
+      lastUpdatedAt: data.lastUpdatedAt,
+    },
+  };
 }
 
 /**
@@ -758,4 +775,168 @@ export async function extractMemories(sessionId: string): Promise<UserMemoriesRe
     headers: getAuthHeaders(),
   });
   return handleResponse<UserMemoriesResponse>(response);
+}
+
+// ============================================
+// 文档版本管理 API
+// ============================================
+
+export interface DocumentItem {
+  id: number;
+  title: string;
+  description: string | null;
+  tags: string[] | null;
+  currentVersionId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentVersionItem {
+  id: number;
+  documentId: number;
+  versionNumber: number;
+  fileUrl: string;
+  fileSize: number;
+  fileType: string;
+  checksum: string | null;
+  status: 'draft' | 'active' | 'archived';
+  parsingStatus: 'pending' | 'parsing' | 'success' | 'failed';
+  uploadedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentAuditLogItem {
+  id: number;
+  documentId: number;
+  versionId: number | null;
+  action: 'upload' | 'activate' | 'archive' | 'rollback' | 'delete';
+  operator: string;
+  detail: string | null;
+  createdAt: string;
+}
+
+export interface DiffLine {
+  value: string;
+  added?: boolean;
+  removed?: boolean;
+}
+
+/** 获取文档列表 */
+export async function getDocuments(): Promise<DocumentItem[]> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}`, {
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse<{ success: boolean; documents: DocumentItem[] }>(response);
+  return data.documents ?? [];
+}
+
+/** 获取单个文档详情 */
+export async function getDocument(id: number): Promise<DocumentItem> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<DocumentItem>(response);
+}
+
+/** 上传文档（新建或新增版本） */
+export async function uploadDocument(
+  file: File,
+  options?: { documentId?: number; title?: string; description?: string; tags?: string[] },
+): Promise<{ success: boolean; document: DocumentItem; version: DocumentVersionItem }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (options?.documentId) formData.append('documentId', String(options.documentId));
+  if (options?.title) formData.append('title', options.title);
+  if (options?.description) formData.append('description', options.description);
+  if (options?.tags) formData.append('tags', JSON.stringify(options.tags));
+
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/upload`, {
+    method: 'POST',
+    body: formData,
+  });
+  return handleResponse<{ success: boolean; document: DocumentItem; version: DocumentVersionItem }>(response);
+}
+
+/** 获取文档版本列表 */
+export async function getDocumentVersions(documentId: number): Promise<DocumentVersionItem[]> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions`, {
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse<{ success: boolean; versions: DocumentVersionItem[] }>(response);
+  return data.versions ?? [];
+}
+
+/** 激活版本 */
+export async function activateVersion(documentId: number, versionId: number): Promise<{ success: boolean; version: DocumentVersionItem }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`, {
+    method: 'PATCH',
+    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'active' }),
+  });
+  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(response);
+}
+
+/** 归档版本 */
+export async function archiveVersion(documentId: number, versionId: number): Promise<{ success: boolean; version: DocumentVersionItem }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`, {
+    method: 'PATCH',
+    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'archived' }),
+  });
+  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(response);
+}
+
+/** 回滚到指定版本 */
+export async function rollbackVersion(
+  documentId: number,
+  versionId: number,
+): Promise<{ success: boolean; document: DocumentItem; activatedVersion: DocumentVersionItem }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/rollback`, {
+    method: 'POST',
+    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ versionId }),
+  });
+  return handleResponse<{ success: boolean; document: DocumentItem; activatedVersion: DocumentVersionItem }>(response);
+}
+
+/** 删除版本 */
+export async function deleteVersion(documentId: number, versionId: number): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+/** 删除文档 */
+export async function deleteDocument(id: number): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+/** 对比两个版本 */
+export async function diffVersions(
+  documentId: number,
+  v1: number,
+  v2: number,
+): Promise<{ success: boolean; diff: DiffLine[] }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/diff?v1=${v1}&v2=${v2}`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean; diff: DiffLine[] }>(response);
+}
+
+/** 获取审计日志 */
+export async function getDocumentAuditLogs(
+  documentId: number,
+): Promise<DocumentAuditLogItem[]> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/audit-log`, {
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse<{ success: boolean; logs: DocumentAuditLogItem[] }>(response);
+  return data.logs ?? [];
 }

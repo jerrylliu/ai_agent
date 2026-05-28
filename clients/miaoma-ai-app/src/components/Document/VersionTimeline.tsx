@@ -1,0 +1,222 @@
+/**
+ * VersionTimeline - 版本时间线组件
+ * 以时间线形式展示文档的所有版本，支持回滚、删除、归档、对比操作
+ */
+
+import { useState } from 'react';
+import {
+  RotateCcw, Trash2, Archive, Play, GitCompare,
+  CheckCircle, AlertCircle, Clock, Loader2, FileText,
+} from 'lucide-react';
+import { Button } from '../ui/button';
+import { Badge } from '../ui/badge';
+import type { DocumentVersionItem } from '../../lib/api';
+
+interface VersionTimelineProps {
+  versions: DocumentVersionItem[];
+  onRollback: (versionId: number) => void;
+  onDelete: (versionId: number) => void;
+  onActivate: (versionId: number) => void;
+  onArchive: (versionId: number) => void;
+  onDiff: (v1: number, v2: number) => void;
+}
+
+export function VersionTimeline({
+  versions,
+  onRollback,
+  onDelete,
+  onActivate,
+  onArchive,
+  onDiff,
+}: VersionTimelineProps) {
+  const [selectedForDiff, setSelectedForDiff] = useState<number[]>([]);
+
+  const toggleDiffSelect = (versionId: number) => {
+    setSelectedForDiff(prev => {
+      if (prev.includes(versionId)) {
+        return prev.filter(id => id !== versionId);
+      }
+      if (prev.length >= 2) {
+        return [prev[1], versionId];
+      }
+      return [...prev, versionId];
+    });
+  };
+
+  const handleCompare = () => {
+    if (selectedForDiff.length === 2) {
+      onDiff(selectedForDiff[0], selectedForDiff[1]);
+      setSelectedForDiff([]);
+    }
+  };
+
+  const statusBadge = (status: string) => {
+    const styles: Record<string, string> = {
+      active: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
+      draft: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+      archived: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
+    };
+    return styles[status] || '';
+  };
+
+  const parsingIcon = (status: string) => {
+    switch (status) {
+      case 'success': return <CheckCircle className="h-3.5 w-3.5 text-green-500" />;
+      case 'parsing': return <Loader2 className="h-3.5 w-3.5 text-blue-500 animate-spin" />;
+      case 'failed': return <AlertCircle className="h-3.5 w-3.5 text-red-500" />;
+      case 'pending': return <Clock className="h-3.5 w-3.5 text-yellow-500" />;
+      default: return null;
+    }
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  // 按版本号倒序排列
+  const sortedVersions = [...versions].sort((a, b) => b.versionNumber - a.versionNumber);
+
+  return (
+    <div>
+      {/* 对比操作栏 */}
+      {selectedForDiff.length > 0 && (
+        <div className="mb-4 p-3 bg-muted rounded-lg flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">
+            已选择 {selectedForDiff.length}/2 个版本进行对比
+          </span>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSelectedForDiff([])}
+            >
+              取消
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleCompare}
+              disabled={selectedForDiff.length < 2}
+            >
+              <GitCompare className="h-4 w-4 mr-1" />
+              对比
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {sortedVersions.length === 0 ? (
+        <div className="text-center py-8 text-muted-foreground text-sm">
+          暂无版本记录
+        </div>
+      ) : (
+        <div className="relative">
+          {/* 时间线竖线 */}
+          <div className="absolute left-5 top-0 bottom-0 w-0.5 bg-border" />
+
+          <div className="space-y-4">
+            {sortedVersions.map((version) => {
+              const isSelected = selectedForDiff.includes(version.id);
+              const isActive = version.status === 'active';
+
+              return (
+                <div key={version.id} className="relative pl-12">
+                  {/* 时间线节点 */}
+                  <div className={`absolute left-3 top-3 w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                    isActive
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/30'
+                      : 'border-muted-foreground/30 bg-background'
+                  }`}>
+                    <div className={`w-2 h-2 rounded-full ${
+                      isActive ? 'bg-green-500' : 'bg-muted-foreground/30'
+                    }`} />
+                  </div>
+
+                  {/* 版本卡片 */}
+                  <div className={`p-3 rounded-lg border transition-colors ${
+                    isSelected
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:border-primary/30'
+                  }`}>
+                    {/* 版本头部 */}
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm">v{version.versionNumber}</span>
+                        <Badge className={`text-[10px] ${statusBadge(version.status)}`}>
+                          {version.status}
+                        </Badge>
+                        <div className="flex items-center gap-1">
+                          {parsingIcon(version.parsingStatus)}
+                          <span className="text-[10px] text-muted-foreground">{version.parsingStatus}</span>
+                        </div>
+                      </div>
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(version.createdAt).toLocaleString()}
+                      </span>
+                    </div>
+
+                    {/* 版本信息 */}
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground mb-2">
+                      <span className="flex items-center gap-1">
+                        <FileText className="h-3 w-3" />
+                        {version.fileType}
+                      </span>
+                      <span>{formatFileSize(version.fileSize)}</span>
+                      {version.checksum && (
+                        <span title={version.checksum} className="truncate max-w-24">
+                          {version.checksum.substring(0, 8)}...
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 操作按钮 */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {version.status === 'draft' && (
+                        <Button variant="outline" size="xs" onClick={() => onActivate(version.id)}>
+                          <Play className="h-3 w-3 mr-1" />
+                          激活
+                        </Button>
+                      )}
+                      {version.status === 'active' && (
+                        <Button variant="outline" size="xs" onClick={() => onArchive(version.id)}>
+                          <Archive className="h-3 w-3 mr-1" />
+                          归档
+                        </Button>
+                      )}
+                      {version.status === 'archived' && (
+                        <Button variant="outline" size="xs" onClick={() => onRollback(version.id)}>
+                          <RotateCcw className="h-3 w-3 mr-1" />
+                          回滚
+                        </Button>
+                      )}
+                      {version.status !== 'active' && (
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => onDelete(version.id)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="h-3 w-3 mr-1" />
+                          删除
+                        </Button>
+                      )}
+                      <Button
+                        variant={isSelected ? 'default' : 'ghost'}
+                        size="xs"
+                        onClick={() => toggleDiffSelect(version.id)}
+                      >
+                        <GitCompare className="h-3 w-3 mr-1" />
+                        {isSelected ? '已选' : '对比'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

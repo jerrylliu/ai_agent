@@ -135,6 +135,9 @@ importers:
       chromadb:
         specifier: ^3.4.3
         version: 3.4.3
+      diff:
+        specifier: ^7.0.0
+        version: 7.0.0
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
@@ -187,6 +190,9 @@ importers:
       '@types/bcryptjs':
         specifier: ^3.0.0
         version: 3.0.0
+      '@types/diff':
+        specifier: ^7.0.0
+        version: 7.0.2
       '@types/express':
         specifier: ^5.0.0
         version: 5.0.6
@@ -2897,6 +2903,9 @@ packages:
   '@types/debug@4.1.13':
     resolution: {integrity: sha512-KSVgmQmzMwPlmtljOomayoR89W4FynCAi3E8PPs7vmDVPe84hT+vGPKkJfThkmXs0x0jAaa9U8uW8bbfyS2fWw==}
 
+  '@types/diff@7.0.2':
+    resolution: {integrity: sha512-JSWRMozjFKsGlEjiiKajUjIJVKuKdE3oVy2DNtK+fUo8q82nhFZ2CPQwicAIkXrofahDXrWJ7mjelvZphMS98Q==}
+
   '@types/eslint-scope@3.7.7':
     resolution: {integrity: sha512-MzMFlSLBqNF2gcHWO0G1vP/YQyfvrxZ0bF+u7mzUdZ1/xK4A4sru+nraZz5i3iEIk1l1uyicaDVTB4QbbEkAYg==}
 
@@ -3858,6 +3867,10 @@ packages:
 
   diff@4.0.4:
     resolution: {integrity: sha512-X07nttJQkwkfKfvTPG/KSnE2OMdcUCao6+eXF3wmnIQRn2aPAHH3VxDbDOdegkd6JbPsXqShpvEOHfAT+nCNwQ==}
+    engines: {node: '>=0.3.1'}
+
+  diff@7.0.0:
+    resolution: {integrity: sha512-PJWHUb1RFevKCwaFA9RlG5tCd+FO5iRh9A8HEtkmBH2Li03iJriB6m6JIN4rGz3K3JLawI7/veA1xzRKP6ISBw==}
     engines: {node: '>=0.3.1'}
 
   dingbat-to-unicode@1.0.1:
@@ -8806,6 +8819,8 @@ snapshots:
     dependencies:
       '@types/ms': 2.1.0
 
+  '@types/diff@7.0.2': {}
+
   '@types/eslint-scope@3.7.7':
     dependencies:
       '@types/eslint': 9.6.1
@@ -9724,6 +9739,8 @@ snapshots:
       wrappy: 1.0.2
 
   diff@4.0.4: {}
+
+  diff@7.0.0: {}
 
   dingbat-to-unicode@1.0.1: {}
 

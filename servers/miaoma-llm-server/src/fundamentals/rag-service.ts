@@ -12,7 +12,7 @@ import { logger } from './logger';
 
 // 配置
 const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB（与头像上传一致）
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 // 确保上传目录存在
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -39,8 +39,18 @@ export async function handleDocumentUpload(file: any): Promise<{
     }
 
     const filePath = file.path;
-    const mimeType = file.mimetype;
+    let mimeType = file.mimetype;
     const originalName = file.originalname;
+
+    // 浏览器上传 .md 等文件时 MIME 类型常为 application/octet-stream，
+    // 根据文件扩展名修正为正确的 MIME 类型
+    if (mimeType === 'application/octet-stream' || !mimeType) {
+      const correctedMime = getMimeType(originalName);
+      if (correctedMime !== 'application/octet-stream') {
+        mimeType = correctedMime;
+        logger.info('修正 MIME 类型', { module: 'RagService', original: file.mimetype, corrected: mimeType });
+      }
+    }
 
     logger.info('收到文档上传', { module: 'RagService', fileName: originalName, fileSizeKB: (file.size / 1024).toFixed(2) });
 
@@ -75,6 +85,8 @@ export async function handleDocumentUpload(file: any): Promise<{
       source: originalName,
       uploadTime: new Date().toISOString(),
       mimeType: mimeType,
+      versionStatus: 'active',
+      legacyUpload: 'true',
     };
 
     const docCount = await addDocuments([textContent], [metadata]);

@@ -1,0 +1,410 @@
+/**
+ * 文档版本管理控制器
+ * 路由前缀：/documents
+ * 所有日志使用 Winston logger
+ */
+
+import {
+  Controller, Get, Post, Put, Delete, Patch,
+  Body, Param, Query, Res, UseGuards, UseInterceptors,
+  UploadedFile, ParseIntPipe, HttpException,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
+import { DocumentService } from '../services/document.service';
+import { DocumentSchedulerService } from '../services/document-scheduler.service';
+import { VersionStatus, DocumentVersion } from '../entities/document-version.entity';
+import { OptionalAuthGuard } from '../auth/optional-auth.guard';
+import { logger } from '../fundamentals/logger';
+
+function serializeVersion(v: DocumentVersion) {
+  return { ...v, fileSize: Number(v.fileSize) };
+}
+
+function serializeVersions(versions: DocumentVersion[]) {
+  return versions.map(serializeVersion);
+}
+
+@Controller('documents')
+@UseGuards(OptionalAuthGuard)
+export class DocumentController {
+
+  constructor(
+    private readonly documentService: DocumentService,
+    private readonly schedulerService: DocumentSchedulerService,
+  ) {}
+
+  /**
+   * POST /documents/upload
+   * 上传文档（新建文档或新增版本）
+   */
+  @Post('upload')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadDocument(
+    @UploadedFile() file: any,
+    @Body('documentId') documentIdStr?: string,
+    @Body('title') title?: string,
+    @Body('description') description?: string,
+    @Body('tags') tagsStr?: string,
+    @Body() body?: any,
+  ) {
+    try {
+      if (!file) {
+        throw new HttpException('请选择要上传的文件', 400);
+      }
+
+      const operator = body?.userId || 'anonymous';
+      const documentId = documentIdStr ? parseInt(documentIdStr, 10) : undefined;
+      const tags = tagsStr ? JSON.parse(tagsStr) : undefined;
+
+      const result = await this.documentService.uploadDocument(
+        { buffer: file.buffer, originalname: file.originalname, size: file.size, mimetype: file.mimetype },
+        { documentId, title, description, tags, operator },
+      );
+
+      return {
+        success: true,
+        message: `文档上传成功，版本 v${result.version.versionNumber} 正在解析中`,
+        document: result.document,
+        version: serializeVersion(result.version),
+      };
+    } catch (error: any) {
+      logger.error('文档上传失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * GET /documents
+   * 列出所有文档
+   */
+  @Get()
+  async listDocuments() {
+    try {
+      const documents = await this.documentService.listDocuments();
+      return { success: true, documents };
+    } catch (error: any) {
+      logger.error('获取文档列表失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, 500);
+    }
+  }
+
+  /**
+   * POST /documents/batch-archive
+   * 批量归档
+   */
+  @Post('batch-archive')
+  async batchArchive(@Body('versionIds') versionIds: number[], @Body('operator') operator?: string) {
+    try {
+      const count = await this.documentService.batchArchive(versionIds, operator || 'anonymous');
+      return { success: true, message: `已归档 ${count} 个版本` };
+    } catch (error: any) {
+      logger.error('批量归档失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * POST /documents/batch-delete
+   * 批量删除
+   */
+  @Post('batch-delete')
+  async batchDelete(@Body('versionIds') versionIds: number[], @Body('operator') operator?: string) {
+    try {
+      const count = await this.documentService.batchDelete(versionIds, operator || 'anonymous');
+      return { success: true, message: `已删除 ${count} 个版本` };
+    } catch (error: any) {
+      logger.error('批量删除失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  // ==================== 定时任务手动触发 ====================
+
+  /**
+   * POST /documents/scheduler/scan-archived
+   * 扫描超过 90 天的 archived 版本
+   */
+  @Post('scheduler/scan-archived')
+  async scanArchivedVersions() {
+    try {
+      const oldVersions = await this.schedulerService.scanArchivedVersions();
+      return { success: true, count: oldVersions.length, versions: oldVersions };
+    } catch (error: any) {
+      logger.error('扫描 archived 版本失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, 500);
+    }
+  }
+
+  /**
+   * POST /documents/scheduler/verify-vectors
+   * 校验向量一致性
+   */
+  @Post('scheduler/verify-vectors')
+  async verifyVectorConsistency() {
+    try {
+      const result = await this.schedulerService.verifyVectorConsistency();
+      return { success: true, ...result };
+    } catch (error: any) {
+      logger.error('向量一致性校验失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, 500);
+    }
+  }
+
+  /**
+   * POST /documents/scheduler/clean-orphans
+   * 清理孤岛向量
+   */
+  @Post('scheduler/clean-orphans')
+  async cleanOrphans() {
+    try {
+      const count = await this.schedulerService.cleanOrphans();
+      return { success: true, message: `已清理 ${count} 个孤岛向量` };
+    } catch (error: any) {
+      logger.error('清理孤岛向量失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, 500);
+    }
+  }
+
+  /**
+   * POST /documents/scheduler/retry-failed-ops
+   * 重试失败的向量操作
+   */
+  @Post('scheduler/retry-failed-ops')
+  async retryFailedOps() {
+    try {
+      const count = await this.schedulerService.retryFailedOps();
+      return { success: true, message: `已重试 ${count} 个向量操作` };
+    } catch (error: any) {
+      logger.error('重试向量操作失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, 500);
+    }
+  }
+
+  /**
+   * POST /documents/scheduler/clean-audit-logs
+   * 清理过期审计日志
+   */
+  @Post('scheduler/clean-audit-logs')
+  async cleanAuditLogs() {
+    try {
+      const count = await this.schedulerService.cleanOldAuditLogs();
+      return { success: true, message: `已清理 ${count} 条过期审计日志` };
+    } catch (error: any) {
+      logger.error('清理审计日志失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, 500);
+    }
+  }
+
+  /**
+   * GET /documents/:id/versions
+   * 列出某文档的所有版本
+   */
+  @Get(':id/versions')
+  async listVersions(@Param('id', ParseIntPipe) id: number) {
+    try {
+      const versions = await this.documentService.listVersions(id);
+      return { success: true, versions: serializeVersions(versions) };
+    } catch (error: any) {
+      logger.error('获取版本列表失败', { module: 'DocumentController', documentId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * GET /documents/:id/versions/:versionId
+   * 获取特定版本详情
+   */
+  @Get(':id/versions/:versionId')
+  async getVersion(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+  ) {
+    try {
+      const version = await this.documentService.getVersion(versionId);
+      return { success: true, version: serializeVersion(version) };
+    } catch (error: any) {
+      logger.error('获取版本详情失败', { module: 'DocumentController', versionId, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * GET /documents/:id/versions/:versionId/status
+   * 轮询版本解析进度
+   */
+  @Get(':id/versions/:versionId/status')
+  async getVersionStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+  ) {
+    try {
+      const status = await this.documentService.getVersionStatus(versionId);
+      return { success: true, ...status };
+    } catch (error: any) {
+      logger.error('获取版本状态失败', { module: 'DocumentController', versionId, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * GET /documents/:id/versions/:versionId/download
+   * 下载历史版本原文件
+   */
+  @Get(':id/versions/:versionId/download')
+  async downloadVersion(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Res() res: Response,
+  ) {
+    try {
+      const result = await this.documentService.downloadVersion(versionId);
+      if (!result) {
+        return res.status(404).json({ success: false, message: '文件不存在' });
+      }
+
+      const mimeTypeMap: Record<string, string> = {
+        pdf: 'application/pdf',
+        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        txt: 'text/plain',
+        md: 'text/markdown',
+        csv: 'text/csv',
+      };
+
+      res.setHeader('Content-Type', mimeTypeMap[result.fileType] || 'application/octet-stream');
+      res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
+      res.send(result.buffer);
+    } catch (error: any) {
+      logger.error('下载版本文件失败', { module: 'DocumentController', versionId, error: error.message });
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
+   * PATCH /documents/:id/versions/:versionId
+   * 修改版本状态
+   */
+  @Patch(':id/versions/:versionId')
+  async updateVersionStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Body('status') status: VersionStatus,
+    @Body('operator') operator?: string,
+  ) {
+    try {
+      const version = await this.documentService.updateVersionStatus(versionId, status, operator || 'anonymous');
+      return { success: true, version: serializeVersion(version) };
+    } catch (error: any) {
+      logger.error('修改版本状态失败', { module: 'DocumentController', versionId, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * PUT /documents/:id
+   * 修改文档元信息
+   */
+  @Put(':id')
+  async updateDocument(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { title?: string; description?: string; tags?: string[] },
+  ) {
+    try {
+      const document = await this.documentService.updateDocument(id, body);
+      return { success: true, document };
+    } catch (error: any) {
+      logger.error('修改文档信息失败', { module: 'DocumentController', documentId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * POST /documents/:id/rollback
+   * 回滚到指定版本
+   */
+  @Post(':id/rollback')
+  async rollbackVersion(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('versionId') versionId: number,
+    @Body('operator') operator?: string,
+  ) {
+    try {
+      const version = await this.documentService.rollbackVersion(id, versionId, operator || 'anonymous');
+      return { success: true, message: `已回滚到版本 v${version.versionNumber}`, version: serializeVersion(version) };
+    } catch (error: any) {
+      logger.error('版本回滚失败', { module: 'DocumentController', documentId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * DELETE /documents/:id/versions/:versionId
+   * 删除特定版本
+   */
+  @Delete(':id/versions/:versionId')
+  async deleteVersion(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Body('operator') operator?: string,
+  ) {
+    try {
+      await this.documentService.deleteVersion(versionId, operator || 'anonymous');
+      return { success: true, message: '版本已删除' };
+    } catch (error: any) {
+      logger.error('删除版本失败', { module: 'DocumentController', versionId, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * DELETE /documents/:id
+   * 删除整个文档
+   */
+  @Delete(':id')
+  async deleteDocument(
+    @Param('id', ParseIntPipe) id: number,
+    @Body('operator') operator?: string,
+  ) {
+    try {
+      await this.documentService.deleteDocument(id, operator || 'anonymous');
+      return { success: true, message: '文档已删除' };
+    } catch (error: any) {
+      logger.error('删除文档失败', { module: 'DocumentController', documentId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * GET /documents/:id/diff?v1=x&v2=y
+   * 对比两个版本的文本差异
+   */
+  @Get(':id/diff')
+  async diffVersions(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('v1', ParseIntPipe) v1: number,
+    @Query('v2', ParseIntPipe) v2: number,
+  ) {
+    try {
+      const changes = await this.documentService.diffVersions(id, v1, v2);
+      return { success: true, diff: changes };
+    } catch (error: any) {
+      logger.error('版本对比失败', { module: 'DocumentController', documentId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * GET /documents/:id/audit-log
+   * 查询文档操作历史
+   */
+  @Get(':id/audit-log')
+  async getAuditLog(@Param('id', ParseIntPipe) id: number) {
+    try {
+      const logs = await this.documentService.getAuditLog(id);
+      return { success: true, logs };
+    } catch (error: any) {
+      logger.error('获取审计日志失败', { module: 'DocumentController', documentId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+}

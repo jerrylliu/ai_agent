@@ -1,7 +1,7 @@
 import React from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Button } from "../ui/button";
-import { MoreHorizontal, Database, Trash2, Upload, Brain } from "lucide-react";
+import { MoreHorizontal, Database, Trash2, Brain, FileText } from "lucide-react";
 interface KbFeedback {
     show: boolean;
     success: boolean;
@@ -14,23 +14,15 @@ interface HeaderContentProps {
         stats?: { documentCount: number };
     };
     showMoreMenu: boolean;
-    onUploadToKnowledgeBase: (file: File) => Promise<{ success: boolean; message: string }>;
     onToggleMoreMenu: () => void;
     onClearKnowledgeBase: () => Promise<{ success: boolean; message: string }>;
     onCheckKnowledgeBaseStatus: () => void;
     onKbFeedback: (feedback: KbFeedback) => void;
     onOpenMemorySummary?: () => void;
+    onOpenDocumentManager?: () => void;
 }
 const HeaderContent: React.FC<HeaderContentProps> = (props) => {
-    const { knowledgeBaseStatus, showMoreMenu, onUploadToKnowledgeBase, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary } = props;
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (file) {
-            const result = await onUploadToKnowledgeBase(file);
-            onKbFeedback({ show: true, success: result.success, message: result.message });
-            setTimeout(() => onKbFeedback({ show: false, success: result.success, message: result.message }), 3000);
-        }
-    };
+    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager } = props;
     const handleClearKnowledgeBase = async () => {
         onToggleMoreMenu();
         if (confirm('确定要清空整个知识库吗？此操作不可恢复。')) {
@@ -96,20 +88,15 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                             <span className="text-xs text-gray-500 dark:text-gray-300">检查中...</span>
                         )}
                     </div>
-                    <label className="cursor-pointer">
-                        <input
-                            type="file"
-                            accept=".txt,.pdf,.doc,.docx,text/plain,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                            className="hidden"
-                            onChange={handleFileUpload}
-                        />
-                        <Button asChild variant="ghost" size="sm" className="rounded-full cyberpunk-header-upload-btn">
-                            <span>
-                                <Upload className="h-4 w-4 mr-1" />
-                                上传知识库
-                            </span>
-                        </Button>
-                    </label>
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="rounded-full"
+                        onClick={() => onOpenDocumentManager?.()}
+                    >
+                        <FileText className="h-4 w-4 mr-1" />
+                        文档管理
+                    </Button>
                     <div className="relative more-menu">
                         <Button
                             variant="ghost"
@@ -121,6 +108,16 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                         </Button>
                         {showMoreMenu && (
                             <div className="absolute right-0 mt-2 w-48 bg-card border border-gray-200 dark:border-slate-600 rounded-lg shadow-lg z-50">
+                                <button
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center"
+                                    onClick={() => {
+                                        onToggleMoreMenu();
+                                        onOpenDocumentManager?.();
+                                    }}
+                                >
+                                    <FileText className="h-4 w-4 mr-2" />
+                                    文档管理
+                                </button>
                                 <button
                                     className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center"
                                     onClick={() => {
