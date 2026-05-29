@@ -157,6 +157,31 @@ export function isMarkdownContent(text: string): boolean {
 // 向量存储实例（单例）
 let vectorStore: Chroma | null = null;
 
+// 初始化锁：防止并发双重初始化
+let initPromise: Promise<Chroma> | null = null;
+
+// 标记当前是否为内存存储（降级模式）
+let isMemoryStore = false;
+
+/**
+ * 重置向量存储实例
+ * 当 ChromaDB 从不可用恢复为可用时，需要手动调用此函数清除旧的内存存储实例
+ * 下次调用 initializeVectorStore() 时会重新连接 ChromaDB
+ */
+export function resetVectorStore(): void {
+  vectorStore = null;
+  initPromise = null;
+  isMemoryStore = false;
+  logger.info('向量存储实例已重置，下次初始化将重新连接 ChromaDB', { module: 'VectorStore' });
+}
+
+/**
+ * 检查当前向量存储是否为内存存储（降级模式）
+ */
+export function isVectorStoreMemoryMode(): boolean {
+  return isMemoryStore;
+}
+
 // BM25 全文索引实例（单例）
 let bm25Index: MiniSearch | null = null;
 let bm25DocumentStore: Map<string, { content: string; metadata: any }> = new Map();
@@ -331,20 +356,32 @@ async function rebuildBM25Index(): Promise<void> {
  * 如果已存在则加载，否则创建新的
  */
 export async function initializeVectorStore(): Promise<Chroma> {
-  if (vectorStore) {
+  if (vectorStore && !isMemoryStore) {
     return vectorStore;
   }
 
+  if (initPromise) {
+    return initPromise;
+  }
+
+  initPromise = doInitialize();
+
+  try {
+    return await initPromise;
+  } finally {
+    initPromise = null;
+  }
+}
+
+async function doInitialize(): Promise<Chroma> {
   logger.info('初始化向量数据库', { module: 'VectorStore' });
 
-  // 确保持久化目录存在
   if (!fs.existsSync(PERSIST_DIR)) {
     fs.mkdirSync(PERSIST_DIR, { recursive: true });
     logger.info('创建 ChromaDB 数据目录', { module: 'VectorStore', path: PERSIST_DIR });
   }
 
   try {
-    // 首先尝试连接并检查集合是否存在
     const client = new ChromaClient({ host: 'localhost', port: 8000 });
 
     let collectionExists = false;
@@ -357,7 +394,6 @@ export async function initializeVectorStore(): Promise<Chroma> {
       logger.info('知识库集合不存在，将创建新集合', { module: 'VectorStore' });
     }
 
-    // 创建 Chroma 向量存储
     if (collectionExists) {
       vectorStore = await Chroma.fromExistingCollection(embeddings, {
         collectionName: COLLECTION_NAME,
@@ -366,7 +402,6 @@ export async function initializeVectorStore(): Promise<Chroma> {
       const coll = await client.getCollection({ name: COLLECTION_NAME });
       logger.info('当前集合空间', { module: 'VectorStore', space: coll.metadata?.['hnsw:space'] || 'l2(默认)' });
     } else {
-      // 集合不存在，先创建集合
       await client.createCollection({
         name: COLLECTION_NAME,
         metadata: { "hnsw:space": "cosine" },
@@ -379,25 +414,22 @@ export async function initializeVectorStore(): Promise<Chroma> {
       });
     }
 
+    isMemoryStore = false;
     logger.info('向量数据库初始化完成', { module: 'VectorStore' });
     return vectorStore;
   } catch (error) {
     logger.error('初始化向量数据库失败', { module: 'VectorStore', error: String(error) });
-
-    // 如果 ChromaDB 连接失败，使用内存存储作为备选
     logger.warn('ChromaDB 不可用，尝试使用内存存储', { module: 'VectorStore' });
     return await createMemoryVectorStore();
   }
 }
 
-/**
- * 创建内存向量存储（备选方案）
- */
 async function createMemoryVectorStore(): Promise<Chroma> {
   const { MemoryVectorStore } = await import('@langchain/classic/vectorstores/memory');
 
   const store = new MemoryVectorStore(embeddings);
   vectorStore = store as unknown as Chroma;
+  isMemoryStore = true;
 
   logger.info('内存向量存储初始化完成（注意：重启后数据会丢失）', { module: 'VectorStore' });
   return vectorStore;
@@ -413,7 +445,7 @@ export async function addDocuments(
   texts: string[],
   metadata: Array<{ source: string; docType?: string; [key: string]: any }>,
 ): Promise<number> {
-  const store = await initializeVectorStore();
+  let store = await initializeVectorStore();
 
   logger.info('开始向量化文档', { module: 'VectorStore', textCount: texts.length, docType: metadata[0]?.docType || 'general' });
 
@@ -460,6 +492,7 @@ export async function addDocuments(
 
   // 分批添加到向量存储，避免超过上下文长度限制
   let addedCount = 0;
+  let retriedAfterReset = false;
   for (let i = 0; i < documents.length; i += BATCH_SIZE) {
     const batch = documents.slice(i, i + BATCH_SIZE);
     try {
@@ -468,6 +501,23 @@ export async function addDocuments(
       logger.debug('文本块处理进度', { module: 'VectorStore', addedCount, total: documents.length });
     } catch (error: any) {
       logger.error('批量添加失败', { module: 'VectorStore', start: i, end: i + batch.length, error: error.message });
+
+      const isNotFoundError = error.name === 'ChromaNotFoundError' || error.message?.includes('could not be found');
+      if (isNotFoundError && !retriedAfterReset) {
+        logger.info('检测到 ChromaNotFoundError，重置向量存储后重试', { module: 'VectorStore' });
+        resetVectorStore();
+        store = await initializeVectorStore();
+        retriedAfterReset = true;
+        try {
+          await store.addDocuments(batch);
+          addedCount += batch.length;
+          logger.info('重置后重试添加成功', { module: 'VectorStore', addedCount, total: documents.length });
+          continue;
+        } catch (retryError: any) {
+          logger.error('重置后重试添加仍失败', { module: 'VectorStore', error: retryError.message });
+        }
+      }
+
       const isContextError = error.message?.includes('context length') ||
         error.message?.includes('context') ||
         error.message?.includes('exceeds');
@@ -1088,21 +1138,37 @@ export async function removeDocumentVersion(versionId: number): Promise<void> {
   }
 
   try {
-    // 从 ChromaDB 删除该版本的所有向量
     const versionFilter = { versionId: String(versionId) };
 
-    // 先获取该版本的所有向量 ID
-    const existing = await collection.get({ where: versionFilter });
+    let existing: { ids: string[] };
+    try {
+      existing = await collection.get({ where: versionFilter });
+    } catch (getError: any) {
+      if (getError.name === 'ChromaNotFoundError' || getError.message?.includes('could not be found')) {
+        logger.info('ChromaDB 集合或资源不存在，视为已清理', { module: 'VectorStore', versionId });
+        existing = { ids: [] };
+      } else {
+        throw getError;
+      }
+    }
+
     logger.info('查询到版本向量数据', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
 
     if (existing.ids.length > 0) {
-      await collection.delete({ where: versionFilter });
-      logger.info('已从 ChromaDB 删除版本向量', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
+      try {
+        await collection.delete({ where: versionFilter });
+        logger.info('已从 ChromaDB 删除版本向量', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
+      } catch (delError: any) {
+        if (delError.name === 'ChromaNotFoundError' || delError.message?.includes('could not be found')) {
+          logger.info('ChromaDB 删除时资源不存在，视为已清理', { module: 'VectorStore', versionId });
+        } else {
+          throw delError;
+        }
+      }
     } else {
       logger.info('ChromaDB 中无该版本向量数据', { module: 'VectorStore', versionId });
     }
 
-    // 从 BM25 索引中删除该版本的文档（使用 bm25DocumentStore 替代内部属性）
     if (bm25Index) {
       const idsToRemove: string[] = [];
       for (const [id, doc] of bm25DocumentStore.entries()) {
@@ -1149,11 +1215,22 @@ export async function updateVersionVectorStatus(versionId: number, newStatus: st
 
   try {
     const versionFilter = { versionId: String(versionId) };
-    const existing = await collection.get({ where: versionFilter });
+
+    let existing: { ids: string[]; metadatas: any[] };
+    try {
+      existing = await collection.get({ where: versionFilter });
+    } catch (getError: any) {
+      if (getError.name === 'ChromaNotFoundError' || getError.message?.includes('could not be found')) {
+        logger.info('ChromaDB 集合或资源不存在，无需更新状态', { module: 'VectorStore', versionId });
+        existing = { ids: [], metadatas: [] };
+      } else {
+        throw getError;
+      }
+    }
+
     logger.info('查询到版本向量数据', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
 
     if (existing.ids.length > 0) {
-      // 更新 metadata 中的 versionStatus
       const updatedMetadata = existing.metadatas.map((meta: any) => ({
         ...meta,
         versionStatus: newStatus,

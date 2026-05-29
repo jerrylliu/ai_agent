@@ -940,3 +940,46 @@ export async function getDocumentAuditLogs(
   const data = await handleResponse<{ success: boolean; logs: DocumentAuditLogItem[] }>(response);
   return data.logs ?? [];
 }
+
+export interface PendingVectorOpItem {
+  id: number;
+  versionId: number;
+  operation: 'remove' | 'update_status' | 'reindex';
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  retryCount: number;
+  errorMessage: string | null;
+  params: Record<string, any> | null;
+  createdAt: string;
+}
+
+export async function getPendingVectorOps(): Promise<PendingVectorOpItem[]> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/pending-ops`, {
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse<{ success: boolean; ops: PendingVectorOpItem[] }>(response);
+  return data.ops ?? [];
+}
+
+export async function retrySingleVectorOp(opId: number): Promise<{ success: boolean; error?: string }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/pending-ops/${opId}/retry`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean; error?: string }>(response);
+}
+
+export async function deletePendingVectorOp(opId: number): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/pending-ops/${opId}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean }>(response);
+}
+
+export async function retryAllFailedOps(): Promise<{ success: boolean; retried: number; total: number }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/scheduler/retry-failed-ops`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean; retried: number; total: number }>(response);
+}

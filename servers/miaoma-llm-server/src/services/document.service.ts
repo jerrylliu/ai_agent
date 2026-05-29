@@ -24,7 +24,7 @@ import {
   readVersionFile,
 } from '../fundamentals/file-storage';
 import { parseDocument } from '../fundamentals/document-parser';
-import { addDocuments, removeDocumentVersion, updateVersionVectorStatus, reindexVersion } from '../fundamentals/vector-store';
+import { addDocuments, removeDocumentVersion, updateVersionVectorStatus, reindexVersion, resetVectorStore, isVectorStoreMemoryMode } from '../fundamentals/vector-store';
 
 @Injectable()
 export class DocumentService {
@@ -296,19 +296,35 @@ export class DocumentService {
       };
       logger.info('开始向量化入库', { module: 'DocumentService', versionId, documentId });
 
-      const chunkCount = await addDocuments([textContent], [metadata]);
-      logger.info('向量化入库完成', { module: 'DocumentService', versionId, documentId, chunkCount });
+      try {
+        const chunkCount = await addDocuments([textContent], [metadata]);
+        logger.info('向量化入库完成', { module: 'DocumentService', versionId, documentId, chunkCount });
 
-      await this.versionRepo.update(versionId, {
-        parsingStatus: ParsingStatus.SUCCESS,
-        chunkCount,
-      });
+        await this.versionRepo.update(versionId, {
+          parsingStatus: ParsingStatus.SUCCESS,
+          chunkCount,
+        });
 
-      logger.info('开始自动激活版本', { module: 'DocumentService', versionId });
-      await this.activateVersion(versionId, version.uploadedBy || 'system');
+        logger.info('开始自动激活版本', { module: 'DocumentService', versionId });
+        await this.activateVersion(versionId, version.uploadedBy || 'system');
+      } catch (vectorError: any) {
+        logger.error('向量化入库失败，已加入重试队列', { module: 'DocumentService', versionId, error: vectorError.message });
+        await this.enqueueVectorOp(versionId, VectorOpType.REINDEX, {
+          textContent,
+          versionStatus: VersionStatus.DRAFT,
+          documentId,
+        });
+        await this.versionRepo.update(versionId, {
+          parsingStatus: ParsingStatus.FAILED,
+          errorMessage: `向量化入库失败，已加入重试队列: ${vectorError.message}`,
+        });
+      }
 
-      logger.info('版本解析向量化完成', { module: 'DocumentService', versionId, documentId, chunkCount });
+      logger.info('版本解析向量化完成', { module: 'DocumentService', versionId, documentId });
     } catch (error: any) {
+      if (error.message?.includes('已加入重试队列')) {
+        return;
+      }
       await this.versionRepo.update(versionId, {
         parsingStatus: ParsingStatus.FAILED,
         errorMessage: error.message,
@@ -333,6 +349,9 @@ export class DocumentService {
     }
     if (version.status === VersionStatus.ARCHIVED) {
       throw new BadRequestException('archived 状态不能直接激活，请使用回滚功能');
+    }
+    if (version.parsingStatus !== ParsingStatus.SUCCESS) {
+      throw new BadRequestException('只能激活解析成功的版本，当前解析状态为 ' + version.parsingStatus);
     }
 
     logger.info('开始激活版本', { module: 'DocumentService', versionId, documentId: version.documentId, currentStatus: version.status, operator });
@@ -457,7 +476,13 @@ export class DocumentService {
       version.status = VersionStatus.ARCHIVED;
       version.archivedAt = new Date();
       await this.versionRepo.save(version);
-      await updateVersionVectorStatus(version.id, VersionStatus.ARCHIVED);
+
+      try {
+        await updateVersionVectorStatus(version.id, VersionStatus.ARCHIVED);
+      } catch (error: any) {
+        logger.error('归档版本向量状态更新失败，已加入重试队列', { module: 'DocumentService', versionId, error: error.message });
+        await this.enqueueVectorOp(version.id, VectorOpType.UPDATE_STATUS, { newStatus: VersionStatus.ARCHIVED });
+      }
 
       const action = newStatus === VersionStatus.ARCHIVED ? AuditAction.ARCHIVE : AuditAction.ACTIVATE;
       await this.writeAuditLog(version.documentId, version.id, action, operator, `版本 v${version.versionNumber} 状态变更为 ${newStatus}`);
@@ -762,7 +787,13 @@ export class DocumentService {
         params: params || {},
       });
       await this.pendingVectorOpRepo.save(op);
-      logger.info('向量操作已加入重试队列', { module: 'DocumentService', versionId, operation });
+      logger.info('向量操作已加入重试队列', {
+        module: 'DocumentService',
+        opId: op.id,
+        versionId,
+        operation,
+        status: VectorOpStatus.PENDING,
+      });
     } catch (error: any) {
       logger.error('写入重试队列失败', { module: 'DocumentService', versionId, operation, error: error.message });
     }
@@ -771,15 +802,30 @@ export class DocumentService {
   /**
    * 重试失败的向量操作（定时任务调用）
    */
-  async retryFailedVectorOps(maxRetry: number = 3): Promise<number> {
-    const failedOps = await this.pendingVectorOpRepo.find({
-      where: { status: VectorOpStatus.FAILED },
+  async retryFailedVectorOps(maxRetry: number = 3): Promise<{ retried: number; total: number; results: Array<{ id: number; versionId: number; operation: string; success: boolean; error?: string }> }> {
+    if (isVectorStoreMemoryMode()) {
+      resetVectorStore();
+      logger.info('检测到向量存储为内存模式，已重置，将重新连接 ChromaDB', { module: 'DocumentService' });
+    }
+
+    const pendingOps = await this.pendingVectorOpRepo.find({
+      where: { status: In([VectorOpStatus.PENDING, VectorOpStatus.FAILED]) },
+      order: { createdAt: 'ASC' },
     });
 
-    let retried = 0;
-    for (const op of failedOps) {
+    const results: Array<{ id: number; versionId: number; operation: string; success: boolean; error?: string }> = [];
+
+    for (const op of pendingOps) {
       if (op.retryCount >= maxRetry) {
-        logger.warn('向量操作重试次数已达上限，跳过', { module: 'DocumentService', opId: op.id, retryCount: op.retryCount });
+        logger.warn('向量操作重试次数已达上限，跳过', {
+          module: 'DocumentService',
+          opId: op.id,
+          versionId: op.versionId,
+          operation: op.operation,
+          retryCount: op.retryCount,
+          maxRetry,
+        });
+        results.push({ id: op.id, versionId: op.versionId, operation: op.operation, success: false, error: `重试次数已达上限(${maxRetry})` });
         continue;
       }
 
@@ -787,14 +833,35 @@ export class DocumentService {
         op.status = VectorOpStatus.PROCESSING;
         op.retryCount += 1;
         await this.pendingVectorOpRepo.save(op);
+        logger.info('向量操作开始重试', {
+          module: 'DocumentService',
+          opId: op.id,
+          versionId: op.versionId,
+          operation: op.operation,
+          retryCount: op.retryCount,
+          previousStatus: VectorOpStatus.FAILED,
+          currentStatus: VectorOpStatus.PROCESSING,
+        });
 
         switch (op.operation) {
           case VectorOpType.REMOVE:
             await removeDocumentVersion(op.versionId);
             break;
-          case VectorOpType.UPDATE_STATUS:
-            await updateVersionVectorStatus(op.versionId, op.params?.newStatus || 'archived');
+          case VectorOpType.UPDATE_STATUS: {
+            const targetVersion = await this.versionRepo.findOne({ where: { id: op.versionId } });
+            if (!targetVersion) {
+              logger.warn('UPDATE_STATUS 重试：版本记录已不存在，跳过', { module: 'DocumentService', versionId: op.versionId });
+              break;
+            }
+            const expectedStatus = op.params?.newStatus || 'archived';
+            if (targetVersion.status === expectedStatus) {
+              logger.info('UPDATE_STATUS 重试：版本状态已一致，直接更新向量', { module: 'DocumentService', versionId: op.versionId, status: expectedStatus });
+            } else {
+              logger.info('UPDATE_STATUS 重试：版本状态已变更，使用数据库当前状态', { module: 'DocumentService', versionId: op.versionId, dbStatus: targetVersion.status, queuedStatus: expectedStatus });
+            }
+            await updateVersionVectorStatus(op.versionId, targetVersion.status);
             break;
+          }
           case VectorOpType.REINDEX: {
             const version = await this.versionRepo.findOne({ where: { id: op.versionId } });
             if (version) {
@@ -808,13 +875,24 @@ export class DocumentService {
                   throw new Error(`重新解析文件失败: ${parseError.message}`);
                 }
               }
-              await reindexVersion(
+              const currentStatus = version.status;
+              const chunkCount = await reindexVersion(
                 op.versionId,
                 version.documentId,
                 textContent,
-                op.params?.versionStatus || 'active',
+                currentStatus,
                 { source: version.fileUrl, fileType: version.fileType },
               );
+              await this.versionRepo.update(op.versionId, {
+                parsingStatus: ParsingStatus.SUCCESS,
+                chunkCount,
+                errorMessage: '',
+              });
+              logger.info('REINDEX 重试：版本状态已同步', { module: 'DocumentService', versionId: op.versionId, parsingStatus: 'success', chunkCount, currentStatus });
+              if (currentStatus === VersionStatus.DRAFT) {
+                logger.info('REINDEX 重试：版本仍为 draft，自动激活', { module: 'DocumentService', versionId: op.versionId });
+                await this.activateVersion(op.versionId, version.uploadedBy || 'system');
+              }
             }
             break;
           }
@@ -822,15 +900,126 @@ export class DocumentService {
 
         op.status = VectorOpStatus.COMPLETED;
         await this.pendingVectorOpRepo.save(op);
-        retried++;
+        logger.info('向量操作重试成功', {
+          module: 'DocumentService',
+          opId: op.id,
+          versionId: op.versionId,
+          operation: op.operation,
+          retryCount: op.retryCount,
+          previousStatus: VectorOpStatus.PROCESSING,
+          currentStatus: VectorOpStatus.COMPLETED,
+        });
+        results.push({ id: op.id, versionId: op.versionId, operation: op.operation, success: true });
       } catch (error: any) {
         op.status = VectorOpStatus.FAILED;
         op.errorMessage = error.message;
         await this.pendingVectorOpRepo.save(op);
-        logger.error('向量操作重试失败', { module: 'DocumentService', opId: op.id, error: error.message });
+        logger.error('向量操作重试失败', {
+          module: 'DocumentService',
+          opId: op.id,
+          versionId: op.versionId,
+          operation: op.operation,
+          retryCount: op.retryCount,
+          previousStatus: VectorOpStatus.PROCESSING,
+          currentStatus: VectorOpStatus.FAILED,
+          errorMessage: error.message,
+        });
+        results.push({ id: op.id, versionId: op.versionId, operation: op.operation, success: false, error: error.message });
       }
     }
 
-    return retried;
+    const retried = results.filter(r => r.success).length;
+    return { retried, total: pendingOps.length, results };
+  }
+
+  async getPendingVectorOps(): Promise<PendingVectorOp[]> {
+    return this.pendingVectorOpRepo.find({
+      where: { status: In([VectorOpStatus.PENDING, VectorOpStatus.FAILED, VectorOpStatus.PROCESSING]) },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async retrySingleVectorOp(opId: number): Promise<{ success: boolean; error?: string }> {
+    if (isVectorStoreMemoryMode()) {
+      resetVectorStore();
+      logger.info('检测到向量存储为内存模式，已重置，将重新连接 ChromaDB', { module: 'DocumentService' });
+    }
+
+    const op = await this.pendingVectorOpRepo.findOne({ where: { id: opId } });
+    if (!op) throw new NotFoundException(`重试队列操作 ${opId} 不存在`);
+    if (op.status === VectorOpStatus.COMPLETED) return { success: true };
+
+    try {
+      op.status = VectorOpStatus.PROCESSING;
+      op.retryCount += 1;
+      await this.pendingVectorOpRepo.save(op);
+
+      switch (op.operation) {
+        case VectorOpType.REMOVE:
+          await removeDocumentVersion(op.versionId);
+          break;
+        case VectorOpType.UPDATE_STATUS: {
+          const targetVersion = await this.versionRepo.findOne({ where: { id: op.versionId } });
+          if (!targetVersion) {
+            logger.warn('UPDATE_STATUS 单条重试：版本记录已不存在，跳过', { module: 'DocumentService', versionId: op.versionId });
+            break;
+          }
+          const expectedStatus = op.params?.newStatus || 'archived';
+          if (targetVersion.status === expectedStatus) {
+            logger.info('UPDATE_STATUS 单条重试：版本状态已一致，直接更新向量', { module: 'DocumentService', versionId: op.versionId, status: expectedStatus });
+          } else {
+            logger.info('UPDATE_STATUS 单条重试：版本状态已变更，使用数据库当前状态', { module: 'DocumentService', versionId: op.versionId, dbStatus: targetVersion.status, queuedStatus: expectedStatus });
+          }
+          await updateVersionVectorStatus(op.versionId, targetVersion.status);
+          break;
+        }
+        case VectorOpType.REINDEX: {
+          const version = await this.versionRepo.findOne({ where: { id: op.versionId } });
+          if (version) {
+            let textContent = op.params?.textContent;
+            if (!textContent) {
+              textContent = await this.parseVersionText(version);
+            }
+            const currentStatus = version.status;
+            const chunkCount = await reindexVersion(
+              op.versionId,
+              version.documentId,
+              textContent,
+              currentStatus,
+              { source: version.fileUrl, fileType: version.fileType },
+            );
+            await this.versionRepo.update(op.versionId, {
+              parsingStatus: ParsingStatus.SUCCESS,
+              chunkCount,
+              errorMessage: '',
+            });
+            logger.info('REINDEX 单条重试：版本状态已同步', { module: 'DocumentService', versionId: op.versionId, parsingStatus: 'success', chunkCount, currentStatus });
+            if (currentStatus === VersionStatus.DRAFT) {
+              logger.info('REINDEX 单条重试：版本仍为 draft，自动激活', { module: 'DocumentService', versionId: op.versionId });
+              await this.activateVersion(op.versionId, version.uploadedBy || 'system');
+            }
+          }
+          break;
+        }
+      }
+
+      op.status = VectorOpStatus.COMPLETED;
+      await this.pendingVectorOpRepo.save(op);
+      logger.info('单条向量操作重试成功', { module: 'DocumentService', opId, versionId: op.versionId, operation: op.operation });
+      return { success: true };
+    } catch (error: any) {
+      op.status = VectorOpStatus.FAILED;
+      op.errorMessage = error.message;
+      await this.pendingVectorOpRepo.save(op);
+      logger.error('单条向量操作重试失败', { module: 'DocumentService', opId, versionId: op.versionId, error: error.message });
+      return { success: false, error: error.message };
+    }
+  }
+
+  async deletePendingVectorOp(opId: number): Promise<void> {
+    const op = await this.pendingVectorOpRepo.findOne({ where: { id: opId } });
+    if (!op) throw new NotFoundException(`重试队列操作 ${opId} 不存在`);
+    await this.pendingVectorOpRepo.remove(op);
+    logger.info('已清除重试队列记录', { module: 'DocumentService', opId, versionId: op.versionId, operation: op.operation });
   }
 }

@@ -57,8 +57,10 @@ export class DocumentController {
       const documentId = documentIdStr ? parseInt(documentIdStr, 10) : undefined;
       const tags = tagsStr ? JSON.parse(tagsStr) : undefined;
 
+      const originalname = Buffer.from(file.originalname, 'latin1').toString('utf8');
+
       const result = await this.documentService.uploadDocument(
-        { buffer: file.buffer, originalname: file.originalname, size: file.size, mimetype: file.mimetype },
+        { buffer: file.buffer, originalname, size: file.size, mimetype: file.mimetype },
         { documentId, title, description, tags, operator },
       );
 
@@ -173,8 +175,8 @@ export class DocumentController {
   @Post('scheduler/retry-failed-ops')
   async retryFailedOps() {
     try {
-      const count = await this.schedulerService.retryFailedOps();
-      return { success: true, message: `已重试 ${count} 个向量操作` };
+      const result = await this.schedulerService.retryFailedOps();
+      return { success: true, message: `已重试 ${result.retried}/${result.total} 个向量操作`, ...result };
     } catch (error: any) {
       logger.error('重试向量操作失败', { module: 'DocumentController', error: error.message });
       throw new HttpException(error.message, 500);
@@ -193,6 +195,39 @@ export class DocumentController {
     } catch (error: any) {
       logger.error('清理审计日志失败', { module: 'DocumentController', error: error.message });
       throw new HttpException(error.message, 500);
+    }
+  }
+
+  @Get('pending-ops')
+  async getPendingOps() {
+    try {
+      const ops = await this.documentService.getPendingVectorOps();
+      return { success: true, ops };
+    } catch (error: any) {
+      logger.error('获取重试队列失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, 500);
+    }
+  }
+
+  @Post('pending-ops/:id/retry')
+  async retrySingleOp(@Param('id', ParseIntPipe) id: number) {
+    try {
+      const result = await this.documentService.retrySingleVectorOp(id);
+      return { success: result.success, error: result.error };
+    } catch (error: any) {
+      logger.error('单条重试失败', { module: 'DocumentController', opId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  @Delete('pending-ops/:id')
+  async deletePendingOp(@Param('id', ParseIntPipe) id: number) {
+    try {
+      await this.documentService.deletePendingVectorOp(id);
+      return { success: true, message: '已清除重试队列记录' };
+    } catch (error: any) {
+      logger.error('清除重试队列记录失败', { module: 'DocumentController', opId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
     }
   }
 
@@ -272,7 +307,8 @@ export class DocumentController {
       };
 
       res.setHeader('Content-Type', mimeTypeMap[result.fileType] || 'application/octet-stream');
-      res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
+      const encodedName = encodeURIComponent(result.fileName);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`);
       res.send(result.buffer);
     } catch (error: any) {
       logger.error('下载版本文件失败', { module: 'DocumentController', versionId, error: error.message });

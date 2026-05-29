@@ -106,10 +106,10 @@ export class DocumentSchedulerService {
   /**
    * 重试 PendingVectorOp 中失败的向量操作
    */
-  async retryFailedOps(): Promise<number> {
-    const count = await this.documentService.retryFailedVectorOps();
-    logger.info('重试向量操作完成', { module: 'DocumentScheduler', retriedCount: count });
-    return count;
+  async retryFailedOps(): Promise<{ retried: number; total: number; results: Array<{ id: number; versionId: number; operation: string; success: boolean; error?: string }> }> {
+    const result = await this.documentService.retryFailedVectorOps();
+    logger.info('重试向量操作完成', { module: 'DocumentScheduler', retriedCount: result.retried, totalCount: result.total });
+    return result;
   }
 
   /**

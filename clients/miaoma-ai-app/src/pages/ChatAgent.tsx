@@ -1404,7 +1404,7 @@ const ChatAgent: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-black/50">
           <div className="absolute right-0 top-0 bottom-0 w-full max-w-4xl bg-card shadow-2xl">
             <ErrorBoundary>
-              <DocumentManager onClose={() => setShowDocumentManager(false)} />
+              <DocumentManager onClose={() => setShowDocumentManager(false)} onRefreshKnowledgeBase={checkKnowledgeBaseStatus} />
             </ErrorBoundary>
           </div>
         </div>
