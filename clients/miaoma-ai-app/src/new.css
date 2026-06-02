@@ -490,6 +490,43 @@
   filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
 }
 
+/* ---------- cyberpunk-update-badge：知识源更新提醒徽章 ---------- */
+.cyberpunk .cyberpunk-update-badge {
+  background-color: rgba(255, 160, 0, 0.15);
+  box-shadow: 0 0 6px #FFA50066, 0 0 12px #FFA50033;
+}
+
+.cyberpunk .cyberpunk-update-badge:hover {
+  background-color: rgba(255, 160, 0, 0.3);
+  box-shadow: 0 0 10px #FFA500AA, 0 0 20px #FFA50066, 0 0 30px #FFA50033;
+}
+
+.cyberpunk .cyberpunk-update-icon {
+  color: #FFA500 !important;
+  filter: drop-shadow(0 0 4px #FFA500AA) drop-shadow(0 0 8px #FFA50066);
+}
+
+/* ---------- cyberpunk-menu：下拉菜单赛博朋克样式 ---------- */
+.cyberpunk .cyberpunk-menu-item {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF44;
+}
+
+.cyberpunk .cyberpunk-menu-item svg {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66);
+}
+
+.cyberpunk .cyberpunk-menu-item:hover {
+  background-color: #5FF6FF15;
+  color: #5FF6FF;
+}
+
+.cyberpunk .cyberpunk-menu-item:hover svg {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 5px #5FF6FF88);
+}
+
 /* ---------- cyberpunk-apikey-dialog：DeepSeek API Key 配置弹窗赛博朋克样式 ---------- */
 /* 弹窗背景：深紫色半透明 */
 .cyberpunk .cyberpunk-apikey-dialog-bg {

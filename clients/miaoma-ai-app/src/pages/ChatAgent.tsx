@@ -58,6 +58,7 @@ import MarkdownRenderer from "../components/MarkdownRenderer";
 import { formatTime, formatDate } from "../lib/utils";
 import { clearKnowledgeBase } from "../lib/api";
 import { DocumentManager } from '../components/Document';
+import { KnowledgeSourceManager } from '../components/KnowledgeSource';
 import { ErrorBoundary } from '../components/ui/error-boundary';
 import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
 import HeaderContent from '../components/Chat/HeaderContent';
@@ -92,6 +93,7 @@ const ChatAgent: React.FC = () => {
   const [showMemorySummary, setShowMemorySummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showDocumentManager, setShowDocumentManager] = useState(false);
+  const [showKnowledgeSourceManager, setShowKnowledgeSourceManager] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
 
   // ==================== 应用设置状态 (localStorage 持久化) ====================
@@ -337,33 +339,6 @@ const ChatAgent: React.FC = () => {
                   功能: 包含会话搜索框、新增对话按钮、主题切换按钮
                   交互: 可通过搜索框过滤会话，新增对话按钮创建新会话，主题切换按钮切换主题
               */}
-                {/* 原本的组件 */}
-                {false && (<div className="p-4 border-b border-gray-200 dark:border-slate-600">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white cyberpunk-header-title">智能助手</h3>
-                    <Button variant="ghost" size="icon" onClick={cycleTheme} title={`当前：${theme === 'light' ? '白天' : theme === 'dark' ? '黑夜' : '赛博朋克'}，点击切换`}>
-                      {theme === 'light' ? <Moon className="h-5 w-5" /> : theme === 'dark' ? <Zap className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
-                    </Button>
-                  </div>
-                  <div className="flex space-x-2 mb-4">
-                    <Button
-                      onClick={createNewSession}
-                      className="flex-1 bg-primary hover:bg-primary/90 text-white"
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      新对话
-                    </Button>
-                  </div>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                    <Input
-                      placeholder="搜索会话..."
-                      className="pl-10"
-                      value={searchKeyword}
-                      onChange={(e) => setSearchKeyword(e.target.value)}
-                    />
-                  </div>
-                </div>)}
                 <SidebarHeader
                   cycleTheme={cycleTheme}
                   theme={theme}
@@ -381,204 +356,6 @@ const ChatAgent: React.FC = () => {
                     - 搜索框实时过滤会话
                   样式: 当前会话高亮显示，带动画过渡效果
               */}
-              {/* 原本的组件 */}
-                {false && (<div className="flex-1 overflow-y-auto p-4">
-                  {/* 对话历史标题栏：包含标题、展开/收起按钮、清空按钮 */}
-                  <div className="flex items-center justify-between mb-4 cyberpunk-history">
-                    <h4 className="font-medium text-gray-700 dark:text-gray-300 flex items-center">
-                      <History className="h-4 w-4 mr-2" />
-                      对话历史
-                    </h4>
-                    <div className="flex items-center space-x-1">
-                      <button
-                        onClick={() => setShowHistoryList(!showHistoryList)}
-                        className="p-1 rounded hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
-                        title={showHistoryList ? '收起' : '展开'}
-                      >
-                        {showHistoryList ? (
-                          <ChevronUp className="h-4 w-4 text-gray-500" />
-                        ) : (
-                          <ChevronDown className="h-4 w-4 text-gray-500" />
-                        )}
-                      </button>
-                      {history.length > 0 && (
-                        <Button variant="ghost" size="sm" onClick={clearHistory}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div
-                    className="overflow-hidden transition-all duration-300 ease-in-out"
-                    style={{ maxHeight: showHistoryList ? '500px' : '0', opacity: showHistoryList ? 1 : 0 }}
-                  >
-                    {/* ==================== 左侧边栏 - 最近问题区域 ====================
-                      模块: 左侧边栏 - 最近问题历史
-                      功能: 展示用户最近发送过的问题列表，方便快速重新提问
-                      交互:
-                        - 点击问题文本自动填充到输入框
-                        - 支持展开/收起动画过渡
-                      数据: 来源于 useChat hook 中的 history 数组
-                  */}
-                    {history.length > 0 && (
-                      <div className="mb-6">
-                        {/* 最近问题标题栏：包含标题、展开/收起按钮 */}
-                        <div className="flex items-center justify-between mb-2 cyberpunk-recent">
-                          <h5 className="text-sm font-medium text-gray-600 dark:text-gray-300 flex items-center">
-                            <History className="h-3 w-3 mr-1" />
-                            最近的问题
-                          </h5>
-                          <button
-                            onClick={() => setShowRecentQuestions(!showRecentQuestions)}
-                            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
-                            title={showRecentQuestions ? '收起' : '展开'}
-                          >
-                            {showRecentQuestions ? (
-                              <ChevronUp className="h-3 w-3 text-gray-400" />
-                            ) : (
-                              <ChevronDown className="h-3 w-3 text-gray-400" />
-                            )}
-                          </button>
-                        </div>
-                        <div
-                          className="overflow-hidden transition-all duration-300 ease-in-out"
-                          style={{ maxHeight: showRecentQuestions ? '300px' : '0', opacity: showRecentQuestions ? 1 : 0 }}
-                        >
-                          <div className="space-y-2">
-                            {history.map((item) => (
-                              <div
-                                key={item.id}
-                                className="p-2 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 cursor-pointer transition-colors duration-200 cyberpunk-recent"
-                                onClick={() => handleHistoryClick(item.query)}
-                              >
-                                <div className="line-clamp-1" dangerouslySetInnerHTML={{
-                                  __html: searchKeyword
-                                    ? item.query.replace(new RegExp(`(${searchKeyword})`, 'gi'), '<mark style="background-color: #fef3c7; color: #92400e;">$1</mark>')
-                                    : item.query
-                                }} />
-
-                                <div className="text-xs text-gray-500 dark:text-gray-300 mt-1 cyberpunk-recent">
-                                  {formatTime(item.timestamp)}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 会话列表渲染：根据加载状态和过滤结果显示不同内容
-                      - 加载中: 显示旋转loading动画
-                      - 有会话: 渲染会话卡片列表，每个卡片包含标题、操作按钮、更新时间
-                      - 无会话: 显示空状态提示，提供创建新会话按钮
-                  */}
-                    {isLoading ? (
-                      <div className="flex justify-center items-center py-8">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                      </div>
-                    ) : filteredSessions.length > 0 ? (
-                      <div className="space-y-2">
-                        {filteredSessions.map((session) => (
-                          /* 单个会话卡片 */
-                          <div
-                            key={session.sessionId}
-                            className={`p-3 rounded-lg cursor-pointer transition-all duration-200 relative cyberpunk-history ${session.sessionId === currentSessionId
-                              ? 'bg-primary/10 dark:bg-primary/20 border border-primary/30 shadow-sm'
-                              : 'hover:bg-gray-100 dark:hover:bg-slate-700'
-                              }`}
-                            onClick={() => switchSession(session.sessionId)}
-                          >
-                            <div className="flex justify-between items-center min-w-0">
-                              <div className="flex-1 min-w-0">
-                                {/* 会话标题：当前会话高亮显示 */}
-                                <p className="text-sm font-medium text-gray-900 dark:text-white mb-1 truncate cyberpunk-history">
-                                  {session.title}
-                                </p>
-                              </div>
-                              {/* 会话操作按钮组：编辑标题、置顶/取消置顶、删除 */}
-                              <div className="flex space-x-1">
-                                {/* 编辑会话标题按钮 */}
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6 text-gray-400 hover:text-blue-500"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const newTitle = prompt('请输入新的会话标题:', session.title);
-                                    if (newTitle && newTitle.trim()) {
-                                      renameSession(session.sessionId, newTitle.trim());
-                                    }
-                                  }}
-                                >
-                                  <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                  </svg>
-                                </Button>
-                                {/* 置顶/取消置顶按钮 */}
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className={`h-6 w-6 ${session.isPinned ? 'text-yellow-500' : 'text-gray-400 hover:text-yellow-500'}`}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    toggleSessionPin(session.sessionId);
-                                  }}
-                                >
-                                  {session.isPinned ? (
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
-                                  ) : (
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                                    </svg>
-                                  )}
-                                </Button>
-                                {/* 删除会话按钮 */}
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6 text-gray-400 hover:text-red-500"
-                                  onClick={(e) => handleDeleteSession(session.sessionId, e)}
-                                >
-                                  <X className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            </div>
-                            <p className="text-xs text-gray-500 dark:text-gray-300 cyberpunk-history">
-                              {formatDate(new Date(session.updatedAt))}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-                    ) :
-                      <div className="text-center py-12 text-gray-500 dark:text-gray-300 cyberpunk-history">
-                        {searchKeyword ? (
-                          <>
-                            <p>无匹配会话</p>
-                            <Button
-                              onClick={() => setSearchKeyword("")}
-                              className="mt-4 bg-primary hover:bg-primary/90 text-white"
-                            >
-                              清除搜索
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <p>暂无对话历史</p>
-                            <Button
-                              onClick={createNewSession}
-                              className="mt-4 bg-primary hover:bg-primary/90 text-white"
-                            >
-                              开始新对话
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    }
-                  </div>
-                </div>)}
                 <SessionList
                   sessions={sessions}
                   currentSessionId={currentSessionId}
@@ -612,69 +389,6 @@ const ChatAgent: React.FC = () => {
                       - 主题切换按钮
                   交互: 头像悬停显示上传图标，点击触发文件选择
               */}
-                {false && (<div className="flex-shrink-0 border-t border-gray-200 dark:border-slate-600 p-4">
-                  {isAuthenticated && user ? (
-                    <>
-                      {/* 已登录状态：用户头像、信息、操作按钮 */}
-                      <div className="flex items-center space-x-3">
-                        {/* 头像上传区域：点击触发文件选择，悬停显示上传图标 */}
-                        <div className="relative group cursor-pointer" onClick={() => !avatarUploading && avatarInputRef.current?.click()}>
-                          <Avatar className={`h-10 w-10 transition-opacity ${avatarUploading ? 'opacity-50' : ''}`}>
-                            <AvatarImage src={user?.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user?.username || user?.id}`} />
-                            <AvatarFallback>{(user?.username || user?.email || '用户')[0].toUpperCase()}</AvatarFallback>
-                          </Avatar>
-                          <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Upload className="h-4 w-4 text-white" />
-                          </div>
-                          <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 border-2 border-white dark:border-slate-800 rounded-full"></div>
-                          <input
-                            ref={avatarInputRef}
-                            type="file"
-                            accept="image/jpeg,image/png,image/gif,image/webp"
-                            className="hidden"
-                            onChange={handleAvatarUpload}
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate cyberpunk-username">{user?.username || user?.email || user?.phone || '用户'}</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-300 truncate cyberpunk-useremail">{user?.email || user?.phone || '在线'}</p>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => cycleTheme()} title={`当前：${theme === 'light' ? '白天' : theme === 'dark' ? '黑夜' : '赛博朋克'}，点击切换`}>
-                            {theme === 'light' ? <Moon className="h-4 w-4" /> : theme === 'dark' ? <Zap className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => logout()} title="退出登录">
-                            <LogOut className="h-4 w-4 text-gray-500" />
-                          </Button>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      {/* 未登录状态：默认头像、登录提示、操作按钮 */}
-                      <div className="flex items-center space-x-3">
-                        {/* 默认头像占位 */}
-                        <div className="relative">
-                          <Avatar className="h-10 w-10">
-                            <AvatarFallback>?</AvatarFallback>
-                          </Avatar>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white cyberpunk-unauth">未登录</p>
-                          <p className="text-xs text-gray-500 dark:text-gray-300 cyberpunk-unauth">点击设置登录账号</p>
-                        </div>
-                        <div className="flex items-center space-x-1">
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => cycleTheme()} title={`当前：${theme === 'light' ? '白天' : theme === 'dark' ? '黑夜' : '赛博朋克'}，点击切换`}>
-                            {theme === 'light' ? <Moon className="h-4 w-4" /> : theme === 'dark' ? <Zap className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowAuthDialog(true)} title="登录/注册">
-                            <LogIn className="h-4 w-4 text-gray-500" />
-                          </Button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>)}
                 <UserProfile
                   isAuthenticated={isAuthenticated}
                   user={user}
@@ -697,7 +411,7 @@ const ChatAgent: React.FC = () => {
             2. 消息列表：用户/AI消息气泡、知识库标记、时间戳
             3. 输入区域：文本输入、图片/文件上传、发送按钮
       */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           {/* ==================== 聊天头部区域 ====================
             模块: 聊天核心 - 头部信息栏
             功能:
@@ -707,101 +421,6 @@ const ChatAgent: React.FC = () => {
                      更多操作菜单（清空知识库）
             交互: 点击上传按钮选择文件，点击更多按钮展开操作菜单
         */}
-          {false && (<div className="bg-card border-b border-gray-200 dark:border-slate-600 py-4 px-6 cyberpunk-border-glow">
-            <div className="flex items-center justify-between">
-              {/* 左侧：AI助手信息 */}
-              <div className="flex items-center space-x-3">
-                <Avatar className="h-10 w-10">
-                  <AvatarImage src="https://neeko-copilot.bytedance.net/api/text2image?prompt=AI%20assistant%20avatar&size=512x512" />
-                  <AvatarFallback>AI</AvatarFallback>
-                </Avatar>
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white cyberpunk-header-title">智能助手</h2>
-                  <p className="text-sm text-gray-500 dark:text-gray-300 cyberpunk-header-online">在线</p>
-                </div>
-              </div>
-              {/* 右侧：知识库状态与操作按钮 */}
-              <div className="flex items-center space-x-2">
-                {/* 知识库状态指示器：显示当前知识库的连接状态和文档数量
-                  状态类型:
-                    - ready: 正常连接，显示文档数量（绿色）
-                    - empty: 知识库为空（黄色）
-                    - error: 连接错误（红色）
-                    - unknown: 正在检查中（灰色）
-              */}
-                <div className="flex items-center space-x-1 px-3 py-1 rounded-full bg-gray-100 dark:bg-slate-700">
-                  <Database className="h-4 w-4 text-gray-500 dark:text-gray-300 cyberpunk-header-kb-label" />
-                  <span className="text-xs text-gray-600 dark:text-gray-300 cyberpunk-header-kb-label">
-                    知识库:
-                  </span>
-                  {knowledgeBaseStatus.status === 'ready' && knowledgeBaseStatus.stats && (
-                    <span className="text-xs font-medium text-green-600 dark:text-green-400 cyberpunk-header-kb-count">
-                      {knowledgeBaseStatus?.stats?.documentCount} 个文档
-                    </span>
-                  )}
-                  {knowledgeBaseStatus.status === 'empty' && (
-                    <span className="text-xs text-yellow-600 dark:text-yellow-400">空</span>
-                  )}
-                  {knowledgeBaseStatus.status === 'error' && (
-                    <span className="text-xs text-red-600 dark:text-red-400">错误</span>
-                  )}
-                  {knowledgeBaseStatus.status === 'unknown' && (
-                    <span className="text-xs text-gray-500 dark:text-gray-300">检查中...</span>
-                  )}
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="rounded-full"
-                  onClick={() => setShowDocumentManager(true)}
-                >
-                  <FileText className="h-4 w-4 mr-1" />
-                  文档管理
-                </Button>
-                <div className="relative more-menu">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="rounded-full"
-                    onClick={() => setShowMoreMenu(!showMoreMenu)}
-                  >
-                    <MoreHorizontal className="h-5 w-5" />
-                  </Button>
-                  {showMoreMenu && (
-                    <div className="absolute right-0 mt-2 w-48 bg-card border border-gray-200 dark:border-slate-600 rounded-lg shadow-lg z-50">
-                      <button
-                        className="w-full px-4 py-2 text-left text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center"
-                        onClick={async () => {
-                          setShowMoreMenu(false);
-                          if (confirm('确定要清空整个知识库吗？此操作不可恢复。')) {
-                            try {
-                              const result = await clearKnowledgeBase();
-                              setKbFeedback({
-                                show: true,
-                                success: result.success,
-                                message: result.message,
-                              });
-                              checkKnowledgeBaseStatus();
-                            } catch (error: any) {
-                              setKbFeedback({
-                                show: true,
-                                success: false,
-                                message: error.message || '清空失败',
-                              });
-                            }
-                            setTimeout(() => setKbFeedback(prev => ({ ...prev, show: false })), 3000);
-                          }
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        清空知识库
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>)}
           <HeaderContent
             knowledgeBaseStatus={knowledgeBaseStatus}
             showMoreMenu={showMoreMenu}
@@ -811,6 +430,7 @@ const ChatAgent: React.FC = () => {
             onKbFeedback={setKbFeedback}
             onOpenMemorySummary={() => setShowMemorySummary(true)}
             onOpenDocumentManager={() => setShowDocumentManager(true)}
+            onOpenKnowledgeSourceManager={() => setShowKnowledgeSourceManager(true)}
           />
 
           {/* ==================== 知识库操作反馈提示 ====================
@@ -856,17 +476,16 @@ const ChatAgent: React.FC = () => {
               - 用户消息：支持显示图片预览
               - 知识库来源：显示绿色"知识库"标签和引用文档数量
         */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-4" style={{ maxWidth: '100%', wordBreak: 'break-all' }}>
+          <div className="flex-1 overflow-y-auto p-6 space-y-4 min-w-0" style={{ overflowX: 'hidden' }}>
             {messages.map((message) => (
               <div
                 key={message.id}
-                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-                style={{ maxWidth: '100%' }}
+                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} min-w-0`}
               >
                 {/* 单条消息容器：包含头像和消息内容 */}
                 <div
                   className={`flex ${message.role === "user" ? "flex-row-reverse" : "flex-row"} gap-3`}
-                  style={{ maxWidth: '80%', width: 'fit-content', flexShrink: 0 }}
+                  style={{ maxWidth: '80%', minWidth: 0 }}
                 >
                   {/* 消息头像：用户或AI */}
                   <Avatar className="h-8 w-8 flex-shrink-0">
@@ -883,7 +502,7 @@ const ChatAgent: React.FC = () => {
                     )}
                   </Avatar>
                   {/* 消息内容区域：气泡 + 元信息 */}
-                  <div className="flex flex-col" style={{ maxWidth: 'calc(100% - 48px)', minWidth: 0 }}>
+                  <div className="flex flex-col min-w-0" style={{ maxWidth: 'calc(100% - 48px)' }}>
                     {/* 消息气泡容器 */}
                     <div className="relative" style={{ maxWidth: '100%' }}>
                       {/* 消息气泡：根据角色显示不同样式
@@ -899,13 +518,12 @@ const ChatAgent: React.FC = () => {
                           maxWidth: '100%',
                           wordBreak: 'break-word',
                           overflowWrap: 'break-word',
-                          whiteSpace: 'pre-wrap',
                           minWidth: 0,
                         }}
                       >
                         {/* AI消息：使用Markdown渲染，过滤内部思考标签 */}
                         {message.role === "assistant" ? (
-                          <div style={{ maxWidth: '100%', overflow: 'hidden', wordBreak: 'break-word' }}>
+                          <div className="min-w-0" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
                             <MarkdownRenderer>{message.content.replace(/<tool_call>[\s\S]*?<\/think>/gs, "")}</MarkdownRenderer>
                           </div>
                         ) : (
@@ -964,7 +582,7 @@ const ChatAgent: React.FC = () => {
                             className="h-6 w-6 text-gray-400 hover:text-red-500"
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (confirm('确定要删除这条消息吗？')) {
+                              if (confirm('确定要删除这条消息吗？将同时删除AI的回复。')) {
                                 deleteMessage(message.id)
                                   .then(() => { })
                                   .catch((error) => {
@@ -1405,6 +1023,15 @@ const ChatAgent: React.FC = () => {
           <div className="absolute right-0 top-0 bottom-0 w-full max-w-4xl bg-card shadow-2xl">
             <ErrorBoundary>
               <DocumentManager onClose={() => setShowDocumentManager(false)} onRefreshKnowledgeBase={checkKnowledgeBaseStatus} />
+            </ErrorBoundary>
+          </div>
+        </div>
+      )}
+      {showKnowledgeSourceManager && (
+        <div className="fixed inset-0 z-50 bg-black/50">
+          <div className="absolute right-0 top-0 bottom-0 w-full max-w-4xl bg-card shadow-2xl">
+            <ErrorBoundary>
+              <KnowledgeSourceManager onClose={() => setShowKnowledgeSourceManager(false)} onContentChange={checkKnowledgeBaseStatus} />
             </ErrorBoundary>
           </div>
         </div>

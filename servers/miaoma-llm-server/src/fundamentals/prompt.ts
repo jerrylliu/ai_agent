@@ -1,4 +1,4 @@
-import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
+import { HumanMessage, AIMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { Response } from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -8,6 +8,7 @@ import * as http from 'http';
 import { retrieveFromKnowledgeBase } from './rag-service';
 import { getKnowledgeBaseStats } from './vector-store';
 import { createLLM, getCurrentModelId, getModelInfo } from './model-provider';
+import { getAllToolSchemas, executeTool, hasTool, getAvailableToolNames } from './tools';
 import { logger } from './logger';
 
 // 系统提示词 - 定义模型的角色和任务
@@ -17,6 +18,33 @@ import { logger } from './logger';
 // 3. **颜色值精确**：使用从设计图中分析出的准确 hex 值
 // 4. **布局还原度高**：尽可能还原设计稿的视觉效果`;
 const SYSTEM_PROMPT = `你是一个全能助手`;
+
+const FC_SYSTEM_PROMPT = `你是一个全能助手，你可以使用工具来帮助回答用户问题。
+
+当前可用工具：
+- search_knowledge_base：搜索知识库中与查询相关的文档内容
+- search_web：联网搜索实时信息
+
+工具使用规则：
+1. 当用户的问题可能涉及已上传的文档、知识库中的信息时，优先调用 search_knowledge_base 工具
+2. 当用户的问题涉及最新新闻、实时数据、当前事件或知识库中没有的实时信息时，调用 search_web 工具
+3. 如果不确定知识库中是否有相关信息，可以同时调用 search_knowledge_base 和 search_web 两个工具
+4. 当你能够直接回答问题（如通用知识、闲聊、数学计算等）时，不需要调用任何工具
+5. 调用工具时，构造精确的搜索查询语句，以提高搜索结果的相关性
+6. 基于工具返回的结果回答用户问题，在回答中标注信息来源
+7. 如果工具返回的结果与用户问题无关，请说明并基于自身知识回答
+
+搜索引擎选择规则（仅在使用 search_web 时）：
+- 默认使用 search_std（速度快、成本低），除非用户明确要求深度搜索
+- 需要深度全面的结果：使用 search_pro
+- 中文内容优先：使用 search_pro_sogou
+- 国内内容覆盖：使用 search_pro_quark
+
+时间过滤规则（仅在使用 search_web 时）：
+- 用户问"今天"的新闻/信息：设置 recency_filter 为 oneDay
+- 用户问"最近"的新闻/信息：设置 recency_filter 为 oneWeek
+- 用户问"本月"的新闻/信息：设置 recency_filter 为 oneMonth
+- 其他无时效性要求的搜索：不设置 recency_filter（默认 noLimit）`;
 /**
  * 从 URL 下载图片并转换为 base64 格式
  * @param imageUrl 图片的 URL 地址
@@ -196,6 +224,292 @@ async function createUserMessage(promptText: string): Promise<HumanMessage> {
   });
 }
 
+async function promptWithFunctionCalling(
+  promptText?: string,
+  images?: string[],
+  history?: Array<{ role: string; content: string; images?: string[] }>,
+  res?: Response,
+  sessionSummary?: string,
+  userMemories?: string[],
+  isCancelled?: () => boolean,
+  abortController?: AbortController,
+) {
+  const modelInfo = getModelInfo();
+  const supportsVision = modelInfo.supportsVision;
+
+  let fcSystemPrompt = FC_SYSTEM_PROMPT;
+
+  const currentDate = new Date();
+  const dateStr = `${currentDate.getFullYear()}年${currentDate.getMonth() + 1}月${currentDate.getDate()}日`;
+  const weekDay = ['日', '一', '二', '三', '四', '五', '六'][currentDate.getDay()];
+  fcSystemPrompt += `\n\n当前日期：${dateStr} 星期${weekDay}`;
+
+  if (sessionSummary && sessionSummary.trim()) {
+    fcSystemPrompt += `\n\n=== 之前对话的摘要 ===\n${sessionSummary}\n=== 摘要结束 ===\n\n请注意：以上摘要是之前对话的压缩版本，请结合摘要和最近的对话来理解用户的意图。`;
+    logger.info('FC模式：已注入对话摘要', { module: 'PromptService', summaryLength: sessionSummary.length });
+  }
+
+  if (userMemories && userMemories.length > 0) {
+    const memoryText = userMemories.map((m, i) => `${i + 1}. ${m}`).join('\n');
+    fcSystemPrompt += `\n\n=== 关于用户的记忆 ===\n以下是从历史对话中了解到的关于用户的信息，请在回答时参考：\n${memoryText}\n=== 用户记忆结束 ===`;
+    logger.info('FC模式：已注入用户记忆', { module: 'PromptService', memoryCount: userMemories.length });
+  }
+
+  const messages: Array<SystemMessage | HumanMessage | AIMessage | ToolMessage> = [
+    new SystemMessage(fcSystemPrompt),
+  ];
+
+  let effectiveImages = images;
+  if (effectiveImages && effectiveImages.length > 0 && !supportsVision) {
+    logger.warn('当前模型不支持图片输入，已忽略图片', { module: 'PromptService', modelId: getCurrentModelId(), imageCount: effectiveImages.length });
+    effectiveImages = undefined;
+  }
+
+  const MAX_HISTORY = (effectiveImages && effectiveImages.length > 0) ? 0 : 10;
+  const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
+
+  if (recentHistory.length > 0) {
+    logger.info('FC模式：添加历史消息', { module: 'PromptService', historyCount: recentHistory.length });
+    for (const msg of recentHistory) {
+      if (msg.role === 'user') {
+        let content: any;
+        if (msg.images && msg.images.length > 0 && supportsVision) {
+          content = [];
+          for (const imgUrl of msg.images) {
+            const processedUrl = await processImageUrl(imgUrl);
+            content.push({ type: 'image_url', image_url: { url: processedUrl } });
+          }
+          if (msg.content) {
+            content.unshift({ type: 'text', text: msg.content });
+          }
+        } else {
+          content = await convertToMultimodalContent(msg.content);
+        }
+        messages.push(new HumanMessage({ content }));
+      } else if (msg.role === 'assistant') {
+        messages.push(new AIMessage(msg.content));
+      }
+    }
+  }
+
+  let userContent: any;
+  if (effectiveImages && effectiveImages.length > 0) {
+    userContent = [];
+    if (promptText) {
+      userContent.push({ type: 'text', text: promptText });
+    }
+    for (const imgUrl of effectiveImages) {
+      const processedUrl = await processImageUrl(imgUrl);
+      userContent.push({ type: 'image_url', image_url: { url: processedUrl } });
+    }
+  } else {
+    userContent = await convertToMultimodalContent(promptText || '');
+  }
+  messages.push(new HumanMessage({ content: userContent }));
+
+  const llm = createLLM();
+  const toolSchemas = getAllToolSchemas();
+  if (!llm.bindTools) {
+    throw new Error('当前模型不支持 bindTools');
+  }
+  const llmWithTools = llm.bindTools(toolSchemas);
+
+  const MAX_TOOL_ITERATIONS = 5;
+  let toolCallsMade: Array<{ name: string; args: any }> = [];
+  let usedKnowledgeBase = false;
+  let usedWebSearch = false;
+
+  logger.info('FC模式：开始工具调用循环', { module: 'PromptService', modelId: getCurrentModelId() });
+
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    if (isCancelled && isCancelled()) {
+      logger.info('FC模式：检测到取消信号', { module: 'PromptService' });
+      if (res && !res.writableEnded) res.end();
+      return;
+    }
+
+    logger.info('FC模式：调用模型', { module: 'PromptService', iteration: iteration + 1, messageCount: messages.length });
+
+    let response: any;
+    try {
+      response = await llmWithTools.invoke(messages, {
+        signal: abortController?.signal,
+      });
+    } catch (invokeError: any) {
+      if (invokeError.name === 'AbortError' || invokeError.code === 'ABORT_ERR') {
+        logger.info('FC模式：LLM调用被中断', { module: 'PromptService' });
+        if (res && !res.writableEnded) res.end();
+        return;
+      }
+      logger.error('FC模式：LLM调用失败，降级到RAG注入模式', { module: 'PromptService', error: invokeError.message });
+      throw invokeError;
+    }
+
+    const aiMessage = response as AIMessage;
+    const hasToolCalls = aiMessage.tool_calls && aiMessage.tool_calls.length > 0;
+
+    logger.info('FC模式：模型响应分析', {
+      module: 'PromptService',
+      iteration: iteration + 1,
+      hasToolCalls,
+      toolCallCount: aiMessage.tool_calls?.length || 0,
+      contentType: typeof aiMessage.content,
+      contentLength: typeof aiMessage.content === 'string' ? aiMessage.content.length : -1,
+      responseKeys: Object.keys(response || {}),
+    });
+
+    if (hasToolCalls) {
+      messages.push(aiMessage);
+
+      for (const toolCall of aiMessage.tool_calls!) {
+        const toolCallId = toolCall.id || `tc_${Date.now()}_${iteration}`;
+        logger.info('FC模式：执行工具调用', {
+          module: 'PromptService',
+          iteration: iteration + 1,
+          toolName: toolCall.name,
+          toolCallId,
+          args: JSON.stringify(toolCall.args).substring(0, 500),
+        });
+
+        if (!hasTool(toolCall.name)) {
+          const availableTools = getAvailableToolNames().join(', ');
+          logger.warn('FC模式：LLM调用了不存在的工具，返回引导信息', {
+            module: 'PromptService',
+            requestedTool: toolCall.name,
+            availableTools,
+          });
+          messages.push(new ToolMessage({
+            content: JSON.stringify({
+              error: true,
+              message: `工具 "${toolCall.name}" 不存在。可用工具: ${availableTools}。请仅使用上述可用工具。`,
+            }),
+            tool_call_id: toolCallId,
+            name: toolCall.name,
+          }));
+          toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
+          continue;
+        }
+
+        if (toolCall.name === 'search_knowledge_base') {
+          usedKnowledgeBase = true;
+        }
+        if (toolCall.name === 'search_web') {
+          usedWebSearch = true;
+        }
+        toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
+
+        try {
+          const result = await executeTool(toolCall.name, toolCall.args);
+          const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+          logger.info('FC模式：工具执行成功，构造 ToolMessage', {
+            module: 'PromptService',
+            toolName: toolCall.name,
+            toolCallId,
+            resultLength: resultStr.length,
+            resultPreview: resultStr.substring(0, 300),
+          });
+          messages.push(new ToolMessage({
+            content: resultStr,
+            tool_call_id: toolCallId,
+            name: toolCall.name,
+          }));
+        } catch (toolError: any) {
+          logger.error('FC模式：工具执行失败，构造错误 ToolMessage', {
+            module: 'PromptService',
+            toolName: toolCall.name,
+            toolCallId,
+            error: toolError.message,
+          });
+          messages.push(new ToolMessage({
+            content: JSON.stringify({ error: true, message: `工具执行失败: ${toolError.message}` }),
+            tool_call_id: toolCallId,
+            name: toolCall.name,
+          }));
+        }
+      }
+
+      logger.info('FC模式：本轮工具调用完成，继续下一轮模型调用', {
+        module: 'PromptService',
+        iteration: iteration + 1,
+        totalToolCallsSoFar: toolCallsMade.length,
+        messagesLength: messages.length,
+      });
+    } else {
+      logger.info('FC模式：获得最终回答，切换流式输出', { module: 'PromptService', toolCallCount: toolCallsMade.length });
+
+      if (res) {
+        const ragMetadata = {
+          usedKnowledgeBase,
+          usedWebSearch,
+          contextCount: toolCallsMade.filter(tc => tc.name === 'search_knowledge_base').length,
+          webSearchCount: toolCallsMade.filter(tc => tc.name === 'search_web').length,
+          toolCalls: toolCallsMade.map(tc => tc.name),
+        };
+        const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]`;
+
+        try {
+          const stream = await llmWithTools.stream(messages, {
+            signal: abortController?.signal,
+          });
+          let isFirstChunk = true;
+          let chunkCount = 0;
+          for await (const chunk of stream) {
+            if (isCancelled && isCancelled()) {
+              logger.info('FC模式流式：检测到取消信号，停止生成', { module: 'PromptService' });
+              break;
+            }
+            chunkCount++;
+            const content = chunk.content?.toString() || '';
+            const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
+            if (cleanContent) {
+              if (isFirstChunk) {
+                res.write(metadataPrefix + cleanContent);
+                isFirstChunk = false;
+              } else {
+                res.write(cleanContent);
+              }
+              process.stdout.write(cleanContent);
+            }
+          }
+          logger.info('FC模式流式响应完成', { module: 'PromptService', chunkCount });
+          res.end();
+        } catch (streamError: any) {
+          if (streamError.name === 'AbortError' || streamError.code === 'ABORT_ERR') {
+            logger.info('FC模式流式：LLM推理已被中断', { module: 'PromptService' });
+            if (!res.writableEnded) res.end();
+          } else {
+            logger.error('FC模式流式输出失败，回退一次性输出', { module: 'PromptService', error: streamError.message });
+            let fallbackContent = typeof aiMessage.content === 'string'
+              ? aiMessage.content
+              : JSON.stringify(aiMessage.content);
+            fallbackContent = fallbackContent.replace(/<think>[\s\S]*?<\/think>/gs, "");
+            if (!res.writableEnded) {
+              res.write(metadataPrefix + fallbackContent);
+              process.stdout.write(fallbackContent);
+              res.end();
+            }
+          }
+        }
+      } else {
+        if (typeof aiMessage.content === 'string') {
+          aiMessage.content = aiMessage.content.replace(/<think>[\s\S]*?<\/think>/gs, "");
+        }
+        return aiMessage;
+      }
+      return;
+    }
+  }
+
+  logger.warn('FC模式：达到最大工具调用次数', { module: 'PromptService', maxIterations: MAX_TOOL_ITERATIONS });
+  if (res && !res.writableEnded) {
+    res.write('[RAG_METADATA:{"usedKnowledgeBase":false,"usedWebSearch":false,"contextCount":0,"webSearchCount":0,"toolCalls":[]}]');
+    res.write('抱歉，工具调用次数已达上限，请简化您的问题后重试。');
+    res.end();
+  } else if (!res) {
+    return new AIMessage('抱歉，工具调用次数已达上限，请简化您的问题后重试。');
+  }
+}
+
 export const promptTemplate = async (
   promptText?: string,
   images?: string[],
@@ -204,8 +518,23 @@ export const promptTemplate = async (
   sessionSummary?: string,
   userMemories?: string[],
   isCancelled?: () => boolean,
-  abortController?: AbortController, // 用于中断 LLM 底层 HTTP 连接的 AbortController
+  abortController?: AbortController,
 ) => {
+  const modelInfo = getModelInfo();
+
+  if (modelInfo.supportsFunctionCalling) {
+    logger.info('当前模型支持Function Calling，使用FC模式', { module: 'PromptService', modelId: getCurrentModelId() });
+    try {
+      return await promptWithFunctionCalling(
+        promptText, images, history, res, sessionSummary, userMemories, isCancelled, abortController,
+      );
+    } catch (fcError: any) {
+      logger.warn('FC模式失败，降级到RAG注入模式', { module: 'PromptService', error: fcError.message });
+    }
+  } else {
+    logger.info('当前模型不支持Function Calling，使用RAG注入模式', { module: 'PromptService', modelId: getCurrentModelId() });
+  }
+
   const conversions: Array<SystemMessage | HumanMessage | AIMessage> = [];
 
   // ==================== 步骤1: 从知识库检索相关文档 ====================
@@ -293,9 +622,6 @@ ${docList}
 
   conversions.push(new SystemMessage(systemPrompt));
 
-  // 有知识库检索结果时不用 history，避免历史 hallucinated 内容干扰
-  // 无检索结果时最多用 1 条 history
-  const modelInfo = getModelInfo();
   const supportsVision = modelInfo.supportsVision;
 
   if (images && images.length > 0 && !supportsVision) {

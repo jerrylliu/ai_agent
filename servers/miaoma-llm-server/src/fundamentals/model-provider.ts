@@ -21,6 +21,7 @@ export interface AvailableModel {
   description: string;
   requiresApiKey: boolean;
   supportsVision: boolean;
+  supportsFunctionCalling: boolean;
 }
 
 export const AVAILABLE_MODELS: AvailableModel[] = [
@@ -31,6 +32,7 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
     description: '本地小型模型，适合简单对话',
     requiresApiKey: false,
     supportsVision: true,
+    supportsFunctionCalling: false,
   },
   {
     id: 'ollama:qwen3.5-new',
@@ -39,6 +41,7 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
     description: '本地超轻量模型，资源占用极低',
     requiresApiKey: false,
     supportsVision: false,
+    supportsFunctionCalling: true,
   },
   {
     id: 'ollama:qwen3.5-2b',
@@ -47,6 +50,7 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
     description: '本地中等模型，平衡效果与速度',
     requiresApiKey: false,
     supportsVision: false,
+    supportsFunctionCalling: true,
   },
   {
     id: 'deepseek:deepseek-v4-flash',
@@ -55,6 +59,7 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
     description: 'DeepSeek 线上模型，效果优秀',
     requiresApiKey: true,
     supportsVision: false,
+    supportsFunctionCalling: true,
   },
   {
     id: 'deepseek:deepseek-v4-pro',
@@ -63,6 +68,7 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
     description: 'DeepSeek 推理模型，深度思考',
     requiresApiKey: true,
     supportsVision: false,
+    supportsFunctionCalling: true,
   },
 ];
 
@@ -165,6 +171,7 @@ export function getModelInfo(): {
   availableModels: AvailableModel[];
   hasDeepseekApiKey: boolean;
   supportsVision: boolean;
+  supportsFunctionCalling: boolean;
 } {
   const current = AVAILABLE_MODELS.find(m => m.id === currentModelId);
   return {
@@ -172,5 +179,6 @@ export function getModelInfo(): {
     availableModels: AVAILABLE_MODELS,
     hasDeepseekApiKey: !!deepseekApiKey,
     supportsVision: current?.supportsVision ?? false,
+    supportsFunctionCalling: current?.supportsFunctionCalling ?? false,
   };
 }

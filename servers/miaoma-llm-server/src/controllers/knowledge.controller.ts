@@ -7,6 +7,7 @@
 import { Controller, Get, Post, Delete, Body, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from '../services/document.service';
+import { KnowledgeSourceService } from '../services/knowledge-source.service.js';
 import { logger } from '../fundamentals/logger';
 
 @Controller('knowledge')
@@ -14,6 +15,7 @@ export class KnowledgeController {
 
   constructor(
     private readonly documentService: DocumentService,
+    private readonly knowledgeSourceService: KnowledgeSourceService,
   ) {}
 
   /**
@@ -55,21 +57,28 @@ export class KnowledgeController {
   @Get('status')
   async getKnowledgeBaseStatus() {
     try {
-      // 从文档版本管理数据库获取统计信息
       const stats = await this.documentService.getKnowledgeStats();
 
-      // 同时获取向量库底层状态
+      const knowledgeSourcePageCount = await this.knowledgeSourceService.getTotalPageCount();
+
+      const knowledgeSources = await this.knowledgeSourceService.findAll();
+      const hasContentUpdate = knowledgeSources.some(s => s.hasContentUpdate);
+
       let vectorStoreInfo: any = {};
       try {
         const { getKnowledgeBaseStatus } = await import('../fundamentals/rag-service.js');
         vectorStoreInfo = await getKnowledgeBaseStatus();
       } catch {
-        // 向量库状态获取失败不影响整体
       }
+
+      const totalDocumentCount = stats.documentCount + knowledgeSourcePageCount;
 
       return {
         status: 'ready',
-        documentCount: stats.documentCount,
+        documentCount: totalDocumentCount,
+        uploadedDocumentCount: stats.documentCount,
+        knowledgeSourcePageCount,
+        hasContentUpdate,
         activeVersionCount: stats.activeVersionCount,
         totalVersionCount: stats.totalVersionCount,
         totalChunkCount: stats.totalChunkCount,

@@ -1,7 +1,7 @@
 import React from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Button } from "../ui/button";
-import { MoreHorizontal, Database, Trash2, Brain, FileText } from "lucide-react";
+import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell } from "lucide-react";
 interface KbFeedback {
     show: boolean;
     success: boolean;
@@ -11,7 +11,8 @@ interface KbFeedback {
 interface HeaderContentProps {
     knowledgeBaseStatus: {
         status: string;
-        stats?: { documentCount: number };
+        stats?: { documentCount: number; uploadedDocumentCount: number; knowledgeSourcePageCount: number };
+        hasContentUpdate?: boolean;
     };
     showMoreMenu: boolean;
     onToggleMoreMenu: () => void;
@@ -20,9 +21,11 @@ interface HeaderContentProps {
     onKbFeedback: (feedback: KbFeedback) => void;
     onOpenMemorySummary?: () => void;
     onOpenDocumentManager?: () => void;
+    onOpenKnowledgeSourceManager?: () => void;
 }
+
 const HeaderContent: React.FC<HeaderContentProps> = (props) => {
-    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager } = props;
+    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager } = props;
     const handleClearKnowledgeBase = async () => {
         onToggleMoreMenu();
         if (confirm('确定要清空整个知识库吗？此操作不可恢复。')) {
@@ -76,6 +79,11 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                         {knowledgeBaseStatus.status === 'ready' && knowledgeBaseStatus.stats && (
                             <span className="text-xs font-medium text-green-600 dark:text-green-400 cyberpunk-header-kb-count">
                                 {knowledgeBaseStatus.stats.documentCount} 个文档
+                                {knowledgeBaseStatus.stats.knowledgeSourcePageCount > 0 && (
+                                    <span className="text-gray-400 dark:text-gray-500 font-normal">
+                                        {' '}(含{knowledgeBaseStatus.stats.knowledgeSourcePageCount}页知识源)
+                                    </span>
+                                )}
                             </span>
                         )}
                         {knowledgeBaseStatus.status === 'empty' && (
@@ -87,16 +95,16 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                         {knowledgeBaseStatus.status === 'unknown' && (
                             <span className="text-xs text-gray-500 dark:text-gray-300">检查中...</span>
                         )}
+                        {knowledgeBaseStatus.hasContentUpdate && (
+                            <button
+                                className="ml-1 flex items-center justify-center w-5 h-5 rounded-full bg-orange-100 dark:bg-orange-900/40 hover:bg-orange-200 dark:hover:bg-orange-800/50 transition-colors cyberpunk-update-badge"
+                                title="知识源内容有更新，点击查看"
+                                onClick={() => onOpenKnowledgeSourceManager?.()}
+                            >
+                                <Bell className="h-3 w-3 text-orange-600 dark:text-orange-400 animate-pulse cyberpunk-update-icon" />
+                            </button>
+                        )}
                     </div>
-                    <Button
-                        variant="ghost"
-                        size="sm"
-                        className="rounded-full"
-                        onClick={() => onOpenDocumentManager?.()}
-                    >
-                        <FileText className="h-4 w-4 mr-1" />
-                        文档管理
-                    </Button>
                     <div className="relative more-menu">
                         <Button
                             variant="ghost"
@@ -109,7 +117,7 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                         {showMoreMenu && (
                             <div className="absolute right-0 mt-2 w-48 bg-card border border-gray-200 dark:border-slate-600 rounded-lg shadow-lg z-50">
                                 <button
-                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center"
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center cyberpunk-menu-item"
                                     onClick={() => {
                                         onToggleMoreMenu();
                                         onOpenDocumentManager?.();
@@ -119,7 +127,17 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                                     文档管理
                                 </button>
                                 <button
-                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center"
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center cyberpunk-menu-item"
+                                    onClick={() => {
+                                        onToggleMoreMenu();
+                                        onOpenKnowledgeSourceManager?.();
+                                    }}
+                                >
+                                    <Layers className="h-4 w-4 mr-2" />
+                                    知识源管理
+                                </button>
+                                <button
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center cyberpunk-menu-item"
                                     onClick={() => {
                                         onToggleMoreMenu();
                                         onOpenMemorySummary?.();

@@ -34,7 +34,8 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
   const [knowledgeBaseStatus, setKnowledgeBaseStatus] = useState<{
     status: 'ready' | 'empty' | 'error' | 'unknown';
     message: string;
-    stats?: { documentCount: number; collectionName: string };
+    stats?: { documentCount: number; uploadedDocumentCount: number; knowledgeSourcePageCount: number; collectionName: string };
+    hasContentUpdate?: boolean;
   }>({ status: 'unknown', message: '未检查知识库状态' });
   const [currentModelId, setCurrentModelId] = useState<string>('ollama:minicpm');
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
@@ -437,8 +438,20 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
   const deleteMessage = async (messageId: string) => {
     try {
       await deleteMessageApi(messageId);
-      // 从本地消息列表中移除
-      setMessages(prev => prev.filter(msg => msg.id !== messageId));
+
+      setMessages(prev => {
+        const index = prev.findIndex(msg => msg.id === messageId);
+        const idsToRemove = [messageId];
+
+        if (index !== -1 && index + 1 < prev.length && prev[index + 1].role === 'assistant') {
+          idsToRemove.push(prev[index + 1].id);
+          deleteMessageApi(prev[index + 1].id).catch(err =>
+            console.error('删除关联AI回复失败:', err)
+          );
+        }
+
+        return prev.filter(msg => !idsToRemove.includes(msg.id));
+      });
     } catch (error) {
       console.error('删除消息失败:', error);
       throw error;

@@ -600,6 +600,7 @@ export async function searchKnowledgeBase(
   try {
     // 向量检索：不在 where 中过滤 versionStatus，改为结果后过滤（兼容旧数据无 versionStatus 字段）
     const searchFilter = { ...filter };
+    delete searchFilter.versionStatus;
     const results = await store.similaritySearchWithScore(query, topK * 3, Object.keys(searchFilter).length > 0 ? searchFilter : undefined);
 
     logger.info('检索到结果', { module: 'VectorStore', resultCount: results.length });
@@ -664,6 +665,7 @@ export async function hybridSearchKnowledgeBase(
   try {
     // 向量检索：不在 where 中过滤 versionStatus，改为结果后过滤（兼容旧数据无 versionStatus 字段）
     const searchFilter = { ...filter };
+    delete searchFilter.versionStatus;
     const rawVectorResults = await store.similaritySearchWithScore(query, topK * 4, Object.keys(searchFilter).length > 0 ? searchFilter : undefined);
     vectorResults = rawVectorResults
       .filter(([doc, score]) => {
@@ -707,6 +709,7 @@ export async function hybridSearchKnowledgeBase(
 
     // 应用元数据过滤到 BM25 结果（版本状态过滤：无 versionStatus 或 active 视为有效）
     const bm25Filter = { ...filter };
+    delete bm25Filter.versionStatus;
     const beforeFilter = bm25Results.length;
     bm25Results = bm25Results.filter((result) => {
       // 版本状态过滤：无 versionStatus 或 versionStatus=active

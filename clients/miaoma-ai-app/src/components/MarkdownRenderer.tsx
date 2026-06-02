@@ -12,7 +12,7 @@ interface MarkdownRendererProps {
 const CodeBlock: React.FC<any> = ({ inline, className, children }) => {
   const match = /language-(\w+)/.exec(className || '');
   return !inline && match ? (
-    <div className="mt-2 mb-4 rounded-lg overflow-hidden overflow-x-auto max-w-full break-all">
+    <div className="mt-2 mb-4 rounded-lg overflow-x-auto max-w-full">
       <SyntaxHighlighter
         style={vscDarkPlus}
         language={match[1]}
@@ -23,29 +23,26 @@ const CodeBlock: React.FC<any> = ({ inline, className, children }) => {
           style: {
             fontSize: '14px',
             lineHeight: '1.5',
-            wordBreak: 'break-all',
-            whiteSpace: 'pre-wrap',
-            wordWrap: 'break-word',
+            whiteSpace: 'pre',
           },
         }}
         customStyle={{
           margin: 0,
           padding: '12px',
           borderRadius: '6px',
-          maxWidth: '100%',
         }}
       >
         {String(children).replace(/\n$/, '')}
       </SyntaxHighlighter>
     </div>
   ) : (
-    <code className={`${className} break-all`}>{children}</code>
+    <code className={`${className} break-all bg-gray-100 dark:bg-slate-700 px-1.5 py-0.5 rounded text-sm`}>{children}</code>
   );
 };
 
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className }) => {
   return (
-    <div className={className} style={{ maxWidth: '100%', wordBreak: 'break-word', whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>
+    <div className={`min-w-0 ${className || ''}`} style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -96,19 +93,19 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className
             <p className="my-2">{children}</p>
           ),
           table: ({ children }) => (
-            <div className="overflow-x-auto my-4">
-              <table className="min-w-full border-collapse">
+            <div className="overflow-x-auto my-4 max-w-full">
+              <table className="border-collapse w-full">
                 {children}
               </table>
             </div>
           ),
           th: ({ children }) => (
-            <th className="border border-gray-300 dark:border-slate-500 px-4 py-2 bg-gray-100 dark:bg-slate-700 font-bold text-left">
+            <th className="border border-gray-300 dark:border-slate-500 px-4 py-2 bg-gray-100 dark:bg-slate-700 font-bold text-left whitespace-nowrap">
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="border border-gray-300 dark:border-slate-500 px-4 py-2">
+            <td className="border border-gray-300 dark:border-slate-500 px-4 py-2 whitespace-nowrap">
               {children}
             </td>
           ),

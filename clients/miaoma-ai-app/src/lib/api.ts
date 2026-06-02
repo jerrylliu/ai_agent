@@ -537,8 +537,11 @@ export async function uploadAvatar(
 export async function getKnowledgeBaseStatus(): Promise<{
   status: 'ready' | 'empty' | 'error';
   message: string;
+  hasContentUpdate?: boolean;
   stats?: {
     documentCount: number;
+    uploadedDocumentCount: number;
+    knowledgeSourcePageCount: number;
     collectionName: string;
     activeVersionCount?: number;
     totalVersionCount?: number;
@@ -552,15 +555,19 @@ export async function getKnowledgeBaseStatus(): Promise<{
 
   const data = await handleResponse<any>(response);
 
-  // 兼容新旧两种返回格式
   const documentCount = data.documentCount ?? data.stats?.documentCount ?? 0;
+  const uploadedDocumentCount = data.uploadedDocumentCount ?? 0;
+  const knowledgeSourcePageCount = data.knowledgeSourcePageCount ?? 0;
   const isEmpty = documentCount === 0;
 
   return {
     status: isEmpty ? 'empty' : (data.status || 'ready'),
     message: data.message || '',
+    hasContentUpdate: data.hasContentUpdate || false,
     stats: {
       documentCount,
+      uploadedDocumentCount,
+      knowledgeSourcePageCount,
       collectionName: data.collectionName || data.stats?.collectionName || '',
       activeVersionCount: data.activeVersionCount,
       totalVersionCount: data.totalVersionCount,
@@ -982,4 +989,144 @@ export async function retryAllFailedOps(): Promise<{ success: boolean; retried: 
     headers: getAuthHeaders(),
   });
   return handleResponse<{ success: boolean; retried: number; total: number }>(response);
+}
+
+// ============================================
+// 知识源管理 API
+// ============================================
+
+export interface KnowledgeSourceItem {
+  id: number;
+  name: string;
+  type: 'web' | 'feishu';
+  config: Record<string, any>;
+  syncInterval: number;
+  lastSyncStatus: 'idle' | 'syncing' | 'success' | 'failed';
+  lastSyncAt: string | null;
+  lastSyncError: string | null;
+  enabled: boolean;
+  hasContentUpdate: boolean;
+  maxDepth: number;
+  maxPages: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeSourceStats {
+  total: number;
+  enabled: number;
+  syncing: number;
+  failed: number;
+  success: number;
+}
+
+export interface KnowledgeSourceSyncLog {
+  id: number;
+  sourceId: number;
+  status: 'running' | 'success' | 'failed';
+  pagesFetched: number;
+  chunksAdded: number;
+  chunksUpdated: number;
+  pagesNew: number;
+  pagesUpdated: number;
+  pagesDeleted: number;
+  updatedPageDetails: Array<{ title: string; url: string }> | null;
+  errorMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  createdAt: string;
+}
+
+export async function getKnowledgeSources(): Promise<KnowledgeSourceItem[]> {
+  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SOURCES, { headers: getAuthHeaders() });
+  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceItem[] }>(response);
+  return data.data;
+}
+
+export async function getKnowledgeSource(id: number): Promise<KnowledgeSourceItem> {
+  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}`, { headers: getAuthHeaders() });
+  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceItem }>(response);
+  return data.data;
+}
+
+export async function createKnowledgeSource(body: {
+  name: string;
+  type: string;
+  config: Record<string, any>;
+  syncInterval?: number;
+  maxDepth?: number;
+  maxPages?: number;
+}): Promise<KnowledgeSourceItem> {
+  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SOURCES, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  });
+  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceItem }>(response);
+  return data.data;
+}
+
+export async function updateKnowledgeSource(
+  id: number,
+  body: Partial<{ name: string; config: Record<string, any>; syncInterval: number; maxDepth: number; maxPages: number; enabled: boolean }>,
+): Promise<KnowledgeSourceItem> {
+  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}`, {
+    method: 'PUT',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  });
+  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceItem }>(response);
+  return data.data;
+}
+
+export async function deleteKnowledgeSource(id: number): Promise<void> {
+  await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+}
+
+export async function syncKnowledgeSource(id: number): Promise<KnowledgeSourceSyncLog> {
+  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/sync`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceSyncLog }>(response);
+  return data.data;
+}
+
+export async function resetKnowledgeSourceStatus(id: number): Promise<void> {
+  await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/reset-status`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+}
+
+export async function acknowledgeKnowledgeSourceUpdate(id: number): Promise<void> {
+  await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/acknowledge-update`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+}
+
+export async function getKnowledgeSourceStats(): Promise<KnowledgeSourceStats> {
+  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/stats`, { headers: getAuthHeaders() });
+  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceStats }>(response);
+  return data.data;
+}
+
+export async function getKnowledgeSourceSyncLogs(id: number, limit: number = 20): Promise<KnowledgeSourceSyncLog[]> {
+  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/logs?limit=${limit}`, { headers: getAuthHeaders() });
+  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceSyncLog[] }>(response);
+  return data.data;
+}
+
+export async function batchSyncKnowledgeSources(sourceIds: number[]): Promise<Array<{ sourceId: number; success: boolean; message: string }>> {
+  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/batch/sync`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ sourceIds }),
+  });
+  const data = await handleResponse<{ success: boolean; data: Array<{ sourceId: number; success: boolean; message: string }> }>(response);
+  return data.data;
 }
