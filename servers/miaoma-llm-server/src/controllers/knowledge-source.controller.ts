@@ -10,7 +10,7 @@ export class KnowledgeSourceController {
 
   @Post()
   async create(
-    @Body() body: { name: string; type: SourceType; config: Record<string, any>; syncInterval?: number; maxDepth?: number; maxPages?: number },
+    @Body() body: { name: string; type: SourceType; config: Record<string, any>; syncInterval?: number; maxDepth?: number; maxPages?: number; preferMarkdown?: boolean; enableJsRendering?: boolean },
   ) {
     try {
       const validated = CreateKnowledgeSourceSchema.parse(body) as CreateKnowledgeSourceInput & { type: SourceType };
@@ -84,7 +84,7 @@ export class KnowledgeSourceController {
   @Put(':id')
   async update(
     @Param('id') id: string,
-    @Body() body: Partial<{ name: string; config: Record<string, any>; syncInterval: number; maxDepth: number; maxPages: number; enabled: boolean }>,
+    @Body() body: Partial<{ name: string; config: Record<string, any>; syncInterval: number; maxDepth: number; maxPages: number; preferMarkdown: boolean; enableJsRendering: boolean; enabled: boolean }>,
   ) {
     try {
       const validated = UpdateKnowledgeSourceSchema.parse(body) as UpdateKnowledgeSourceInput;

@@ -59,7 +59,7 @@ function getAuthHeaders(): Record<string, string> {
  * @param data 聊天历史项数据
  * @throws 保存失败时抛出错误
  */
-export async function saveChatHistory(data: ChatHistoryItem): Promise<void> {
+export async function saveChatHistory(data: ChatHistoryItem): Promise<{ id: number }> {
   const response = await fetch(API_ENDPOINTS.CHAT_HISTORY, {
     method: 'POST',
     headers: getAuthHeaders(),
@@ -68,12 +68,28 @@ export async function saveChatHistory(data: ChatHistoryItem): Promise<void> {
   if (!response.ok) {
     throw new Error('保存聊天记录失败');
   }
+  return response.json();
+}
+
+export interface ToolStatusEvent {
+  toolName: string;
+  label: string;
+  status: 'calling' | 'executing' | 'done';
+  iteration?: number;
+  error?: boolean;
+}
+
+export interface SessionAction {
+  type: 'switch_session' | 'create_session' | 'delete_session' | 'refresh_sessions';
+  payload: any;
 }
 
 export interface AIStreamResponse {
   stream: ReadableStream<string>;
   usedKnowledgeBase: boolean;
   contextCount: number;
+  sessionAction: SessionAction | null;
+  onToolStatus: ((event: ToolStatusEvent) => void) | null;
 }
 
 /**
@@ -90,7 +106,7 @@ export async function getAIResponse(
   history: Message[] = [],
   sessionId?: string,
   signal?: AbortSignal,
-  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean }
+  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean; onToolStatus?: ((event: ToolStatusEvent) => void) | null }
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
     method: 'POST',
@@ -105,6 +121,8 @@ export async function getAIResponse(
   const stream = response.body!.pipeThrough(new TextDecoderStream());
   let usedKnowledgeBase = false;
   let contextCount = 0;
+  let sessionAction: SessionAction | null = null;
+  const toolStatusCallback = options?.onToolStatus ?? null;
 
   const modifiedStream = new ReadableStream<string>({
     async start(controller) {
@@ -119,6 +137,9 @@ export async function getAIResponse(
 
           buffer += value;
 
+          // 过滤心跳标记
+          buffer = buffer.replace(/\[HEARTBEAT\]/g, '');
+
           if (!metadataExtracted) {
             const metadataMatch = buffer.match(/^\[RAG_METADATA:(\{[^}]*\})\]/);
             if (metadataMatch) {
@@ -131,12 +152,57 @@ export async function getAIResponse(
                 console.warn('解析RAG元数据失败:', e);
               }
               buffer = buffer.substring(metadataMatch[0].length);
+
+              // 提取 SESSION_ACTION 标记（payload 含嵌套对象，用 .+ 匹配）
+              const actionMatch = buffer.match(/^\[SESSION_ACTION:(\{.+\})\]/);
+              if (actionMatch) {
+                try {
+                  sessionAction = JSON.parse(actionMatch[1]);
+                } catch (e) {
+                  console.warn('解析SESSION_ACTION失败:', e);
+                }
+                buffer = buffer.substring(actionMatch[0].length);
+              }
             }
           }
 
-          if (buffer) {
-            controller.enqueue(buffer);
+          // 提取 TOOL_STATUS 事件（可能出现在流中的任何位置）
+          let toolStatusMatch;
+          while ((toolStatusMatch = buffer.match(/\[TOOL_STATUS:(\{[^}]*\})\]/))) {
+            try {
+              const event: ToolStatusEvent = JSON.parse(toolStatusMatch[1]);
+              if (toolStatusCallback) {
+                toolStatusCallback(event);
+              }
+            } catch (e) {
+              console.warn('解析TOOL_STATUS失败:', e);
+            }
+            buffer = buffer.substring(0, toolStatusMatch.index!) + buffer.substring(toolStatusMatch.index! + toolStatusMatch[0].length);
+          }
+
+          // 检查 buffer 末尾是否有未完成的控制标记
+          // 已知标记前缀：[RAG_METADATA: [SESSION_ACTION: [TOOL_STATUS: [HEARTBEAT]
+          // 只对这些已知前缀做截断保护，避免误伤 AI 回复中的正常 [ 字符
+          const MARKER_PREFIXES = ['[RAG_METADATA:', '[SESSION_ACTION:', '[TOOL_STATUS:', '[HEARTBEAT'];
+          let outputPart = buffer;
+          for (const prefix of MARKER_PREFIXES) {
+            const idx = buffer.lastIndexOf(prefix);
+            if (idx !== -1) {
+              const afterPrefix = buffer.substring(idx);
+              // 标记未闭合（没有找到对应的 ]）
+              if (!afterPrefix.includes(']')) {
+                outputPart = buffer.substring(0, idx);
+                buffer = afterPrefix;
+                break;
+              }
+            }
+          }
+          if (outputPart === buffer) {
             buffer = '';
+          }
+
+          if (outputPart) {
+            controller.enqueue(outputPart);
           }
         }
         if (buffer) {
@@ -153,6 +219,8 @@ export async function getAIResponse(
     stream: modifiedStream,
     usedKnowledgeBase,
     contextCount,
+    sessionAction,
+    onToolStatus: toolStatusCallback,
   };
 }
 
@@ -267,6 +335,48 @@ export async function toggleSessionPin(sessionId: string): Promise<void> {
 }
 
 /**
+ * 复制会话：创建一个新会话，复制原会话的所有消息
+ * @param sessionId 原会话 ID
+ * @returns 新创建的会话对象
+ */
+export async function duplicateSession(sessionId: string): Promise<Session> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/duplicate`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<Session>(response);
+}
+
+/**
+ * 导出会话：返回会话信息和所有消息
+ * @param sessionId 会话 ID
+ * @param format 导出格式 (json / markdown / text)
+ * @returns 导出内容（包含 content 和 filename）
+ */
+export async function exportSession(
+  sessionId: string,
+  format: 'json' | 'markdown' | 'text' = 'json',
+): Promise<{
+  content?: string;
+  filename: string;
+  session?: any;
+  messages?: any[];
+  exportedAt?: string;
+}> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/export?format=${format}`,
+    { headers: getAuthHeaders() },
+  );
+  return handleResponse<{
+    content?: string;
+    filename: string;
+    session?: any;
+    messages?: any[];
+    exportedAt?: string;
+  }>(response);
+}
+
+/**
  * 获取指定会话的消息列表
  * @param sessionId 会话 ID
  * @returns 消息记录列表
@@ -359,11 +469,12 @@ export async function uploadToKnowledgeBase(file: File): Promise<{
 
 export interface AvailableModel {
   id: string;
-  provider: 'ollama' | 'deepseek';
+  provider: 'ollama' | 'deepseek' | 'zhipu';
   name: string;
   description: string;
   requiresApiKey: boolean;
   supportsVision: boolean;
+  supportsFunctionCalling: boolean;
 }
 
 export interface ModelInfoResponse {
@@ -371,7 +482,9 @@ export interface ModelInfoResponse {
   currentModelId: string;
   availableModels: AvailableModel[];
   hasDeepseekApiKey: boolean;
+  hasZhipuApiKey: boolean;
   supportsVision: boolean;
+  supportsFunctionCalling: boolean;
 }
 
 export async function getModelInfo(): Promise<ModelInfoResponse> {
@@ -1008,6 +1121,8 @@ export interface KnowledgeSourceItem {
   hasContentUpdate: boolean;
   maxDepth: number;
   maxPages: number;
+  preferMarkdown: boolean;
+  enableJsRendering: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -1056,6 +1171,8 @@ export async function createKnowledgeSource(body: {
   syncInterval?: number;
   maxDepth?: number;
   maxPages?: number;
+  preferMarkdown?: boolean;
+  enableJsRendering?: boolean;
 }): Promise<KnowledgeSourceItem> {
   const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SOURCES, {
     method: 'POST',
@@ -1068,7 +1185,7 @@ export async function createKnowledgeSource(body: {
 
 export async function updateKnowledgeSource(
   id: number,
-  body: Partial<{ name: string; config: Record<string, any>; syncInterval: number; maxDepth: number; maxPages: number; enabled: boolean }>,
+  body: Partial<{ name: string; config: Record<string, any>; syncInterval: number; maxDepth: number; maxPages: number; preferMarkdown: boolean; enableJsRendering: boolean; enabled: boolean }>,
 ): Promise<KnowledgeSourceItem> {
   const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}`, {
     method: 'PUT',
@@ -1129,4 +1246,117 @@ export async function batchSyncKnowledgeSources(sourceIds: number[]): Promise<Ar
   });
   const data = await handleResponse<{ success: boolean; data: Array<{ sourceId: number; success: boolean; message: string }> }>(response);
   return data.data;
+}
+
+// ============================================
+// LLM 用量统计 API
+// ============================================
+
+export interface LlmUsageStats {
+  totalCalls: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalTokens: number;
+  avgResponseTimeMs: number;
+  knowledgeBaseHitRate: number;
+  dailyStats: Record<string, { calls: number; inputTokens: number; outputTokens: number }>;
+  recentRecords: Array<{
+    id: number;
+    userId: string;
+    sessionId: string;
+    modelId: string;
+    inputTokens: number;
+    outputTokens: number;
+    historyCount: number;
+    usedKnowledgeBase: boolean;
+    imageCount: number;
+    responseTimeMs: number;
+    userMessage: string;
+    createdAt: string;
+  }>;
+}
+
+/**
+ * 获取 LLM 用量统计
+ * @param days 统计最近多少天（默认 7 天）
+ */
+export async function getLlmUsageStats(days: number = 7): Promise<LlmUsageStats> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/llm-usage?days=${days}`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<LlmUsageStats>(response);
+}
+
+// ============================================
+// 准确率评估 API
+// ============================================
+
+/**
+ * 提交消息反馈（点赞/点踩）
+ */
+export async function submitFeedback(params: {
+  sessionId: string;
+  userMessage: string;
+  assistantMessage: string;
+  rating: 'positive' | 'negative';
+  comment?: string;
+  modelId?: string;
+  usedKnowledgeBase?: boolean;
+}): Promise<{ action: 'created' | 'removed'; rating?: string }> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/feedback`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(params),
+  });
+  return handleResponse<{ action: 'created' | 'removed'; rating?: string }>(response);
+}
+
+export interface EvaluationStats {
+  humanEvaluation: {
+    totalFeedbacks: number;
+    positiveCount: number;
+    negativeCount: number;
+    satisfactionRate: number;
+    recentFeedbacks: Array<{
+      id: number;
+      userId: string;
+      sessionId: string;
+      userMessage: string;
+      assistantMessage: string;
+      rating: 'positive' | 'negative';
+      comment: string;
+      modelId: string;
+      usedKnowledgeBase: boolean;
+      createdAt: string;
+    }>;
+  };
+  autoEvaluation: {
+    totalEvaluations: number;
+    avgScore: number;
+    recentEvaluations: Array<{
+      id: number;
+      userId: string;
+      sessionId: string;
+      userMessage: string;
+      assistantMessage: string;
+      score: number;
+      reason: string;
+      dimension: string;
+      modelId: string;
+      usedKnowledgeBase: boolean;
+      responseTimeMs: number;
+      createdAt: string;
+    }>;
+  };
+  dailyFeedback: Record<string, { positive: number; negative: number }>;
+}
+
+/**
+ * 获取准确率评估统计
+ */
+export async function getEvaluationStats(days: number = 7): Promise<EvaluationStats> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/evaluation-stats?days=${days}`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<EvaluationStats>(response);
 }

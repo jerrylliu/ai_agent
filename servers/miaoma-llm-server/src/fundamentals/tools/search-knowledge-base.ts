@@ -72,7 +72,9 @@ export async function executeSearchKnowledgeBase(
   }
 
   const topK = params.top_k || 3;
-  const filter: Record<string, string> = { versionStatus: 'active' };
+  // versionStatus 过滤在 hybridSearchKnowledgeBase 内部通过结果后过滤实现
+  // 仅 active 状态的向量可被搜索到
+  const filter: Record<string, string> = {};
 
   if (params.document_id) {
     filter.documentId = String(params.document_id);

@@ -3,7 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { logger } from './logger';
 
-export type ModelProvider = 'ollama' | 'deepseek';
+export type ModelProvider = 'ollama' | 'deepseek' | 'zhipu';
 
 export interface ModelConfig {
   provider: ModelProvider;
@@ -70,13 +70,33 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
     supportsVision: false,
     supportsFunctionCalling: true,
   },
+  {
+    id: 'zhipu:glm-4.6v',
+    provider: 'zhipu',
+    name: 'GLM-4.6V (线上)',
+    description: '智谱视觉模型，支持图片理解',
+    requiresApiKey: true,
+    supportsVision: true,
+    supportsFunctionCalling: true,
+  },
+  {
+    id: 'zhipu:glm-4.7',
+    provider: 'zhipu',
+    name: 'GLM-4.7 (线上)',
+    description: '智谱最新模型，效果优秀',
+    requiresApiKey: true,
+    supportsVision: false,
+    supportsFunctionCalling: true,
+  },
 ];
 
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+const ZHIPU_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4';
 const OLLAMA_BASE_URL = 'http://localhost:11434';
 
 let currentModelId = 'ollama:minicpm';
 let deepseekApiKey = '';
+let zhipuApiKey = '';
 
 export function getCurrentModelId(): string {
   return currentModelId;
@@ -90,14 +110,27 @@ export function getDeepseekApiKey(): string {
   return deepseekApiKey;
 }
 
+export function setZhipuApiKey(apiKey: string): void {
+  zhipuApiKey = apiKey;
+}
+
+export function getZhipuApiKey(): string {
+  return zhipuApiKey;
+}
+
 export function switchModel(modelId: string): ModelConfig {
   const available = AVAILABLE_MODELS.find(m => m.id === modelId);
   if (!available) {
     throw new Error(`未知的模型: ${modelId}`);
   }
 
-  if (available.requiresApiKey && !deepseekApiKey) {
-    throw new Error(`模型 ${available.name} 需要 API Key，请先配置`);
+  if (available.requiresApiKey) {
+    if (available.provider === 'deepseek' && !deepseekApiKey) {
+      throw new Error(`模型 ${available.name} 需要 API Key，请先配置`);
+    }
+    if (available.provider === 'zhipu' && !zhipuApiKey) {
+      throw new Error(`模型 ${available.name} 需要 API Key，请先配置`);
+    }
   }
 
   currentModelId = modelId;
@@ -126,6 +159,9 @@ export function buildModelConfig(modelId: string): ModelConfig {
   } else if (provider === 'deepseek') {
     config.apiKey = deepseekApiKey;
     config.baseUrl = DEEPSEEK_BASE_URL;
+  } else if (provider === 'zhipu') {
+    config.apiKey = zhipuApiKey;
+    config.baseUrl = ZHIPU_BASE_URL;
   }
 
   return config;
@@ -163,6 +199,21 @@ export function createLLM(config?: ModelConfig): BaseChatModel {
     }) as unknown as BaseChatModel;
   }
 
+  if (modelConfig.provider === 'zhipu') {
+    if (!modelConfig.apiKey) {
+      throw new Error('智谱模型需要 API Key');
+    }
+
+    return new ChatOpenAI({
+      model: modelConfig.model,
+      temperature: modelConfig.temperature ?? 0.7,
+      apiKey: modelConfig.apiKey,
+      configuration: {
+        baseURL: modelConfig.baseUrl || ZHIPU_BASE_URL,
+      },
+    }) as unknown as BaseChatModel;
+  }
+
   throw new Error(`不支持的模型提供者: ${modelConfig.provider}`);
 }
 
@@ -170,6 +221,7 @@ export function getModelInfo(): {
   currentModelId: string;
   availableModels: AvailableModel[];
   hasDeepseekApiKey: boolean;
+  hasZhipuApiKey: boolean;
   supportsVision: boolean;
   supportsFunctionCalling: boolean;
 } {
@@ -178,6 +230,7 @@ export function getModelInfo(): {
     currentModelId,
     availableModels: AVAILABLE_MODELS,
     hasDeepseekApiKey: !!deepseekApiKey,
+    hasZhipuApiKey: !!zhipuApiKey,
     supportsVision: current?.supportsVision ?? false,
     supportsFunctionCalling: current?.supportsFunctionCalling ?? false,
   };

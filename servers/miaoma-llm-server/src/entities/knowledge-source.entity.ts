@@ -51,6 +51,12 @@ export class KnowledgeSource {
   @Column({ default: 50 })
   maxPages: number;
 
+  @Column({ default: true })
+  preferMarkdown: boolean;
+
+  @Column({ default: false })
+  enableJsRendering: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 

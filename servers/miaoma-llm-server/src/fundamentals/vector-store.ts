@@ -284,11 +284,13 @@ async function saveBM25Index(): Promise<void> {
 
 /**
  * 添加文档到 BM25 索引
+ * @param skipSave 跳过立即保存到磁盘（批量操作时设为 true，由调用方统一保存）
  */
 async function addToBM25Index(
   id: string,
   content: string,
-  metadata: any
+  metadata: any,
+  skipSave: boolean = false,
 ): Promise<void> {
   if (!bm25Index) {
     await initializeBM25Index();
@@ -301,7 +303,9 @@ async function addToBM25Index(
   });
 
   bm25DocumentStore.set(id, { content, metadata });
-  await saveBM25Index();
+  if (!skipSave) {
+    await saveBM25Index();
+  }
 }
 
 /**
@@ -343,12 +347,21 @@ async function rebuildBM25Index(): Promise<void> {
   await clearBM25Index();
 
   const docs = await getAllDocuments();
-  for (const [i, doc] of docs.entries()) {
-    const id = `doc_${i}`;
-    await addToBM25Index(id, doc.content, doc.metadata);
-  }
 
-  logger.info('BM25 索引重建完成', { module: 'VectorStore', documentCount: docs.length });
+  // 过滤掉 archived 状态的文档，仅将 active 或无 versionStatus（兼容旧数据）的文档加入 BM25 索引
+  // archived 状态的向量属于已被新版本替代的旧版本，不应参与关键词检索
+  const activeDocs = docs.filter((doc) => {
+    const vs = doc.metadata?.versionStatus;
+    return !vs || vs === 'active';
+  });
+
+  for (const [i, doc] of activeDocs.entries()) {
+    const id = `doc_${i}`;
+    await addToBM25Index(id, doc.content, doc.metadata, true); // 批量操作，跳过单次保存
+  }
+  await saveBM25Index(); // 批量操作完成后统一保存
+
+  logger.info('BM25 索引重建完成', { module: 'VectorStore', totalCount: docs.length, activeCount: activeDocs.length });
 }
 
 /**
@@ -451,7 +464,12 @@ export async function addDocuments(
 
   // ==================== P1: 按文档类型选择切分器 ====================
   // 根据文件名或内容类型选择最合适的切分策略
-  const allChunks: Array<{ text: string; metaIndex: number; splitterType: string }> = [];
+  const allChunks: Array<{ text: string; metaIndex: number; splitterType: string; chunkIndexInDoc: number }> = [];
+  // 每个文档（metaIndex）内的 chunk 序号计数器，用于生成文档内连续的 chunk_index
+  // P3 上下文扩展依赖 chunk_index 合并同一文档内的相邻 chunk，
+  // 全局序号会导致不同文档的 chunk_index 交错，合并出错误内容
+  const perDocChunkCounters: Map<number, number> = new Map();
+
   for (let t = 0; t < texts.length; t++) {
     const text = texts[t];
     const fileName = metadata[t]?.source || '';
@@ -473,8 +491,11 @@ export async function addDocuments(
     logger.debug('文件切分策略', { module: 'VectorStore', fileName: fileName || 'unknown', splitterType });
 
     const chunks = await splitter.splitText(text);
+    perDocChunkCounters.set(t, 0);
     for (const chunk of chunks) {
-      allChunks.push({ text: chunk, metaIndex: t, splitterType });
+      const chunkIndexInDoc = perDocChunkCounters.get(t)!;
+      perDocChunkCounters.set(t, chunkIndexInDoc + 1);
+      allChunks.push({ text: chunk, metaIndex: t, splitterType, chunkIndexInDoc });
     }
   }
   logger.info('文本分割完成', { module: 'VectorStore', chunkCount: allChunks.length });
@@ -483,7 +504,9 @@ export async function addDocuments(
     pageContent: chunk.text,
     metadata: {
       ...metadata[chunk.metaIndex],
-      chunk_index: i,
+      // chunk_index 使用文档内序号（而非全局序号），确保 P3 上下文扩展时
+      // 同一文档内的 chunk_index 连续，能正确合并相邻 chunk
+      chunk_index: chunk.chunkIndexInDoc,
       source: metadata[chunk.metaIndex]?.source || 'unknown',
       doc_type: metadata[chunk.metaIndex]?.docType || 'general',
       splitter_type: chunk.splitterType, // P1: 记录使用的切分策略，便于调试和优化
@@ -545,16 +568,46 @@ export async function addDocuments(
   try {
     await initializeBM25Index();
     let bm25AddedCount = 0;
+    let bm25DedupedCount = 0;
     for (const [i, chunk] of allChunks.entries()) {
       const id = `doc_${Date.now()}_${Math.random().toString(36).substring(2, 9)}_${i}`;
       const chunkMetadata = {
         ...metadata[chunk.metaIndex],
-        chunk_index: i,
+        // chunk_index 使用文档内序号，与 ChromaDB 中的 chunk_index 保持一致
+        chunk_index: chunk.chunkIndexInDoc,
         source: metadata[chunk.metaIndex]?.source || 'unknown',
         doc_type: metadata[chunk.metaIndex]?.docType || 'general',
       };
-      await addToBM25Index(id, chunk.text, chunkMetadata);
+
+      // 去重：删除 BM25 中同 source + chunk_index 的旧条目，避免重复入库导致索引膨胀
+      // 场景：reindex 或知识源增量更新时，同一文档可能被多次入库
+      const sourceValue = chunkMetadata.source;
+      const chunkIndexValue = chunkMetadata.chunk_index;
+      if (sourceValue !== undefined && chunkIndexValue !== undefined) {
+        const idsToRemove: string[] = [];
+        for (const [existingId, existingDoc] of bm25DocumentStore.entries()) {
+          if (existingDoc.metadata?.source === sourceValue &&
+              existingDoc.metadata?.chunk_index === chunkIndexValue) {
+            idsToRemove.push(existingId);
+          }
+        }
+        for (const removeId of idsToRemove) {
+          try {
+            bm25Index!.remove(removeId);
+            bm25DocumentStore.delete(removeId);
+            bm25DedupedCount++;
+          } catch {
+            // 旧条目可能已不存在，忽略
+          }
+        }
+      }
+
+      await addToBM25Index(id, chunk.text, chunkMetadata, true); // 批量操作，跳过单次保存
       bm25AddedCount++;
+    }
+    await saveBM25Index(); // 批量操作完成后统一保存
+    if (bm25DedupedCount > 0) {
+      logger.info('BM25 索引去重清理', { module: 'VectorStore', dedupedCount: bm25DedupedCount });
     }
     logger.info('已添加文档到 BM25 索引', { module: 'VectorStore', documentCount: bm25AddedCount });
   } catch (bm25Error: any) {
@@ -570,11 +623,57 @@ export async function addDocuments(
  */
 export async function deleteDocuments(filter: Record<string, any>): Promise<void> {
   const store = await initializeVectorStore();
+
+  // 先从 BM25 索引中按 filter 增量删除匹配的文档，避免全量重建
+  // BM25 删除直接按 filter 匹配 bm25DocumentStore，无需依赖 ChromaDB 查询
+  try {
+    // 确保 BM25 索引已初始化（服务重启后 bm25Index 可能为 null，需要从磁盘加载）
+    await initializeBM25Index();
+    if (bm25Index) {
+      // 从 BM25 索引中按 filter 匹配删除文档
+      let bm25DeletedCount = 0;
+      const idsToRemove: string[] = [];
+      for (const [id, doc] of bm25DocumentStore.entries()) {
+        const docMeta = doc.metadata;
+        let matches = true;
+
+        // 检查 filter 中的每个条件是否匹配
+        for (const [key, value] of Object.entries(filter)) {
+          if (docMeta?.[key] !== value) {
+            matches = false;
+            break;
+          }
+        }
+
+        if (matches) {
+          idsToRemove.push(id);
+        }
+      }
+
+      for (const id of idsToRemove) {
+        try {
+          bm25Index.remove(id);
+          bm25DocumentStore.delete(id);
+          bm25DeletedCount++;
+        } catch {
+          logger.warn('BM25 删除文档失败（可能已不存在）', { module: 'VectorStore', id });
+        }
+      }
+
+      if (bm25DeletedCount > 0) {
+        await saveBM25Index();
+        logger.info('已从 BM25 索引增量删除文档', { module: 'VectorStore', deletedCount: bm25DeletedCount });
+      }
+    }
+  } catch (bm25Error: any) {
+    // BM25 增量删除失败时降级为全量重建
+    logger.warn('BM25 增量删除失败，降级为全量重建', { module: 'VectorStore', error: bm25Error.message });
+    await rebuildBM25Index();
+  }
+
+  // 从 ChromaDB 删除文档
   await store.delete({ filter });
   logger.info('已从知识库删除文档', { module: 'VectorStore' });
-
-  // 重建 BM25 索引以保持同步
-  await rebuildBM25Index();
 }
 
 /**
@@ -587,7 +686,9 @@ export async function deleteDocuments(filter: Record<string, any>): Promise<void
 export async function searchKnowledgeBase(
   query: string,
   topK: number = 5,
-  minSimilarity: number = 0.4,
+  // 相似度阈值：ChromaDB cosine 距离下 score 越小越相似，0.55 为经验阈值
+  // 与 hybridSearchKnowledgeBase 保持一致，避免不同搜索路径结果差异过大
+  minSimilarity: number = 0.55,
   filter?: Record<string, any>,
 ): Promise<Array<{ content: string; metadata: any; score: number }>> {
   const store = await initializeVectorStore();
@@ -671,7 +772,8 @@ export async function hybridSearchKnowledgeBase(
       .filter(([doc, score]) => {
         // 相似度过滤
         if (score > 0.55) return false;
-        // 版本状态过滤：无 versionStatus 或 versionStatus=active
+        // 版本状态过滤：无 versionStatus 或 versionStatus=active 可搜索
+        // archived 状态的向量不参与检索（已被新版本替代的旧版本）
         const vs = doc.metadata?.versionStatus;
         return !vs || vs === 'active';
       })
@@ -712,7 +814,7 @@ export async function hybridSearchKnowledgeBase(
     delete bm25Filter.versionStatus;
     const beforeFilter = bm25Results.length;
     bm25Results = bm25Results.filter((result) => {
-      // 版本状态过滤：无 versionStatus 或 versionStatus=active
+      // 版本状态过滤：无 versionStatus 或 versionStatus=active 可搜索
       const vs = result.metadata?.versionStatus;
       if (vs && vs !== 'active') return false;
       // 其他自定义过滤条件
@@ -833,12 +935,20 @@ export async function hybridSearchKnowledgeBase(
           limit: 100,
         });
 
+        // 过滤掉 archived 状态的 chunk，避免上下文扩展时混入已归档的旧版本内容
+        // 仅保留 active 或无 versionStatus（兼容旧数据）的 chunk
         const sameFileChunks = neighborResults.documents
           .map((doc, i) => ({
             content: doc || '',
             index: (neighborResults.metadatas?.[i] as any)?.chunk_index ?? -1,
+            versionStatus: (neighborResults.metadatas?.[i] as any)?.versionStatus,
           }))
-          .filter((c) => c.index !== -1 && c.content.length > 0)
+          .filter((c) => {
+            if (c.index === -1 || c.content.length === 0) return false;
+            // archived 状态的 chunk 不参与上下文扩展
+            const vs = c.versionStatus;
+            return !vs || vs === 'active';
+          })
           .sort((a, b) => a.index - b.index);
 
         // 找到当前 chunk 在排序后的位置
@@ -1017,8 +1127,8 @@ export async function clearKnowledgeBase(): Promise<void> {
  */
 export async function previewChunking(text: string): Promise<string[]> {
   const splitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 400,
-    chunkOverlap: 80,
+    chunkSize: DEFAULT_CHUNK_SIZE,
+    chunkOverlap: DEFAULT_CHUNK_OVERLAP,
   });
   return splitter.splitText(text);
 }
@@ -1051,7 +1161,8 @@ export async function previewEmbedding(text: string): Promise<{
 export async function debugSearch(
   query: string,
   topK: number = 3,
-  minSimilarity: number = 0.4
+  // 与 searchKnowledgeBase / hybridSearchKnowledgeBase 保持一致
+  minSimilarity: number = 0.55
 ): Promise<{
   originalQuery: string;
   rawResults: Array<{
@@ -1172,6 +1283,9 @@ export async function removeDocumentVersion(versionId: number): Promise<void> {
       logger.info('ChromaDB 中无该版本向量数据', { module: 'VectorStore', versionId });
     }
 
+    // 同步清理 BM25 索引中该版本的数据
+    // 确保 BM25 索引已初始化（服务重启后 bm25Index 可能为 null，需要从磁盘加载）
+    await initializeBM25Index();
     if (bm25Index) {
       const idsToRemove: string[] = [];
       for (const [id, doc] of bm25DocumentStore.entries()) {
@@ -1250,6 +1364,8 @@ export async function updateVersionVectorStatus(versionId: number, newStatus: st
     }
 
     // 同步更新 BM25 索引（使用 bm25DocumentStore 替代内部属性）
+    // 确保 BM25 索引已初始化（服务重启后 bm25Index 可能为 null，需要从磁盘加载）
+    await initializeBM25Index();
     if (bm25Index) {
       let updatedCount = 0;
       for (const [id, doc] of bm25DocumentStore.entries()) {
@@ -1337,6 +1453,28 @@ export async function cleanOrphanVectors(validVersionIds: string[]): Promise<num
       logger.info('发现孤岛向量', { module: 'VectorStore', orphanCount: orphanIds.length, orphanVersionIds: [...orphanVersionIds] });
       await collection.delete({ ids: orphanIds });
       logger.info('已清理孤岛向量', { module: 'VectorStore', count: orphanIds.length });
+
+      // 同步清理 BM25 索引中对应的孤岛数据
+      await initializeBM25Index();
+      if (bm25Index) {
+        let bm25OrphanCount = 0;
+        for (const [id, doc] of bm25DocumentStore.entries()) {
+          const versionId = doc.metadata?.versionId;
+          if (versionId && orphanVersionIds.has(versionId)) {
+            try {
+              bm25Index.remove(id);
+              bm25DocumentStore.delete(id);
+              bm25OrphanCount++;
+            } catch {
+              // 条目可能已不存在，忽略
+            }
+          }
+        }
+        if (bm25OrphanCount > 0) {
+          await saveBM25Index();
+          logger.info('已清理 BM25 索引中孤岛数据', { module: 'VectorStore', count: bm25OrphanCount });
+        }
+      }
     } else {
       logger.info('未发现孤岛向量', { module: 'VectorStore' });
     }
@@ -1346,4 +1484,73 @@ export async function cleanOrphanVectors(validVersionIds: string[]): Promise<num
     logger.error('清理孤岛向量失败', { module: 'VectorStore', error: error.message, stack: error.stack });
     return 0;
   }
+}
+
+/**
+ * 修复旧数据：将 versionStatus=draft 的向量批量更新为 active
+ * 用于修复历史版本中因 updateVersionVectorStatus 失败而遗留的 draft 状态向量
+ * @returns 修复的向量数量
+ */
+export async function fixDraftVectors(): Promise<{ fixedChromaCount: number; fixedBM25Count: number }> {
+  logger.info('开始修复 draft 状态向量', { module: 'VectorStore' });
+
+  let fixedChromaCount = 0;
+
+  // 1. 修复 ChromaDB 中的 draft 向量
+  try {
+    const store = await initializeVectorStore();
+    const collection = store.collection;
+    if (!collection) {
+      throw new Error('向量存储集合未初始化');
+    }
+
+    const allDocs = await collection.get();
+    const draftIds: string[] = [];
+    const draftMetadatas: any[] = [];
+
+    for (let i = 0; i < allDocs.ids.length; i++) {
+      const meta = allDocs.metadatas[i] as any;
+      if (meta?.versionStatus === 'draft') {
+        draftIds.push(allDocs.ids[i]);
+        draftMetadatas.push({ ...meta, versionStatus: 'active' });
+      }
+    }
+
+    if (draftIds.length > 0) {
+      await collection.update({
+        ids: draftIds,
+        metadatas: draftMetadatas,
+      });
+      fixedChromaCount = draftIds.length;
+      logger.info('已修复 ChromaDB 中 draft 向量', { module: 'VectorStore', count: fixedChromaCount });
+    } else {
+      logger.info('ChromaDB 中无 draft 向量需要修复', { module: 'VectorStore' });
+    }
+  } catch (error: any) {
+    logger.error('修复 ChromaDB draft 向量失败', { module: 'VectorStore', error: error.message, stack: error.stack });
+  }
+
+  // 2. 修复 BM25 索引中的 draft 向量
+  let fixedBM25Count = 0;
+  try {
+    // 确保 BM25 索引已初始化（服务重启后 bm25Index 可能为 null，需要从磁盘加载）
+    await initializeBM25Index();
+    if (bm25Index) {
+      for (const [id, doc] of bm25DocumentStore.entries()) {
+        if (doc.metadata?.versionStatus === 'draft') {
+          doc.metadata.versionStatus = 'active';
+          fixedBM25Count++;
+        }
+      }
+      if (fixedBM25Count > 0) {
+        await saveBM25Index();
+        logger.info('已修复 BM25 索引中 draft 文档', { module: 'VectorStore', count: fixedBM25Count });
+      }
+    }
+  } catch (error: any) {
+    logger.error('修复 BM25 draft 文档失败', { module: 'VectorStore', error: error.message });
+  }
+
+  logger.info('draft 向量修复完成', { module: 'VectorStore', fixedChromaCount, fixedBM25Count });
+  return { fixedChromaCount, fixedBM25Count };
 }

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -9,7 +9,7 @@ interface MarkdownRendererProps {
   className?: string;
 }
 
-const CodeBlock: React.FC<any> = ({ inline, className, children }) => {
+const CodeBlock: React.FC<any> = React.memo(({ inline, className, children }) => {
   const match = /language-(\w+)/.exec(className || '');
   return !inline && match ? (
     <div className="mt-2 mb-4 rounded-lg overflow-x-auto max-w-full">
@@ -38,9 +38,14 @@ const CodeBlock: React.FC<any> = ({ inline, className, children }) => {
   ) : (
     <code className={`${className} break-all bg-gray-100 dark:bg-slate-700 px-1.5 py-0.5 rounded text-sm`}>{children}</code>
   );
-};
+});
 
-const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className }) => {
+const MarkdownRenderer: React.FC<MarkdownRendererProps> = React.memo(({ children, className }) => {
+  // 缓存过滤后的内容，避免每次渲染都执行正则替换
+  const content = useMemo(() => {
+    return children.replace(/<tool_call>[\s\S]*?<\/think>/gs, '');
+  }, [children]);
+
   return (
     <div className={`min-w-0 ${className || ''}`} style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
       <ReactMarkdown
@@ -111,10 +116,10 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ children, className
           ),
         }}
       >
-        {children}
+        {content}
       </ReactMarkdown>
     </div>
   );
-};
+});
 
 export default MarkdownRenderer;

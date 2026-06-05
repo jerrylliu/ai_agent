@@ -198,6 +198,25 @@ export class DocumentController {
     }
   }
 
+  /**
+   * POST /documents/scheduler/fix-draft-vectors
+   * 修复 draft 状态的向量（将 versionStatus=draft 更新为 active）
+   */
+  @Post('scheduler/fix-draft-vectors')
+  async fixDraftVectors() {
+    try {
+      const result = await this.schedulerService.fixDraftVectors();
+      return {
+        success: true,
+        message: `已修复 ${result.fixedChromaCount} 个 ChromaDB 向量和 ${result.fixedBM25Count} 个 BM25 文档`,
+        ...result,
+      };
+    } catch (error: any) {
+      logger.error('修复 draft 向量失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, 500);
+    }
+  }
+
   @Get('pending-ops')
   async getPendingOps() {
     try {

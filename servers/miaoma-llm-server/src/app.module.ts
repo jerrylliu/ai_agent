@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, OnModuleInit } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
@@ -22,12 +22,16 @@ import { PendingVectorOp } from './entities/pending-vector-op.entity.js';
 import { KnowledgeSource } from './entities/knowledge-source.entity.js';
 import { KnowledgeSourceSyncLog } from './entities/knowledge-source-sync-log.entity.js';
 import { KnowledgeSourcePage } from './entities/knowledge-source-page.entity.js';
+import { LlmUsage } from './entities/llm-usage.entity.js';
+import { MessageFeedback } from './entities/message-feedback.entity.js';
+import { AutoEvaluation } from './entities/auto-evaluation.entity.js';
 import { DocumentService } from './services/document.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
 import { KnowledgeSourceService } from './services/knowledge-source.service.js';
 import { KnowledgeSourceSchedulerService } from './services/knowledge-source-scheduler.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { WinstonLoggerModule } from './fundamentals/logger.js';
+import { initManageSession } from './fundamentals/tools/index.js';
 @Module({
   imports: [
     WinstonLoggerModule,
@@ -39,13 +43,19 @@ import { WinstonLoggerModule } from './fundamentals/logger.js';
       username: 'root',
       password: '123456',
       database: 'cyberpunk',
-      entities: [ChatHistory, Session, User, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage],
+      entities: [ChatHistory, Session, User, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation],
       synchronize: true,
     }),
-    TypeOrmModule.forFeature([ChatHistory, Session, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage]),
+    TypeOrmModule.forFeature([ChatHistory, Session, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation]),
     AuthModule,
   ],
   controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController, DocumentController, KnowledgeSourceController],
   providers: [AppService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService],
 })
-export class AppModule {}
+export class AppModule implements OnModuleInit {
+  constructor(private readonly appService: AppService) {}
+
+  onModuleInit() {
+    initManageSession(this.appService);
+  }
+}

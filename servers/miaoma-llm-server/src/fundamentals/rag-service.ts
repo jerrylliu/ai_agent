@@ -81,12 +81,17 @@ export async function handleDocumentUpload(file: any): Promise<{
     logger.info('文档解析完成', { module: 'RagService', charCount: textContent.length });
 
     // 添加到知识库（addDocuments 内部会用 RecursiveCharacterTextSplitter 统一切分）
+    // 注意：旧上传路径（/knowledge/upload）不经过文档版本管理，
+    // 补充 legacyUpload 标识以便与版本管理上传的文档区分，
+    // 这些向量无法通过版本管理界面进行更新/归档/删除，只能通过 /knowledge/clear 全量清空
     const metadata = {
       source: originalName,
       uploadTime: new Date().toISOString(),
       mimeType: mimeType,
       versionStatus: 'active',
       legacyUpload: 'true',
+      documentId: 'legacy',
+      versionId: 'legacy',
     };
 
     const docCount = await addDocuments([textContent], [metadata]);

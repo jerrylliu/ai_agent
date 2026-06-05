@@ -11,6 +11,130 @@ import { createLLM, getCurrentModelId, getModelInfo } from './model-provider';
 import { getAllToolSchemas, executeTool, hasTool, getAvailableToolNames } from './tools';
 import { logger } from './logger';
 
+// ==================== FC 模式进度通知辅助函数 ====================
+
+// 工具名称到中文标签的映射
+const TOOL_LABELS: Record<string, string> = {
+  thinking: '思考中',
+  search_knowledge_base: '搜索知识库',
+  search_web: '搜索网页',
+  get_weather: '查询天气',
+  calculate: '计算',
+  manage_session: '管理会话',
+};
+
+// 向客户端发送工具调用进度事件（同时作为 SSE 心跳保活）
+function sendToolStatus(res: Response | undefined, toolName: string, status: 'calling' | 'executing' | 'done', extra?: Record<string, any>) {
+  if (!res || res.writableEnded) return;
+  const label = TOOL_LABELS[toolName] || toolName;
+  const data = JSON.stringify({ toolName, label, status, ...extra });
+  res.write(`[TOOL_STATUS:${data}]`);
+}
+
+// 定期发送 SSE 心跳，防止长时间无数据导致连接断开
+function startHeartbeat(res: Response | undefined, intervalMs: number = 5000): NodeJS.Timeout | null {
+  if (!res) return null;
+  return setInterval(() => {
+    if (!res.writableEnded) {
+      res.write('[HEARTBEAT]');
+    }
+  }, intervalMs);
+}
+
+function stopHeartbeat(timer: NodeJS.Timeout | null) {
+  if (timer) clearInterval(timer);
+}
+
+// ==================== Token 预算策略 ====================
+
+// Token 估算：中文约 1.5 字符/token，英文约 4 字符/token
+function estimateTokens(text: string): number {
+  const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const otherChars = text.length - chineseChars;
+  return Math.ceil(chineseChars / 1.5 + otherChars / 4);
+}
+
+interface HistoryBudget {
+  maxHistory: number;       // 允许传入的历史条数
+  budgetUsed: number;       // 已被知识库/图片占用的预算
+  budgetRemaining: number;  // 剩余可用于历史的预算
+}
+
+// 基于总 token 预算，动态计算可传入的历史消息条数
+// 知识库/图片与历史消息共存，通过预算分配而非互斥
+function computeHistoryBudget(params: {
+  totalBudget: number;
+  knowledgeContextLength: number;
+  imageCount: number;
+  history: Array<{ role: string; content: string }>;
+}): HistoryBudget {
+  const { totalBudget, knowledgeContextLength, imageCount, history } = params;
+
+  let budgetUsed = 0;
+
+  // 知识库结果占用预算
+  if (knowledgeContextLength > 0) {
+    budgetUsed += estimateTokens(knowledgeContextLength.toString());
+  }
+
+  // 图片占用预算（每张约 1000 tokens）
+  budgetUsed += imageCount * 1000;
+
+  const budgetRemaining = Math.max(0, totalBudget - budgetUsed);
+
+  // 从最新往前填充历史消息
+  let maxHistory = 0;
+  let usedTokens = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msgTokens = estimateTokens(history[i].content);
+    if (usedTokens + msgTokens > budgetRemaining) break;
+    usedTokens += msgTokens;
+    maxHistory++;
+  }
+
+  // 最少保留 2 条（上一轮问答），最多 20 条
+  maxHistory = Math.max(history.length >= 2 ? 2 : 0, Math.min(maxHistory, 20));
+
+  return { maxHistory, budgetUsed, budgetRemaining };
+}
+
+// ==================== Token 用量记录 ====================
+
+export interface UsageData {
+  userId: string;
+  sessionId?: string;
+  modelId: string;
+  inputTokens: number;
+  outputTokens: number;
+  historyCount: number;
+  usedKnowledgeBase: boolean;
+  imageCount: number;
+  responseTimeMs: number;
+  userMessage: string;
+  assistantMessage?: string;
+}
+
+// 从消息列表估算 input tokens
+function estimateTokensFromMessages(messages: Array<any>): number {
+  let total = 0;
+  for (const msg of messages) {
+    if (typeof msg.content === 'string') {
+      total += estimateTokens(msg.content);
+    } else if (Array.isArray(msg.content)) {
+      for (const part of msg.content) {
+        if (typeof part === 'string') {
+          total += estimateTokens(part);
+        } else if (part.text) {
+          total += estimateTokens(part.text);
+        } else if (part.type === 'image_url') {
+          total += 1000; // 图片约 1000 tokens
+        }
+      }
+    }
+  }
+  return total;
+}
+
 // 系统提示词 - 定义模型的角色和任务
 // ### 注意事项
 // 1. **代码必须可直接运行**：复制粘贴到浏览器即可运行
@@ -24,15 +148,28 @@ const FC_SYSTEM_PROMPT = `你是一个全能助手，你可以使用工具来帮
 当前可用工具：
 - search_knowledge_base：搜索知识库中与查询相关的文档内容
 - search_web：联网搜索实时信息
+- get_weather：查询指定城市的天气信息（实时天气、7天预报、24小时逐小时预报）
+- calculate：执行精确的数学计算（支持大数运算、科学计算、三角函数、对数等）
+- manage_session：管理用户的会话（对话），包括创建、删除、重命名、置顶/取消置顶、切换、查询列表等
 
 工具使用规则：
 1. 当用户的问题可能涉及已上传的文档、知识库中的信息时，优先调用 search_knowledge_base 工具
 2. 当用户的问题涉及最新新闻、实时数据、当前事件或知识库中没有的实时信息时，调用 search_web 工具
 3. 如果不确定知识库中是否有相关信息，可以同时调用 search_knowledge_base 和 search_web 两个工具
-4. 当你能够直接回答问题（如通用知识、闲聊、数学计算等）时，不需要调用任何工具
-5. 调用工具时，构造精确的搜索查询语句，以提高搜索结果的相关性
-6. 基于工具返回的结果回答用户问题，在回答中标注信息来源
-7. 如果工具返回的结果与用户问题无关，请说明并基于自身知识回答
+4. 当用户询问天气、温度、湿度、风力、空气质量等与天气相关的问题时，必须优先使用 get_weather 工具，不要使用 search_web 查天气
+5. 当用户需要进行复杂的数学运算（大数乘除、浮点运算、科学计算、公式计算等）时，调用 calculate 工具确保结果精确
+6. 当你能够直接回答问题（如通用知识、闲聊、简单的加减乘除等）时，不需要调用任何工具
+7. 调用工具时，构造精确的搜索查询语句，以提高搜索结果的相关性
+8. 基于工具返回的结果回答用户问题，在回答中标注信息来源
+9. 如果工具返回的结果与用户问题无关，请说明并基于自身知识回答
+10. 每个工具在一次对话中最多调用一次，不要对同一个工具重复调用相同的参数
+11. 收到工具返回结果后，必须直接基于结果生成最终回答，不要再调用其他工具
+
+天气查询规则（仅在使用 get_weather 时）：
+- 用户问当前/现在天气：type 参数设为 now（默认）
+- 用户问未来几天天气预报：type 参数设为 daily
+- 用户问今天/明天逐小时天气：type 参数设为 hourly
+- city 参数支持中文城市名（如"北京"）或城市ID
 
 搜索引擎选择规则（仅在使用 search_web 时）：
 - 默认使用 search_std（速度快、成本低），除非用户明确要求深度搜索
@@ -44,7 +181,19 @@ const FC_SYSTEM_PROMPT = `你是一个全能助手，你可以使用工具来帮
 - 用户问"今天"的新闻/信息：设置 recency_filter 为 oneDay
 - 用户问"最近"的新闻/信息：设置 recency_filter 为 oneWeek
 - 用户问"本月"的新闻/信息：设置 recency_filter 为 oneMonth
-- 其他无时效性要求的搜索：不设置 recency_filter（默认 noLimit）`;
+- 其他无时效性要求的搜索：不设置 recency_filter（默认 noLimit）
+
+会话管理规则（仅在使用 manage_session 时）：
+- 用户想新建对话/会话：action=create，可选提供 title 作为标题
+- 用户想删除某个对话：action=delete，需要 session_id（先 list 获取）
+- 用户想重命名对话：action=rename，需要 session_id 和 title
+- 用户想置顶对话：action=pin，需要 session_id
+- 用户想取消置顶：action=unpin，需要 session_id
+- 用户想切换到某个对话：action=switch，需要 session_id
+- 用户问有哪些对话/会话：action=list
+- 用户想搜索对话：action=search，提供 keyword
+- 如果用户没有提供 session_id 但提到了会话标题，先用 list 或 search 找到对应会话再操作
+- 执行操作后，用自然语言告知用户操作结果`;
 /**
  * 从 URL 下载图片并转换为 base64 格式
  * @param imageUrl 图片的 URL 地址
@@ -233,6 +382,9 @@ async function promptWithFunctionCalling(
   userMemories?: string[],
   isCancelled?: () => boolean,
   abortController?: AbortController,
+  userId?: string,
+  sessionId?: string,
+  onUsageComplete?: (usage: UsageData) => void,
 ) {
   const modelInfo = getModelInfo();
   const supportsVision = modelInfo.supportsVision;
@@ -265,11 +417,16 @@ async function promptWithFunctionCalling(
     effectiveImages = undefined;
   }
 
-  const MAX_HISTORY = (effectiveImages && effectiveImages.length > 0) ? 0 : 10;
+  const { maxHistory: MAX_HISTORY } = computeHistoryBudget({
+    totalBudget: 4000,
+    knowledgeContextLength: 0,  // FC 模式知识库通过工具调用，不走 RAG 注入
+    imageCount: effectiveImages?.length || 0,
+    history: history || [],
+  });
   const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
 
   if (recentHistory.length > 0) {
-    logger.info('FC模式：添加历史消息', { module: 'PromptService', historyCount: recentHistory.length });
+    logger.info('FC模式：添加历史消息', { module: 'PromptService', historyCount: recentHistory.length, maxHistory: MAX_HISTORY });
     for (const msg of recentHistory) {
       if (msg.role === 'user') {
         let content: any;
@@ -312,23 +469,33 @@ async function promptWithFunctionCalling(
   if (!llm.bindTools) {
     throw new Error('当前模型不支持 bindTools');
   }
-  const llmWithTools = llm.bindTools(toolSchemas);
+  const llmWithTools = llm.bindTools(toolSchemas, { tool_choice: 'auto' });
 
   const MAX_TOOL_ITERATIONS = 5;
   let toolCallsMade: Array<{ name: string; args: any }> = [];
   let usedKnowledgeBase = false;
   let usedWebSearch = false;
+  let usedWeather = false;
+  let usedCalculate = false;
+  let sessionAction: any = null;
+
+  // 启动心跳，在工具调用循环期间保持连接活跃
+  const heartbeatTimer = startHeartbeat(res);
 
   logger.info('FC模式：开始工具调用循环', { module: 'PromptService', modelId: getCurrentModelId() });
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     if (isCancelled && isCancelled()) {
       logger.info('FC模式：检测到取消信号', { module: 'PromptService' });
+      stopHeartbeat(heartbeatTimer);
       if (res && !res.writableEnded) res.end();
       return;
     }
 
     logger.info('FC模式：调用模型', { module: 'PromptService', iteration: iteration + 1, messageCount: messages.length });
+
+    // 通知客户端：模型正在思考
+    sendToolStatus(res, 'thinking', 'calling', { iteration: iteration + 1 });
 
     let response: any;
     try {
@@ -338,6 +505,7 @@ async function promptWithFunctionCalling(
     } catch (invokeError: any) {
       if (invokeError.name === 'AbortError' || invokeError.code === 'ABORT_ERR') {
         logger.info('FC模式：LLM调用被中断', { module: 'PromptService' });
+        stopHeartbeat(heartbeatTimer);
         if (res && !res.writableEnded) res.end();
         return;
       }
@@ -378,6 +546,7 @@ async function promptWithFunctionCalling(
             requestedTool: toolCall.name,
             availableTools,
           });
+          sendToolStatus(res, toolCall.name, 'done', { error: true });
           messages.push(new ToolMessage({
             content: JSON.stringify({
               error: true,
@@ -396,10 +565,19 @@ async function promptWithFunctionCalling(
         if (toolCall.name === 'search_web') {
           usedWebSearch = true;
         }
+        if (toolCall.name === 'get_weather') {
+          usedWeather = true;
+        }
+        if (toolCall.name === 'calculate') {
+          usedCalculate = true;
+        }
         toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
 
+        // 通知客户端：工具开始执行
+        sendToolStatus(res, toolCall.name, 'executing');
+
         try {
-          const result = await executeTool(toolCall.name, toolCall.args);
+          const result = await executeTool(toolCall.name, toolCall.args, { userId });
           const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
           logger.info('FC模式：工具执行成功，构造 ToolMessage', {
             module: 'PromptService',
@@ -408,6 +586,20 @@ async function promptWithFunctionCalling(
             resultLength: resultStr.length,
             resultPreview: resultStr.substring(0, 300),
           });
+
+          // 通知客户端：工具执行完成
+          sendToolStatus(res, toolCall.name, 'done');
+
+          // 收集 manage_session 返回的前端操作指令
+          if (toolCall.name === 'manage_session' && result?.frontend_action && !sessionAction) {
+            sessionAction = result.frontend_action;
+            logger.info('FC模式：收集到前端会话操作指令', {
+              module: 'PromptService',
+              actionType: sessionAction.type,
+              payload: JSON.stringify(sessionAction.payload),
+            });
+          }
+
           messages.push(new ToolMessage({
             content: resultStr,
             tool_call_id: toolCallId,
@@ -420,6 +612,7 @@ async function promptWithFunctionCalling(
             toolCallId,
             error: toolError.message,
           });
+          sendToolStatus(res, toolCall.name, 'done', { error: true });
           messages.push(new ToolMessage({
             content: JSON.stringify({ error: true, message: `工具执行失败: ${toolError.message}` }),
             tool_call_id: toolCallId,
@@ -437,15 +630,24 @@ async function promptWithFunctionCalling(
     } else {
       logger.info('FC模式：获得最终回答，切换流式输出', { module: 'PromptService', toolCallCount: toolCallsMade.length });
 
+      // 流式输出阶段不再需要心跳，停止定时器
+      stopHeartbeat(heartbeatTimer);
+
+      const fcStartTime = Date.now();
+
       if (res) {
         const ragMetadata = {
           usedKnowledgeBase,
           usedWebSearch,
+          usedWeather,
+          usedCalculate,
           contextCount: toolCallsMade.filter(tc => tc.name === 'search_knowledge_base').length,
           webSearchCount: toolCallsMade.filter(tc => tc.name === 'search_web').length,
+          weatherCount: toolCallsMade.filter(tc => tc.name === 'get_weather').length,
+          calculateCount: toolCallsMade.filter(tc => tc.name === 'calculate').length,
           toolCalls: toolCallsMade.map(tc => tc.name),
         };
-        const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]`;
+        const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]${sessionAction ? `[SESSION_ACTION:${JSON.stringify(sessionAction)}]` : ''}`;
 
         try {
           const stream = await llmWithTools.stream(messages, {
@@ -453,6 +655,7 @@ async function promptWithFunctionCalling(
           });
           let isFirstChunk = true;
           let chunkCount = 0;
+          let fcFullResponse = '';
           for await (const chunk of stream) {
             if (isCancelled && isCancelled()) {
               logger.info('FC模式流式：检测到取消信号，停止生成', { module: 'PromptService' });
@@ -462,6 +665,7 @@ async function promptWithFunctionCalling(
             const content = chunk.content?.toString() || '';
             const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
             if (cleanContent) {
+              fcFullResponse += cleanContent;
               if (isFirstChunk) {
                 res.write(metadataPrefix + cleanContent);
                 isFirstChunk = false;
@@ -471,8 +675,25 @@ async function promptWithFunctionCalling(
               process.stdout.write(cleanContent);
             }
           }
-          logger.info('FC模式流式响应完成', { module: 'PromptService', chunkCount });
+          logger.info('FC模式流式响应完成', { module: 'PromptService', chunkCount, fcFullResponseLength: fcFullResponse.length, estimatedOutputTokens: estimateTokens(fcFullResponse) });
           res.end();
+
+          // 记录 token 用量
+          if (onUsageComplete) {
+            onUsageComplete({
+              userId: userId || 'default',
+              sessionId,
+              modelId: getCurrentModelId(),
+              inputTokens: estimateTokensFromMessages(messages),
+              outputTokens: estimateTokens(fcFullResponse),
+              historyCount: recentHistory.length,
+              usedKnowledgeBase,
+              imageCount: images?.length || 0,
+              responseTimeMs: Date.now() - fcStartTime,
+              userMessage: promptText || '',
+              assistantMessage: fcFullResponse,
+            });
+          }
         } catch (streamError: any) {
           if (streamError.name === 'AbortError' || streamError.code === 'ABORT_ERR') {
             logger.info('FC模式流式：LLM推理已被中断', { module: 'PromptService' });
@@ -500,13 +721,99 @@ async function promptWithFunctionCalling(
     }
   }
 
-  logger.warn('FC模式：达到最大工具调用次数', { module: 'PromptService', maxIterations: MAX_TOOL_ITERATIONS });
-  if (res && !res.writableEnded) {
-    res.write('[RAG_METADATA:{"usedKnowledgeBase":false,"usedWebSearch":false,"contextCount":0,"webSearchCount":0,"toolCalls":[]}]');
-    res.write('抱歉，工具调用次数已达上限，请简化您的问题后重试。');
-    res.end();
-  } else if (!res) {
-    return new AIMessage('抱歉，工具调用次数已达上限，请简化您的问题后重试。');
+  logger.warn('FC模式：达到最大工具调用次数，强制生成最终回答', { module: 'PromptService', maxIterations: MAX_TOOL_ITERATIONS });
+
+  // 停止心跳
+  stopHeartbeat(heartbeatTimer);
+
+  const maxIterStartTime = Date.now();
+
+  // 达到最大迭代次数时，不再绑定工具，强制让模型基于已有信息生成最终回答
+  messages.push(new HumanMessage({
+    content: '请根据以上工具返回的结果，直接给出最终回答，不要再调用任何工具。',
+  }));
+
+  const ragMetadata = {
+    usedKnowledgeBase,
+    usedWebSearch,
+    usedWeather,
+    usedCalculate,
+    contextCount: toolCallsMade.filter(tc => tc.name === 'search_knowledge_base').length,
+    webSearchCount: toolCallsMade.filter(tc => tc.name === 'search_web').length,
+    weatherCount: toolCallsMade.filter(tc => tc.name === 'get_weather').length,
+    calculateCount: toolCallsMade.filter(tc => tc.name === 'calculate').length,
+    toolCalls: toolCallsMade.map(tc => tc.name),
+  };
+  const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]${sessionAction ? `[SESSION_ACTION:${JSON.stringify(sessionAction)}]` : ''}`;
+
+  if (res) {
+    try {
+      const stream = await llm.stream(messages, {
+        signal: abortController?.signal,
+      });
+      let isFirstChunk = true;
+      let chunkCount = 0;
+      let fullResponse = '';
+      for await (const chunk of stream) {
+        if (isCancelled && isCancelled()) {
+          break;
+        }
+        chunkCount++;
+        const content = chunk.content?.toString() || '';
+        const cleanContent = content.replace(/<tool_call>[\s\S]*?<\/think>/gs, "");
+        if (cleanContent) {
+          fullResponse += cleanContent;
+          if (isFirstChunk) {
+            res.write(metadataPrefix + cleanContent);
+            isFirstChunk = false;
+          } else {
+            res.write(cleanContent);
+          }
+          process.stdout.write(cleanContent);
+        }
+      }
+      logger.info('FC模式：达到最大迭代后强制生成回答完成', { module: 'PromptService', chunkCount, fullResponseLength: fullResponse.length });
+      res.end();
+
+      // 记录 token 用量
+      if (onUsageComplete) {
+        onUsageComplete({
+          userId: userId || 'default',
+          sessionId,
+          modelId: getCurrentModelId(),
+          inputTokens: estimateTokensFromMessages(messages),
+          outputTokens: estimateTokens(fullResponse),
+          historyCount: recentHistory.length,
+          usedKnowledgeBase,
+          imageCount: images?.length || 0,
+          responseTimeMs: Date.now() - maxIterStartTime,
+          userMessage: promptText || '',
+          assistantMessage: fullResponse,
+        });
+      }
+    } catch (streamError: any) {
+      if (streamError.name === 'AbortError' || streamError.code === 'ABORT_ERR') {
+        if (!res.writableEnded) res.end();
+      } else {
+        logger.error('FC模式：达到最大迭代后流式输出失败', { module: 'PromptService', error: streamError.message });
+        if (!res.writableEnded) {
+          res.write(metadataPrefix + '抱歉，工具调用次数已达上限，请简化您的问题后重试。');
+          res.end();
+        }
+      }
+    }
+  } else {
+    try {
+      const finalResponse = await llm.invoke(messages, {
+        signal: abortController?.signal,
+      });
+      if (typeof finalResponse.content === 'string') {
+        finalResponse.content = finalResponse.content.replace(/<tool_call>[\s\S]*?<\/think>/gs, "");
+      }
+      return finalResponse;
+    } catch (invokeError: any) {
+      return new AIMessage('抱歉，工具调用次数已达上限，请简化您的问题后重试。');
+    }
   }
 }
 
@@ -519,6 +826,9 @@ export const promptTemplate = async (
   userMemories?: string[],
   isCancelled?: () => boolean,
   abortController?: AbortController,
+  userId?: string,
+  sessionId?: string,
+  onUsageComplete?: (usage: UsageData) => void,
 ) => {
   const modelInfo = getModelInfo();
 
@@ -526,7 +836,7 @@ export const promptTemplate = async (
     logger.info('当前模型支持Function Calling，使用FC模式', { module: 'PromptService', modelId: getCurrentModelId() });
     try {
       return await promptWithFunctionCalling(
-        promptText, images, history, res, sessionSummary, userMemories, isCancelled, abortController,
+        promptText, images, history, res, sessionSummary, userMemories, isCancelled, abortController, userId, sessionId, onUsageComplete,
       );
     } catch (fcError: any) {
       logger.warn('FC模式失败，降级到RAG注入模式', { module: 'PromptService', error: fcError.message });
@@ -629,7 +939,12 @@ ${docList}
     images = undefined;
   }
 
-  const MAX_HISTORY = hasRetrievedContent ? 0 : ((images && images.length > 0) ? 0 : 10);
+  const { maxHistory: MAX_HISTORY } = computeHistoryBudget({
+    totalBudget: 4000,
+    knowledgeContextLength: hasRetrievedContent ? retrievedContext.length : 0,
+    imageCount: images?.length || 0,
+    history: history || [],
+  });
   const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
 
   if (recentHistory.length > 0) {
@@ -679,6 +994,7 @@ ${docList}
     logger.info('开始流式调用模型', { module: 'PromptService', modelId: getCurrentModelId() });
     
     const llm = createLLM();
+    const ragStartTime = Date.now();
 
     const ragMetadata = {
       usedKnowledgeBase: hasRetrievedContent,
@@ -698,6 +1014,7 @@ ${docList}
       });
       let chunkCount = 0;
       let isFirstChunk = true;
+      let fullResponse = '';
       for await (const chunk of stream) {
         // 检查客户端是否已断开连接（双重保险：即使 abort 信号未生效，也能通过标志位退出循环）
         if (isCancelled && isCancelled()) {
@@ -708,6 +1025,7 @@ ${docList}
         const content = chunk.content?.toString() || '';
         const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
         if (cleanContent) {
+          fullResponse += cleanContent;
           if (isFirstChunk) {
             res.write(metadataPrefix + cleanContent);
             isFirstChunk = false;
@@ -717,8 +1035,25 @@ ${docList}
           process.stdout.write(cleanContent);
         }
       }
-      logger.info('流式响应完成', { module: 'PromptService', chunkCount });
+      logger.info('流式响应完成', { module: 'PromptService', chunkCount, fullResponseLength: fullResponse.length, estimatedOutputTokens: estimateTokens(fullResponse) });
       res.end();
+
+      // 记录 token 用量
+      if (onUsageComplete) {
+        onUsageComplete({
+          userId: userId || 'default',
+          sessionId,
+          modelId: getCurrentModelId(),
+          inputTokens: estimateTokensFromMessages(conversions),
+          outputTokens: estimateTokens(fullResponse),
+          historyCount: recentHistory.length,
+          usedKnowledgeBase: hasRetrievedContent,
+          imageCount: images?.length || 0,
+          responseTimeMs: Date.now() - ragStartTime,
+          userMessage: promptText || '',
+          assistantMessage: fullResponse,
+        });
+      }
     } catch (streamError: any) {
       // AbortError 是用户主动取消导致的，属于正常流程，不需要报错
       if (streamError.name === 'AbortError' || streamError.code === 'ABORT_ERR') {
@@ -737,13 +1072,33 @@ ${docList}
       }
     }
   } else {
+    const nonStreamStartTime = Date.now();
     const llm = createLLM();
     const result = await llm.invoke(conversions);
-    // 去除 <think> 标签
+    // 去除 think 标签
     if (typeof result.content === 'string') {
       result.content = result.content.replace(/<think>[\s\S]*?<\/think>/gs, "");
     }
     logger.debug('非流式调用完成', { module: 'PromptService' });
+
+    // 记录 token 用量
+    if (onUsageComplete) {
+      const assistantContent = typeof result.content === 'string' ? result.content : '';
+      onUsageComplete({
+        userId: userId || 'default',
+        sessionId,
+        modelId: getCurrentModelId(),
+        inputTokens: estimateTokensFromMessages(conversions),
+        outputTokens: estimateTokens(assistantContent),
+        historyCount: recentHistory.length,
+        usedKnowledgeBase: hasRetrievedContent,
+        imageCount: images?.length || 0,
+        responseTimeMs: Date.now() - nonStreamStartTime,
+        userMessage: promptText || '',
+        assistantMessage: assistantContent,
+      });
+    }
+
     return result;
   }
 }

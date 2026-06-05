@@ -10,7 +10,7 @@ import { DocumentVersion, VersionStatus, ParsingStatus } from '../entities/docum
 import { DocumentAuditLog } from '../entities/document-audit-log.entity.js';
 import { PendingVectorOp, VectorOpStatus } from '../entities/pending-vector-op.entity.js';
 import { DocumentService } from './document.service';
-import { cleanOrphanVectors } from '../fundamentals/vector-store';
+import { cleanOrphanVectors, fixDraftVectors } from '../fundamentals/vector-store';
 import { logger } from '../fundamentals/logger';
 
 @Injectable()
@@ -149,5 +149,16 @@ export class DocumentSchedulerService {
       .execute();
 
     return result.affected || 0;
+  }
+
+  /**
+   * 修复 draft 状态的向量：将 ChromaDB 和 BM25 中 versionStatus=draft 的向量更新为 active
+   * 用于修复历史版本中因 updateVersionVectorStatus 失败而遗留的 draft 状态
+   */
+  async fixDraftVectors(): Promise<{ fixedChromaCount: number; fixedBM25Count: number }> {
+    logger.info('开始修复 draft 状态向量', { module: 'DocumentScheduler' });
+    const result = await fixDraftVectors();
+    logger.info('draft 向量修复完成', { module: 'DocumentScheduler', ...result });
+    return result;
   }
 }

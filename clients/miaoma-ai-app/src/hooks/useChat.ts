@@ -8,6 +8,8 @@ import {
   getSessionMessages,
   updateSessionTitle,
   toggleSessionPin,
+  duplicateSession as duplicateSessionApi,
+  exportSession as exportSessionApi,
   updateMessage as updateMessageApi,
   deleteMessage as deleteMessageApi,
   uploadFile,
@@ -17,7 +19,7 @@ import {
   switchModel as switchModelApi,
   setModelApiKey,
 } from '../lib/api';
-import type { AvailableModel } from '../lib/api';
+import type { AvailableModel, ToolStatusEvent } from '../lib/api';
 import type { AppSettings } from '../components/Settings/SettingsDialog';
 import { generateId, generateSessionId } from '../lib/utils';
 import { DEFAULT_MESSAGE, ERROR_MESSAGE } from '../lib/constants';
@@ -40,7 +42,9 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
   const [currentModelId, setCurrentModelId] = useState<string>('ollama:minicpm');
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [hasDeepseekApiKey, setHasDeepseekApiKey] = useState(false);
+  const [hasZhipuApiKey, setHasZhipuApiKey] = useState(false);
   const [supportsVision, setSupportsVision] = useState(true);
+  const [toolStatus, setToolStatus] = useState<ToolStatusEvent | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -55,6 +59,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         setCurrentModelId(info.currentModelId);
         setAvailableModels(info.availableModels);
         setHasDeepseekApiKey(info.hasDeepseekApiKey);
+        setHasZhipuApiKey(info.hasZhipuApiKey);
         setSupportsVision(info.supportsVision);
       }
     } catch (error) {
@@ -67,6 +72,11 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
       const result = await switchModelApi(modelId);
       if (result.success) {
         setCurrentModelId(modelId);
+        // 从 availableModels 中查找当前模型的 supportsVision
+        const model = availableModels.find(m => m.id === modelId);
+        if (model) {
+          setSupportsVision(model.supportsVision);
+        }
         console.log(`✅ 已切换模型: ${modelId}`);
       } else {
         console.error('切换模型失败:', result.message);
@@ -83,6 +93,9 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
       const result = await setModelApiKey(provider, apiKey);
       if (result.success && provider === 'deepseek') {
         setHasDeepseekApiKey(true);
+      }
+      if (result.success && provider === 'zhipu') {
+        setHasZhipuApiKey(true);
       }
       return result;
     } catch (error) {
@@ -153,13 +166,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     }
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, isTyping]);
+  // 注意：自动滚动已移至 ChatAgent.tsx 中通过虚拟滚动 virtualizer 处理
 
   const createNewSession = async () => {
     const newSessionId = generateSessionId();
@@ -230,12 +237,19 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     abortControllerRef.current = abortController;
 
     try {
-      await saveChatHistory({
+      const savedUserMsg = await saveChatHistory({
         sessionId: currentSessionId,
         role: 'user',
         content: userInput,
         images,
       });
+
+      // 用数据库返回的 ID 更新前端消息 ID，确保删除时能匹配
+      if (savedUserMsg?.id) {
+        setMessages(prev => prev.map(msg =>
+          msg.id === userMessage.id ? { ...msg, id: savedUserMsg.id.toString() } : msg
+        ));
+      }
 
       // 检查是否是第一条消息（除了默认消息）
       const isFirstMessage = messages.length === 1 && messages[0].id === DEFAULT_MESSAGE.id;
@@ -271,6 +285,9 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         memoryEnabled: appSettings?.memoryEnabled ?? true,
         summaryEnabled: appSettings?.summaryEnabled ?? true,
         injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
+        onToolStatus: (event) => {
+          setToolStatus(event);
+        },
       });
       
       // 设置知识库来源标记
@@ -296,15 +313,30 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         ));
       }
 
+      // 流式响应完成，清除工具状态
+      setToolStatus(null);
+
       // 保存完整的响应
-      await saveChatHistory({
+      const savedAssistantMsg = await saveChatHistory({
         sessionId: currentSessionId,
         role: 'assistant',
         content: fullResponse,
       });
 
+      // 用数据库返回的 ID 更新前端消息 ID，确保删除时能匹配
+      if (savedAssistantMsg?.id) {
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMessageId ? { ...msg, id: savedAssistantMsg.id.toString() } : msg
+        ));
+      }
+
       // 重新加载会话列表以更新会话标题和时间
       await loadSessions();
+
+      // 处理 manage_session 工具返回的前端操作指令
+      if (aiResponse.sessionAction) {
+        handleSessionAction(aiResponse.sessionAction);
+      }
 
     } catch (error: any) {
       // 用户主动取消，不显示错误
@@ -322,7 +354,17 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
       }
     } finally {
       setIsTyping(false);
+      setToolStatus(null);
       abortControllerRef.current = null;
+
+      // 清理空的 AI 回复（连接断开或取消时，AI 可能没有输出任何内容）
+      setMessages(prev => {
+        const lastMsg = prev[prev.length - 1];
+        if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content.trim()) {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
     }
   };
 
@@ -370,6 +412,9 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
             memoryEnabled: appSettings?.memoryEnabled ?? true,
             summaryEnabled: appSettings?.summaryEnabled ?? true,
             injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
+            onToolStatus: (event) => {
+              setToolStatus(event);
+            },
           });
           const reader = aiResponse.stream.getReader();
           let fullResponse = '';
@@ -383,11 +428,17 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
             ));
           }
 
-          await saveChatHistory({
+          const savedAssistantMsg = await saveChatHistory({
             sessionId: currentSessionId,
             role: 'assistant',
             content: fullResponse,
           });
+
+          if (savedAssistantMsg?.id) {
+            setMessages(prev => prev.map(msg =>
+              msg.id === assistantMessageId ? { ...msg, id: savedAssistantMsg.id.toString() } : msg
+            ));
+          }
         } catch (error: any) {
           if (error.name === 'AbortError') {
             console.log('🛑 用户停止了生成');
@@ -413,6 +464,10 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
 
   const clearPendingImages = () => {
     setPendingImages([]);
+  };
+
+  const removePendingImage = (index: number) => {
+    setPendingImages(prev => prev.filter((_, i) => i !== index));
   };
 
   const stopGeneration = () => {
@@ -471,6 +526,30 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     }
   };
 
+  const handleSessionAction = (action: { type: string; payload: any }) => {
+    switch (action.type) {
+      case 'switch_session':
+        if (action.payload?.sessionId) {
+          switchSession(action.payload.sessionId);
+        }
+        break;
+      case 'create_session':
+        // 创建会话已在后端完成，刷新列表并切换
+        loadSessions();
+        if (action.payload?.sessionId) {
+          switchSession(action.payload.sessionId);
+        }
+        break;
+      case 'delete_session':
+        // 删除已在后端完成，刷新列表
+        loadSessions();
+        break;
+      case 'refresh_sessions':
+        loadSessions();
+        break;
+    }
+  };
+
   const renameSession = async (sessionId: string, newTitle: string) => {
     // 乐观更新：先更新本地状态
     const prevSessions = sessions;
@@ -483,6 +562,82 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
       // 失败则回滚
       console.error('更新会话标题失败:', error);
       setSessions(prevSessions);
+    }
+  };
+
+  const duplicateSessionById = async (sessionId: string) => {
+    try {
+      await duplicateSessionApi(sessionId);
+      await loadSessions();
+    } catch (error) {
+      console.error('复制会话失败:', error);
+      throw error;
+    }
+  };
+
+  const exportSessionById = async (sessionId: string, format: 'json' | 'markdown' | 'text' = 'markdown') => {
+    console.log('[导出] 开始导出会话:', sessionId, format);
+    try {
+      const result = await exportSessionApi(sessionId, format);
+      console.log('[导出] API 返回成功:', result.filename);
+
+      let content: string;
+      let mimeType: string;
+      const ext = format === 'markdown' ? 'md' : format === 'text' ? 'txt' : 'json';
+      const filename = result.filename || `session_export.${ext}`;
+
+      if (format === 'json') {
+        content = JSON.stringify({
+          session: result.session,
+          messages: result.messages,
+          exportedAt: result.exportedAt,
+        }, null, 2);
+        mimeType = 'application/json';
+      } else {
+        content = result.content || '';
+        mimeType = format === 'markdown' ? 'text/markdown' : 'text/plain';
+      }
+
+      // 尝试使用 Tauri 原生文件保存对话框
+      let saved = false;
+      try {
+        const isTauri = !!(window as any).__TAURI_INTERNALS__;
+        if (isTauri) {
+          const { save } = await import('@tauri-apps/plugin-dialog');
+          const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+          const filePath = await save({
+            defaultPath: filename,
+            filters: [{
+              name: format === 'markdown' ? 'Markdown' : format === 'json' ? 'JSON' : 'Text',
+              extensions: [ext],
+            }],
+          });
+          if (filePath) {
+            console.log('[导出] Tauri 保存路径:', filePath);
+            await writeTextFile(filePath, content);
+            saved = true;
+          }
+        }
+      } catch (e) {
+        console.warn('[导出] Tauri 保存失败，降级为浏览器下载:', e);
+      }
+
+      if (!saved) {
+        // 浏览器 / Tauri WebView 通用下载方式
+        const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      console.error('[导出] 导出会话失败:', error);
+      throw error;
     }
   };
 
@@ -529,12 +684,14 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     history,
     isTyping,
     isLoading,
+    toolStatus,
     messagesEndRef,
     knowledgeBaseStatus,
     pendingImages,
     sendMessage,
     sendFile,
     clearPendingImages,
+    removePendingImage,
     stopGeneration,
     uploadToKnowledgeBase: uploadToKnowledgeBaseFromChat,
     checkKnowledgeBaseStatus,
@@ -546,9 +703,12 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     deleteSession: deleteSessionById,
     toggleSessionPin: toggleSessionPinById,
     renameSession,
+    duplicateSession: duplicateSessionById,
+    exportSession: exportSessionById,
     currentModelId,
     availableModels,
     hasDeepseekApiKey,
+    hasZhipuApiKey,
     supportsVision,
     switchModel,
     configureApiKey,

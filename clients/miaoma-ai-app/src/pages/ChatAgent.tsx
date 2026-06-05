@@ -16,6 +16,7 @@
 // ==================== React 核心钩子 ====================
 // useState: 组件状态管理  useEffect: 副作用处理  useRef: DOM引用
 import { useState, useEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 // ==================== Lucide 图标库 ====================
 // 提供项目中所有UI图标，按功能分组：
@@ -28,7 +29,7 @@ import { useState, useEffect, useRef } from "react";
 // 模型类型: Cpu(本地), Cloud(线上), Key(API密钥), Settings(设置)
 // 箭头图标: ChevronRight, ChevronLeft, ChevronUp, ChevronDown
 // 用户操作: LogOut(退出), LogIn(登录)
-import { Send, MoreHorizontal, Search, Moon, Sun, Trash2, History, Plus, X, Smile, Image, FileText, Database, Upload, CheckCircle, AlertCircle, Cpu, Cloud, Key, Settings, ChevronRight, ChevronLeft, ChevronUp, ChevronDown, LogOut, LogIn, Zap } from "lucide-react";
+import { Send, X, Smile, Image, FileText, Database, CheckCircle, AlertCircle, Cpu, Cloud, Key, Settings, ChevronRight, ChevronLeft, Check, ThumbsUp, ThumbsDown } from "lucide-react";
 
 // ==================== UI 组件库 (shadcn/ui) ====================
 // Button: 按钮组件，支持多种变体(default/ghost/outline等)和尺寸
@@ -55,14 +56,16 @@ import MarkdownRenderer from "../components/MarkdownRenderer";
 // ==================== 工具函数和常量 ====================
 // formatTime/formatDate: 时间格式化工具，用于消息时间戳和会话日期
 // clearKnowledgeBase: 清空知识库API调用函数
-import { formatTime, formatDate } from "../lib/utils";
-import { clearKnowledgeBase } from "../lib/api";
+import { formatTime } from "../lib/utils";
+import { clearKnowledgeBase, submitFeedback } from "../lib/api";
 import { DocumentManager } from '../components/Document';
 import { KnowledgeSourceManager } from '../components/KnowledgeSource';
 import { ErrorBoundary } from '../components/ui/error-boundary';
 import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
 import HeaderContent from '../components/Chat/HeaderContent';
 import MemorySummaryDialog from '../components/Chat/MemorySummaryDialog';
+import TokenUsagePanel from '../components/Chat/TokenUsagePanel';
+import EvaluationPanel from '../components/Chat/EvaluationPanel';
 import SettingsDialog, { type AppSettings } from '../components/Settings/SettingsDialog';
 // ==================== 组件主体：ChatAgent ====================
 // 智能助手聊天页面的主组件，负责整合所有子模块和状态管理
@@ -84,6 +87,7 @@ const ChatAgent: React.FC = () => {
   const [searchKeyword, setSearchKeyword] = useState("");
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
+  const [apiKeyDialogProvider, setApiKeyDialogProvider] = useState<'deepseek' | 'zhipu'>('deepseek');
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [showModelPanel, setShowModelPanel] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -91,10 +95,17 @@ const ChatAgent: React.FC = () => {
   const [showRecentQuestions, setShowRecentQuestions] = useState(true);
   const [showAuthDialog, setShowAuthDialog] = useState(false);
   const [showMemorySummary, setShowMemorySummary] = useState(false);
+  const [showTokenUsage, setShowTokenUsage] = useState(false);
+  const [showEvaluation, setShowEvaluation] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showDocumentManager, setShowDocumentManager] = useState(false);
   const [showKnowledgeSourceManager, setShowKnowledgeSourceManager] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
+  const [copyToast, setCopyToast] = useState<{ show: boolean; message: string; x: number; y: number }>({ show: false, message: '', x: 0, y: 0 });
+  // 每条消息的反馈状态：key=消息内容hash, value='positive'|'negative'|null
+  const [feedbackState, setFeedbackState] = useState<Record<string, 'positive' | 'negative' | null>>({});
+  // 反馈提示
+  const [feedbackToast, setFeedbackToast] = useState<{ show: boolean; message: string; x: number; y: number }>({ show: false, message: '', x: 0, y: 0 });
 
   // ==================== 应用设置状态 (localStorage 持久化) ====================
   // memoryEnabled: 记忆功能总开关，关闭后不提取/不注入记忆
@@ -116,7 +127,9 @@ const ChatAgent: React.FC = () => {
 
   // ==================== DOM引用 (useRef) ====================
   // avatarInputRef: 头像文件上传input的DOM引用，用于触发文件选择
+  // imageInputRef: 图片上传input的DOM引用，用于重置value以支持重复上传同一文件
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // ==================== 自定义Hooks - 用户认证模块 ====================
   // user: 当前登录用户信息（用户名、邮箱、头像等）
@@ -151,12 +164,14 @@ const ChatAgent: React.FC = () => {
     history,
     isTyping,
     isLoading,
+    toolStatus,
     messagesEndRef,
     knowledgeBaseStatus,
     pendingImages,
     sendMessage,
     sendFile,
     clearPendingImages,
+    removePendingImage,
     stopGeneration,
     checkKnowledgeBaseStatus,
     updateMessage,
@@ -167,13 +182,50 @@ const ChatAgent: React.FC = () => {
     deleteSession,
     toggleSessionPin,
     renameSession,
+    duplicateSession,
+    exportSession,
     currentModelId,
     availableModels,
     hasDeepseekApiKey,
+    hasZhipuApiKey,
     supportsVision,
     switchModel,
     configureApiKey,
   } = useChat(isAuthenticated, appSettings);
+
+  // ==================== 虚拟滚动相关 ====================
+  const chatListRef = useRef<HTMLDivElement>(null);
+  // 跟踪用户是否在底部附近，用于决定是否自动滚动
+  const isAtBottomRef = useRef(true);
+  // 跟踪是否是会话切换（需要滚动到底部）
+  const isSessionSwitchRef = useRef(false);
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => chatListRef.current,
+    estimateSize: (index) => {
+      const msg = messages[index];
+      if (!msg) return 100;
+      if (msg.role === 'user') {
+        // 用户消息：考虑图片和文本长度
+        const len = msg.content?.length || 0;
+        if (len < 50) return 80;
+        if (len < 200) return 120;
+        return 180;
+      }
+      // AI 消息：Markdown 渲染后高度通常远大于纯文本
+      // 代码块、列表、表格等会显著增加高度
+      const len = msg.content?.length || 0;
+      if (len < 50) return 120;
+      if (len < 200) return 200;
+      if (len < 500) return 350;
+      if (len < 1000) return 500;
+      if (len < 2000) return 700;
+      if (len < 4000) return 1000;
+      return 1400;
+    },
+    overscan: 15,
+  });
 
   // ==================== 知识库操作反馈状态 ====================
   // 用于显示知识库上传/清空的成功或失败提示消息
@@ -206,6 +258,52 @@ const ChatAgent: React.FC = () => {
     return () => {
       document.removeEventListener('click', handleClickOutside);
     };
+  }, []);
+
+  // 副作用3: 新消息时自动滚动到底部（虚拟滚动）
+  // 只在用户处于底部附近时自动滚动，避免用户上翻时被强制拉回
+  const prevMessageCountRef = useRef(messages.length);
+  useEffect(() => {
+    if (messages.length > 0 && messages.length > prevMessageCountRef.current) {
+      // 新消息到来时，如果用户在底部附近，自动滚动
+      if (isAtBottomRef.current) {
+        // 延迟一帧让虚拟滚动先完成测量
+        requestAnimationFrame(() => {
+          virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'smooth' });
+        });
+      }
+    }
+    prevMessageCountRef.current = messages.length;
+  }, [messages.length]);
+
+  // 副作用3.5: 会话切换时滚动到底部
+  // 切换会话后等虚拟滚动测量完成再滚动，避免基于估算位置的跳变
+  useEffect(() => {
+    if (isSessionSwitchRef.current && messages.length > 0) {
+      isSessionSwitchRef.current = false;
+      // 延迟两帧确保虚拟滚动完成初始测量
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'instant' });
+          isAtBottomRef.current = true;
+        });
+      });
+    }
+  }, [messages]);
+
+  // 副作用3.6: 监听滚动位置，判断用户是否在底部附近
+  useEffect(() => {
+    const scrollEl = chatListRef.current;
+    if (!scrollEl) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = scrollEl;
+      // 距离底部 150px 以内视为"在底部"
+      isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 150;
+    };
+
+    scrollEl.addEventListener('scroll', handleScroll, { passive: true });
+    return () => scrollEl.removeEventListener('scroll', handleScroll);
   }, []);
 
   // ==================== 自定义Hooks - 主题管理 ====================
@@ -253,13 +351,6 @@ const ChatAgent: React.FC = () => {
     }
   };
 
-  // 功能: 会话搜索过滤
-  // 模块: 左侧边栏 - 会话管理
-  // 根据搜索关键词过滤会话列表，支持不区分大小写的模糊匹配
-  const filteredSessions = sessions.filter(session =>
-    session.title.toLowerCase().includes(searchKeyword.toLowerCase())
-  );
-
   // 功能: 发送消息
   // 模块: 聊天核心 - 消息发送
   // 流程: 1. 校验输入（文本或图片至少有一项） 2. 清空输入框 3. 调用sendMessage发送
@@ -287,14 +378,10 @@ const ChatAgent: React.FC = () => {
     setInputValue(query);
   };
 
-  // 功能: 删除会话
-  // 模块: 左侧边栏 - 会话管理
-  // 点击删除按钮后弹出确认对话框，确认后调用deleteSession删除
-  const handleDeleteSession = (sessionId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirm('确定要删除这个会话吗？')) {
-      deleteSession(sessionId);
-    }
+  // 功能: 切换会话时设置标记，用于滚动到底部
+  const handleSwitchSession = (sessionId: string) => {
+    isSessionSwitchRef.current = true;
+    switchSession(sessionId);
   };
 
   // ==================== JSX 渲染区域 ====================
@@ -364,7 +451,7 @@ const ChatAgent: React.FC = () => {
                   history={history}
                   showHistoryList={showHistoryList}
                   showRecentQuestions={showRecentQuestions}
-                  onSwitchSession={switchSession}
+                  onSwitchSession={handleSwitchSession}
                   onDeleteSession={deleteSession}
                   onTogglePin={toggleSessionPin}
                   onHistoryClick={handleHistoryClick}
@@ -374,6 +461,8 @@ const ChatAgent: React.FC = () => {
                   onClearSearch={() => setSearchKeyword("")}
                   onCreateSession={createNewSession}
                   onRenameSession={renameSession}
+                  onDuplicateSession={duplicateSession}
+                  onExportSession={exportSession}
                 />
 
                 {/* ==================== 左侧边栏 - 用户信息区域 ====================
@@ -431,6 +520,8 @@ const ChatAgent: React.FC = () => {
             onOpenMemorySummary={() => setShowMemorySummary(true)}
             onOpenDocumentManager={() => setShowDocumentManager(true)}
             onOpenKnowledgeSourceManager={() => setShowKnowledgeSourceManager(true)}
+            onOpenTokenUsage={() => setShowTokenUsage(true)}
+            onOpenEvaluation={() => setShowEvaluation(true)}
           />
 
           {/* ==================== 知识库操作反馈提示 ====================
@@ -476,160 +567,275 @@ const ChatAgent: React.FC = () => {
               - 用户消息：支持显示图片预览
               - 知识库来源：显示绿色"知识库"标签和引用文档数量
         */}
-          <div className="flex-1 overflow-y-auto p-6 space-y-4 min-w-0" style={{ overflowX: 'hidden' }}>
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} min-w-0`}
-              >
-                {/* 单条消息容器：包含头像和消息内容 */}
-                <div
-                  className={`flex ${message.role === "user" ? "flex-row-reverse" : "flex-row"} gap-3`}
-                  style={{ maxWidth: '80%', minWidth: 0 }}
-                >
-                  {/* 消息头像：用户或AI */}
-                  <Avatar className="h-8 w-8 flex-shrink-0">
-                    {message.role === "user" ? (
-                      <>
-                        <AvatarImage src="https://neeko-copilot.bytedance.net/api/text2image?prompt=user%20avatar&size=512x512" />
-                        <AvatarFallback>用户</AvatarFallback>
-                      </>
-                    ) : (
-                      <>
-                        <AvatarImage src="https://neeko-copilot.bytedance.net/api/text2image?prompt=AI%20assistant%20avatar&size=512x512" />
-                        <AvatarFallback>AI</AvatarFallback>
-                      </>
-                    )}
-                  </Avatar>
-                  {/* 消息内容区域：气泡 + 元信息 */}
-                  <div className="flex flex-col min-w-0" style={{ maxWidth: 'calc(100% - 48px)' }}>
-                    {/* 消息气泡容器 */}
-                    <div className="relative" style={{ maxWidth: '100%' }}>
-                      {/* 消息气泡：根据角色显示不同样式
-                        用户: 主题色背景(bg-primary)、白色文字、右上角无圆角
-                        AI: 卡片背景(bg-card)、边框、左上角无圆角
-                    */}
-                      <div
-                        className={`rounded-lg p-3 shadow-sm transition-all duration-200 ${message.role === "user"
-                          ? "bg-primary text-white rounded-tr-none cyberpunk-user-msg"
-                          : "bg-card border border-gray-200 dark:border-slate-600 text-gray-900 dark:text-white rounded-tl-none cyberpunk-ai-msg"
-                          }`}
-                        style={{
-                          maxWidth: '100%',
-                          wordBreak: 'break-word',
-                          overflowWrap: 'break-word',
-                          minWidth: 0,
-                        }}
-                      >
-                        {/* AI消息：使用Markdown渲染，过滤内部思考标签 */}
-                        {message.role === "assistant" ? (
-                          <div className="min-w-0" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
-                            <MarkdownRenderer>{message.content.replace(/<tool_call>[\s\S]*?<\/think>/gs, "")}</MarkdownRenderer>
-                          </div>
-                        ) : (
-                          /* 用户消息：支持图片预览 + Markdown渲染 */
+          <div ref={chatListRef} className="flex-1 overflow-y-auto p-6 min-w-0" style={{ overflowX: 'hidden' }}>
+            <div
+              style={{
+                height: virtualizer.getTotalSize(),
+                width: '100%',
+                position: 'relative',
+              }}
+            >
+              {virtualizer.getVirtualItems().map((virtualItem) => {
+                const message = messages[virtualItem.index];
+                return (
+                  <div
+                    key={message.id}
+                    data-index={virtualItem.index}
+                    ref={virtualizer.measureElement}
+                    className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} min-w-0`}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualItem.start}px)`,
+                      paddingBottom: '16px',
+                    }}
+                  >
+                    {/* 单条消息容器：包含头像和消息内容 */}
+                    <div
+                      className={`flex ${message.role === "user" ? "flex-row-reverse" : "flex-row"} gap-3`}
+                      style={{ maxWidth: '80%', minWidth: 0 }}
+                    >
+                      {/* 消息头像：用户或AI */}
+                      <Avatar className="h-8 w-8 flex-shrink-0">
+                        {message.role === "user" ? (
                           <>
-                            {/* 用户发送的图片预览：点击可新窗口打开 */}
-                            {message.images && message.images.length > 0 && (
-                              <div className="flex flex-wrap gap-2 mb-2">
-                                {message.images.map((imgUrl, imgIdx) => (
-                                  <img
-                                    key={imgIdx}
-                                    src={imgUrl}
-                                    alt={`图片 ${imgIdx + 1}`}
-                                    className="max-w-[200px] max-h-[200px] object-contain rounded"
-                                    style={{ cursor: 'pointer' }}
-                                    onClick={() => window.open(imgUrl, '_blank')}
-                                  />
-                                ))}
-                              </div>
-                            )}
-                            <MarkdownRenderer>{message.content}</MarkdownRenderer>
+                            <AvatarImage src="https://neeko-copilot.bytedance.net/api/text2image?prompt=user%20avatar&size=512x512" />
+                            <AvatarFallback>用户</AvatarFallback>
+                          </>
+                        ) : (
+                          <>
+                            <AvatarImage src="https://neeko-copilot.bytedance.net/api/text2image?prompt=AI%20assistant%20avatar&size=512x512" />
+                            <AvatarFallback>AI</AvatarFallback>
                           </>
                         )}
-                      </div>
-                      {/* 用户消息操作按钮：仅对用户消息显示
-                        - 编辑按钮: 弹出prompt修改消息内容，调用updateMessage更新
-                        - 删除按钮: 弹出确认对话框，调用deleteMessage删除
-                    */}
-                      {message.role === "user" && (
-                        <div className="top-1 right-1 flex space-x-1">
-                          {/* 编辑消息按钮 */}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-gray-400 hover:text-blue-500"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const newContent = prompt('请输入新的消息内容:', message.content);
-                              if (newContent && newContent.trim()) {
-                                updateMessage(message.id, newContent.trim())
-                                  .then(() => { })
-                                  .catch((error) => {
-                                    alert('更新消息失败: ' + (error.message || '未知错误'));
-                                  });
-                              }
+                      </Avatar>
+                      {/* 消息内容区域：气泡 + 元信息 */}
+                      <div className="flex flex-col min-w-0" style={{ maxWidth: 'calc(100% - 48px)' }}>
+                        {/* 消息气泡容器 */}
+                        <div className="relative" style={{ maxWidth: '100%' }}>
+                          {/* 消息气泡：根据角色显示不同样式
+                            用户: 主题色背景(bg-primary)、白色文字、右上角无圆角
+                            AI: 卡片背景(bg-card)、边框、左上角无圆角
+                        */}
+                          <div
+                            className={`rounded-lg p-3 shadow-sm transition-all duration-200 ${message.role === "user"
+                              ? "bg-primary text-white rounded-tr-none cyberpunk-user-msg"
+                              : "bg-card border border-gray-200 dark:border-slate-600 text-gray-900 dark:text-white rounded-tl-none cyberpunk-ai-msg"
+                              }`}
+                            style={{
+                              maxWidth: '100%',
+                              wordBreak: 'break-word',
+                              overflowWrap: 'break-word',
+                              minWidth: 0,
                             }}
                           >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                            </svg>
-                          </Button>
-                          {/* 删除消息按钮 */}
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-gray-400 hover:text-red-500"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (confirm('确定要删除这条消息吗？将同时删除AI的回复。')) {
-                                deleteMessage(message.id)
-                                  .then(() => { })
-                                  .catch((error) => {
-                                    alert('删除消息失败: ' + (error.message || '未知错误'));
-                                  });
-                              }
-                            }}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                    {/* 消息元信息栏：知识库来源标记 + 时间戳 + 已读标记 */}
-                    <div className="flex items-center mt-1">
-                      {/* 知识库来源标记：仅当消息来自知识库检索时显示
-                        显示绿色标签，包含Database图标和引用文档数量
-                    */}
-                      {message.fromKnowledgeBase && (
-                        <span className="text-xs px-1.5 py-0.5 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded mr-2 flex items-center">
-                          <Database className="h-3 w-3 mr-0.5" />
-                          知识库
-                          {message.contextCount && message.contextCount > 0 && (
-                            <span className="ml-1 text-xs opacity-75">({message.contextCount}条)</span>
+                            {/* AI消息：使用Markdown渲染，过滤内部思考标签 */}
+                            {message.role === "assistant" ? (
+                              <div className="min-w-0" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+                                <MarkdownRenderer>{message.content}</MarkdownRenderer>
+                              </div>
+                            ) : (
+                              /* 用户消息：支持图片预览 + Markdown渲染 */
+                              <>
+                                {/* 用户发送的图片预览：点击可新窗口打开 */}
+                                {message.images && message.images.length > 0 && (
+                                  <div className="flex flex-wrap gap-2 mb-2">
+                                    {message.images.map((imgUrl, imgIdx) => (
+                                      <img
+                                        key={imgIdx}
+                                        src={imgUrl}
+                                        alt={`图片 ${imgIdx + 1}`}
+                                        className="max-w-[200px] max-h-[200px] object-contain rounded"
+                                        style={{ cursor: 'pointer' }}
+                                        onClick={() => window.open(imgUrl, '_blank')}
+                                      />
+                                    ))}
+                                  </div>
+                                )}
+                                <MarkdownRenderer>{message.content}</MarkdownRenderer>
+                              </>
+                            )}
+                          </div>
+                          {/* 用户消息操作按钮：仅对用户消息显示
+                            - 编辑按钮: 弹出prompt修改消息内容，调用updateMessage更新
+                            - 删除按钮: 弹出确认对话框，调用deleteMessage删除
+                        */}
+                          {message.role === "user" && (
+                            <div className="top-1 right-1 flex space-x-1">
+                              {/* 编辑消息按钮 */}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-gray-400 hover:text-blue-500"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const newContent = prompt('请输入新的消息内容:', message.content);
+                                  if (newContent && newContent.trim()) {
+                                    updateMessage(message.id, newContent.trim())
+                                      .then(() => { })
+                                      .catch((error) => {
+                                        alert('更新消息失败: ' + (error.message || '未知错误'));
+                                      });
+                                  }
+                                }}
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </Button>
+                              {/* 删除消息按钮 */}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-gray-400 hover:text-red-500"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (confirm('确定要删除这条消息吗？将同时删除AI的回复。')) {
+                                    deleteMessage(message.id)
+                                      .then(() => { })
+                                      .catch((error) => {
+                                        alert('删除消息失败: ' + (error.message || '未知错误'));
+                                      });
+                                  }
+                                }}
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </Button>
+                            </div>
                           )}
-                        </span>
-                      )}
-                      {/* 消息时间戳 */}
-                      <p className="text-xs text-gray-500 dark:text-gray-300 ml-2">
-                        {formatTime(message.timestamp)}
-                      </p>
-                      {/* 用户消息已读标记 */}
-                      {message.role === "user" && (
-                        <span className="text-xs text-gray-400 dark:text-gray-400 ml-2">
-                          ✓
-                        </span>
-                      )}
+                          {/* AI消息反馈按钮：点赞/点踩/复制 */}
+                          {message.role === "assistant" && (
+                            <div className="top-1 right-1 flex space-x-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                                title="复制内容"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const btn = e.currentTarget;
+                                  const rect = btn.getBoundingClientRect();
+                                  try {
+                                    const contentToCopy = message.content.replace(/<think[\s\S]*?<\/think>/gs, "");
+                                    await navigator.clipboard.writeText(contentToCopy);
+                                    setCopyToast({ show: true, message: '内容已复制', x: rect.left, y: rect.top - 8 });
+                                    setTimeout(() => setCopyToast(prev => ({ ...prev, show: false })), 2000);
+                                  } catch {
+                                    setCopyToast({ show: true, message: '复制失败，请重试', x: rect.left, y: rect.top - 8 });
+                                    setTimeout(() => setCopyToast(prev => ({ ...prev, show: false })), 2000);
+                                  }
+                                }}
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className={`h-6 w-6 ${feedbackState[message.id] === 'positive' ? 'text-green-500' : 'text-gray-400 hover:text-green-500'}`}
+                                title="有帮助"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const btn = e.currentTarget;
+                                  const rect = btn.getBoundingClientRect();
+                                  const prevMsg = messages[virtualItem.index - 1];
+                                  try {
+                                    const result = await submitFeedback({
+                                      sessionId: currentSessionId || '',
+                                      userMessage: prevMsg?.role === 'user' ? prevMsg.content : '',
+                                      assistantMessage: message.content,
+                                      rating: 'positive',
+                                      usedKnowledgeBase: message.fromKnowledgeBase,
+                                    });
+                                    if (result.action === 'created') {
+                                      setFeedbackState(prev => ({ ...prev, [message.id]: 'positive' }));
+                                      setFeedbackToast({ show: true, message: '已点赞', x: rect.left, y: rect.top - 8 });
+                                    } else {
+                                      setFeedbackState(prev => ({ ...prev, [message.id]: null }));
+                                      setFeedbackToast({ show: true, message: '已取消点赞', x: rect.left, y: rect.top - 8 });
+                                    }
+                                    setTimeout(() => setFeedbackToast(prev => ({ ...prev, show: false })), 1500);
+                                  } catch (err) {
+                                    console.error('提交反馈失败:', err);
+                                  }
+                                }}
+                              >
+                                <ThumbsUp className="h-3 w-3" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className={`h-6 w-6 ${feedbackState[message.id] === 'negative' ? 'text-red-500' : 'text-gray-400 hover:text-red-500'}`}
+                                title="需改进"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const btn = e.currentTarget;
+                                  const rect = btn.getBoundingClientRect();
+                                  const prevMsg = messages[virtualItem.index - 1];
+                                  try {
+                                    const result = await submitFeedback({
+                                      sessionId: currentSessionId || '',
+                                      userMessage: prevMsg?.role === 'user' ? prevMsg.content : '',
+                                      assistantMessage: message.content,
+                                      rating: 'negative',
+                                      usedKnowledgeBase: message.fromKnowledgeBase,
+                                    });
+                                    if (result.action === 'created') {
+                                      setFeedbackState(prev => ({ ...prev, [message.id]: 'negative' }));
+                                      setFeedbackToast({ show: true, message: '已点踩', x: rect.left, y: rect.top - 8 });
+                                    } else {
+                                      setFeedbackState(prev => ({ ...prev, [message.id]: null }));
+                                      setFeedbackToast({ show: true, message: '已取消点踩', x: rect.left, y: rect.top - 8 });
+                                    }
+                                    setTimeout(() => setFeedbackToast(prev => ({ ...prev, show: false })), 1500);
+                                  } catch (err) {
+                                    console.error('提交反馈失败:', err);
+                                  }
+                                }}
+                              >
+                                <ThumbsDown className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        {/* 消息元信息栏：知识库来源标记 + 时间戳 + 已读标记 */}
+                        <div className="flex items-center mt-1">
+                          {/* 知识库来源标记：仅当消息来自知识库检索时显示
+                            显示绿色标签，包含Database图标和引用文档数量
+                        */}
+                          {message.fromKnowledgeBase && (
+                            <span className="text-xs px-1.5 py-0.5 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded mr-2 flex items-center">
+                              <Database className="h-3 w-3 mr-0.5" />
+                              知识库
+                              {message.contextCount && message.contextCount > 0 && (
+                                <span className="ml-1 text-xs opacity-75">({message.contextCount}条)</span>
+                              )}
+                            </span>
+                          )}
+                          {/* 消息时间戳 */}
+                          <p className="text-xs text-gray-500 dark:text-gray-300 ml-2">
+                            {formatTime(message.timestamp)}
+                          </p>
+                          {/* 用户消息已读标记 */}
+                          {message.role === "user" && (
+                            <span className="text-xs text-gray-400 dark:text-gray-400 ml-2">
+                              ✓
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
-            ))}
+                );
+              })}
+            </div>
             {/* AI正在输入动画：当isTyping为true时显示
-              显示三个跳动的圆点，模拟打字动画效果
-              每个圆点有不同的animationDelay，形成波浪效果
+              如果有工具调用状态，显示进度提示；否则显示跳动的圆点
           */}
             {isTyping && (
               <div className="flex justify-start">
@@ -639,11 +845,21 @@ const ChatAgent: React.FC = () => {
                     <AvatarFallback>AI</AvatarFallback>
                   </Avatar>
                   <div className="bg-card border border-gray-200 dark:border-slate-600 rounded-lg p-3 cyberpunk-ai-msg">
-                    <div className="flex space-x-1">
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></div>
-                    </div>
+                    {toolStatus && toolStatus.status !== 'done' ? (
+                      <div className="flex items-center space-x-2 text-sm text-muted-foreground">
+                        <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>{toolStatus.label}{toolStatus.status === 'executing' ? '中...' : '...'}</span>
+                      </div>
+                    ) : (
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }}></div>
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }}></div>
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }}></div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -692,7 +908,7 @@ const ChatAgent: React.FC = () => {
                       />
                       {/* 悬停删除按钮 */}
                       <button
-                        onClick={() => clearPendingImages()}
+                        onClick={() => removePendingImage(index)}
                         className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full h-5 w-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         <X className="h-3 w-3" />
@@ -717,6 +933,7 @@ const ChatAgent: React.FC = () => {
               */}
                 <label className={`cursor-pointer ${!supportsVision ? 'opacity-40 pointer-events-none' : ''}`}>
                   <input
+                    ref={imageInputRef}
                     type="file"
                     accept="image/*"
                     className="hidden"
@@ -726,6 +943,8 @@ const ChatAgent: React.FC = () => {
                       if (file) {
                         sendFile(file);
                       }
+                      // 重置 input value，确保删除图片后可以再次选择同一文件
+                      e.target.value = '';
                     }}
                   />
                   <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 cyberpunk-icon-glow" title={!supportsVision ? '当前模型不支持图片' : '上传图片'}>
@@ -745,6 +964,8 @@ const ChatAgent: React.FC = () => {
                       if (file) {
                         sendFile(file);
                       }
+                      // 重置 input value，确保删除图片后可以再次选择同一文件
+                      e.target.value = '';
                     }}
                   />
                   <Button asChild variant="ghost" size="icon" className="rounded-full hover:bg-gray-100 dark:hover:bg-slate-700 cyberpunk-icon-glow">
@@ -886,7 +1107,7 @@ const ChatAgent: React.FC = () => {
                 {availableModels.filter(m => m.provider === 'deepseek').length > 0 && (
                   <div className="px-3 py-2 border-t border-gray-100 dark:border-slate-600">
                     <p className="text-xs font-medium text-gray-400 dark:text-gray-400 px-1 mb-1 flex items-center cyberpunk-model-group-label">
-                      <Cloud className="h-3 w-3 mr-1" /> 线上模型
+                      <Cloud className="h-3 w-3 mr-1" /> DeepSeek 线上模型
                     </p>
                     {availableModels.filter(m => m.provider === 'deepseek').map(model => (
                       <button
@@ -897,6 +1118,7 @@ const ChatAgent: React.FC = () => {
                           }`}
                         onClick={async () => {
                           if (!hasDeepseekApiKey) {
+                            setApiKeyDialogProvider('deepseek');
                             setShowApiKeyDialog(true);
                             return;
                           }
@@ -907,8 +1129,47 @@ const ChatAgent: React.FC = () => {
                         <div className="flex items-center justify-between">
                           <p className="text-sm text-gray-900 dark:text-white flex items-center cyberpunk-model-item-name">
                             {model.name}
-                            {/* 未配置API Key时显示黄色Key图标提示 */}
                             {!hasDeepseekApiKey && (
+                              <Key className="h-3 w-3 ml-1 text-yellow-500" />
+                            )}
+                          </p>
+                          {currentModelId === model.id && (
+                            <CheckCircle className="h-4 w-4 text-blue-500 flex-shrink-0 cyberpunk-model-item-check" />
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-300 mt-0.5 cyberpunk-model-item-desc">{model.description}</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* 智谱线上模型列表 */}
+                {availableModels.filter(m => m.provider === 'zhipu').length > 0 && (
+                  <div className="px-3 py-2 border-t border-gray-100 dark:border-slate-600">
+                    <p className="text-xs font-medium text-gray-400 dark:text-gray-400 px-1 mb-1 flex items-center cyberpunk-model-group-label">
+                      <Cloud className="h-3 w-3 mr-1" /> 智谱线上模型
+                    </p>
+                    {availableModels.filter(m => m.provider === 'zhipu').map(model => (
+                      <button
+                        key={model.id}
+                        className={`w-full px-3 py-2.5 text-left rounded-lg mb-1 transition-colors ${currentModelId === model.id
+                            ? 'bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800'
+                            : 'hover:bg-gray-50 dark:hover:bg-slate-700 border border-transparent'
+                          }`}
+                        onClick={async () => {
+                          if (!hasZhipuApiKey) {
+                            setApiKeyDialogProvider('zhipu');
+                            setShowApiKeyDialog(true);
+                            return;
+                          }
+                          const result = await switchModel(model.id);
+                          if (!result.success) alert(result.message);
+                        }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm text-gray-900 dark:text-white flex items-center cyberpunk-model-item-name">
+                            {model.name}
+                            {!hasZhipuApiKey && (
                               <Key className="h-3 w-3 ml-1 text-yellow-500" />
                             )}
                           </p>
@@ -923,45 +1184,56 @@ const ChatAgent: React.FC = () => {
                 )}
               </div>
 
-              {/* DeepSeek API Key配置入口：当未配置时显示在面板底部 */}
-              {!hasDeepseekApiKey && (
+              {/* API Key配置入口 */}
+              {(!hasDeepseekApiKey || !hasZhipuApiKey) && (
                 <div className="px-3 py-2 border-t border-gray-100 dark:border-slate-600">
-                  <button
-                    className="w-full px-3 py-2 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg flex items-center transition-colors cyberpunk-model-apikey-btn"
-                    onClick={() => setShowApiKeyDialog(true)}
-                  >
-                    <Key className="h-4 w-4 mr-2" />
-                    配置 DeepSeek API Key
-                  </button>
+                  {!hasDeepseekApiKey && (
+                    <button
+                      className="w-full px-3 py-2 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg flex items-center transition-colors cyberpunk-model-apikey-btn"
+                      onClick={() => { setApiKeyDialogProvider('deepseek'); setShowApiKeyDialog(true); }}
+                    >
+                      <Key className="h-4 w-4 mr-2" />
+                      配置 DeepSeek API Key
+                    </button>
+                  )}
+                  {!hasZhipuApiKey && (
+                    <button
+                      className="w-full px-3 py-2 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg flex items-center transition-colors cyberpunk-model-apikey-btn"
+                      onClick={() => { setApiKeyDialogProvider('zhipu'); setShowApiKeyDialog(true); }}
+                    >
+                      <Key className="h-4 w-4 mr-2" />
+                      配置智谱 API Key
+                    </button>
+                  )}
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* ==================== DeepSeek API Key配置弹窗 ====================
-          模块: 模型管理 - API密钥配置
-          触发: 点击"配置 DeepSeek API Key"按钮或点击未配置Key的线上模型
-          功能: 输入并保存DeepSeek API Key，用于调用线上模型
-          交互:
-            - 点击遮罩层或取消按钮关闭弹窗
-            - 输入框支持密码类型显示（隐藏输入内容）
-            - 保存按钮在输入为空时禁用
-            - 保存成功后自动关闭弹窗，失败时alert提示
-      */}
+        {/* ==================== API Key配置弹窗 ==================== */}
         {showApiKeyDialog && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 cyberpunk-apikey-dialog-bg" onClick={() => setShowApiKeyDialog(false)}>
             <div className="bg-card rounded-lg p-6 w-96 shadow-xl cyberpunk-apikey-dialog-card" onClick={e => e.stopPropagation()}>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2 cyberpunk-apikey-dialog-title">配置 DeepSeek API Key</h3>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2 cyberpunk-apikey-dialog-title">
+                配置 {apiKeyDialogProvider === 'deepseek' ? 'DeepSeek' : '智谱'} API Key
+              </h3>
               <p className="text-sm text-gray-500 dark:text-gray-300 mb-4 cyberpunk-apikey-dialog-desc">
-                使用 DeepSeek 线上模型需要 API Key，
-                <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">点击获取</a>
+                使用 {apiKeyDialogProvider === 'deepseek' ? 'DeepSeek' : '智谱'} 线上模型需要 API Key，
+                <a
+                  href={apiKeyDialogProvider === 'deepseek' ? 'https://platform.deepseek.com/api_keys' : 'https://open.bigmodel.cn/usercenter/apikeys'}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-500 hover:underline"
+                >
+                  点击获取
+                </a>
               </p>
               <input
                 type="password"
                 value={apiKeyInput}
                 onChange={e => setApiKeyInput(e.target.value)}
-                placeholder="sk-..."
+                placeholder={apiKeyDialogProvider === 'deepseek' ? 'sk-...' : '请输入智谱 API Key'}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 mb-4 cyberpunk-apikey-dialog-input"
               />
               <div className="flex justify-end space-x-2">
@@ -971,7 +1243,7 @@ const ChatAgent: React.FC = () => {
                   className="bg-blue-600 hover:bg-blue-700 text-white cyberpunk-apikey-dialog-save"
                   disabled={!apiKeyInput.trim()}
                   onClick={async () => {
-                    const result = await configureApiKey('deepseek', apiKeyInput.trim());
+                    const result = await configureApiKey(apiKeyDialogProvider, apiKeyInput.trim());
                     if (result.success) {
                       setShowApiKeyDialog(false);
                       setApiKeyInput('');
@@ -1010,6 +1282,14 @@ const ChatAgent: React.FC = () => {
         onClose={() => setShowMemorySummary(false)}
         currentSessionId={currentSessionId}
       />
+      <TokenUsagePanel
+        open={showTokenUsage}
+        onClose={() => setShowTokenUsage(false)}
+      />
+      <EvaluationPanel
+        open={showEvaluation}
+        onClose={() => setShowEvaluation(false)}
+      />
       <SettingsDialog
         open={showSettings}
         onClose={() => setShowSettings(false)}
@@ -1033,6 +1313,30 @@ const ChatAgent: React.FC = () => {
             <ErrorBoundary>
               <KnowledgeSourceManager onClose={() => setShowKnowledgeSourceManager(false)} onContentChange={checkKnowledgeBaseStatus} />
             </ErrorBoundary>
+          </div>
+        </div>
+      )}
+
+      {/* 复制成功提示 Toast - 跟随按钮位置 */}
+      {copyToast.show && (
+        <div
+          className="fixed z-[100] animate-in fade-in slide-in-from-bottom-2 duration-300 pointer-events-none"
+          style={{ left: copyToast.x, top: copyToast.y, transform: 'translate(-50%, -100%)' }}
+        >
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg shadow-lg bg-green-600 text-white text-xs whitespace-nowrap">
+            <Check className="h-3 w-3" />
+            {copyToast.message}
+          </div>
+        </div>
+      )}
+      {/* 反馈提示 Toast - 跟随按钮位置 */}
+      {feedbackToast.show && (
+        <div
+          className="fixed z-[100] animate-in fade-in slide-in-from-bottom-2 duration-300 pointer-events-none"
+          style={{ left: feedbackToast.x, top: feedbackToast.y, transform: 'translate(-50%, -100%)' }}
+        >
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg shadow-lg bg-blue-600 text-white text-xs whitespace-nowrap">
+            {feedbackToast.message}
           </div>
         </div>
       )}

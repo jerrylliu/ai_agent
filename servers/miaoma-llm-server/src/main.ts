@@ -5,7 +5,7 @@ import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import * as express from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
-import { validateSearchWebConfig } from './fundamentals/tools';
+import { validateSearchWebConfig, validateWeatherConfig } from './fundamentals/tools';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -13,6 +13,7 @@ async function bootstrap() {
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
 
   validateSearchWebConfig();
+  validateWeatherConfig();
   
   // 配置 bodyParser，支持大文件上传
   app.use(express.json({ limit: '50mb' }));
@@ -33,10 +34,9 @@ async function bootstrap() {
 
   // 拼接上传目录的绝对路径
   // __dirname: 编译后的 JS 文件所在目录（dist/）
-  // '..': 回到 src/ 目录
   // '..': 回到项目根目录（servers/miaoma-llm-server/）
   // 'uploads': 上传文件存储的目录名
-  const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+  const uploadDir = path.join(__dirname, '..', 'uploads');
 
   // 检查 uploads 目录是否存在
   if (!fs.existsSync(uploadDir)) {

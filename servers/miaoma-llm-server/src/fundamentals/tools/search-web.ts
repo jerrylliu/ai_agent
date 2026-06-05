@@ -54,7 +54,7 @@ export const searchWebSchema = {
   type: 'function' as const,
   function: {
     name: 'search_web',
-    description: '联网搜索实时信息。当用户的问题涉及最新新闻、实时数据、当前事件或本地知识库中没有的实时信息时，使用此工具进行网络搜索。不要对知识库中已有的静态内容使用此工具。',
+    description: '联网搜索实时信息。当用户的问题涉及最新新闻、实时数据、当前事件或本地知识库中没有的实时信息时，使用此工具进行网络搜索。不要对知识库中已有的静态内容使用此工具。注意：查询天气信息时请使用 get_weather 工具，不要使用此工具。',
     parameters: {
       type: 'object',
       properties: {

@@ -39,6 +39,8 @@ export class KnowledgeSourceService {
     syncInterval?: number;
     maxDepth?: number;
     maxPages?: number;
+    preferMarkdown?: boolean;
+    enableJsRendering?: boolean;
   }): Promise<KnowledgeSource> {
     const source = this.sourceRepo.create({
       name: data.name,
@@ -47,6 +49,8 @@ export class KnowledgeSourceService {
       syncInterval: data.syncInterval ?? 60,
       maxDepth: data.maxDepth ?? 2,
       maxPages: data.maxPages ?? 50,
+      preferMarkdown: data.preferMarkdown ?? true,
+      enableJsRendering: data.enableJsRendering ?? false,
       lastSyncStatus: SyncStatus.IDLE,
       enabled: true,
     });
@@ -66,7 +70,7 @@ export class KnowledgeSourceService {
     return source;
   }
 
-  async update(id: number, data: Partial<Pick<KnowledgeSource, 'name' | 'config' | 'syncInterval' | 'maxDepth' | 'maxPages' | 'enabled'>>): Promise<KnowledgeSource> {
+  async update(id: number, data: Partial<Pick<KnowledgeSource, 'name' | 'config' | 'syncInterval' | 'maxDepth' | 'maxPages' | 'preferMarkdown' | 'enableJsRendering' | 'enabled'>>): Promise<KnowledgeSource> {
     const source = await this.findOne(id);
     Object.assign(source, data);
     const saved = await this.sourceRepo.save(source);
@@ -367,6 +371,8 @@ export class KnowledgeSourceService {
       maxPages: source.maxPages,
       includePatterns: source.config?.includePatterns,
       excludePatterns: source.config?.excludePatterns,
+      preferMarkdown: source.preferMarkdown,
+      enableJsRendering: source.enableJsRendering,
     };
 
     if (!config.startUrl) {

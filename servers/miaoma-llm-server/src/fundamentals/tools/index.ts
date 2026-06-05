@@ -1,10 +1,17 @@
 import { searchKnowledgeBaseSchema, executeSearchKnowledgeBase, type SearchKnowledgeBaseParams, type SearchKnowledgeBaseResult } from './search-knowledge-base';
 import { searchWebSchema, executeSearchWeb, type SearchWebParams, type SearchWebResult, validateSearchWebConfig, isSearchWebAvailable } from './search-web';
+import { getWeatherSchema, executeGetWeather, type GetWeatherParams, type GetWeatherResult, validateWeatherConfig, isWeatherAvailable } from './get-weather';
+import { calculateSchema, executeCalculate, type CalculateParams, type CalculateResult } from './calculate';
+import { manageSessionSchema, executeManageSession, initManageSession, type ManageSessionParams, type ManageSessionResult } from './manage-session';
 import { logger } from '../logger';
+
+export interface ToolContext {
+  userId?: string;
+}
 
 export interface ToolDefinition {
   schema: any;
-  executor: (params: any) => Promise<any>;
+  executor: (params: any, context?: ToolContext) => Promise<any>;
 }
 
 export const TOOLS: Record<string, ToolDefinition> = {
@@ -16,13 +23,25 @@ export const TOOLS: Record<string, ToolDefinition> = {
     schema: searchWebSchema,
     executor: executeSearchWeb as (params: any) => Promise<any>,
   },
+  get_weather: {
+    schema: getWeatherSchema,
+    executor: executeGetWeather as (params: any) => Promise<any>,
+  },
+  calculate: {
+    schema: calculateSchema,
+    executor: executeCalculate as (params: any) => Promise<any>,
+  },
+  manage_session: {
+    schema: manageSessionSchema,
+    executor: executeManageSession as (params: any, context?: ToolContext) => Promise<any>,
+  },
 };
 
 export function getAllToolSchemas(): any[] {
   return Object.values(TOOLS).map((t) => t.schema);
 }
 
-export async function executeTool(name: string, params: any): Promise<any> {
+export async function executeTool(name: string, params: any, context?: ToolContext): Promise<any> {
   const tool = TOOLS[name];
   if (!tool) {
     logger.error('FC工具注册中心：尝试执行未注册的工具', {
@@ -41,7 +60,7 @@ export async function executeTool(name: string, params: any): Promise<any> {
 
   const startTime = Date.now();
   try {
-    const result = await tool.executor(params);
+    const result = await tool.executor(params, context);
     const duration = Date.now() - startTime;
 
     const resultSummary = typeof result === 'object' && result !== null
@@ -76,5 +95,10 @@ export function getAvailableToolNames(): string[] {
   return Object.keys(TOOLS);
 }
 
+export { initManageSession };
+
 export { searchKnowledgeBaseSchema, executeSearchKnowledgeBase, type SearchKnowledgeBaseParams, type SearchKnowledgeBaseResult };
 export { searchWebSchema, executeSearchWeb, type SearchWebParams, type SearchWebResult, validateSearchWebConfig, isSearchWebAvailable };
+export { getWeatherSchema, executeGetWeather, type GetWeatherParams, type GetWeatherResult, validateWeatherConfig, isWeatherAvailable };
+export { calculateSchema, executeCalculate, type CalculateParams, type CalculateResult };
+export { manageSessionSchema, executeManageSession, type ManageSessionParams, type ManageSessionResult };

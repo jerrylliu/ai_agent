@@ -69,7 +69,7 @@ export class ModelController {
   ) {
     try {
       // 动态导入 model-provider
-      const { setDeepseekApiKey } = await import('../fundamentals/model-provider.js');
+      const { setDeepseekApiKey, setZhipuApiKey } = await import('../fundamentals/model-provider.js');
       // 校验必填参数：apiKey 不能为空
       if (!body.apiKey) {
         return { success: false, message: '请提供 apiKey 参数' };
@@ -79,6 +79,11 @@ export class ModelController {
         // 设置 DeepSeek API Key
         setDeepseekApiKey(body.apiKey);
         return { success: true, message: 'DeepSeek API Key 已设置' };
+      }
+      if (body.provider === 'zhipu') {
+        // 设置智谱 API Key
+        setZhipuApiKey(body.apiKey);
+        return { success: true, message: '智谱 API Key 已设置' };
       }
       // 不支持的提供商类型
       return { success: false, message: `不支持的提供者: ${body.provider}` };

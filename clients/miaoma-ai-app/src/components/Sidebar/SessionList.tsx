@@ -6,7 +6,7 @@
  * 包含以下子模块：
  * 1. 对话历史标题栏：展开/收起控制、清空历史
  * 2. 最近问题区域：展示用户最近提问，点击可重新填入输入框
- * 3. 会话卡片列表：会话标题、编辑/置顶/删除操作、更新时间
+ * 3. 会话卡片列表：会话标题、操作菜单（重命名/复制/导出/置顶/删除）、更新时间
  * 4. 空状态提示：无会话或无搜索结果时的占位显示
  *
  * 数据流向：
@@ -16,7 +16,7 @@
  */
 
 import React from "react";
-import { History, ChevronUp, ChevronDown, Trash2, X } from "lucide-react";
+import { History, ChevronUp, ChevronDown, Trash2, X, Copy, Download, MoreVertical, Pencil, Pin, PinOff, Check, FileText, FileJson, FileType } from "lucide-react";
 import { Button } from "../ui/button";
 import { formatTime, formatDate } from "../../lib/utils";
 import { Session, HistoryItem } from "../../types/session";
@@ -87,30 +87,24 @@ interface SessionListProps {
 
   /** 重命名会话标题 → 对应父组件的 renameSession() */
   onRenameSession: (sessionId: string, newTitle: string) => void;
+
+  /** 复制会话 → 对应父组件的 duplicateSession() */
+  onDuplicateSession: (sessionId: string) => void;
+
+  /** 导出会话 → 对应父组件的 exportSession() */
+  onExportSession: (sessionId: string, format: 'json' | 'markdown' | 'text') => void;
 }
 
 // ==================== 组件主体 ====================
 
-/**
- * SessionList - 会话列表组件
- *
- * 职责：
- * - 根据搜索关键词过滤并展示会话列表
- * - 展示最近问题历史，支持点击重新提问
- * - 提供会话操作（编辑标题、置顶、删除）
- * - 三种渲染状态：加载中 / 有数据 / 空状态
- */
 const SessionList: React.FC<SessionListProps> = ({
-  // 数据
   sessions,
   currentSessionId,
   history,
-  // 搜索与状态
   searchKeyword,
   isLoading,
   showHistoryList,
   showRecentQuestions,
-  // 回调
   onSwitchSession,
   onDeleteSession,
   onTogglePin,
@@ -121,24 +115,42 @@ const SessionList: React.FC<SessionListProps> = ({
   onClearSearch,
   onCreateSession,
   onRenameSession,
+  onDuplicateSession,
+  onExportSession,
 }) => {
-  // ==================== 内部计算 ====================
+  // 操作菜单展开状态（值为 sessionId 时显示该会话的菜单）
+  const [menuSessionId, setMenuSessionId] = React.useState<string | null>(null);
 
-  /**
-   * 根据搜索关键词过滤会话列表
-   * 支持不区分大小写的模糊匹配
-   */
+  // 导出子菜单展开状态
+  const [showExportSubmenu, setShowExportSubmenu] = React.useState(false);
+
+  // Toast 提示状态
+  const [toast, setToast] = React.useState<{ show: boolean; message: string; success: boolean }>({
+    show: false, message: '', success: true,
+  });
+
+  // 点击外部区域关闭菜单
+  React.useEffect(() => {
+    if (!menuSessionId) return;
+    const handleClickOutside = () => {
+      setMenuSessionId(null);
+      setShowExportSubmenu(false);
+    };
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, [menuSessionId]);
+
+  // Toast 自动消失
+  React.useEffect(() => {
+    if (!toast.show) return;
+    const timer = setTimeout(() => setToast({ show: false, message: '', success: true }), 2000);
+    return () => clearTimeout(timer);
+  }, [toast.show]);
+
   const filteredSessions = sessions.filter((session) =>
     session.title.toLowerCase().includes(searchKeyword.toLowerCase())
   );
 
-  // ==================== 事件处理函数 ====================
-
-  /**
-   * 删除会话处理
-   * 阻止事件冒泡（避免触发卡片的 onClick 切换会话）
-   * 弹出确认对话框后调用父组件的 onDeleteSession
-   */
   const handleDeleteSession = (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm("确定要删除这个会话吗？")) {
@@ -146,11 +158,6 @@ const SessionList: React.FC<SessionListProps> = ({
     }
   };
 
-  /**
-   * 编辑会话标题处理
-   * 弹出输入框让用户输入新标题
-   * 通过 props 回调通知父组件统一处理
-   */
   const handleRenameSession = (sessionId: string, currentTitle: string) => {
     const newTitle = prompt("请输入新的会话标题:", currentTitle);
     if (newTitle && newTitle.trim()) {
@@ -158,22 +165,35 @@ const SessionList: React.FC<SessionListProps> = ({
     }
   };
 
-  // ==================== JSX 渲染 ====================
+  // 关闭菜单
+  const closeMenu = () => {
+    setMenuSessionId(null);
+    setShowExportSubmenu(false);
+  };
+
+  // 导出会话处理（带 Toast 反馈）
+  const handleExport = async (sessionId: string, format: 'json' | 'markdown' | 'text') => {
+    const formatName = format === 'markdown' ? 'Markdown' : format === 'json' ? 'JSON' : '纯文本';
+    try {
+      await onExportSession(sessionId, format);
+      setToast({ show: true, message: `已导出为 ${formatName}`, success: true });
+    } catch (err: any) {
+      const errMsg = err?.message || '未知错误';
+      console.error('[导出] SessionList catch:', errMsg, err);
+      setToast({ show: true, message: `导出失败: ${errMsg}`, success: false });
+    }
+    closeMenu();
+  };
 
   return (
     <div className="flex-1 overflow-y-auto p-4">
-      {/* ==================== 对话历史标题栏 ====================
-          功能：
-          - 左侧：显示"对话历史"标题和图标
-          - 右侧：展开/收起按钮 + 清空历史按钮（仅在有历史时显示）
-      */}
+      {/* ==================== 对话历史标题栏 ==================== */}
       <div className="flex items-center justify-between mb-4 cyberpunk-history">
         <h4 className="font-medium text-gray-700 dark:text-gray-300 flex items-center">
           <History className="h-4 w-4 mr-2" />
           对话历史
         </h4>
         <div className="flex items-center space-x-1">
-          {/* 展开/收起按钮：根据 showHistoryList 切换上下箭头 */}
           <button
             onClick={onToggleHistoryList}
             className="p-1 rounded hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
@@ -185,7 +205,6 @@ const SessionList: React.FC<SessionListProps> = ({
               <ChevronDown className="h-4 w-4 text-gray-500" />
             )}
           </button>
-          {/* 清空历史按钮：仅在有历史记录时显示 */}
           {history.length > 0 && (
             <Button variant="ghost" size="sm" onClick={onClearHistory}>
               <Trash2 className="h-4 w-4" />
@@ -194,12 +213,7 @@ const SessionList: React.FC<SessionListProps> = ({
         </div>
       </div>
 
-      {/* ==================== 可展开/收起的列表容器 ====================
-          使用 maxHeight + opacity 实现展开/收起动画
-          - 展开时：maxHeight=500px, opacity=1
-          - 收起时：maxHeight=0, opacity=0
-          transition-all + duration-300 实现平滑过渡
-      */}
+      {/* ==================== 可展开/收起的列表容器 ==================== */}
       <div
         className="overflow-hidden transition-all duration-300 ease-in-out"
         style={{
@@ -207,20 +221,14 @@ const SessionList: React.FC<SessionListProps> = ({
           opacity: showHistoryList ? 1 : 0,
         }}
       >
-        {/* ==================== 最近问题区域 ====================
-            功能：展示用户最近发送的问题，点击可重新填入输入框
-            条件渲染：仅在有历史记录时显示
-            数据来源：useChat() hook 中的 history 数组
-        */}
+        {/* ==================== 最近问题区域 ==================== */}
         {history.length > 0 && (
           <div className="mb-6">
-            {/* 最近问题标题栏 */}
             <div className="flex items-center justify-between mb-2 cyberpunk-recent">
               <h5 className="text-sm font-medium text-gray-600 dark:text-gray-300 flex items-center">
                 <History className="h-3 w-3 mr-1" />
                 最近的问题
               </h5>
-              {/* 展开/收起按钮 */}
               <button
                 onClick={onToggleRecentQuestions}
                 className="p-1 rounded hover:bg-gray-100 dark:hover:bg-slate-700 transition-colors"
@@ -234,7 +242,6 @@ const SessionList: React.FC<SessionListProps> = ({
               </button>
             </div>
 
-            {/* 最近问题列表：可展开/收起的动画容器 */}
             <div
               className="overflow-hidden transition-all duration-300 ease-in-out"
               style={{
@@ -249,7 +256,6 @@ const SessionList: React.FC<SessionListProps> = ({
                     className="p-2 rounded-md text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 cursor-pointer transition-colors duration-200 cyberpunk-recent"
                     onClick={() => onHistoryClick(item.query)}
                   >
-                    {/* 问题文本：有搜索关键词时高亮匹配部分 */}
                     <div
                       className="line-clamp-1"
                       dangerouslySetInnerHTML={{
@@ -261,7 +267,6 @@ const SessionList: React.FC<SessionListProps> = ({
                           : item.query,
                       }}
                     />
-                    {/* 问题时间戳 */}
                     <div className="text-xs text-gray-500 dark:text-gray-300 mt-1 cyberpunk-recent">
                       {formatTime(item.timestamp)}
                     </div>
@@ -272,29 +277,14 @@ const SessionList: React.FC<SessionListProps> = ({
           </div>
         )}
 
-        {/* ==================== 会话列表渲染 ====================
-            三种渲染状态：
-            1. 加载中 → 旋转 loading 动画
-            2. 有数据 → 渲染会话卡片列表
-            3. 无数据 → 空状态提示（区分"无搜索结果"和"无会话"）
-        */}
+        {/* ==================== 会话列表渲染 ==================== */}
         {isLoading ? (
-          /* 状态1：加载中 */
           <div className="flex justify-center items-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
           </div>
         ) : filteredSessions.length > 0 ? (
-          /* 状态2：有会话数据 */
           <div className="space-y-2">
             {filteredSessions.map((session) => (
-              /* ==================== 单个会话卡片 ====================
-                  结构：
-                  - 整行可点击切换会话
-                  - 左侧：会话标题（超长截断）
-                  - 右侧：操作按钮组（编辑/置顶/删除）
-                  - 底部：更新时间
-                  样式：当前会话高亮（蓝色边框+背景），其他会话 hover 变灰
-              */
               <div
                 key={session.sessionId}
                 className={`p-3 rounded-lg cursor-pointer transition-all duration-200 relative cyberpunk-history ${
@@ -305,102 +295,144 @@ const SessionList: React.FC<SessionListProps> = ({
                 onClick={() => onSwitchSession(session.sessionId)}
               >
                 <div className="flex justify-between items-center min-w-0">
-                  {/* 会话标题：超长文本截断显示 */}
+                  {/* 会话标题 */}
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 dark:text-white mb-1 truncate cyberpunk-history">
                       {session.title}
                     </p>
                   </div>
 
-                  {/* ==================== 会话操作按钮组 ====================
-                      所有按钮都需要 e.stopPropagation() 阻止冒泡，
-                      避免点击按钮时同时触发卡片的 onClick（切换会话）
-                  */}
-                  <div className="flex space-x-1">
-                    {/* 编辑会话标题按钮 */}
+                  {/* ==================== 省略号菜单按钮 ==================== */}
+                  <div className="relative">
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-6 w-6 text-gray-400 hover:text-blue-500"
+                      className="h-6 w-6 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleRenameSession(session.sessionId, session.title);
+                        setShowExportSubmenu(false);
+                        setMenuSessionId(
+                          menuSessionId === session.sessionId ? null : session.sessionId
+                        );
                       }}
+                      title="更多操作"
                     >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-3 w-3"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
+                      <MoreVertical className="h-3.5 w-3.5" />
+                    </Button>
+
+                    {/* ==================== 下拉菜单 ==================== */}
+                    {menuSessionId === session.sessionId && (
+                      <div
+                        className="absolute right-0 top-6 z-50 bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-lg shadow-xl py-1 min-w-[160px]"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                        />
-                      </svg>
-                    </Button>
-
-                    {/* 置顶/取消置顶按钮：已置顶显示黄色勾选图标，未置顶显示上箭头 */}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className={`h-6 w-6 ${
-                        session.isPinned
-                          ? "text-yellow-500"
-                          : "text-gray-400 hover:text-yellow-500"
-                      }`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onTogglePin(session.sessionId);
-                      }}
-                    >
-                      {session.isPinned ? (
-                        /* 已置顶图标：圆形勾选 */
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="h-3 w-3"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
+                        {/* 重命名 */}
+                        <button
+                          className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-primary/10 dark:hover:bg-primary/20 flex items-center gap-2.5 transition-colors duration-150"
+                          onClick={() => {
+                            handleRenameSession(session.sessionId, session.title);
+                            closeMenu();
+                          }}
                         >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                          />
-                        </svg>
-                      ) : (
-                        /* 未置顶图标：上箭头 */
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="h-3 w-3"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M5 10l7-7m0 0l7 7m-7-7v18"
-                          />
-                        </svg>
-                      )}
-                    </Button>
+                          <Pencil className="h-3.5 w-3.5 flex-shrink-0" />
+                          重命名
+                        </button>
 
-                    {/* 删除会话按钮：带确认对话框 */}
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 text-gray-400 hover:text-red-500"
-                      onClick={(e) => handleDeleteSession(session.sessionId, e)}
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
+                        {/* 复制会话 */}
+                        <button
+                          className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-primary/10 dark:hover:bg-primary/20 flex items-center gap-2.5 transition-colors duration-150"
+                          onClick={async () => {
+                            try {
+                              await onDuplicateSession(session.sessionId);
+                              setToast({ show: true, message: '会话复制成功', success: true });
+                            } catch {
+                              setToast({ show: true, message: '复制失败，请重试', success: false });
+                            }
+                            closeMenu();
+                          }}
+                        >
+                          <Copy className="h-3.5 w-3.5 flex-shrink-0" />
+                          复制会话
+                        </button>
+
+                        {/* 导出会话（内嵌展开子菜单） */}
+                        <button
+                          className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-primary/10 dark:hover:bg-primary/20 flex items-center justify-between gap-2.5 transition-colors duration-150"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowExportSubmenu(!showExportSubmenu);
+                          }}
+                        >
+                          <span className="flex items-center gap-2.5">
+                            <Download className="h-3.5 w-3.5 flex-shrink-0" />
+                            导出会话
+                          </span>
+                          <ChevronDown className={`h-3 w-3 text-gray-400 transition-transform duration-150 ${showExportSubmenu ? 'rotate-180' : ''}`} />
+                        </button>
+
+                        {/* 导出格式子菜单（内嵌展开） */}
+                        {showExportSubmenu && (
+                          <div className="bg-gray-50 dark:bg-slate-800/50 py-1">
+                            <button
+                              className="w-full text-left px-3 pl-8 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:bg-primary/10 dark:hover:bg-primary/20 flex items-center gap-2.5 transition-colors duration-150"
+                              onClick={() => handleExport(session.sessionId, 'markdown')}
+                            >
+                              <FileText className="h-3 w-3 flex-shrink-0 text-gray-400" />
+                              Markdown
+                            </button>
+                            <button
+                              className="w-full text-left px-3 pl-8 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:bg-primary/10 dark:hover:bg-primary/20 flex items-center gap-2.5 transition-colors duration-150"
+                              onClick={() => handleExport(session.sessionId, 'json')}
+                            >
+                              <FileJson className="h-3 w-3 flex-shrink-0 text-gray-400" />
+                              JSON
+                            </button>
+                            <button
+                              className="w-full text-left px-3 pl-8 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:bg-primary/10 dark:hover:bg-primary/20 flex items-center gap-2.5 transition-colors duration-150"
+                              onClick={() => handleExport(session.sessionId, 'text')}
+                            >
+                              <FileType className="h-3 w-3 flex-shrink-0 text-gray-400" />
+                              纯文本
+                            </button>
+                          </div>
+                        )}
+
+                        {/* 置顶 */}
+                        <div className="border-t border-gray-100 dark:border-slate-600 my-1" />
+                        <button
+                          className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-primary/10 dark:hover:bg-primary/20 flex items-center gap-2.5 transition-colors duration-150"
+                          onClick={() => {
+                            onTogglePin(session.sessionId);
+                            closeMenu();
+                          }}
+                        >
+                          {session.isPinned ? (
+                            <>
+                              <PinOff className="h-3.5 w-3.5 flex-shrink-0" />
+                              取消置顶
+                            </>
+                          ) : (
+                            <>
+                              <Pin className="h-3.5 w-3.5 flex-shrink-0" />
+                              置顶会话
+                            </>
+                          )}
+                        </button>
+
+                        {/* 删除 */}
+                        <div className="border-t border-gray-100 dark:border-slate-600 my-1" />
+                        <button
+                          className="w-full text-left px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2.5 transition-colors duration-150"
+                          onClick={(e) => {
+                            handleDeleteSession(session.sessionId, e);
+                            closeMenu();
+                          }}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 flex-shrink-0" />
+                          删除会话
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -412,10 +444,9 @@ const SessionList: React.FC<SessionListProps> = ({
             ))}
           </div>
         ) : (
-          /* 状态3：空状态提示 */
+          /* 空状态提示 */
           <div className="text-center py-12 text-gray-500 dark:text-gray-300 cyberpunk-history">
             {searchKeyword ? (
-              /* 有搜索关键词但无匹配结果 */
               <>
                 <p>无匹配会话</p>
                 <Button
@@ -426,7 +457,6 @@ const SessionList: React.FC<SessionListProps> = ({
                 </Button>
               </>
             ) : (
-              /* 完全没有会话 */
               <>
                 <p>暂无对话历史</p>
                 <Button
@@ -440,6 +470,18 @@ const SessionList: React.FC<SessionListProps> = ({
           </div>
         )}
       </div>
+
+      {/* ==================== Toast 提示 ==================== */}
+      {toast.show && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className={`flex items-center gap-2 px-4 py-2.5 rounded-lg shadow-lg text-white text-sm ${
+            toast.success ? 'bg-green-600' : 'bg-red-500'
+          }`}>
+            {toast.success ? <Check className="h-4 w-4" /> : <X className="h-4 w-4" />}
+            {toast.message}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

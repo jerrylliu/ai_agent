@@ -381,6 +381,8 @@ function SourceDetail({
   const [editSyncInterval, setEditSyncInterval] = useState(source.syncInterval);
   const [editMaxPages, setEditMaxPages] = useState(source.maxPages);
   const [editMaxDepth, setEditMaxDepth] = useState(source.maxDepth);
+  const [editPreferMarkdown, setEditPreferMarkdown] = useState(source.preferMarkdown ?? true);
+  const [editEnableJsRendering, setEditEnableJsRendering] = useState(source.enableJsRendering ?? false);
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState('');
 
@@ -389,8 +391,10 @@ function SourceDetail({
       setEditSyncInterval(source.syncInterval);
       setEditMaxPages(source.maxPages);
       setEditMaxDepth(source.maxDepth);
+      setEditPreferMarkdown(source.preferMarkdown ?? true);
+      setEditEnableJsRendering(source.enableJsRendering ?? false);
     }
-  }, [source.syncInterval, source.maxPages, source.maxDepth, editing]);
+  }, [source.syncInterval, source.maxPages, source.maxDepth, source.preferMarkdown, source.enableJsRendering, editing]);
 
   const handleSaveEdit = async () => {
     setEditError('');
@@ -403,6 +407,8 @@ function SourceDetail({
         syncInterval: editSyncInterval,
         maxPages: editMaxPages,
         maxDepth: editMaxDepth,
+        preferMarkdown: editPreferMarkdown,
+        enableJsRendering: editEnableJsRendering,
       });
       setEditing(false);
       onRefresh?.();
@@ -417,6 +423,8 @@ function SourceDetail({
     setEditSyncInterval(source.syncInterval);
     setEditMaxPages(source.maxPages);
     setEditMaxDepth(source.maxDepth);
+    setEditPreferMarkdown(source.preferMarkdown ?? true);
+    setEditEnableJsRendering(source.enableJsRendering ?? false);
     setEditError('');
     setEditing(false);
   };
@@ -493,12 +501,24 @@ function SourceDetail({
                 <EditRow label="同步间隔(分)" value={editSyncInterval} onChange={setEditSyncInterval} min={1} />
                 <EditRow label="最大页面数" value={editMaxPages} onChange={setEditMaxPages} min={1} />
                 <EditRow label="爬取深度" value={editMaxDepth} onChange={setEditMaxDepth} min={1} max={5} />
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-muted-foreground text-xs">优先 Markdown</span>
+                  <Switch checked={editPreferMarkdown} onCheckedChange={setEditPreferMarkdown} />
+                </div>
+                {source.type === 'web' && (
+                  <div className="flex items-center justify-between py-1">
+                    <span className="text-muted-foreground text-xs">JS 渲染</span>
+                    <Switch checked={editEnableJsRendering} onCheckedChange={setEditEnableJsRendering} />
+                  </div>
+                )}
               </>
             ) : (
               <>
                 <DetailRow label="同步间隔" value={`${source.syncInterval} 分钟`} />
                 <DetailRow label="最大页面数" value={`${source.maxPages}`} />
                 <DetailRow label="爬取深度" value={`${source.maxDepth}`} />
+                <DetailRow label="优先 Markdown" value={source.type === 'web' ? (source.preferMarkdown ? '开启' : '关闭') : '—'} />
+                <DetailRow label="JS 渲染" value={source.type === 'web' ? (source.enableJsRendering ? '开启' : '关闭') : '—'} />
               </>
             )}
             <DetailRow label="最后同步" value={source.lastSyncAt ? new Date(source.lastSyncAt).toLocaleString() : '从未同步'} />
@@ -740,6 +760,8 @@ function CreateSourceDialog({
   const [syncInterval, setSyncInterval] = useState(60);
   const [maxPages, setMaxPages] = useState(50);
   const [maxDepth, setMaxDepth] = useState(2);
+  const [preferMarkdown, setPreferMarkdown] = useState(true);
+  const [enableJsRendering, setEnableJsRendering] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [pasteSuccess, setPasteSuccess] = useState(false);
@@ -791,6 +813,8 @@ function CreateSourceDialog({
         syncInterval,
         maxPages,
         maxDepth,
+        preferMarkdown,
+        enableJsRendering,
       });
       onCreated();
     } catch (err: any) {
@@ -918,6 +942,24 @@ function CreateSourceDialog({
                 <Input type="number" value={maxDepth} onChange={e => setMaxDepth(Number(e.target.value))} min={1} max={5} />
               </div>
             </div>
+            {type === 'web' && (
+              <div className="flex items-center justify-between mt-3 py-1">
+                <div>
+                  <span className="text-sm font-medium">优先 Markdown</span>
+                  <span className="text-xs text-muted-foreground ml-2">自动尝试获取 .md 优化版本</span>
+                </div>
+                <Switch checked={preferMarkdown} onCheckedChange={setPreferMarkdown} />
+              </div>
+            )}
+            {type === 'web' && (
+              <div className="flex items-center justify-between mt-1 py-1">
+                <div>
+                  <span className="text-sm font-medium">JS 渲染</span>
+                  <span className="text-xs text-muted-foreground ml-2">用浏览器渲染 SPA 页面（较慢）</span>
+                </div>
+                <Switch checked={enableJsRendering} onCheckedChange={setEnableJsRendering} />
+              </div>
+            )}
           </div>
         </div>
 

@@ -54,6 +54,10 @@ pids
 
 # ChromaDB runtime data
 /chromadb_data
+/docker/chroma-data
+
+# Uploads (user-generated files)
+/uploads
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json

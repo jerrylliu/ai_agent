@@ -31,6 +31,8 @@ export const CreateKnowledgeSourceSchema = z.discriminatedUnion('type', [
     syncInterval: z.number().int().min(1).optional(),
     maxDepth: z.number().int().min(1).max(5).optional(),
     maxPages: z.number().int().min(1).optional(),
+    preferMarkdown: z.boolean().optional(),
+    enableJsRendering: z.boolean().optional(),
   }),
   z.object({
     name: z.string().min(1, '名称不能为空'),
@@ -48,6 +50,8 @@ export const UpdateKnowledgeSourceSchema = z.object({
   syncInterval: z.number().int().min(1).optional(),
   maxDepth: z.number().int().min(1).max(5).optional(),
   maxPages: z.number().int().min(1).optional(),
+  preferMarkdown: z.boolean().optional(),
+  enableJsRendering: z.boolean().optional(),
   enabled: z.boolean().optional(),
 });
 

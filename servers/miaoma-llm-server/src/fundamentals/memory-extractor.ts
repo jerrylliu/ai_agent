@@ -4,8 +4,10 @@
  * 核心功能：从对话中提取用户的关键信息，持久化到用户记忆库
  *
  * 设计决策：
- * - 使用 DeepSeek-Flash（线上模型）提取记忆，而非本地模型
- *   原因：记忆提取需要理解语义和判断重要性，本地小模型容易遗漏或误判
+ * - 优先使用 DeepSeek-Flash（线上模型）提取记忆
+ *   原因：记忆提取需要理解语义和判断重要性，线上模型效果更好
+ * - 当 DeepSeek API Key 未配置时，回退到本地 Ollama 模型
+ *   原因：本地模型虽然效果稍弱，但比完全跳过记忆提取更好
  * - 提取结果为结构化的记忆条目（每条独立），而非一大段文本
  *   原因：独立条目便于去重、分类、按重要性排序和增量更新
  * - 支持去重：新提取的记忆与已有记忆比较，合并或跳过重复项
@@ -17,6 +19,7 @@
  */
 
 import { ChatOpenAI } from '@langchain/openai';
+import { ChatOllama } from '@langchain/ollama';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { getDeepseekApiKey } from './model-provider';
 import { logger } from './logger';
@@ -28,6 +31,47 @@ const MEMORY_EXTRACTION_INTERVAL = 10;
 
 /** DeepSeek API 基础 URL */
 const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+
+/** Ollama 基础 URL */
+const OLLAMA_BASE_URL = 'http://localhost:11434';
+
+/** 记忆提取使用的本地模型 */
+const LOCAL_EXTRACTOR_MODEL = 'qwen3.5-new';
+
+/**
+ * 创建记忆提取用的 LLM 实例
+ * 优先使用 DeepSeek（效果好），回退到本地 Ollama 模型
+ */
+function createExtractorLLM(): ChatOpenAI | ChatOllama | null {
+  const apiKey = getDeepseekApiKey();
+
+  if (apiKey && apiKey.trim() !== '') {
+    return new ChatOpenAI({
+      model: 'deepseek-chat',
+      temperature: 0.1,
+      apiKey,
+      configuration: {
+        baseURL: DEEPSEEK_BASE_URL,
+      },
+    });
+  }
+
+  // 回退到本地 Ollama 模型
+  try {
+    const llm = new ChatOllama({
+      model: LOCAL_EXTRACTOR_MODEL,
+      temperature: 0.1,
+      numCtx: 4096,
+      baseUrl: OLLAMA_BASE_URL,
+      think: false,
+    });
+    logger.info('DeepSeek API Key 未配置，使用本地模型提取记忆', { module: 'MemoryExtractor', model: LOCAL_EXTRACTOR_MODEL });
+    return llm;
+  } catch (error: any) {
+    logger.warn('本地模型创建失败，跳过记忆提取', { module: 'MemoryExtractor', error: error.message });
+    return null;
+  }
+}
 
 /** 记忆提取的系统提示词 */
 const MEMORY_EXTRACTION_PROMPT = `你是一个用户画像分析专家。你的任务是从对话中提取用户希望记住的关键信息。
@@ -119,23 +163,12 @@ export function shouldExtractMemory(
 export async function extractMemories(
   messages: Array<{ role: string; content: string }>,
 ): Promise<ExtractedMemory[]> {
-  const apiKey = getDeepseekApiKey();
-
-  if (!apiKey || apiKey.trim() === '') {
-    logger.warn('未配置 DeepSeek API Key，跳过记忆提取', { module: 'MemoryExtractor' });
+  const llm = createExtractorLLM();
+  if (!llm) {
     return [];
   }
 
   try {
-    const llm = new ChatOpenAI({
-      model: 'deepseek-chat',
-      temperature: 0.1,
-      apiKey,
-      configuration: {
-        baseURL: DEEPSEEK_BASE_URL,
-      },
-    });
-
     const conversationText = messages
       .map((msg) => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}`)
       .join('\n');
@@ -187,10 +220,10 @@ export async function mergeMemories(
     }));
   }
 
-  const apiKey = getDeepseekApiKey();
+  const llm = createExtractorLLM();
 
-  if (!apiKey || apiKey.trim() === '') {
-    // 无 API Key 时，简单去重：跳过与已有记忆完全相同的
+  if (!llm) {
+    // 无可用 LLM 时，简单去重：跳过与已有记忆完全相同的
     return newMemories
       .filter((m) => !existingMemories.some((e) => e === m.content))
       .map((m) => ({
@@ -202,15 +235,6 @@ export async function mergeMemories(
   }
 
   try {
-    const llm = new ChatOpenAI({
-      model: 'deepseek-chat',
-      temperature: 0.1,
-      apiKey,
-      configuration: {
-        baseURL: DEEPSEEK_BASE_URL,
-      },
-    });
-
     const existingList = existingMemories
       .map((m, i) => `[${i}] ${m}`)
       .join('\n');

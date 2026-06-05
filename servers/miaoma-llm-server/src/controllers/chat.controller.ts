@@ -144,6 +144,30 @@ export class ChatController {
   }
 
   /**
+   * GET /chat/sessions/:sessionId/export?format=json|markdown|text
+   * 导出会话：返回会话信息和所有消息，支持 JSON/Markdown/纯文本格式
+   * 注意：此路由必须在 sessions/:sessionId 之前注册，否则 :sessionId 会匹配 "export"
+   */
+  @Get('sessions/:sessionId/export')
+  async exportSession(
+    @Param('sessionId') sessionId: string,
+    @Query('format') format: string = 'json',
+  ) {
+    return this.appService.exportSession(sessionId, format);
+  }
+
+  /**
+   * GET /chat/sessions/:sessionId/messages
+   * 获取指定会话下的所有消息记录
+   * 注意：此路由必须在 sessions/:sessionId 之前注册，否则 :sessionId 会匹配 "messages"
+   */
+  @Get('sessions/:sessionId/messages') // 映射 GET 请求到 /chat/sessions/:sessionId/messages
+  async getSessionMessages(@Param('sessionId') sessionId: string) {
+    // 复用 getSessionHistory 方法，会话消息即该会话的聊天历史
+    return this.appService.getSessionHistory(sessionId);
+  }
+
+  /**
    * GET /chat/sessions/:sessionId
    * 获取指定会话的详细信息
    */
@@ -185,13 +209,12 @@ export class ChatController {
   }
 
   /**
-   * GET /chat/sessions/:sessionId/messages
-   * 获取指定会话下的所有消息记录
+   * POST /chat/sessions/:sessionId/duplicate
+   * 复制会话：创建一个新会话，复制原会话的所有消息
    */
-  @Get('sessions/:sessionId/messages') // 映射 GET 请求到 /chat/sessions/:sessionId/messages
-  async getSessionMessages(@Param('sessionId') sessionId: string) {
-    // 复用 getSessionHistory 方法，会话消息即该会话的聊天历史
-    return this.appService.getSessionHistory(sessionId);
+  @Post('sessions/:sessionId/duplicate')
+  async duplicateSession(@Param('sessionId') sessionId: string, @Req() req: any) {
+    return this.appService.duplicateSession(sessionId, req.userId);
   }
 
   // ==================== 消息管理接口 ====================
@@ -215,5 +238,58 @@ export class ChatController {
   @Delete('messages/:id') // 映射 DELETE 请求到 /chat/messages/:id
   async deleteMessage(@Param('id') id: string) {
     return this.appService.deleteMessage(id);
+  }
+
+  // ==================== LLM 用量统计接口 ====================
+
+  /**
+   * GET /chat/llm-usage?days=7
+   * 获取 LLM 调用用量统计
+   */
+  @Get('llm-usage')
+  async getLlmUsageStats(
+    @Query('days') days: string = '7',
+    @Req() req: any,
+  ) {
+    const daysNum = parseInt(days, 10) || 7;
+    return this.appService.getLlmUsageStats(req.userId, daysNum);
+  }
+
+  // ==================== 准确率评估接口 ====================
+
+  /**
+   * POST /chat/feedback
+   * 提交消息反馈（点赞/点踩）
+   */
+  @Post('feedback')
+  async submitFeedback(
+    @Body() body: {
+      sessionId: string;
+      userMessage: string;
+      assistantMessage: string;
+      rating: 'positive' | 'negative';
+      comment?: string;
+      modelId?: string;
+      usedKnowledgeBase?: boolean;
+    },
+    @Req() req: any,
+  ) {
+    return this.appService.submitFeedback({
+      userId: req.userId,
+      ...body,
+    });
+  }
+
+  /**
+   * GET /chat/evaluation-stats?days=7
+   * 获取准确率评估统计
+   */
+  @Get('evaluation-stats')
+  async getEvaluationStats(
+    @Query('days') days: string = '7',
+    @Req() req: any,
+  ) {
+    const daysNum = parseInt(days, 10) || 7;
+    return this.appService.getEvaluationStats(req.userId, daysNum);
   }
 }

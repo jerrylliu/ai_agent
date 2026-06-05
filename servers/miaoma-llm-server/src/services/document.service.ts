@@ -290,7 +290,7 @@ export class DocumentService {
       const metadata = {
         documentId: String(documentId),
         versionId: String(versionId),
-        versionStatus: VersionStatus.DRAFT,
+        versionStatus: VersionStatus.ACTIVE,
         source: version.fileUrl,
         fileType: version.fileType,
       };
@@ -311,7 +311,7 @@ export class DocumentService {
         logger.error('向量化入库失败，已加入重试队列', { module: 'DocumentService', versionId, error: vectorError.message });
         await this.enqueueVectorOp(versionId, VectorOpType.REINDEX, {
           textContent,
-          versionStatus: VersionStatus.DRAFT,
+          versionStatus: VersionStatus.ACTIVE,
           documentId,
         });
         await this.versionRepo.update(versionId, {
@@ -875,12 +875,14 @@ export class DocumentService {
                   throw new Error(`重新解析文件失败: ${parseError.message}`);
                 }
               }
-              const currentStatus = version.status;
+              // DRAFT 版本重试时直接以 ACTIVE 状态入库，避免再次依赖 updateVersionVectorStatus
+              // ARCHIVED 版本保持原状态（用户手动归档的，不应自动激活）
+              const vectorStatus = version.status === VersionStatus.DRAFT ? VersionStatus.ACTIVE : version.status;
               const chunkCount = await reindexVersion(
                 op.versionId,
                 version.documentId,
                 textContent,
-                currentStatus,
+                vectorStatus,
                 { source: version.fileUrl, fileType: version.fileType },
               );
               await this.versionRepo.update(op.versionId, {
@@ -888,8 +890,8 @@ export class DocumentService {
                 chunkCount,
                 errorMessage: '',
               });
-              logger.info('REINDEX 重试：版本状态已同步', { module: 'DocumentService', versionId: op.versionId, parsingStatus: 'success', chunkCount, currentStatus });
-              if (currentStatus === VersionStatus.DRAFT) {
+              logger.info('REINDEX 重试：版本状态已同步', { module: 'DocumentService', versionId: op.versionId, parsingStatus: 'success', chunkCount, vectorStatus });
+              if (version.status === VersionStatus.DRAFT) {
                 logger.info('REINDEX 重试：版本仍为 draft，自动激活', { module: 'DocumentService', versionId: op.versionId });
                 await this.activateVersion(op.versionId, version.uploadedBy || 'system');
               }
