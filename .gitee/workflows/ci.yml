@@ -1,5 +1,7 @@
-name: tauri-nestjs-ci
-displayName: "Tauri & NestJS Monorepo 构建"
+# 2. 定义流水线 YAML 内容
+version: "1.0"
+name: tauri-nestjs-build
+displayName: Tauri与NestJS构建流水线
 triggers:
   push:
     branches:
@@ -7,46 +9,36 @@ triggers:
       - main
 
 stages:
-  - name: build_stage
-    displayName: "环境准备与构建"
-    jobs:
-      build_job:
-        name: "全流程构建任务"
-        runsOn: ubuntu-latest
-        steps:
-          - name: 检出代码
-            uses: checkout@v1
-            
-          - name: 安装 Node.js 18 与 pnpm
-            run: |
-              curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-              sudo apt-get install -y nodejs
-              corepack enable
-              corepack prepare pnpm@latest --activate
-              pnpm config set registry https://registry.npmmirror.com
-              
-          - name: 安装 Tauri 必须的 Ubuntu 系统依赖 (WebKit 与 GTK)
-            run: |
-              sudo apt-get update
-              sudo apt-get install -y libwebkit2gtk-4.0-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-              
-          - name: 安装 Rust 环境 (Tauri 底层核心)
-            run: |
-              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-              echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-              source $HOME/.cargo/env
-              rustc --version
-              
-          - name: 在根目录安装 Monorepo 依赖
-            run: pnpm install --frozen-lockfile
-            
-          - name: 构建 NestJS 后端
-            run: |
-              cd servers/jerry-llm-server
-              pnpm run build
-              
-          - name: 构建 Tauri 桌面应用 (前端)
-            run: |
-              cd clients/jerry-ai-app
-              pnpm run build
-              pnpm run tauri build --no-confirm
+  - stage:
+      name: build_stage
+      displayName: 环境准备与构建阶段
+      jobs:
+        job:
+          name: build_job
+          displayName: 全流程构建任务
+          runsOn: ubuntu-latest
+          steps:
+            - step: shell
+              name: install_node
+              displayName: 安装 Node.js 18
+              commands:
+                - curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+                - sudo apt-get install -y nodejs
+                - corepack enable
+                - corepack prepare pnpm@latest --activate
+            - step: shell
+              name: install_deps
+              displayName: 安装依赖 (pnpm)
+              commands:
+                - pnpm install --frozen-lockfile
+            - step: shell
+              name: build_nestjs
+              displayName: 构建 NestJS 后端
+              commands:
+                - pnpm run build:server
+            - step: shell
+              name: build_tauri
+              displayName: 构建 Tauri 前端及打包
+              commands:
+                - sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.0-dev build-essential curl wget libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+                - pnpm run tauri build
