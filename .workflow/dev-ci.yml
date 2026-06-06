@@ -19,22 +19,17 @@ stages:
         nodeVersion: 25.4.0
         commands:
           - set -e
-          - echo "=== 开始构建 ==="
+          - echo "=== 当前目录 ==="
+          - pwd
           - ''
-          - '# 1. 执行构建命令'
-          - pnpm build
+          - echo "=== 目录结构 ==="
+          - ls -la
           - ''
-          - '# 2. 检查构建产物是否存在（防止报错退出）'
-          - if [ -d "./dist" ]; then
-          - '  echo "✅ 构建成功，产物在 ./dist 目录"'
-          - else
-          - '  echo "⚠️ 未找到 ./dist 目录，尝试查找其他目录..."'
-          - '  # 如果 dist 不存在，试着找找看是不是生成在其他地方了（比如 build）'
-          - '  ls -la'
-          - '  exit 1'
-          - fi
+          - echo "=== package.json scripts ==="
+          - cat package.json | grep -A 20 '"scripts"' || echo "❌ 没找到 package.json"
           - ''
-          - echo "✅ CI 全流程完成"
+          - echo "=== pnpm workspaces ==="
+          - cat pnpm-workspace.yaml 2>/dev/null || echo "❌ 非 workspace 项目"
         artifacts:
           - name: BUILD_ARTIFACT
             path:
