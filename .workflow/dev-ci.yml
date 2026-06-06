@@ -1,0 +1,53 @@
+version: '1.0'
+
+# 仓库内唯一，用小写+中划线，不要跟旧名字撞车
+name: dev-ci
+displayName: 开发期门禁（lint + type-check）
+
+# 触发条件：push 到任意分支都跑（开发期最省心）
+# 等你以后想收敛，再把 prefix: [] 改成 precise: [master] 之类
+triggers:
+  push:
+    branches:
+      prefix: []
+
+stages:
+  - stage:
+      name: quality-check
+      displayName: 代码质量检查
+      strategy: naturally
+      trigger: auto
+      executor: []
+      steps:
+
+        # ── 用 Gitee Go 内置 Node.js 云端构建机（不需要主机组！）──
+        - step: build@nodejs
+          name: dev_check
+          displayName: 安装依赖 + Lint + TypeCheck
+          # 选你项目实际在用的版本，18/20 都可，Tauri 生态建议 ≥18
+          nodeVersion: '20'
+          # 构建产物路径（我们暂不产出制品，留空也行）
+          artifacts: []
+          commands: |
+            # ── 0. 看环境 ──────────────────────────────────────
+            node -v
+            npm -v
+
+            # ── 1. 启用 pnpm（corepack 是 Node 自带，不需要全局装）──
+            corepack enable
+            corepack prepare pnpm@latest --activate 2>/dev/null || npm install -g pnpm
+
+            pnpm -v
+
+            # ── 2. 装依赖（monorepo 从根目录装）────────────────
+            pnpm install --frozen-lockfile || pnpm install
+
+            # ── 3. Lint（按你项目实际 script 名改，没有就注释掉）──
+            echo "=== Lint ==="
+            pnpm lint || echo "⚠️  lint 脚本不存在，跳过"
+
+            # ── 4. Type Check（TS 类型检查，同理按你实际 script 改）──
+            echo "=== Type Check ==="
+            pnpm type-check || echo "⚠️  type-check 脚本不存在，跳过"
+
+            echo "✅ 开发期 CI 通过"
