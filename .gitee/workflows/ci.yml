@@ -5,7 +5,7 @@ displayName: Tauri与NestJS构建流水线
 triggers:
   push:
     branches:
-      - master
+      - jerrydev
       - main
 
 stages:
