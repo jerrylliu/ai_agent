@@ -37,10 +37,4 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-   // ✅ 新增：显式指定构建输出目录（关键！）
-  build: {
-    outDir: "dist",       // 强制输出到 ./dist
-    emptyOutDir: true,    // 构建前清空目录，避免旧文件残留
-    sourcemap: false,     // CI 无需 sourcemap，加快构建
-  },
 }));
