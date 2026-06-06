@@ -3,51 +3,41 @@ stages:
   - prepare
   - build
 
-# 全局超时设置（解决Tauri构建超时问题）
+# 全局超时设置（避免Tauri构建超时）
 options:
-  timeout: 30  # 单位：分钟（个人版免费额度内合理使用）
+  timeout: 30
 
-# 全局缓存配置（关键优化点）
-cache:
-  key: $CI_COMMIT_REF_NAME  # 按分支缓存，避免不同分支污染
-  paths:
-    - node_modules/         # 缓存依赖，加速后续构建
-
-# 阶段1：安装所有依赖
+# 修复1：必须在根目录安装依赖（monorepo关键）
 prepare_job:
   stage: prepare
   script:
-    - corepack enable  # 启用pnpm（Node.js内置）
-    - pnpm config set registry https://registry.npmmirror.com  # 强制使用国内镜像
-    - pnpm install --frozen-lockfile  # 禁止自动更新lockfile
+    - corepack enable
+    - pnpm config set registry https://registry.npmmirror.com
+    # 关键：在根目录执行安装（不是子目录！）
+    - pnpm install --frozen-lockfile
+  cache:
+    key: $CI_COMMIT_REF_NAME
+    paths:
+      - node_modules/  # 缓存根目录依赖
 
-# 阶段2：构建Tauri桌面应用（前端）
+# 修复2：分阶段构建（确保工作目录正确）
 build_frontend_job:
   stage: build
   script:
-    - export PATH="$PATH:$(pwd)/node_modules/.bin"  # 修复pnpm命令路径
+    # 关键：先回到根目录，再进入客户端
     - cd clients/jerry-ai-app
     - pnpm run build
-    - pnpm run tauri build --no-confirm  # 关键：跳过交互确认
+    - pnpm run tauri build --no-confirm
   artifacts:
     paths:
-      - clients/jerry-ai-app/src-tauri/target/release/  # 保存Tauri构建产物
+      - clients/jerry-ai-app/src-tauri/target/release/
 
-# 阶段3：构建NestJS后端服务
 build_backend_job:
   stage: build
   script:
+    # 关键：先回到根目录，再进入服务端
     - cd servers/jerry-llm-server
     - pnpm run build
   artifacts:
     paths:
       - servers/jerry-llm-server/dist/
-
-# 触发条件设置（仅当代码变更时触发）
-triggers:
-  push:
-    paths:
-      - clients/**/*    # 仅客户端代码变更时触发
-      - servers/**/*    # 仅服务端代码变更时触发
-    branches:
-      - main          # 仅监听main分支
