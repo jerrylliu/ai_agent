@@ -1,0 +1,58 @@
+name: miaoma-ai-app CI
+
+triggers:
+  push:
+    - jerrydev
+    - main
+  pull_request:
+    - main
+
+variables:
+  NODE_VERSION: "20"
+
+stages:
+  - name: 代码检查与构建
+    jobs:
+      - name: 安装依赖
+        runs-on:
+          container:
+            image: node:20
+        steps:
+          - run: npm install -g pnpm
+          - run: pnpm install --frozen-lockfile
+
+      - name: 后端代码检查
+        runs-on:
+          container:
+            image: node:20
+        steps:
+          - run: npm install -g pnpm
+          - run: pnpm install --frozen-lockfile
+          - run: cd servers/jerry-llm-server && pnpm lint
+
+      - name: 后端构建
+        runs-on:
+          container:
+            image: node:20
+        steps:
+          - run: npm install -g pnpm
+          - run: pnpm install --frozen-lockfile
+          - run: cd servers/jerry-llm-server && pnpm build
+
+      - name: 前端构建
+        runs-on:
+          container:
+            image: node:20
+        steps:
+          - run: npm install -g pnpm
+          - run: pnpm install --frozen-lockfile
+          - run: cd clients/jerry-ai-app && pnpm build
+
+      - name: 后端测试
+        runs-on:
+          container:
+            image: node:20
+        steps:
+          - run: npm install -g pnpm
+          - run: pnpm install --frozen-lockfile
+          - run: cd servers/jerry-llm-server && pnpm test
