@@ -1,43 +1,52 @@
-# .gitee/workflows/ci.yml
+name: tauri-nestjs-ci
+displayName: "Tauri & NestJS Monorepo 构建"
+triggers:
+  push:
+    branches:
+      - master
+      - main
+
 stages:
-  - prepare
-  - build
-
-# 全局超时设置（避免Tauri构建超时）
-options:
-  timeout: 30
-
-# 修复1：必须在根目录安装依赖（monorepo关键）
-prepare_job:
-  stage: prepare
-  script:
-    - corepack enable
-    - pnpm config set registry https://registry.npmmirror.com
-    # 关键：在根目录执行安装（不是子目录！）
-    - pnpm install --frozen-lockfile
-  cache:
-    key: $CI_COMMIT_REF_NAME
-    paths:
-      - node_modules/  # 缓存根目录依赖
-
-# 修复2：分阶段构建（确保工作目录正确）
-build_frontend_job:
-  stage: build
-  script:
-    # 关键：先回到根目录，再进入客户端
-    - cd clients/jerry-ai-app
-    - pnpm run build
-    - pnpm run tauri build --no-confirm
-  artifacts:
-    paths:
-      - clients/jerry-ai-app/src-tauri/target/release/
-
-build_backend_job:
-  stage: build
-  script:
-    # 关键：先回到根目录，再进入服务端
-    - cd servers/jerry-llm-server
-    - pnpm run build
-  artifacts:
-    paths:
-      - servers/jerry-llm-server/dist/
+  - name: build_stage
+    displayName: "环境准备与构建"
+    jobs:
+      build_job:
+        name: "全流程构建任务"
+        runsOn: ubuntu-latest
+        steps:
+          - name: 检出代码
+            uses: checkout@v1
+            
+          - name: 安装 Node.js 18 与 pnpm
+            run: |
+              curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+              sudo apt-get install -y nodejs
+              corepack enable
+              corepack prepare pnpm@latest --activate
+              pnpm config set registry https://registry.npmmirror.com
+              
+          - name: 安装 Tauri 必须的 Ubuntu 系统依赖 (WebKit 与 GTK)
+            run: |
+              sudo apt-get update
+              sudo apt-get install -y libwebkit2gtk-4.0-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+              
+          - name: 安装 Rust 环境 (Tauri 底层核心)
+            run: |
+              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+              echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+              source $HOME/.cargo/env
+              rustc --version
+              
+          - name: 在根目录安装 Monorepo 依赖
+            run: pnpm install --frozen-lockfile
+            
+          - name: 构建 NestJS 后端
+            run: |
+              cd servers/jerry-llm-server
+              pnpm run build
+              
+          - name: 构建 Tauri 桌面应用 (前端)
+            run: |
+              cd clients/jerry-ai-app
+              pnpm run build
+              pnpm run tauri build --no-confirm
