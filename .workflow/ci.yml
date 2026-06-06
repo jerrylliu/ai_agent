@@ -1,5 +1,5 @@
-name: miaoma-ai-app
-displayName: miaoma-ai-app CI
+name: jerry-ai-app
+displayName: jerry-ai-app CI
 triggers:
   push:
     branches:
