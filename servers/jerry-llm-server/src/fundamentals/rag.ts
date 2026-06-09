@@ -2,10 +2,11 @@
 import { OllamaEmbeddings } from "@langchain/ollama";
 import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
 import { logger } from './logger';
+import { config } from './config';
 // 创建 Ollama 嵌入模型实例
 const embeddings = new OllamaEmbeddings({
   model: "bge-large", // 使用的嵌入模型,中文支持力度大.
-  baseUrl: "http://localhost:11434", // Ollama 服务地址
+  baseUrl: config.ollamaBaseUrl,
 });
 
 // 创建内存向量存储

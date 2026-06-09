@@ -3,6 +3,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Button } from "../ui/button";
 import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star } from "lucide-react";
 import { ConfirmDialog } from "../ui/confirm-dialog";
+import { DEFAULT_AI_AVATAR_URL } from "../../lib/constants";
 
 interface KbFeedback {
     show: boolean;
@@ -62,16 +63,12 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
 
     return (
         <>
-        <div className="bg-card border-b border-gray-200 dark:border-slate-600 py-4 px-6 cyberpunk-border-glow">
+        <div className="bg-card  py-2 px-6 dark:border-slate-600">
             <div className="flex items-center justify-between">
                 {/* 左侧：AI助手信息 */}
                 <div className="flex items-center space-x-3">
-                    <Avatar className="h-10 w-10">
-                        <AvatarImage src="https://neeko-copilot.bytedance.net/api/text2image?prompt=AI%20assistant%20avatar&size=512x512" />
-                        <AvatarFallback>AI</AvatarFallback>
-                    </Avatar>
                     <div>
-                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white cyberpunk-header-title">智能助手</h2>
+                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white cyberpunk-header-title">Aether MC</h2>
                         <p className="text-sm text-gray-500 dark:text-gray-300 cyberpunk-header-online">在线</p>
                     </div>
                 </div>

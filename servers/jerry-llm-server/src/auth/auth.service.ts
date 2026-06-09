@@ -4,8 +4,9 @@ import { Repository } from 'typeorm';
 import { User } from '../entities/user.entity.js';
 import * as bcrypt from 'bcryptjs';
 import * as jwt from 'jsonwebtoken';
+import { config } from '../fundamentals/config.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'miaoma-ai-secret-key-2024';
+const JWT_SECRET = config.jwtSecret;
 const JWT_EXPIRES_IN = '7d';
 const MAX_PASSWORD_LENGTH = 128;
 
@@ -21,11 +22,7 @@ export class AuthService {
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
-  ) {
-    if (!process.env.JWT_SECRET) {
-      this.logger.warn('⚠️ JWT_SECRET 未设置环境变量，正在使用默认密钥，请在生产环境中配置！');
-    }
-  }
+  ) {}
 
   async register(body: {
     email?: string;
@@ -164,7 +161,12 @@ export class AuthService {
     }
 
     if (body.avatar) {
-      user.avatar = body.avatar;
+      // 校验 avatar URL 协议，防止 javascript: 等恶意 URL
+      const avatarUrl = body.avatar.trim();
+      if (!/^https?:\/\//i.test(avatarUrl)) {
+        throw new BadRequestException('头像 URL 必须以 http:// 或 https:// 开头');
+      }
+      user.avatar = avatarUrl;
     }
 
     await this.userRepository.save(user);
@@ -204,6 +206,7 @@ export class AuthService {
     }
 
     user.password = await bcrypt.hash(newPassword, 10);
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
     await this.userRepository.save(user);
 
     return {
@@ -212,12 +215,38 @@ export class AuthService {
     };
   }
 
+  async resetPassword(account: string, newPassword: string) {
+    const user = await this.userRepository
+      .createQueryBuilder('user')
+      .where('user.email = :account OR user.phone = :account OR user.username = :account', { account: account.trim() })
+      .getOne();
+
+    if (!user) {
+      throw new BadRequestException('该账号不存在');
+    }
+
+    if (!newPassword || newPassword.length < 6) {
+      throw new BadRequestException('新密码长度至少6位');
+    }
+
+    if (newPassword.length > MAX_PASSWORD_LENGTH) {
+      throw new BadRequestException(`新密码长度不能超过${MAX_PASSWORD_LENGTH}位`);
+    }
+
+    user.password = await bcrypt.hash(newPassword, 10);
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1;
+    await this.userRepository.save(user);
+
+    return {
+      success: true,
+      message: '密码重置成功',
+    };
+  }
+
   generateToken(user: User): string {
     const payload = {
       sub: user.id,
-      email: user.email,
-      phone: user.phone,
-      username: user.username,
+      tokenVersion: user.tokenVersion ?? 0,
     };
     return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
   }

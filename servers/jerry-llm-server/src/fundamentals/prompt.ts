@@ -3,49 +3,95 @@ import type { Response } from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
+
+import { sendToolStatus, startHeartbeat, stopHeartbeat, sendMetadata, sendSessionAction, sendContent } from './sse-writer';
+
+/**
+ * FC 模式降级到 RAG 模式时携带已获取的知识库结果
+ */
+class FCFallbackError extends Error {
+  knowledgeBaseResult: string;
+  constructor(message: string, knowledgeBaseResult: string = '') {
+    super(message);
+    this.name = 'FCFallbackError';
+    this.knowledgeBaseResult = knowledgeBaseResult;
+  }
+}
 import * as http from 'http';
 
 import { retrieveFromKnowledgeBase } from './rag-service';
 import { getKnowledgeBaseStats } from './vector-store';
-import { createLLM, getCurrentModelId, getModelInfo } from './model-provider';
-import { getAllToolSchemas, executeTool, hasTool, getAvailableToolNames } from './tools';
+import { createLLM, buildModelConfig, getCurrentModelId, getModelInfo, getModelCapabilities } from './model-provider';
+import { getToolSchemasForModel, executeTool, hasTool, getAvailableToolNames } from './tools';
+import { formatSearchResultAsSummary } from './tools/search-web';
 import { logger } from './logger';
+import { config } from './config';
 
 // ==================== FC 模式进度通知辅助函数 ====================
-
-// 工具名称到中文标签的映射
-const TOOL_LABELS: Record<string, string> = {
-  thinking: '思考中',
-  search_knowledge_base: '搜索知识库',
-  search_web: '搜索网页',
-  get_weather: '查询天气',
-  calculate: '计算',
-  manage_session: '管理会话',
-};
-
-// 向客户端发送工具调用进度事件（同时作为 SSE 心跳保活）
-function sendToolStatus(res: Response | undefined, toolName: string, status: 'calling' | 'executing' | 'done', extra?: Record<string, any>) {
-  if (!res || res.writableEnded) return;
-  const label = TOOL_LABELS[toolName] || toolName;
-  const data = JSON.stringify({ toolName, label, status, ...extra });
-  res.write(`[TOOL_STATUS:${data}]`);
-}
-
-// 定期发送 SSE 心跳，防止长时间无数据导致连接断开
-function startHeartbeat(res: Response | undefined, intervalMs: number = 5000): NodeJS.Timeout | null {
-  if (!res) return null;
-  return setInterval(() => {
-    if (!res.writableEnded) {
-      res.write('[HEARTBEAT]');
-    }
-  }, intervalMs);
-}
-
-function stopHeartbeat(timer: NodeJS.Timeout | null) {
-  if (timer) clearInterval(timer);
-}
+// SSE 写入函数已提取到 sse-writer.ts
 
 // ==================== Token 预算策略 ====================
+
+/**
+ * 流式输出中跨 chunk 过滤 <think...</think 标签
+ * 推理模型（如 DeepSeek-R1）会输出 <think 块，需要正确过滤掉
+ * 简单的正则替换无法处理标签跨 chunk 的情况
+ */
+function filterThinkTags(content: string, inThinkBlock: boolean): { text: string; inThinkBlock: boolean } {
+  let remaining = content;
+  let result = '';
+  let inThink = inThinkBlock;
+
+  while (remaining.length > 0) {
+    if (inThink) {
+      const endIdx = remaining.indexOf('</think');
+      if (endIdx !== -1) {
+        const closeEnd = remaining.indexOf('>', endIdx);
+        if (closeEnd !== -1) {
+          inThink = false;
+          remaining = remaining.substring(closeEnd + 1);
+        } else {
+          // </think 未闭合，继续缓冲
+          remaining = '';
+        }
+      } else {
+        // 还在 think 块中，全部丢弃
+        remaining = '';
+      }
+    } else {
+      const thinkIdx = remaining.indexOf('<think');
+      if (thinkIdx !== -1) {
+        result += remaining.substring(0, thinkIdx);
+        const afterThink = remaining.substring(thinkIdx);
+        const openEnd = afterThink.indexOf('>');
+        if (openEnd !== -1) {
+          const afterOpenTag = afterThink.substring(openEnd + 1);
+          const endIdx = afterOpenTag.indexOf('</think');
+          if (endIdx !== -1) {
+            const closeEnd = afterOpenTag.indexOf('>', endIdx);
+            if (closeEnd !== -1) {
+              remaining = afterOpenTag.substring(closeEnd + 1);
+            } else {
+              inThink = true;
+              remaining = '';
+            }
+          } else {
+            inThink = true;
+            remaining = '';
+          }
+        } else {
+          inThink = true;
+          remaining = '';
+        }
+      } else {
+        result += remaining;
+        remaining = '';
+      }
+    }
+  }
+
+  return { text: result, inThinkBlock: inThink };
+}
 
 // Token 估算：中文约 1.5 字符/token，英文约 4 字符/token
 function estimateTokens(text: string): number {
@@ -54,21 +100,65 @@ function estimateTokens(text: string): number {
   return Math.ceil(chineseChars / 1.5 + otherChars / 4);
 }
 
+/**
+ * 格式化工具结果为模型友好的内容
+ * search_web：使用结构化摘要（保留url，去掉engine/total，snippet完整，Top-K限制）
+ * 其他工具：保持原始内容不变
+ */
+function formatToolResult(toolName: string, content: string, modelId: string): string {
+  if (toolName === 'search_web') {
+    try {
+      const parsed = JSON.parse(content);
+      const caps = getModelCapabilities(modelId);
+      const isSmallContext = caps.contextLength < 8192;
+      const maxResults = isSmallContext ? 3 : 5;
+      return formatSearchResultAsSummary(parsed, maxResults);
+    } catch {
+      // JSON 解析失败，返回原始内容
+      return content;
+    }
+  }
+  // 其他工具保持原始内容
+  return content;
+}
+
+/**
+ * 根据模型上下文窗口大小计算历史消息的 token 总预算
+ * FC 模式下需要扣除工具 Schema 占用的 token
+ */
+function computeTotalBudgetForModel(isFCMode: boolean): number {
+  const modelId = getCurrentModelId();
+  const caps = getModelCapabilities(modelId);
+  const modelConfig = buildModelConfig(modelId, { isFCMode });
+  const modelCtx = modelConfig.numCtx ?? caps.contextLength;
+  const isSmallContext = caps.contextLength < 8192;
+  // 预留 System Prompt + 工具 Schema + 输出空间
+  const systemPromptTokens = isSmallContext ? 800 : 1500;
+  const toolSchemaTokens = isFCMode ? (isSmallContext ? 600 : 1500) : 0;
+  const outputReserve = isSmallContext ? 800 : 2000;
+  const budget = modelCtx - systemPromptTokens - toolSchemaTokens - outputReserve;
+  return Math.max(budget, 500); // 至少保留 500
+}
+
 interface HistoryBudget {
-  maxHistory: number;       // 允许传入的历史条数
+  maxRounds: number;        // 允许传入的历史轮数（1轮 = user + assistant）
   budgetUsed: number;       // 已被知识库/图片占用的预算
   budgetRemaining: number;  // 剩余可用于历史的预算
 }
 
-// 基于总 token 预算，动态计算可传入的历史消息条数
-// 知识库/图片与历史消息共存，通过预算分配而非互斥
+/**
+ * 基于模型上下文计算可传入的历史轮数
+ * 策略：保留最近 N 轮对话，更早的由摘要替代
+ * 小上下文模型（<8192）：N=3 轮
+ * 大上下文模型（≥8192）：N=5 轮
+ */
 function computeHistoryBudget(params: {
   totalBudget: number;
   knowledgeContextLength: number;
   imageCount: number;
   history: Array<{ role: string; content: string }>;
 }): HistoryBudget {
-  const { totalBudget, knowledgeContextLength, imageCount, history } = params;
+  const { totalBudget, knowledgeContextLength, imageCount } = params;
 
   let budgetUsed = 0;
 
@@ -82,20 +172,38 @@ function computeHistoryBudget(params: {
 
   const budgetRemaining = Math.max(0, totalBudget - budgetUsed);
 
-  // 从最新往前填充历史消息
-  let maxHistory = 0;
-  let usedTokens = 0;
+  // 基于模型上下文决定保留轮数
+  const modelId = getCurrentModelId();
+  const caps = getModelCapabilities(modelId);
+  const maxRounds = caps.contextLength < 8192 ? 3 : 5;
+
+  return { maxRounds, budgetUsed, budgetRemaining };
+}
+
+/**
+ * 按轮次切片历史消息
+ * 1轮 = 1个 user 消息 + 紧随其后的 assistant 消息
+ * 保留最近 maxRounds 轮，更早的由摘要替代
+ */
+function sliceHistoryByRounds(
+  history: Array<{ role: string; content: string; images?: string[] }>,
+  maxRounds: number,
+): Array<{ role: string; content: string; images?: string[] }> {
+  if (!history || history.length === 0 || maxRounds <= 0) return [];
+
+  // 从后往前数轮次
+  let roundsFound = 0;
+  let sliceStart = history.length;
+
   for (let i = history.length - 1; i >= 0; i--) {
-    const msgTokens = estimateTokens(history[i].content);
-    if (usedTokens + msgTokens > budgetRemaining) break;
-    usedTokens += msgTokens;
-    maxHistory++;
+    if (history[i].role === 'user') {
+      roundsFound++;
+      if (roundsFound > maxRounds) break;
+      sliceStart = i;
+    }
   }
 
-  // 最少保留 2 条（上一轮问答），最多 20 条
-  maxHistory = Math.max(history.length >= 2 ? 2 : 0, Math.min(maxHistory, 20));
-
-  return { maxHistory, budgetUsed, budgetRemaining };
+  return history.slice(sliceStart);
 }
 
 // ==================== Token 用量记录 ====================
@@ -143,57 +251,87 @@ function estimateTokensFromMessages(messages: Array<any>): number {
 // 4. **布局还原度高**：尽可能还原设计稿的视觉效果`;
 const SYSTEM_PROMPT = `你是一个全能助手`;
 
-const FC_SYSTEM_PROMPT = `你是一个全能助手，你可以使用工具来帮助回答用户问题。
+/**
+ * 根据当前注册的工具动态构建 FC 模式 System Prompt
+ * 只包含已注册工具的描述和规则，避免本地小模型上下文浪费
+ */
+function buildFCSystemPrompt(): string {
+  const availableTools = getAvailableToolNames();
+
+  // 工具描述映射
+  const toolDescriptions: Record<string, string> = {
+    search_knowledge_base: '搜索知识库中与查询相关的文档内容',
+    search_web: '联网搜索实时信息',
+    get_weather: '查询指定城市的天气信息（实时天气、7天预报、24小时逐小时预报）',
+    calculate: '执行精确的数学计算（支持大数运算、科学计算、三角函数、对数等）',
+    manage_session: '管理用户的会话（对话），包括创建、删除、重命名、置顶/取消置顶、切换、查询列表等',
+  };
+
+  // 工具列表
+  const toolList = availableTools
+    .filter(name => toolDescriptions[name])
+    .map(name => `- ${name}：${toolDescriptions[name]}`)
+    .join('\n');
+
+  // 通用规则（始终包含）
+  let prompt = `你是一个全能助手，你可以使用工具来帮助回答用户问题。
 
 当前可用工具：
-- search_knowledge_base：搜索知识库中与查询相关的文档内容
-- search_web：联网搜索实时信息
-- get_weather：查询指定城市的天气信息（实时天气、7天预报、24小时逐小时预报）
-- calculate：执行精确的数学计算（支持大数运算、科学计算、三角函数、对数等）
-- manage_session：管理用户的会话（对话），包括创建、删除、重命名、置顶/取消置顶、切换、查询列表等
+${toolList}
 
 工具使用规则：
-1. 当用户的问题可能涉及已上传的文档、知识库中的信息时，优先调用 search_knowledge_base 工具
-2. 当用户的问题涉及最新新闻、实时数据、当前事件或知识库中没有的实时信息时，调用 search_web 工具
-3. 如果不确定知识库中是否有相关信息，可以同时调用 search_knowledge_base 和 search_web 两个工具
-4. 当用户询问天气、温度、湿度、风力、空气质量等与天气相关的问题时，必须优先使用 get_weather 工具，不要使用 search_web 查天气
-5. 当用户需要进行复杂的数学运算（大数乘除、浮点运算、科学计算、公式计算等）时，调用 calculate 工具确保结果精确
-6. 当你能够直接回答问题（如通用知识、闲聊、简单的加减乘除等）时，不需要调用任何工具
-7. 调用工具时，构造精确的搜索查询语句，以提高搜索结果的相关性
-8. 基于工具返回的结果回答用户问题，在回答中标注信息来源
-9. 如果工具返回的结果与用户问题无关，请说明并基于自身知识回答
-10. 每个工具在一次对话中最多调用一次，不要对同一个工具重复调用相同的参数
-11. 收到工具返回结果后，必须直接基于结果生成最终回答，不要再调用其他工具
+1. 当你能够直接回答问题（如通用知识、闲聊、简单的加减乘除等）时，不需要调用任何工具
+2. 调用工具时，构造精确的查询语句，以提高搜索结果的相关性
+3. 基于工具返回的结果回答用户问题，在回答中标注信息来源
+4. 如果工具返回的结果与用户问题无关，请说明并基于自身知识回答
+5. 每个工具在一次对话中最多调用一次，不要对同一个工具重复调用相同的参数
+6. 收到工具返回结果后，必须直接基于结果生成最终回答，不要再调用其他工具`;
 
-天气查询规则（仅在使用 get_weather 时）：
-- 用户问当前/现在天气：type 参数设为 now（默认）
-- 用户问未来几天天气预报：type 参数设为 daily
-- 用户问今天/明天逐小时天气：type 参数设为 hourly
-- city 参数支持中文城市名（如"北京"）或城市ID
+  // 按工具追加专属规则
+  if (availableTools.includes('search_knowledge_base')) {
+    prompt += `\n\n知识库搜索规则：
+- 当用户的问题可能涉及已上传的文档、知识库中的信息时，优先调用 search_knowledge_base`;
+  }
 
-搜索引擎选择规则（仅在使用 search_web 时）：
-- 默认使用 search_std（速度快、成本低），除非用户明确要求深度搜索
-- 需要深度全面的结果：使用 search_pro
-- 中文内容优先：使用 search_pro_sogou
-- 国内内容覆盖：使用 search_pro_quark
+  if (availableTools.includes('search_web')) {
+    prompt += `\n\n联网搜索规则：
+- 当用户的问题涉及最新新闻、实时数据、当前事件时，调用 search_web
+- 如果不确定知识库中是否有相关信息，可以同时调用 search_knowledge_base 和 search_web
+- 默认使用 search_std，需要深度搜索时使用 search_pro
+- 用户问"今天"的新闻：设置 recency_filter 为 oneDay；"最近"：oneWeek；"本月"：oneMonth`;
+  }
 
-时间过滤规则（仅在使用 search_web 时）：
-- 用户问"今天"的新闻/信息：设置 recency_filter 为 oneDay
-- 用户问"最近"的新闻/信息：设置 recency_filter 为 oneWeek
-- 用户问"本月"的新闻/信息：设置 recency_filter 为 oneMonth
-- 其他无时效性要求的搜索：不设置 recency_filter（默认 noLimit）
+  if (availableTools.includes('get_weather')) {
+    prompt += `\n\n天气查询规则：
+- 当用户询问天气、温度、湿度等问题时，必须使用 get_weather，不要用 search_web
+- 当前/现在天气：type=now（默认）；未来几天：type=daily；逐小时：type=hourly
+- city 参数支持中文城市名（如"北京"）或城市ID`;
+  }
 
-会话管理规则（仅在使用 manage_session 时）：
-- 用户想新建对话/会话：action=create，可选提供 title 作为标题
-- 用户想删除某个对话：action=delete，需要 session_id（先 list 获取）
-- 用户想重命名对话：action=rename，需要 session_id 和 title
-- 用户想置顶对话：action=pin，需要 session_id
-- 用户想取消置顶：action=unpin，需要 session_id
-- 用户想切换到某个对话：action=switch，需要 session_id
-- 用户问有哪些对话/会话：action=list
-- 用户想搜索对话：action=search，提供 keyword
-- 如果用户没有提供 session_id 但提到了会话标题，先用 list 或 search 找到对应会话再操作
-- 执行操作后，用自然语言告知用户操作结果`;
+  if (availableTools.includes('calculate')) {
+    prompt += `\n\n计算规则：
+- 当用户需要进行复杂的数学运算时，调用 calculate 确保结果精确`;
+  }
+
+  if (availableTools.includes('manage_session')) {
+    prompt += `\n\n会话管理规则：
+- 新建对话：action=create，可选提供 title
+- 删除对话：action=delete，需要 session_id
+- 重命名：action=rename，需要 session_id 和 title
+- 置顶/取消置顶：action=pin/unpin，需要 session_id
+- 切换对话：action=switch，需要 session_id
+- 查看会话：action=list；搜索：action=search，提供 keyword`;
+  }
+
+  // 兜底声明：工具不可用时的处理 + 上下文策略
+  prompt += `\n\n重要规则：
+- 如果你需要的工具不在上述可用列表中，请直接告知用户该功能当前不可用，并建议切换到云端模型获取完整功能
+- 不要编造工具调用，不要猜测工具的参数格式
+- 如果之前的对话内容被截断或存在摘要，请基于当前可见的信息回答，不要假设或编造已丢失的内容
+- 如果工具返回的结果标注为"部分结果"，请基于已有信息直接回答，不要重复调用该工具`;
+
+  return prompt;
+}
 /**
  * 从 URL 下载图片并转换为 base64 格式
  * @param imageUrl 图片的 URL 地址
@@ -254,8 +392,8 @@ async function downloadImageAsBase64(imageUrl: string): Promise<string> {
  * @returns 处理后的图片 URL（base64 或原始 URL）
  */
 async function processImageUrl(imageUrl: string): Promise<string> {
-  if (imageUrl.startsWith('http://localhost:3000/files/') ||
-      imageUrl.startsWith('https://localhost:3000/files/')) {
+  if (imageUrl.startsWith(`${config.serverBaseUrl}/files/`) ||
+      imageUrl.startsWith(config.serverBaseUrl.replace('http://', 'https://') + '/files/')) {
     logger.info('检测到本地图片，开始下载', { module: 'PromptService', imageUrl });
     try {
       const base64DataUrl = await downloadImageAsBase64(imageUrl);
@@ -316,9 +454,9 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
     const imageUrl = match[2];
     logger.debug('检测到图片 URL', { module: 'PromptService', imageUrl });
 
-    // 检查是否是本地服务器的图片（http://localhost:3000/files/）
-    if (imageUrl.startsWith('http://localhost:3000/files/') ||
-        imageUrl.startsWith('https://localhost:3000/files/')) {
+    // 检查是否是本地服务器的图片
+    if (imageUrl.startsWith(`${config.serverBaseUrl}/files/`) ||
+        imageUrl.startsWith(config.serverBaseUrl.replace('http://', 'https://') + '/files/')) {
       try {
         // 下载图片并转换为 base64 格式
         logger.info('开始下载图片并转换为 base64', { module: 'PromptService' });
@@ -389,7 +527,7 @@ async function promptWithFunctionCalling(
   const modelInfo = getModelInfo();
   const supportsVision = modelInfo.supportsVision;
 
-  let fcSystemPrompt = FC_SYSTEM_PROMPT;
+  let fcSystemPrompt = buildFCSystemPrompt();
 
   const currentDate = new Date();
   const dateStr = `${currentDate.getFullYear()}年${currentDate.getMonth() + 1}月${currentDate.getDate()}日`;
@@ -417,16 +555,19 @@ async function promptWithFunctionCalling(
     effectiveImages = undefined;
   }
 
-  const { maxHistory: MAX_HISTORY } = computeHistoryBudget({
-    totalBudget: 4000,
+  const { maxRounds: MAX_ROUNDS } = computeHistoryBudget({
+    totalBudget: computeTotalBudgetForModel(true),
     knowledgeContextLength: 0,  // FC 模式知识库通过工具调用，不走 RAG 注入
     imageCount: effectiveImages?.length || 0,
     history: history || [],
   });
-  const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
+
+  // 按轮次切片历史：1轮 = 连续的 user + assistant 消息对
+  // 保留最近 MAX_ROUNDS 轮，更早的由 sessionSummary 替代
+  const recentHistory = sliceHistoryByRounds(history || [], MAX_ROUNDS);
 
   if (recentHistory.length > 0) {
-    logger.info('FC模式：添加历史消息', { module: 'PromptService', historyCount: recentHistory.length, maxHistory: MAX_HISTORY });
+    logger.info('FC模式：添加历史消息', { module: 'PromptService', historyCount: recentHistory.length, maxRounds: MAX_ROUNDS });
     for (const msg of recentHistory) {
       if (msg.role === 'user') {
         let content: any;
@@ -464,12 +605,28 @@ async function promptWithFunctionCalling(
   }
   messages.push(new HumanMessage({ content: userContent }));
 
-  const llm = createLLM();
-  const toolSchemas = getAllToolSchemas();
+  const llm = createLLM(buildModelConfig(getCurrentModelId(), { isFCMode: true }));
+  const currentModelId = getCurrentModelId();
+  const caps = getModelCapabilities(currentModelId);
+  const toolSchemas = await getToolSchemasForModel(currentModelId, { contextLength: caps.contextLength, supportsFC: caps.supportsFC, query: promptText });
   if (!llm.bindTools) {
-    throw new Error('当前模型不支持 bindTools');
+    throw new FCFallbackError('当前模型不支持 bindTools', '');
   }
-  const llmWithTools = llm.bindTools(toolSchemas, { tool_choice: 'auto' });
+  // FC 能力弱的模型对 tool_choice 参数支持不佳，不传该参数
+  // bindTools 失败时静默降级到 RAG 模式
+  let llmWithTools;
+  try {
+    llmWithTools = !caps.supportsFC
+      ? llm.bindTools(toolSchemas)
+      : llm.bindTools(toolSchemas, { tool_choice: 'auto' });
+  } catch (bindError: any) {
+    logger.warn('FC模式：bindTools 失败，降级到RAG注入模式', {
+      module: 'PromptService',
+      error: bindError.message,
+      modelId: getCurrentModelId(),
+    });
+    throw new FCFallbackError(`bindTools 失败: ${bindError.message}`, '');
+  }
 
   const MAX_TOOL_ITERATIONS = 5;
   let toolCallsMade: Array<{ name: string; args: any }> = [];
@@ -478,6 +635,7 @@ async function promptWithFunctionCalling(
   let usedWeather = false;
   let usedCalculate = false;
   let sessionAction: any = null;
+  let fcKnowledgeBaseResult = ''; // 收集 FC 模式下已获取的知识库结果，降级时复用
 
   // 启动心跳，在工具调用循环期间保持连接活跃
   const heartbeatTimer = startHeartbeat(res);
@@ -510,7 +668,7 @@ async function promptWithFunctionCalling(
         return;
       }
       logger.error('FC模式：LLM调用失败，降级到RAG注入模式', { module: 'PromptService', error: invokeError.message });
-      throw invokeError;
+      throw new FCFallbackError(invokeError.message, fcKnowledgeBaseResult);
     }
 
     const aiMessage = response as AIMessage;
@@ -529,8 +687,79 @@ async function promptWithFunctionCalling(
     if (hasToolCalls) {
       messages.push(aiMessage);
 
-      for (const toolCall of aiMessage.tool_calls!) {
-        const toolCallId = toolCall.id || `tc_${Date.now()}_${iteration}`;
+      // 工具调用去重：同一工具+相同参数只执行一次
+      const seenCalls = new Set<string>();
+      const deduplicatedCalls = aiMessage.tool_calls!.filter((toolCall) => {
+        const key = `${toolCall.name}:${JSON.stringify(toolCall.args)}`;
+        if (seenCalls.has(key)) {
+          logger.info('FC模式：跳过重复的工具调用', {
+            module: 'PromptService',
+            toolName: toolCall.name,
+            args: JSON.stringify(toolCall.args).substring(0, 200),
+          });
+          return false;
+        }
+        seenCalls.add(key);
+        return true;
+      });
+
+      // 工具调用熔断：根据模型能力分级设定限制
+      // 线上模型上下文大、指令遵循强，允许稍多调用；本地模型严格限制防循环
+      const caps = getModelCapabilities(getCurrentModelId());
+      const isSmallContext = caps.contextLength < 8192;
+      const MAX_PER_TOOL = isSmallContext ? 2 : 5;
+      const MAX_TOTAL_TOOL_CALLS = isSmallContext ? 8 : 15;
+      const toolCallCounts: Record<string, number> = {};
+      for (const tc of toolCallsMade) {
+        toolCallCounts[tc.name] = (toolCallCounts[tc.name] || 0) + 1;
+      }
+
+      // 全局熔断：总调用次数超限，返回失败 ToolMessage 让模型转向最终回答
+      if (toolCallsMade.length >= MAX_TOTAL_TOOL_CALLS) {
+        logger.warn('FC模式：全局熔断触发，所有工具调用返回限制提示', {
+          module: 'PromptService',
+          totalCalls: toolCallsMade.length,
+          maxTotal: MAX_TOTAL_TOOL_CALLS,
+        });
+        for (const toolCall of deduplicatedCalls) {
+          messages.push(new ToolMessage({
+            content: JSON.stringify({ error: true, message: '工具调用总次数已达上限，请基于已有信息直接回答用户问题，不要再调用任何工具。' }),
+            tool_call_id: toolCall.id || `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+            name: toolCall.name,
+          }));
+        }
+        continue; // 继续下一轮迭代，模型会看到失败结果后生成最终回答
+      }
+
+      // 单工具熔断：过滤掉超过调用次数限制的工具
+      const circuitBrokenCalls = deduplicatedCalls.filter((toolCall) => {
+        const currentCount = toolCallCounts[toolCall.name] || 0;
+        if (currentCount >= MAX_PER_TOOL) {
+          logger.warn('FC模式：单工具熔断触发，返回限制提示', {
+            module: 'PromptService',
+            toolName: toolCall.name,
+            currentCount,
+            maxPerTool: MAX_PER_TOOL,
+          });
+          // 为被熔断的工具调用添加失败 ToolMessage
+          messages.push(new ToolMessage({
+            content: JSON.stringify({ error: true, message: `工具 ${toolCall.name} 调用次数已达上限，请基于已有信息回答。` }),
+            tool_call_id: toolCall.id || `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+            name: toolCall.name,
+          }));
+          return false;
+        }
+        return true;
+      });
+
+      // 如果所有工具调用都被熔断过滤，直接进入下一轮迭代
+      if (circuitBrokenCalls.length === 0) {
+        continue;
+      }
+
+      // 并行执行所有工具调用，减少总等待时间
+      const toolCallPromises = circuitBrokenCalls.map(async (toolCall) => {
+        const toolCallId = toolCall.id || `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
         logger.info('FC模式：执行工具调用', {
           module: 'PromptService',
           iteration: iteration + 1,
@@ -547,31 +776,22 @@ async function promptWithFunctionCalling(
             availableTools,
           });
           sendToolStatus(res, toolCall.name, 'done', { error: true });
-          messages.push(new ToolMessage({
+          return {
+            toolCall,
+            toolCallId,
+            success: false,
             content: JSON.stringify({
               error: true,
               message: `工具 "${toolCall.name}" 不存在。可用工具: ${availableTools}。请仅使用上述可用工具。`,
             }),
-            tool_call_id: toolCallId,
-            name: toolCall.name,
-          }));
-          toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
-          continue;
+            result: null,
+          };
         }
 
-        if (toolCall.name === 'search_knowledge_base') {
-          usedKnowledgeBase = true;
-        }
-        if (toolCall.name === 'search_web') {
-          usedWebSearch = true;
-        }
-        if (toolCall.name === 'get_weather') {
-          usedWeather = true;
-        }
-        if (toolCall.name === 'calculate') {
-          usedCalculate = true;
-        }
-        toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
+        if (toolCall.name === 'search_knowledge_base') usedKnowledgeBase = true;
+        if (toolCall.name === 'search_web') usedWebSearch = true;
+        if (toolCall.name === 'get_weather') usedWeather = true;
+        if (toolCall.name === 'calculate') usedCalculate = true;
 
         // 通知客户端：工具开始执行
         sendToolStatus(res, toolCall.name, 'executing');
@@ -590,6 +810,35 @@ async function promptWithFunctionCalling(
           // 通知客户端：工具执行完成
           sendToolStatus(res, toolCall.name, 'done');
 
+          return { toolCall, toolCallId, success: true, content: resultStr, result };
+        } catch (toolError: any) {
+          logger.error('FC模式：工具执行失败，构造错误 ToolMessage', {
+            module: 'PromptService',
+            toolName: toolCall.name,
+            toolCallId,
+            error: toolError.message,
+          });
+          sendToolStatus(res, toolCall.name, 'done', { error: true });
+          return {
+            toolCall,
+            toolCallId,
+            success: false,
+            content: JSON.stringify({ error: true, message: `工具执行失败: ${toolError.message}` }),
+            result: null,
+          };
+        }
+      });
+
+      const toolResults = await Promise.all(toolCallPromises);
+
+      // 按顺序处理结果，构造 ToolMessage 和收集元数据
+      for (const { toolCall, toolCallId, success, content, result } of toolResults) {
+        // 只在工具实际执行成功时记录到 metadata
+        if (success) {
+          toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
+        }
+
+        if (success && result) {
           // 收集 manage_session 返回的前端操作指令
           if (toolCall.name === 'manage_session' && result?.frontend_action && !sessionAction) {
             sessionAction = result.frontend_action;
@@ -600,25 +849,17 @@ async function promptWithFunctionCalling(
             });
           }
 
-          messages.push(new ToolMessage({
-            content: resultStr,
-            tool_call_id: toolCallId,
-            name: toolCall.name,
-          }));
-        } catch (toolError: any) {
-          logger.error('FC模式：工具执行失败，构造错误 ToolMessage', {
-            module: 'PromptService',
-            toolName: toolCall.name,
-            toolCallId,
-            error: toolError.message,
-          });
-          sendToolStatus(res, toolCall.name, 'done', { error: true });
-          messages.push(new ToolMessage({
-            content: JSON.stringify({ error: true, message: `工具执行失败: ${toolError.message}` }),
-            tool_call_id: toolCallId,
-            name: toolCall.name,
-          }));
+          // 收集知识库结果，降级 RAG 时可复用
+          if (toolCall.name === 'search_knowledge_base' && content) {
+            fcKnowledgeBaseResult = content;
+          }
         }
+
+        messages.push(new ToolMessage({
+          content: success ? formatToolResult(toolCall.name, content, getCurrentModelId()) : content,
+          tool_call_id: toolCallId,
+          name: toolCall.name,
+        }));
       }
 
       logger.info('FC模式：本轮工具调用完成，继续下一轮模型调用', {
@@ -628,6 +869,25 @@ async function promptWithFunctionCalling(
         messagesLength: messages.length,
       });
     } else {
+      // 检测本地模型可能输出疑似工具调用意图的文本（如"调用 search_web"）
+      const textContent = typeof aiMessage.content === 'string' ? aiMessage.content : '';
+      const toolNamePattern = getAvailableToolNames().join('|');
+      const suspectedIntent = toolNamePattern
+        ? new RegExp(`(?:调用|使用|执行|运行)\\s*(?:工具)?\\s*(${toolNamePattern})`, 'i').test(textContent)
+        : false;
+
+      if (suspectedIntent && iteration < MAX_TOOL_ITERATIONS - 1) {
+        logger.info('FC模式：检测到疑似工具调用意图文本，添加提示重试', {
+          module: 'PromptService',
+          textPreview: textContent.substring(0, 200),
+        });
+        messages.push(aiMessage);
+        messages.push(new HumanMessage({
+          content: '请直接使用工具调用功能来执行上述操作，而不是用文字描述。如果你需要调用工具，请使用正确的工具调用格式。',
+        }));
+        continue; // 继续下一轮迭代
+      }
+
       logger.info('FC模式：获得最终回答，切换流式输出', { module: 'PromptService', toolCallCount: toolCallsMade.length });
 
       // 流式输出阶段不再需要心跳，停止定时器
@@ -647,32 +907,31 @@ async function promptWithFunctionCalling(
           calculateCount: toolCallsMade.filter(tc => tc.name === 'calculate').length,
           toolCalls: toolCallsMade.map(tc => tc.name),
         };
-        const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]${sessionAction ? `[SESSION_ACTION:${JSON.stringify(sessionAction)}]` : ''}`;
-
         try {
-          const stream = await llmWithTools.stream(messages, {
+          // 先发送 metadata 和 session_action 事件
+          sendMetadata(res, ragMetadata);
+          if (sessionAction) {
+            sendSessionAction(res, sessionAction);
+          }
+
+          const stream = await llm.stream(messages, {
             signal: abortController?.signal,
           });
-          let isFirstChunk = true;
           let chunkCount = 0;
           let fcFullResponse = '';
+          let inThinkBlock = false;
           for await (const chunk of stream) {
             if (isCancelled && isCancelled()) {
               logger.info('FC模式流式：检测到取消信号，停止生成', { module: 'PromptService' });
               break;
             }
             chunkCount++;
-            const content = chunk.content?.toString() || '';
-            const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
-            if (cleanContent) {
-              fcFullResponse += cleanContent;
-              if (isFirstChunk) {
-                res.write(metadataPrefix + cleanContent);
-                isFirstChunk = false;
-              } else {
-                res.write(cleanContent);
-              }
-              process.stdout.write(cleanContent);
+            const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
+            inThinkBlock = filtered.inThinkBlock;
+            if (filtered.text) {
+              fcFullResponse += filtered.text;
+              sendContent(res, filtered.text);
+              process.stdout.write(filtered.text);
             }
           }
           logger.info('FC模式流式响应完成', { module: 'PromptService', chunkCount, fcFullResponseLength: fcFullResponse.length, estimatedOutputTokens: estimateTokens(fcFullResponse) });
@@ -705,7 +964,12 @@ async function promptWithFunctionCalling(
               : JSON.stringify(aiMessage.content);
             fallbackContent = fallbackContent.replace(/<think>[\s\S]*?<\/think>/gs, "");
             if (!res.writableEnded) {
-              res.write(metadataPrefix + fallbackContent);
+              // fallback 时也需要发送 metadata，否则客户端收不到
+              sendMetadata(res, ragMetadata);
+              if (sessionAction) {
+                sendSessionAction(res, sessionAction);
+              }
+              sendContent(res, fallbackContent);
               process.stdout.write(fallbackContent);
               res.end();
             }
@@ -729,8 +993,19 @@ async function promptWithFunctionCalling(
   const maxIterStartTime = Date.now();
 
   // 达到最大迭代次数时，不再绑定工具，强制让模型基于已有信息生成最终回答
-  messages.push(new HumanMessage({
-    content: '请根据以上工具返回的结果，直接给出最终回答，不要再调用任何工具。',
+  // 清理消息中的工具调用上下文，防止本地模型继续尝试工具调用格式
+  const cleanedMessages = messages.filter((msg, idx) => {
+    // 保留 SystemMessage
+    if (idx === 0 && msg instanceof SystemMessage) return true;
+    // 移除早期的 ToolMessage（只保留最后一轮工具结果）
+    if (msg instanceof ToolMessage) return false;
+    // 移除包含 tool_calls 的 AIMessage（早期轮次的工具调用记录）
+    if (msg instanceof AIMessage && msg.tool_calls && msg.tool_calls.length > 0) return false;
+    return true;
+  });
+
+  cleanedMessages.push(new HumanMessage({
+    content: '请根据以上信息，直接用自然语言给出最终回答。注意：不要输出任何工具调用格式，不要提及工具名称，只需直接回答问题。',
   }));
 
   const ragMetadata = {
@@ -744,32 +1019,31 @@ async function promptWithFunctionCalling(
     calculateCount: toolCallsMade.filter(tc => tc.name === 'calculate').length,
     toolCalls: toolCallsMade.map(tc => tc.name),
   };
-  const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]${sessionAction ? `[SESSION_ACTION:${JSON.stringify(sessionAction)}]` : ''}`;
-
   if (res) {
     try {
-      const stream = await llm.stream(messages, {
+      // 先发送 metadata 和 session_action 事件
+      sendMetadata(res, ragMetadata);
+      if (sessionAction) {
+        sendSessionAction(res, sessionAction);
+      }
+
+      const stream = await llm.stream(cleanedMessages, {
         signal: abortController?.signal,
       });
-      let isFirstChunk = true;
       let chunkCount = 0;
       let fullResponse = '';
+      let inThinkBlock = false;
       for await (const chunk of stream) {
         if (isCancelled && isCancelled()) {
           break;
         }
         chunkCount++;
-        const content = chunk.content?.toString() || '';
-        const cleanContent = content.replace(/<tool_call>[\s\S]*?<\/think>/gs, "");
-        if (cleanContent) {
-          fullResponse += cleanContent;
-          if (isFirstChunk) {
-            res.write(metadataPrefix + cleanContent);
-            isFirstChunk = false;
-          } else {
-            res.write(cleanContent);
-          }
-          process.stdout.write(cleanContent);
+        const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
+        inThinkBlock = filtered.inThinkBlock;
+        if (filtered.text) {
+          fullResponse += filtered.text;
+          sendContent(res, filtered.text);
+          process.stdout.write(filtered.text);
         }
       }
       logger.info('FC模式：达到最大迭代后强制生成回答完成', { module: 'PromptService', chunkCount, fullResponseLength: fullResponse.length });
@@ -797,7 +1071,12 @@ async function promptWithFunctionCalling(
       } else {
         logger.error('FC模式：达到最大迭代后流式输出失败', { module: 'PromptService', error: streamError.message });
         if (!res.writableEnded) {
-          res.write(metadataPrefix + '抱歉，工具调用次数已达上限，请简化您的问题后重试。');
+          // fallback 时也需要发送 metadata
+          sendMetadata(res, ragMetadata);
+          if (sessionAction) {
+            sendSessionAction(res, sessionAction);
+          }
+          sendContent(res, '抱歉，工具调用次数已达上限，请简化您的问题后重试。');
           res.end();
         }
       }
@@ -831,6 +1110,7 @@ export const promptTemplate = async (
   onUsageComplete?: (usage: UsageData) => void,
 ) => {
   const modelInfo = getModelInfo();
+  let fcError: any = null;
 
   if (modelInfo.supportsFunctionCalling) {
     logger.info('当前模型支持Function Calling，使用FC模式', { module: 'PromptService', modelId: getCurrentModelId() });
@@ -838,12 +1118,16 @@ export const promptTemplate = async (
       return await promptWithFunctionCalling(
         promptText, images, history, res, sessionSummary, userMemories, isCancelled, abortController, userId, sessionId, onUsageComplete,
       );
-    } catch (fcError: any) {
-      logger.warn('FC模式失败，降级到RAG注入模式', { module: 'PromptService', error: fcError.message });
+    } catch (err: any) {
+      fcError = err;
+      logger.warn('FC模式失败，降级到RAG注入模式', { module: 'PromptService', error: err.message });
     }
   } else {
     logger.info('当前模型不支持Function Calling，使用RAG注入模式', { module: 'PromptService', modelId: getCurrentModelId() });
   }
+
+  // 检查 FC 降级时是否已获取知识库结果，避免重复检索
+  const fcFallbackKBResult = (fcError instanceof FCFallbackError && fcError.knowledgeBaseResult) ? fcError.knowledgeBaseResult : '';
 
   const conversions: Array<SystemMessage | HumanMessage | AIMessage> = [];
 
@@ -852,8 +1136,14 @@ export const promptTemplate = async (
   let hasRetrievedContent = false;
   let ragContextCount = 0;
   let retrievalResults: Array<{ content: string; metadata: any; score: number; vectorScore?: number }> = [];
-  
-  if (promptText && promptText.trim()) {
+
+  if (fcFallbackKBResult) {
+    // FC 模式已检索过知识库，直接复用结果，跳过重复检索
+    logger.info('RAG模式：复用FC模式已获取的知识库结果，跳过重复检索', { module: 'PromptService' });
+    retrievedContext = fcFallbackKBResult;
+    hasRetrievedContent = true;
+    ragContextCount = 1;
+  } else if (promptText && promptText.trim()) {
     try {
       logger.info('正在从知识库检索相关文档', { module: 'PromptService' });
       const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);
@@ -939,16 +1229,16 @@ ${docList}
     images = undefined;
   }
 
-  const { maxHistory: MAX_HISTORY } = computeHistoryBudget({
-    totalBudget: 4000,
+  const { maxRounds: MAX_ROUNDS } = computeHistoryBudget({
+    totalBudget: computeTotalBudgetForModel(false),
     knowledgeContextLength: hasRetrievedContent ? retrievedContext.length : 0,
     imageCount: images?.length || 0,
     history: history || [],
   });
-  const recentHistory = history && MAX_HISTORY > 0 ? history.slice(-MAX_HISTORY) : [];
+  const recentHistory = sliceHistoryByRounds(history || [], MAX_ROUNDS);
 
   if (recentHistory.length > 0) {
-    logger.info('添加历史消息', { module: 'PromptService', historyCount: recentHistory.length, maxHistory: MAX_HISTORY });
+    logger.info('添加历史消息', { module: 'PromptService', historyCount: recentHistory.length, maxRounds: MAX_ROUNDS });
     for (const msg of recentHistory) {
       if (msg.role === 'user') {
         let content: any;
@@ -1001,9 +1291,11 @@ ${docList}
       contextCount: hasRetrievedContent ? ragContextCount : 0,
     };
     logger.debug('发送 RAG 元数据', { module: 'PromptService', usedKnowledgeBase: hasRetrievedContent, contextCount: ragMetadata.contextCount });
-    const metadataPrefix = `[RAG_METADATA:${JSON.stringify(ragMetadata)}]`;
-    
+
     try {
+      // 先发送 metadata 事件
+      sendMetadata(res, ragMetadata);
+
       // 将 AbortController 的 signal 传递给 LLM 的 stream 方法
       // 当客户端断开连接时，调用 abortController.abort() 会：
       // 1. 中断 LLM 底层到 Ollama/DeepSeek 的 HTTP 连接
@@ -1013,8 +1305,8 @@ ${docList}
         signal: abortController?.signal, // 绑定 abort 信号，中断时自动销毁底层 HTTP 请求
       });
       let chunkCount = 0;
-      let isFirstChunk = true;
       let fullResponse = '';
+      let inThinkBlock = false;
       for await (const chunk of stream) {
         // 检查客户端是否已断开连接（双重保险：即使 abort 信号未生效，也能通过标志位退出循环）
         if (isCancelled && isCancelled()) {
@@ -1022,17 +1314,12 @@ ${docList}
           break;
         }
         chunkCount++;
-        const content = chunk.content?.toString() || '';
-        const cleanContent = content.replace(/<think>[\s\S]*?<\/think>/gs, "");
-        if (cleanContent) {
-          fullResponse += cleanContent;
-          if (isFirstChunk) {
-            res.write(metadataPrefix + cleanContent);
-            isFirstChunk = false;
-          } else {
-            res.write(cleanContent);
-          }
-          process.stdout.write(cleanContent);
+        const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
+        inThinkBlock = filtered.inThinkBlock;
+        if (filtered.text) {
+          fullResponse += filtered.text;
+          sendContent(res, filtered.text);
+          process.stdout.write(filtered.text);
         }
       }
       logger.info('流式响应完成', { module: 'PromptService', chunkCount, fullResponseLength: fullResponse.length, estimatedOutputTokens: estimateTokens(fullResponse) });

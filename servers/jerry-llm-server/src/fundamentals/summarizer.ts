@@ -18,6 +18,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { getDeepseekApiKey } from './model-provider';
 import { logger } from './logger';
+import { config } from './config';
 
 // ==================== 配置常量 ====================
 
@@ -28,7 +29,7 @@ const SUMMARY_THRESHOLD = 10;
 const INCREMENTAL_THRESHOLD = 10;
 
 /** DeepSeek API 基础 URL */
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+const DEEPSEEK_BASE_URL = config.deepseekBaseUrl;
 
 /** 摘要生成的系统提示词 */
 const SUMMARIZER_SYSTEM_PROMPT = `你是一个对话摘要专家。你的任务是将对话历史压缩为简洁但完整的摘要。

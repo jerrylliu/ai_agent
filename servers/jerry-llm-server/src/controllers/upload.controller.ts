@@ -11,6 +11,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import * as path from 'path';
 // 导入 Node.js fs 模块，用于文件系统操作（创建目录、写入文件）
 import * as fs from 'fs';
+import { config } from '../fundamentals/config';
 
 // @Controller('upload') 声明该类为 NestJS 控制器，路由前缀为 /upload
 @Controller('upload')
@@ -54,6 +55,6 @@ export class UploadController {
 
     // 返回文件的访问 URL，前端通过此 URL 引用上传的文件
     // 注意：需要配合静态文件服务中间件（如 ServeStaticModule）才能通过 URL 访问
-    return { url: `http://localhost:3000/files/${safeFilename}` };
+    return { url: `${config.serverBaseUrl}/files/${safeFilename}` };
   }
 }

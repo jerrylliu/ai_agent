@@ -23,17 +23,18 @@ import { ChatOllama } from '@langchain/ollama';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { getDeepseekApiKey } from './model-provider';
 import { logger } from './logger';
+import { config } from './config';
 
 // ==================== 配置常量 ====================
 
 /** 每隔多少条消息触发一次记忆提取 */
 const MEMORY_EXTRACTION_INTERVAL = 10;
 
-/** DeepSeek API 基础 URL */
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
-
 /** Ollama 基础 URL */
-const OLLAMA_BASE_URL = 'http://localhost:11434';
+const OLLAMA_BASE_URL = config.ollamaBaseUrl;
+
+/** DeepSeek API 基础 URL */
+const DEEPSEEK_BASE_URL = config.deepseekBaseUrl;
 
 /** 记忆提取使用的本地模型 */
 const LOCAL_EXTRACTOR_MODEL = 'qwen3.5-new';

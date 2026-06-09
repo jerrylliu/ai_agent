@@ -3,7 +3,7 @@ import ChatAgent from "./pages/ChatAgent";
 
 function App() {
   return (
-    <div className="h-screen w-full">
+    <div className="h-full w-full">
       <ChatAgent/>
     </div>
   );

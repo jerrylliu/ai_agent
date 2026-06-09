@@ -1,7 +1,8 @@
 import { logger } from '../logger';
+import { config } from '../config';
 
-const SEARCH_API_URL = process.env.SEARCH_API_URL || '';
-const SEARCH_API_KEY = process.env.SEARCH_API_KEY || '';
+const SEARCH_API_URL = config.searchApiUrl;
+const SEARCH_API_KEY = config.searchApiKey;
 
 const VALID_ENGINES = ['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'] as const;
 const MAX_SNIPPET_LENGTH = 500;

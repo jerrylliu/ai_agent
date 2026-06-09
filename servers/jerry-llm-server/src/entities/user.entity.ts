@@ -23,6 +23,9 @@ export class User {
   @Column({ default: true })
   isActive: boolean;
 
+  @Column({ default: 0 })
+  tokenVersion: number;
+
   @CreateDateColumn()
   createdAt: Date;
 

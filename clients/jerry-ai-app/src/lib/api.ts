@@ -1,6 +1,7 @@
 // API 端点常量导入
 import { API_ENDPOINTS } from './constants';
 import { Session, Message } from '../types/session';
+import { parseSSEFrames, handleSSEEvents } from './sse-parser';
 
 // 类型定义
 export interface ChatHistoryItem {
@@ -128,7 +129,6 @@ export async function getAIResponse(
     async start(controller) {
       const reader = stream.getReader();
       let buffer = '';
-      let metadataExtracted = false;
 
       try {
         while (true) {
@@ -137,76 +137,26 @@ export async function getAIResponse(
 
           buffer += value;
 
-          // 过滤心跳标记
-          buffer = buffer.replace(/\[HEARTBEAT\]/g, '');
+          const { events, remainingBuffer } = parseSSEFrames(buffer);
+          buffer = remainingBuffer;
 
-          if (!metadataExtracted) {
-            const metadataMatch = buffer.match(/^\[RAG_METADATA:(\{[^}]*\})\]/);
-            if (metadataMatch) {
-              metadataExtracted = true;
-              try {
-                const metadata = JSON.parse(metadataMatch[1]);
-                usedKnowledgeBase = metadata.usedKnowledgeBase || false;
-                contextCount = metadata.contextCount || 0;
-              } catch (e) {
-                console.warn('解析RAG元数据失败:', e);
-              }
-              buffer = buffer.substring(metadataMatch[0].length);
-
-              // 提取 SESSION_ACTION 标记（payload 含嵌套对象，用 .+ 匹配）
-              const actionMatch = buffer.match(/^\[SESSION_ACTION:(\{.+\})\]/);
-              if (actionMatch) {
-                try {
-                  sessionAction = JSON.parse(actionMatch[1]);
-                } catch (e) {
-                  console.warn('解析SESSION_ACTION失败:', e);
-                }
-                buffer = buffer.substring(actionMatch[0].length);
-              }
-            }
-          }
-
-          // 提取 TOOL_STATUS 事件（可能出现在流中的任何位置）
-          let toolStatusMatch;
-          while ((toolStatusMatch = buffer.match(/\[TOOL_STATUS:(\{[^}]*\})\]/))) {
-            try {
-              const event: ToolStatusEvent = JSON.parse(toolStatusMatch[1]);
+          handleSSEEvents(events, {
+            onMetadata: (metadata) => {
+              usedKnowledgeBase = metadata.usedKnowledgeBase || false;
+              contextCount = metadata.contextCount || 0;
+            },
+            onSessionAction: (action) => {
+              sessionAction = action;
+            },
+            onToolStatus: (event) => {
               if (toolStatusCallback) {
                 toolStatusCallback(event);
               }
-            } catch (e) {
-              console.warn('解析TOOL_STATUS失败:', e);
-            }
-            buffer = buffer.substring(0, toolStatusMatch.index!) + buffer.substring(toolStatusMatch.index! + toolStatusMatch[0].length);
-          }
-
-          // 检查 buffer 末尾是否有未完成的控制标记
-          // 已知标记前缀：[RAG_METADATA: [SESSION_ACTION: [TOOL_STATUS: [HEARTBEAT]
-          // 只对这些已知前缀做截断保护，避免误伤 AI 回复中的正常 [ 字符
-          const MARKER_PREFIXES = ['[RAG_METADATA:', '[SESSION_ACTION:', '[TOOL_STATUS:', '[HEARTBEAT'];
-          let outputPart = buffer;
-          for (const prefix of MARKER_PREFIXES) {
-            const idx = buffer.lastIndexOf(prefix);
-            if (idx !== -1) {
-              const afterPrefix = buffer.substring(idx);
-              // 标记未闭合（没有找到对应的 ]）
-              if (!afterPrefix.includes(']')) {
-                outputPart = buffer.substring(0, idx);
-                buffer = afterPrefix;
-                break;
-              }
-            }
-          }
-          if (outputPart === buffer) {
-            buffer = '';
-          }
-
-          if (outputPart) {
-            controller.enqueue(outputPart);
-          }
-        }
-        if (buffer) {
-          controller.enqueue(buffer);
+            },
+            onContent: (text) => {
+              controller.enqueue(text);
+            },
+          });
         }
         controller.close();
       } catch (e) {

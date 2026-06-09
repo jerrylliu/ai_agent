@@ -2,6 +2,7 @@ import { ChatOllama } from "@langchain/ollama";
 import { ChatOpenAI } from "@langchain/openai";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { logger } from './logger';
+import { config } from './config';
 
 export type ModelProvider = 'ollama' | 'deepseek' | 'zhipu';
 
@@ -90,9 +91,9 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
   },
 ];
 
-const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
-const ZHIPU_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4';
-const OLLAMA_BASE_URL = 'http://localhost:11434';
+const DEEPSEEK_BASE_URL = config.deepseekBaseUrl;
+const ZHIPU_BASE_URL = config.zhipuBaseUrl;
+const OLLAMA_BASE_URL = config.ollamaBaseUrl;
 
 let currentModelId = 'ollama:minicpm';
 let deepseekApiKey = '';

@@ -29,20 +29,26 @@ import { DocumentService } from './services/document.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
 import { KnowledgeSourceService } from './services/knowledge-source.service.js';
 import { KnowledgeSourceSchedulerService } from './services/knowledge-source-scheduler.service.js';
+import { SessionService } from './services/session.service.js';
+import { SummaryService } from './services/summary.service.js';
+import { MemoryService } from './services/memory.service.js';
+import { UsageService } from './services/usage.service.js';
+import { EvaluationService } from './services/evaluation.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { WinstonLoggerModule } from './fundamentals/logger.js';
 import { initManageSession } from './fundamentals/tools/index.js';
+import { config } from './fundamentals/config.js';
 @Module({
   imports: [
     WinstonLoggerModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forRoot({
       type: 'mysql',
-      host: '127.0.0.1',
-      port: 3306,
-      username: 'root',
-      password: '123456',
-      database: 'cyberpunk',
+      host: config.db.host,
+      port: config.db.port,
+      username: config.db.username,
+      password: config.db.password,
+      database: config.db.database,
       entities: [ChatHistory, Session, User, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation],
       synchronize: true,
     }),
@@ -50,12 +56,12 @@ import { initManageSession } from './fundamentals/tools/index.js';
     AuthModule,
   ],
   controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController, DocumentController, KnowledgeSourceController],
-  providers: [AppService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService],
+  providers: [AppService, SessionService, SummaryService, MemoryService, UsageService, EvaluationService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService],
 })
 export class AppModule implements OnModuleInit {
-  constructor(private readonly appService: AppService) {}
+  constructor(private readonly sessionService: SessionService) {}
 
   onModuleInit() {
-    initManageSession(this.appService);
+    initManageSession(this.sessionService);
   }
 }

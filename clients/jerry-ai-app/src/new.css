@@ -164,6 +164,25 @@
   --sidebar-ring: #5FF6FF;                           /* 侧边栏焦点环：霓虹青色 */
 }
 
+/* ==================== Tauri Decorum 自定义标题栏适配 ==================== */
+/* decorum 插件在 Windows 上隐藏系统装饰，自动创建窗口控制按钮（最小化/最大化/关闭）*/
+/* 按钮通过 .decorum-tb-btn 等类名定位在右上角，内容区需要留出顶部空间 */
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
+  padding-top: 25px;
+  box-sizing: border-box;
+}
+
+/* decorum 窗口控制按钮样式适配 */
+button.decorum-tb-btn {
+  -webkit-app-region: no-drag;
+}
+
 /* ========================================================================
    赛博朋克模式专属样式区
    所有赛博朋克特效均使用专属类名，不会牵连其他模块
@@ -448,7 +467,7 @@
 }
 
 /* ---------- cyberpunk-header：聊天头部信息栏赛博朋克样式 ---------- */
-/* 智能助手标题：#5FF6FF 颜色 + 发光 */
+/* 以太忆核标题：#5FF6FF 颜色 + 发光 */
 .cyberpunk .cyberpunk-header-title {
   color: #5FF6FF;
   text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33, 0 0 12px #5FF6FF22;

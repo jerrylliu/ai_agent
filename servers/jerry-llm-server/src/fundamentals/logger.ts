@@ -13,6 +13,7 @@
 
 import { WinstonModule } from 'nest-winston';
 import LokiTransport from 'winston-loki';
+import { config } from './config';
 import * as winston from 'winston';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -50,7 +51,7 @@ export const winstonConfig = {
     // Console 输出：开发环境友好，带颜色
     new winston.transports.Console({
       format: consoleFormat,
-      level: process.env.LOG_LEVEL || 'info', // 默认 info 级别，可通过环境变量调整
+      level: config.logLevel, // 通过 config 统一管理
     }),
 
     // 所有日志写入 combined.log
@@ -72,16 +73,20 @@ export const winstonConfig = {
     }),
 
     // Loki 输出：将所有日志写入 Loki 数据库
-    // 注意：LokiTransport 需要 Loki 数据库已启动并监听在 http://localhost:3100
-    // 可以通过修改 host 和 labels 来配置不同的 Loki 实例
-    new LokiTransport({
-      host: 'http://localhost:3100',
-      labels: { service: 'jerry-llm-server' },
-      json: true,
-      format: winston.format.json(),
-      replaceTimestamp: true,
-      onConnectionError: (err) => console.error('Loki connection error:', err),
-    })
+    // 注意：需要 Loki 数据库已启动并监听在 http://localhost:3100
+    // 开发环境下可通过环境变量 LOKI_HOST 配置，未设置则跳过 Loki Transport
+    ...(config.lokiHost
+      ? [
+          new LokiTransport({
+            host: config.lokiHost,
+            labels: { service: 'jerry-llm-server' },
+            json: true,
+            format: winston.format.json(),
+            replaceTimestamp: true,
+            onConnectionError: (err) => console.error('Loki connection error:', err),
+          }),
+        ]
+      : []),
   ],
 
   // 默认附加的元数据

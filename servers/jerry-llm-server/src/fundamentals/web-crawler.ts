@@ -162,6 +162,12 @@ async function fetchPage(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): P
 async function tryFetchMarkdownVersion(htmlUrl: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<FetchedContent | null> {
   try {
     const u = new URL(htmlUrl);
+    // 对已有明确文件后缀的 URL（如 .txt, .json, .xml），不尝试追加 .md
+    const pathname = u.pathname;
+    const ext = pathname.substring(pathname.lastIndexOf('.'));
+    if (ext && ext !== '.html' && ext !== '.htm' && ext.length <= 10) {
+      return null;
+    }
     if (u.pathname.endsWith('/')) {
       u.pathname += 'index.md';
     } else {

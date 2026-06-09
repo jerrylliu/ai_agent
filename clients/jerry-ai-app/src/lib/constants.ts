@@ -1,4 +1,4 @@
-export const API_BASE_URL = 'http://localhost:3000';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
 
 export const API_ENDPOINTS = {
   BASE_URL: API_BASE_URL,
@@ -16,6 +16,7 @@ export const API_ENDPOINTS = {
   AUTH_PROFILE: `${API_BASE_URL}/auth/profile`,
   AUTH_VERIFY: `${API_BASE_URL}/auth/verify`,
   AUTH_CHANGE_PASSWORD: `${API_BASE_URL}/auth/password`,
+  AUTH_RESET_PASSWORD: `${API_BASE_URL}/auth/reset-password`,
   AUTH_AVATAR: `${API_BASE_URL}/auth/avatar`,
   DOCUMENTS: `${API_BASE_URL}/documents`,
   KNOWLEDGE_SOURCES: `${API_BASE_URL}/knowledge-sources`,
@@ -25,9 +26,15 @@ export const MAX_HISTORY_ITEMS = 10;
 
 export const DEFAULT_MESSAGE = {
   id: '1',
-  content: '你好！我是你的智能助手，有什么可以帮助你的吗？',
+  content: '你好！我是以太忆核，有什么可以帮助你的吗？',
   role: 'assistant' as const,
   timestamp: new Date(),
 };
 
 export const ERROR_MESSAGE = '抱歉，发生了错误，请稍后重试。';
+
+/** 默认用户头像 URL */
+export const DEFAULT_USER_AVATAR_URL = import.meta.env.VITE_USER_AVATAR_URL || 'https://neeko-copilot.bytedance.net/api/text2image?prompt=user%20avatar&size=512x512';
+
+/** 默认 AI 助手头像 URL */
+export const DEFAULT_AI_AVATAR_URL = import.meta.env.VITE_AI_AVATAR_URL || 'https://neeko-copilot.bytedance.net/api/text2image?prompt=AI%20assistant%20avatar&size=512x512';

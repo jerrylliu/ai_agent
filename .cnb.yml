@@ -1,0 +1,122 @@
+# .cnb.yml - miaoma-ai-app CI/CD 流水线
+
+# ===== jerrydev 分支 push 事件触发 =====
+jerrydev:
+  push:
+    # 1. 流水线级别的环境变量（下面的所有 stages 都能用到）
+    - env:
+        DEPLOY_SERVER_HOST: "123.45.67.89" # 你的服务器 IP
+        NODE_ENV: "production"
+        # 如果仓库是私密的，SSH 私钥也可以直接贴在这里（注意缩进）
+        DEPLOY_SSH_KEY: |
+          -----BEGIN OPENSSH PRIVATE KEY-----
+          b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+          ... (你的私钥内容) ...
+          -----END OPENSSH PRIVATE KEY-----
+
+      docker:
+        image: alpine:latest
+      stages:
+        - name: "部署到生产服务器"
+          script:
+            - apk add --no-cache openssh-client
+            - mkdir -p ~/.ssh
+            # 2. 在脚本中直接使用 $变量名 来引用
+            - echo "$DEPLOY_SSH_KEY" > ~/.ssh/id_rsa
+            - chmod 600 ~/.ssh/id_rsa
+            - ssh -o StrictHostKeyChecking=no root@$DEPLOY_SERVER_HOST "echo '部署成功!'"
+    # ---------- 阶段 1：Server 端代码检查 ----------
+    - stage: server-lint
+      name: "Server - 代码检查"
+      docker:
+        image: node:20-slim
+        volumes:
+          - /cache/pnpm-store:/root/.local/share/pnpm/store
+      script:
+        - npm install -g pnpm
+        - pnpm install --frozen-lockfile --filter jerry-llm-server
+        - cd servers/jerry-llm-server && pnpm lint
+
+    # ---------- 阶段 2：Server 端单元测试 ----------
+    - stage: server-test
+      name: "Server - 单元测试"
+      docker:
+        image: node:20-slim
+        volumes:
+          - /cache/pnpm-store:/root/.local/share/pnpm/store
+      script:
+        - npm install -g pnpm
+        - pnpm install --frozen-lockfile --filter jerry-llm-server
+        - cd servers/jerry-llm-server && pnpm test --passWithNoTests
+
+    # ---------- 阶段 3：Client 端前端检查 ----------
+    - stage: client-check
+      name: "Client - 前端代码检查"
+      docker:
+        image: node:20-slim
+        volumes:
+          - /cache/pnpm-store:/root/.local/share/pnpm/store
+      script:
+        - npm install -g pnpm
+        - pnpm install --frozen-lockfile --filter jerry-ai-app
+        - cd clients/jerry-ai-app && pnpm lint
+        - cd clients/jerry-ai-app && pnpm tsc --noEmit
+
+    # ---------- 阶段 4：Server Docker 镜像构建 & 推送 ----------
+    - stage: server-docker
+      name: "Server - Docker 构建推送"
+      # 启用 Docker-in-Docker 服务
+      services:
+        - docker
+      docker:
+        image: docker:24
+      script:
+        - docker login -u ${CNB_TOKEN_USER_NAME} -p "${CNB_TOKEN}" ${CNB_DOCKER_REGISTRY}
+        - |
+          docker build \
+            -f servers/jerry-llm-server/Dockerfile \
+            -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_PATH}/jerry-llm-server:${CNB_COMMIT_SHA_SHORT} \
+            -t ${CNB_DOCKER_REGISTRY}/${CNB_REPO_PATH}/jerry-llm-server:latest \
+            .
+        - docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_PATH}/jerry-llm-server:${CNB_COMMIT_SHA_SHORT}
+        - docker push ${CNB_DOCKER_REGISTRY}/${CNB_REPO_PATH}/jerry-llm-server:latest
+
+    # ---------- 阶段 5：部署到服务器（可选） ----------
+    - stage: deploy
+      name: "部署到生产服务器"
+      docker:
+        image: alpine:latest
+      script:
+        - apk add --no-cache openssh-client
+        - mkdir -p ~/.ssh && echo "$DEPLOY_SSH_KEY" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa
+        - ssh -o StrictHostKeyChecking=no root@${DEPLOY_SERVER_HOST} "
+          docker pull ${CNB_DOCKER_REGISTRY}/${CNB_REPO_PATH}/jerry-llm-server:${CNB_COMMIT_SHA_SHORT} &&
+          cd /opt/jerry-llm-server &&
+          docker-compose pull &&
+          docker-compose up -d
+          "
+
+# ===== tag 推送时额外构建 Tauri 桌面应用 =====
+"tag:v*":
+  push:
+    - stage: tauri-linux-build
+      name: "Client - Tauri Linux 打包"
+      docker:
+        image: ubuntu:22.04
+        volumes:
+          - /cache/cargo-registry:/root/.cargo/registry
+          - /cache/pnpm-store:/root/.local/share/pnpm/store
+      script:
+        - |
+          apt-get update && apt-get install -y \
+            curl build-essential libwebkit2gtk-4.1-dev \
+            libappindicator3-dev librsvg2-dev patchelf \
+            libssl-dev pkg-config
+        - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        - source $HOME/.cargo/env
+        - npm install -g pnpm
+        - pnpm install --frozen-lockfile
+        - cd clients/jerry-ai-app && pnpm tauri build
+      artifacts:
+        - clients/jerry-ai-app/src-tauri/target/release/bundle/deb/*.deb
+        - clients/jerry-ai-app/src-tauri/target/release/bundle/appimage/*.AppImage

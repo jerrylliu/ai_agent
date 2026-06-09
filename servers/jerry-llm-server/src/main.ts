@@ -1,14 +1,19 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import * as express from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
 import { validateSearchWebConfig, validateWeatherConfig } from './fundamentals/tools';
+import { config } from './fundamentals/config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
+
+  // 全局启用输入验证管道
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   app.useLogger(app.get(WINSTON_MODULE_NEST_PROVIDER));
 
@@ -20,11 +25,19 @@ async function bootstrap() {
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // 配置 CORS（跨域资源共享）
-  // 允许所有来源的请求访问 API（开发环境使用，生产环境应限制具体域名）
+  const allowedOrigins = config.corsOrigins;
   app.enableCors({
-    origin: '*',                              // 允许所有来源（域名）
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE', // 允许的 HTTP 方法
-    credentials: true,                         // 允许携带凭证（cookies）
+    origin: (origin, callback) => {
+      // 允许无 origin 的请求（如服务端请求、移动端）
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+        callback(null, true);
+      } else {
+        callback(new Error('CORS 不允许的来源: ' + origin), false);
+      }
+    },
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    credentials: true,
   });
 
   // ============================================
@@ -59,6 +72,6 @@ async function bootstrap() {
   app.use('/files', express.static(uploadDir));
 
   // 启动服务器，监听 3000 端口（或使用环境变量 PORT 指定的端口）
-  await app.listen(process.env.PORT ?? 3000);
+  await app.listen(config.port);
 }
 bootstrap();

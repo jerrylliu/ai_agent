@@ -14,28 +14,54 @@ export interface ToolDefinition {
   executor: (params: any, context?: ToolContext) => Promise<any>;
 }
 
-export const TOOLS: Record<string, ToolDefinition> = {
-  search_knowledge_base: {
-    schema: searchKnowledgeBaseSchema,
-    executor: executeSearchKnowledgeBase as (params: any) => Promise<any>,
-  },
-  search_web: {
-    schema: searchWebSchema,
-    executor: executeSearchWeb as (params: any) => Promise<any>,
-  },
-  get_weather: {
-    schema: getWeatherSchema,
-    executor: executeGetWeather as (params: any) => Promise<any>,
-  },
-  calculate: {
-    schema: calculateSchema,
-    executor: executeCalculate as (params: any) => Promise<any>,
-  },
-  manage_session: {
-    schema: manageSessionSchema,
-    executor: executeManageSession as (params: any, context?: ToolContext) => Promise<any>,
-  },
-};
+/**
+ * 根据配置动态构建可用工具列表
+ * 未配置 API Key 的工具不会被注册，模型不会尝试调用
+ */
+function buildToolsMap(): Record<string, ToolDefinition> {
+  // 先执行配置验证，设置可用性标志
+  validateSearchWebConfig();
+  validateWeatherConfig();
+
+  const tools: Record<string, ToolDefinition> = {
+    search_knowledge_base: {
+      schema: searchKnowledgeBaseSchema,
+      executor: executeSearchKnowledgeBase as (params: any) => Promise<any>,
+    },
+    calculate: {
+      schema: calculateSchema,
+      executor: executeCalculate as (params: any) => Promise<any>,
+    },
+    manage_session: {
+      schema: manageSessionSchema,
+      executor: executeManageSession as (params: any, context?: ToolContext) => Promise<any>,
+    },
+  };
+
+  if (isSearchWebAvailable()) {
+    tools.search_web = {
+      schema: searchWebSchema,
+      executor: executeSearchWeb as (params: any) => Promise<any>,
+    };
+    logger.info('工具注册：search_web 已启用', { module: 'ToolRegistry' });
+  } else {
+    logger.info('工具注册：search_web 未配置，跳过注册', { module: 'ToolRegistry' });
+  }
+
+  if (isWeatherAvailable()) {
+    tools.get_weather = {
+      schema: getWeatherSchema,
+      executor: executeGetWeather as (params: any) => Promise<any>,
+    };
+    logger.info('工具注册：get_weather 已启用', { module: 'ToolRegistry' });
+  } else {
+    logger.info('工具注册：get_weather 未配置，跳过注册', { module: 'ToolRegistry' });
+  }
+
+  return tools;
+}
+
+export const TOOLS: Record<string, ToolDefinition> = buildToolsMap();
 
 export function getAllToolSchemas(): any[] {
   return Object.values(TOOLS).map((t) => t.schema);

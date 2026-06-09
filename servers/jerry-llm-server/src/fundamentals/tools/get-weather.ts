@@ -1,7 +1,8 @@
 import { logger } from '../logger';
+import { config } from '../config';
 
-const QWEATHER_API_KEY = process.env.QWEATHER_API_KEY || '';
-const _rawApiBase = process.env.QWEATHER_API_BASE || 'https://devapi.qweather.com';
+const QWEATHER_API_KEY = config.qweatherApiKey;
+const _rawApiBase = config.qweatherApiBase;
 const QWEATHER_API_BASE = _rawApiBase.startsWith('http') ? _rawApiBase : `https://${_rawApiBase}`;
 const WEATHER_API_TIMEOUT_MS = 10000;
 

@@ -12,15 +12,16 @@
   "app": {
     "windows": [
       {
-        "title": "Jerry智能",
-        "width": 800,
-        "height": 600,
+        "title": "以太忆核",
+        "width": 985,
+        "height": 641,
         "hiddenTitle": true
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "targets": "all",

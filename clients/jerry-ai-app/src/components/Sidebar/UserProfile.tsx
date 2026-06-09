@@ -14,7 +14,7 @@ interface UserProfileProps {
   onShowAuthDialog: () => void;
 }
 const UserProfile: React.FC<UserProfileProps> =({isAuthenticated, user, avatarUploading, avatarInputRef, onAvatarUpload, onLogout, onOpenSettings, onShowAuthDialog}) =>{
-return (<div className="flex-shrink-0 border-t border-gray-200 dark:border-slate-600 p-4">
+return (<div className="flex-shrink-0  p-3">
     {isAuthenticated && user ? (
         <>
             {/* 已登录状态：用户头像、信息、操作按钮 */}

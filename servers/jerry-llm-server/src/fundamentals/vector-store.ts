@@ -14,6 +14,7 @@ import MiniSearch from 'minisearch';
 import * as path from 'path';
 import * as fs from 'fs';
 import { logger } from './logger';
+import { config } from './config';
 
 const BATCH_SIZE = 1;
 
@@ -25,7 +26,7 @@ const PERSIST_DIR = path.join(__dirname, '..', '..', 'chromadb_data'); // Chroma
 // 创建嵌入模型实例
 const embeddings = new OllamaEmbeddings({
   model: EMBEDDING_MODEL,
-  baseUrl: 'http://localhost:11434',
+  baseUrl: config.ollamaBaseUrl,
 });
 
 // ==================== P0: 优化切分参数 ====================
@@ -243,8 +244,17 @@ async function loadBM25Index(): Promise<void> {
     }
     
     const data = JSON.parse(fileContent);
-    if (bm25Index && data?.index?.documents) {
-      bm25Index.addAll(data.index.documents);
+    if (data?.index && data.index.serializationVersion) {
+      // 使用 MiniSearch 官方 loadJSON 反序列化
+      bm25Index = MiniSearch.loadJSON(JSON.stringify(data.index), {
+        fields: ['content'],
+        storeFields: ['content', 'metadata'],
+        searchOptions: {
+          boost: { content: 1 },
+          fuzzy: 0.2,
+          prefix: true,
+        },
+      });
       bm25DocumentStore = new Map(Object.entries(data.documentStore || {}));
       logger.info('已加载 BM25 索引', { module: 'VectorStore', documentCount: bm25Index.documentCount });
     } else {
@@ -395,7 +405,7 @@ async function doInitialize(): Promise<Chroma> {
   }
 
   try {
-    const client = new ChromaClient({ host: 'localhost', port: 8000 });
+    const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
 
     let collectionExists = false;
     try {
@@ -410,7 +420,7 @@ async function doInitialize(): Promise<Chroma> {
     if (collectionExists) {
       vectorStore = await Chroma.fromExistingCollection(embeddings, {
         collectionName: COLLECTION_NAME,
-        url: 'http://localhost:8000',
+        url: config.chromaUrl,
       });
       const coll = await client.getCollection({ name: COLLECTION_NAME });
       logger.info('当前集合空间', { module: 'VectorStore', space: coll.metadata?.['hnsw:space'] || 'l2(默认)' });
@@ -423,7 +433,7 @@ async function doInitialize(): Promise<Chroma> {
       logger.info('新知识库集合已创建', { module: 'VectorStore' });
       vectorStore = await Chroma.fromExistingCollection(embeddings, {
         collectionName: COLLECTION_NAME,
-        url: 'http://localhost:8000',
+        url: config.chromaUrl,
       });
     }
 
@@ -928,7 +938,7 @@ export async function hybridSearchKnowledgeBase(
       }
 
       try {
-        const client = new ChromaClient({ host: 'localhost', port: 8000 });
+        const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
         const collection = await client.getCollection({ name: COLLECTION_NAME });
         const neighborResults = await collection.get({
           where: { source },
@@ -1034,7 +1044,7 @@ export async function getAllDocuments(): Promise<Array<{ content: string; metada
   logger.info('获取知识库所有文档', { module: 'VectorStore' });
 
   try {
-    const client = new ChromaClient({ host: 'localhost', port: 8000 });
+    const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
     const collection = await client.getCollection({
       name: COLLECTION_NAME,
     });
@@ -1062,7 +1072,7 @@ export async function getKnowledgeBaseStats(): Promise<{
   collectionName: string;
 }> {
   try {
-    const client = new ChromaClient({ host: 'localhost', port: 8000 });
+    const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
     const collection = await client.getCollection({
       name: COLLECTION_NAME,
     });
@@ -1090,7 +1100,7 @@ export async function clearKnowledgeBase(): Promise<void> {
 
   try {
     // 使用 ChromaDB 原生 API 删除整个集合
-    const client = new ChromaClient({ host: 'localhost', port: 8000 });
+    const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
 
     // 检查集合是否存在并删除
     try {

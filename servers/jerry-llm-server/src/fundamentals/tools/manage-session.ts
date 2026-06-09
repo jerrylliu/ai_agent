@@ -103,13 +103,13 @@ export interface ManageSessionResult {
   data?: any;
 }
 
-// ==================== AppService 引用 ====================
+// ==================== SessionService 引用 ====================
 
-// 通过 initManageSession 注入 AppService 实例
-let appServiceInstance: any = null;
+// 通过 initManageSession 注入 SessionService 实例
+let sessionServiceInstance: any = null;
 
-export function initManageSession(appService: any): void {
-  appServiceInstance = appService;
+export function initManageSession(sessionService: any): void {
+  sessionServiceInstance = sessionService;
   logger.info('manage_session 工具已初始化', { module: 'Tool:ManageSession' });
 }
 
@@ -147,8 +147,8 @@ export async function executeManageSession(
 
   const validated = parseResult.data;
 
-  if (!appServiceInstance) {
-    logger.error('FC工具 [manage_session] AppService 未初始化', {
+  if (!sessionServiceInstance) {
+    logger.error('FC工具 [manage_session] SessionService 未初始化', {
       module: 'Tool:ManageSession',
     });
     return {
@@ -199,7 +199,7 @@ export async function executeManageSession(
 // ==================== Action Handlers ====================
 
 async function handleList(userId: string): Promise<ManageSessionResult> {
-  const sessions = await appServiceInstance.getSessions(userId);
+  const sessions = await sessionServiceInstance.getSessions(userId);
 
   if (sessions.length === 0) {
     return {
@@ -228,7 +228,7 @@ async function handleCreate(
   const sessionId = `session_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
   const sessionTitle = title || '新对话';
 
-  const session = await appServiceInstance.createSession(
+  const session = await sessionServiceInstance.createSession(
     sessionId,
     sessionTitle,
     userId,
@@ -263,7 +263,7 @@ async function handleDelete(
   }
 
   // 先查找会话确认存在
-  const session = await appServiceInstance.getSessionBySessionId(sessionId);
+  const session = await sessionServiceInstance.getSessionBySessionId(sessionId);
   if (!session) {
     return {
       success: false,
@@ -272,7 +272,7 @@ async function handleDelete(
   }
 
   const title = session.title;
-  await appServiceInstance.deleteSession(sessionId, userId);
+  await sessionServiceInstance.deleteSession(sessionId, userId);
 
   logger.info('FC工具 [manage_session] 删除会话成功', {
     module: 'Tool:ManageSession',
@@ -308,7 +308,7 @@ async function handleRename(
     };
   }
 
-  const session = await appServiceInstance.getSessionBySessionId(sessionId);
+  const session = await sessionServiceInstance.getSessionBySessionId(sessionId);
   if (!session) {
     return {
       success: false,
@@ -317,7 +317,7 @@ async function handleRename(
   }
 
   const oldTitle = session.title;
-  await appServiceInstance.updateSessionTitle(sessionId, newTitle.trim(), userId);
+  await sessionServiceInstance.updateSessionTitle(sessionId, newTitle.trim(), userId);
 
   logger.info('FC工具 [manage_session] 重命名会话成功', {
     module: 'Tool:ManageSession',
@@ -347,7 +347,7 @@ async function handlePin(
     };
   }
 
-  const session = await appServiceInstance.getSessionBySessionId(sessionId);
+  const session = await sessionServiceInstance.getSessionBySessionId(sessionId);
   if (!session) {
     return {
       success: false,
@@ -362,7 +362,7 @@ async function handlePin(
     };
   }
 
-  await appServiceInstance.toggleSessionPin(sessionId, userId);
+  await sessionServiceInstance.toggleSessionPin(sessionId, userId);
 
   return {
     success: true,
@@ -385,7 +385,7 @@ async function handleUnpin(
     };
   }
 
-  const session = await appServiceInstance.getSessionBySessionId(sessionId);
+  const session = await sessionServiceInstance.getSessionBySessionId(sessionId);
   if (!session) {
     return {
       success: false,
@@ -400,7 +400,7 @@ async function handleUnpin(
     };
   }
 
-  await appServiceInstance.toggleSessionPin(sessionId, userId);
+  await sessionServiceInstance.toggleSessionPin(sessionId, userId);
 
   return {
     success: true,
@@ -423,7 +423,7 @@ async function handleSwitch(
     };
   }
 
-  const session = await appServiceInstance.getSessionBySessionId(sessionId);
+  const session = await sessionServiceInstance.getSessionBySessionId(sessionId);
   if (!session) {
     return {
       success: false,
@@ -452,7 +452,7 @@ async function handleSearch(
     };
   }
 
-  const sessions = await appServiceInstance.getSessions(userId);
+  const sessions = await sessionServiceInstance.getSessions(userId);
   const matched = sessions.filter((s: any) =>
     s.title.toLowerCase().includes(keyword.toLowerCase()),
   );

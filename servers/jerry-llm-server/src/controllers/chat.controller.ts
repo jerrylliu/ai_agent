@@ -6,6 +6,9 @@
 import { Controller, Get, Post, Put, Delete, Patch, Body, Query, Param, Res, UseGuards, Req } from '@nestjs/common';
 import type { Response } from 'express';
 import { AppService } from '../app.service';
+import { SessionService } from '../services/session.service';
+import { UsageService } from '../services/usage.service';
+import { EvaluationService } from '../services/evaluation.service';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard.js';
 import { logger } from '../fundamentals/logger';
 
@@ -14,9 +17,13 @@ import { logger } from '../fundamentals/logger';
 @Controller('chat')
 @UseGuards(OptionalAuthGuard) // 所有接口使用可选认证，登录用户使用真实 userId
 export class ChatController {
-  // 构造函数注入 AppService，通过依赖注入获取服务实例
-  // private readonly 表示该属性为私有且只读，TypeScript 会自动创建并赋值
-  constructor(private readonly appService: AppService) {}
+  // 构造函数注入各领域 Service
+  constructor(
+    private readonly appService: AppService,
+    private readonly sessionService: SessionService,
+    private readonly usageService: UsageService,
+    private readonly evaluationService: EvaluationService,
+  ) {}
 
   // ==================== 对话生成接口 ====================
 
@@ -52,10 +59,6 @@ export class ChatController {
     let cancelled = false;
 
     // 创建 AbortController，用于中断 LLM 底层到 Ollama/DeepSeek 的 HTTP 连接
-    // 当调用 abort() 时：
-    // 1. 底层 HTTP 请求被立即销毁，Ollama 服务端停止推理，释放 GPU 资源
-    // 2. llm.stream() 会抛出 AbortError，被 prompt.ts 的 catch 块捕获
-    // 3. 配合 isCancelled 标志位形成双重保险，确保生成流程完全终止
     const llmAbortController = new AbortController();
 
     // 监听连接关闭事件（客户端主动断开或网络中断）
@@ -77,10 +80,8 @@ export class ChatController {
   /**
    * GET /chat/rag?message=xxx
    * RAG（检索增强生成）接口：根据用户消息检索知识库，返回相关上下文
-   * 用于测试和调试 RAG 检索效果
    */
   @Get('rag') // 映射 GET 请求到 /chat/rag
-  // @Query() 从 URL 查询参数中提取 message 字段
   rag(@Query() { message }: { message?: string }) {
     return this.appService.rag(message); // 委托给服务层处理 RAG 检索
   }
@@ -93,11 +94,10 @@ export class ChatController {
    */
   @Post('history') // 映射 POST 请求到 /chat/history
   async saveChatHistory(
-    // @Body() 从请求体提取：sessionId（会话ID）、role（角色：user/assistant）、content（消息内容）
     @Body() body: { sessionId: string; role: string; content: string },
     @Req() req: any,
   ) {
-    return this.appService.saveChatHistory(body.sessionId, body.role, body.content, req.userId);
+    return this.sessionService.saveChatHistory(body.sessionId, body.role, body.content, req.userId);
   }
 
   /**
@@ -105,9 +105,8 @@ export class ChatController {
    * 获取指定会话的聊天历史记录
    */
   @Get('history') // 映射 GET 请求到 /chat/history
-  // @Query('sessionId') 从 URL 查询参数中提取 sessionId
   async getSessionHistory(@Query('sessionId') sessionId: string) {
-    return this.appService.getSessionHistory(sessionId);
+    return this.sessionService.getSessionHistory(sessionId);
   }
 
   /**
@@ -116,7 +115,7 @@ export class ChatController {
    */
   @Get('all-history') // 映射 GET 请求到 /chat/all-history
   async getAllChatHistory() {
-    return this.appService.getAllChatHistory();
+    return this.sessionService.getAllChatHistory();
   }
 
   // ==================== 会话管理接口 ====================
@@ -127,7 +126,7 @@ export class ChatController {
    */
   @Get('sessions') // 映射 GET 请求到 /chat/sessions
   async getSessions(@Req() req: any) {
-    return this.appService.getSessions(req.userId);
+    return this.sessionService.getSessions(req.userId);
   }
 
   /**
@@ -136,45 +135,40 @@ export class ChatController {
    */
   @Post('sessions') // 映射 POST 请求到 /chat/sessions
   async createSession(
-    // @Body() 从请求体提取：sessionId（前端生成的唯一ID）、title（会话标题）
     @Body() body: { sessionId: string; title: string },
     @Req() req: any,
   ) {
-    return this.appService.createSession(body.sessionId, body.title, req.userId);
+    return this.sessionService.createSession(body.sessionId, body.title, req.userId);
   }
 
   /**
    * GET /chat/sessions/:sessionId/export?format=json|markdown|text
-   * 导出会话：返回会话信息和所有消息，支持 JSON/Markdown/纯文本格式
-   * 注意：此路由必须在 sessions/:sessionId 之前注册，否则 :sessionId 会匹配 "export"
+   * 导出会话
    */
   @Get('sessions/:sessionId/export')
   async exportSession(
     @Param('sessionId') sessionId: string,
     @Query('format') format: string = 'json',
   ) {
-    return this.appService.exportSession(sessionId, format);
+    return this.sessionService.exportSession(sessionId, format);
   }
 
   /**
    * GET /chat/sessions/:sessionId/messages
    * 获取指定会话下的所有消息记录
-   * 注意：此路由必须在 sessions/:sessionId 之前注册，否则 :sessionId 会匹配 "messages"
    */
   @Get('sessions/:sessionId/messages') // 映射 GET 请求到 /chat/sessions/:sessionId/messages
   async getSessionMessages(@Param('sessionId') sessionId: string) {
-    // 复用 getSessionHistory 方法，会话消息即该会话的聊天历史
-    return this.appService.getSessionHistory(sessionId);
+    return this.sessionService.getSessionHistory(sessionId);
   }
 
   /**
    * GET /chat/sessions/:sessionId
    * 获取指定会话的详细信息
    */
-  @Get('sessions/:sessionId') // 映射 GET 请求到 /chat/sessions/:sessionId（动态路由参数）
-  // @Param('sessionId') 从 URL 路径参数中提取 sessionId
+  @Get('sessions/:sessionId') // 映射 GET 请求到 /chat/sessions/:sessionId
   async getSessionBySessionId(@Param('sessionId') sessionId: string) {
-    return this.appService.getSessionBySessionId(sessionId);
+    return this.sessionService.getSessionBySessionId(sessionId);
   }
 
   /**
@@ -187,7 +181,7 @@ export class ChatController {
     @Body() body: { title: string },
     @Req() req: any,
   ) {
-    return this.appService.updateSessionTitle(sessionId, body.title, req.userId);
+    return this.sessionService.updateSessionTitle(sessionId, body.title, req.userId);
   }
 
   /**
@@ -196,39 +190,39 @@ export class ChatController {
    */
   @Delete('sessions/:sessionId') // 映射 DELETE 请求到 /chat/sessions/:sessionId
   async deleteSession(@Param('sessionId') sessionId: string, @Req() req: any) {
-    return this.appService.deleteSession(sessionId, req.userId);
+    return this.sessionService.deleteSession(sessionId, req.userId);
   }
 
   /**
    * PATCH /chat/sessions/:sessionId/pin
-   * 切换会话的置顶状态（置顶 ↔ 取消置顶）
+   * 切换会话的置顶状态
    */
   @Patch('sessions/:sessionId/pin') // 映射 PATCH 请求到 /chat/sessions/:sessionId/pin
   async toggleSessionPin(@Param('sessionId') sessionId: string, @Req() req: any) {
-    return this.appService.toggleSessionPin(sessionId, req.userId);
+    return this.sessionService.toggleSessionPin(sessionId, req.userId);
   }
 
   /**
    * POST /chat/sessions/:sessionId/duplicate
-   * 复制会话：创建一个新会话，复制原会话的所有消息
+   * 复制会话
    */
   @Post('sessions/:sessionId/duplicate')
   async duplicateSession(@Param('sessionId') sessionId: string, @Req() req: any) {
-    return this.appService.duplicateSession(sessionId, req.userId);
+    return this.sessionService.duplicateSession(sessionId, req.userId);
   }
 
   // ==================== 消息管理接口 ====================
 
   /**
    * PUT /chat/messages/:id
-   * 更新指定消息的内容（如编辑用户已发送的消息）
+   * 更新指定消息的内容
    */
   @Put('messages/:id') // 映射 PUT 请求到 /chat/messages/:id
   async updateMessage(
-    @Param('id') id: string, // 从 URL 路径提取消息 ID
-    @Body() body: { content: string }, // 从请求体提取新内容
+    @Param('id') id: string,
+    @Body() body: { content: string },
   ) {
-    return this.appService.updateMessage(id, body.content);
+    return this.sessionService.updateMessage(id, body.content);
   }
 
   /**
@@ -237,7 +231,7 @@ export class ChatController {
    */
   @Delete('messages/:id') // 映射 DELETE 请求到 /chat/messages/:id
   async deleteMessage(@Param('id') id: string) {
-    return this.appService.deleteMessage(id);
+    return this.sessionService.deleteMessage(id);
   }
 
   // ==================== LLM 用量统计接口 ====================
@@ -252,7 +246,7 @@ export class ChatController {
     @Req() req: any,
   ) {
     const daysNum = parseInt(days, 10) || 7;
-    return this.appService.getLlmUsageStats(req.userId, daysNum);
+    return this.usageService.getLlmUsageStats(req.userId, daysNum);
   }
 
   // ==================== 准确率评估接口 ====================
@@ -274,7 +268,7 @@ export class ChatController {
     },
     @Req() req: any,
   ) {
-    return this.appService.submitFeedback({
+    return this.evaluationService.submitFeedback({
       userId: req.userId,
       ...body,
     });
@@ -290,6 +284,6 @@ export class ChatController {
     @Req() req: any,
   ) {
     const daysNum = parseInt(days, 10) || 7;
-    return this.appService.getEvaluationStats(req.userId, daysNum);
+    return this.evaluationService.getEvaluationStats(req.userId, daysNum);
   }
 }
