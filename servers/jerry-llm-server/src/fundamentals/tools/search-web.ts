@@ -5,7 +5,6 @@ const SEARCH_API_URL = config.searchApiUrl;
 const SEARCH_API_KEY = config.searchApiKey;
 
 const VALID_ENGINES = ['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'] as const;
-const MAX_SNIPPET_LENGTH = 500;
 const SEARCH_API_TIMEOUT_MS = 15000;
 
 let searchWebAvailable = false;
@@ -43,12 +42,6 @@ function maskUrl(url: string): string {
   } catch {
     return '***';
   }
-}
-
-function truncateSnippet(text: string, maxLength: number = MAX_SNIPPET_LENGTH): string {
-  if (!text) return '';
-  if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength) + '...';
 }
 
 export const searchWebSchema = {
@@ -108,6 +101,40 @@ export interface SearchWebResult {
   error?: string;
 }
 
+/**
+ * 将搜索结果格式化为结构化摘要，供模型直接理解
+ * 保留 url（方便用户点击），去掉 engine/total（对回答无用）
+ * snippet 保持完整不截断，只保留 Top-K 条
+ */
+export function formatSearchResultAsSummary(result: SearchWebResult, maxResults: number): string {
+  if (result.error) {
+    return `搜索"${result.query}"失败：${result.error}`;
+  }
+
+  if (!result.results || result.results.length === 0) {
+    return `搜索"${result.query}"未找到相关结果。`;
+  }
+
+  const kept = result.results.slice(0, maxResults);
+  const lines: string[] = [`搜索"${result.query}"找到${result.results.length}条结果${kept.length < result.results.length ? `，展示前${kept.length}条` : ''}：`];
+
+  for (let i = 0; i < kept.length; i++) {
+    const r = kept[i];
+    const title = r.title || '无标题';
+    const snippet = r.snippet || '';
+    const url = r.url || '';
+    const source = r.source || '';
+
+    let line = `${i + 1}. ${title}`;
+    if (source) line += `（${source}）`;
+    if (snippet) line += `\n   ${snippet}`;
+    if (url) line += `\n   链接：${url}`;
+    lines.push(line);
+  }
+
+  return lines.join('\n');
+}
+
 function extractResultsFromResponse(responseData: any, maxResults: number, engine: string): SearchWebResult['results'] {
   const results: SearchWebResult['results'] = [];
   let items: any[] | null = null;
@@ -135,7 +162,7 @@ function extractResultsFromResponse(responseData: any, maxResults: number, engin
     results.push({
       title: item.title || item.name || '',
       url: item.link || item.url || '',
-      snippet: truncateSnippet(item.content || item.snippet || item.description || ''),
+      snippet: item.content || item.snippet || item.description || '',
       source: item.media || item.source || item.engine || engine,
     });
   }

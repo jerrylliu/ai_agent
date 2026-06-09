@@ -68,7 +68,7 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                 {/* 左侧：AI助手信息 */}
                 <div className="flex items-center space-x-3">
                     <div>
-                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white cyberpunk-header-title">Aether MC</h2>
+                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white cyberpunk-unauth">Aether MC</h2>
                         <p className="text-sm text-gray-500 dark:text-gray-300 cyberpunk-header-online">在线</p>
                     </div>
                 </div>

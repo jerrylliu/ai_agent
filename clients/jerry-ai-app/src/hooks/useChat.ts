@@ -22,13 +22,13 @@ import {
 import type { AvailableModel, ToolStatusEvent } from '../lib/api';
 import type { AppSettings } from '../components/Settings/SettingsDialog';
 import { generateId, generateSessionId } from '../lib/utils';
-import { DEFAULT_MESSAGE, ERROR_MESSAGE } from '../lib/constants';
+import { ERROR_MESSAGE } from '../lib/constants';
 import { Session, Message, HistoryItem } from '../types/session';
 
 export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => generateSessionId());
-  const [messages, setMessages] = useState<Message[]>([DEFAULT_MESSAGE]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -44,9 +44,46 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
   const [hasDeepseekApiKey, setHasDeepseekApiKey] = useState(false);
   const [hasZhipuApiKey, setHasZhipuApiKey] = useState(false);
   const [supportsVision, setSupportsVision] = useState(true);
-  const [toolStatus, setToolStatus] = useState<ToolStatusEvent | null>(null);
+  const [toolStatuses, setToolStatuses] = useState<ToolStatusEvent[]>([]);
+  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
+  // 记录哪些会话曾经有过内容（卸载所有消息后也不回欢迎页）
+  const [sessionHasContent, setSessionHasContent] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('session-has-content');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const currentSessionIdRef = useRef(currentSessionId);
+  // 消息加载的 AbortController，切换会话时取消旧请求
+  const messageLoadAbortRef = useRef<AbortController | null>(null);
+  // 消息内存缓存：sessionId → Message[]，切换会话时先读缓存避免空白页
+  const messagesCacheRef = useRef<Map<string, Message[]>>(new Map());
+
+  // 辅助: 标记会话有内容 + 持久化
+  const markSessionHasContent = (sessionId: string) => {
+    setSessionHasContent(prev => {
+      if (prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.add(sessionId);
+      localStorage.setItem('session-has-content', JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  // 辅助: 移除会话的内容标记
+  const unmarkSessionContent = (sessionId: string) => {
+    setSessionHasContent(prev => {
+      if (!prev.has(sessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sessionId);
+      localStorage.setItem('session-has-content', JSON.stringify([...next]));
+      return next;
+    });
+  };
 
   useEffect(() => {
     loadModelInfo();
@@ -116,11 +153,18 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     } else {
       // 登出时清空会话和消息
       setSessions([]);
-      setMessages([DEFAULT_MESSAGE]);
+      setMessages([]);
       setHistory([]);
+      setSessionHasContent(new Set());
+      localStorage.removeItem('session-has-content');
       setCurrentSessionId(generateSessionId());
     }
   }, [isAuthenticated]);
+
+  // 同步 currentSessionId 到 ref，供异步回调中读取最新值
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
 
   // 切换会话时加载消息
   useEffect(() => {
@@ -129,26 +173,45 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     }
   }, [currentSessionId]);
 
-  const loadSessions = async () => {
+  const loadSessions = async (skipAutoSwitch = false) => {
     try {
       setIsLoading(true);
       const sessionsData = await getSessions();
       setSessions(sessionsData);
 
-      // 如果有会话，使用第一个会话作为当前会话
-      if (sessionsData.length > 0) {
+      if (!skipAutoSwitch && sessionsData.length > 0) {
         setCurrentSessionId(sessionsData[0].sessionId);
       }
+      return sessionsData;
     } catch (error) {
       console.error('加载会话失败:', error);
+      return [];
     } finally {
       setIsLoading(false);
     }
   };
 
   const loadSessionMessages = async (sessionId: string) => {
+    // 先读缓存，有则直接使用，不发请求
+    const cached = messagesCacheRef.current.get(sessionId);
+    if (cached) {
+      setMessages(cached);
+      setIsMessagesLoading(false);
+      return;
+    }
+
+    // 无缓存，从服务器加载
+    messageLoadAbortRef.current?.abort();
+    const controller = new AbortController();
+    messageLoadAbortRef.current = controller;
+
+    setMessages([]);
+    setIsMessagesLoading(true);
+
     try {
       const messagesData = await getSessionMessages(sessionId);
+      if (controller.signal.aborted) return;
+      if (currentSessionIdRef.current !== sessionId) return;
       if (messagesData.length > 0) {
         const formattedMessages: Message[] = messagesData.map((msg: any) => ({
           id: msg.id.toString(),
@@ -157,12 +220,21 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
           timestamp: new Date(msg.createdAt),
         }));
         setMessages(formattedMessages);
+        messagesCacheRef.current.set(sessionId, formattedMessages);
+        markSessionHasContent(sessionId);
       } else {
-        setMessages([DEFAULT_MESSAGE]);
+        setMessages([]);
+        messagesCacheRef.current.set(sessionId, []);
       }
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.name === 'AbortError') return;
       console.error('加载会话消息失败:', error);
-      setMessages([DEFAULT_MESSAGE]);
+      if (currentSessionIdRef.current !== sessionId) return;
+      // 出错时不清空消息，保留当前显示状态
+    } finally {
+      if (currentSessionIdRef.current === sessionId) {
+        setIsMessagesLoading(false);
+      }
     }
   };
 
@@ -174,29 +246,44 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
 
     try {
       await createSession(newSessionId, sessionTitle);
-      await loadSessions();
+      await loadSessions(true);
       setCurrentSessionId(newSessionId);
-      setMessages([DEFAULT_MESSAGE]);
+      setMessages([]);
       setHistory([]);
+      // 新会话缓存空消息
+      messagesCacheRef.current.set(newSessionId, []);
     } catch (error) {
       console.error('创建新会话失败:', error);
     }
   };
 
   const switchSession = (sessionId: string) => {
+    if (sessionId === currentSessionId) return;
+    // 先从缓存读取，避免切换瞬间空白
+    const cached = messagesCacheRef.current.get(sessionId);
+    if (cached) {
+      setMessages(cached);
+      setIsMessagesLoading(false);
+    } else {
+      setMessages([]);
+      setIsMessagesLoading(true);
+    }
+    setHistory([]);
     setCurrentSessionId(sessionId);
   };
 
   const deleteSessionById = async (sessionId: string) => {
     try {
       await deleteSession(sessionId);
-      await loadSessions();
+      // 清理该会话的内容标记和缓存
+      unmarkSessionContent(sessionId);
+      messagesCacheRef.current.delete(sessionId);
+      const sessionsData = await loadSessions(true);
 
-      // 如果删除的是当前会话，切换到第一个会话
-      if (sessionId === currentSessionId && sessions.length > 1) {
-        const remainingSessions = sessions.filter(s => s.sessionId !== sessionId);
-        if (remainingSessions.length > 0) {
-          setCurrentSessionId(remainingSessions[0].sessionId);
+      // 如果删除的是当前会话，切换到第一个剩余会话或创建新会话
+      if (sessionId === currentSessionId) {
+        if (sessionsData.length > 0) {
+          setCurrentSessionId(sessionsData[0].sessionId);
         } else {
           createNewSession();
         }
@@ -208,6 +295,9 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
 
   const sendMessage = async (userInput: string, images: string[] = []) => {
     if (!userInput.trim() && images.length === 0) return;
+
+    // 发消息即标记该会话有内容
+    markSessionHasContent(currentSessionId);
 
     if (images.length > 0 && !supportsVision) {
       const errorMessage: Message = {
@@ -251,8 +341,8 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         ));
       }
 
-      // 检查是否是第一条消息（除了默认消息）
-      const isFirstMessage = messages.length === 1 && messages[0].id === DEFAULT_MESSAGE.id;
+      // 检查是否是第一条消息
+      const isFirstMessage = messages.length === 0;
       if (isFirstMessage) {
         // 更新会话标题为第一条消息内容
         const newTitle = userInput.substring(0, 50); // 限制标题长度
@@ -267,7 +357,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
       setHistory(prev => [newHistoryItem, ...prev].slice(0, 10));
 
       // 准备历史消息（排除默认消息）
-      const chatHistory = messages.filter(msg => msg.id !== DEFAULT_MESSAGE.id);
+      const chatHistory = messages;
 
       // 创建一个临时的助手消息 ID
       const assistantMessageId = generateId();
@@ -286,7 +376,16 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         summaryEnabled: appSettings?.summaryEnabled ?? true,
         injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
         onToolStatus: (event) => {
-          setToolStatus(event);
+          setToolStatuses(prev => {
+            // 更新同名工具的状态，或追加新工具
+            const idx = prev.findIndex(e => e.toolName === event.toolName);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = event;
+              return updated;
+            }
+            return [...prev, event];
+          });
         },
       });
       
@@ -314,7 +413,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
       }
 
       // 流式响应完成，清除工具状态
-      setToolStatus(null);
+      setToolStatuses([]);
 
       // 保存完整的响应
       const savedAssistantMsg = await saveChatHistory({
@@ -331,7 +430,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
       }
 
       // 重新加载会话列表以更新会话标题和时间
-      await loadSessions();
+      await loadSessions(true);
 
       // 处理 manage_session 工具返回的前端操作指令
       if (aiResponse.sessionAction) {
@@ -354,16 +453,18 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
       }
     } finally {
       setIsTyping(false);
-      setToolStatus(null);
+      setToolStatuses([]);
       abortControllerRef.current = null;
 
       // 清理空的 AI 回复（连接断开或取消时，AI 可能没有输出任何内容）
       setMessages(prev => {
         const lastMsg = prev[prev.length - 1];
-        if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content.trim()) {
-          return prev.slice(0, -1);
-        }
-        return prev;
+        const cleaned = (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content.trim())
+          ? prev.slice(0, -1)
+          : prev;
+        // 更新缓存
+        messagesCacheRef.current.set(currentSessionId, cleaned);
+        return cleaned;
       });
     }
   };
@@ -398,7 +499,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         abortControllerRef.current = abortController;
 
         try {
-          const chatHistory = messages.filter(msg => msg.id !== DEFAULT_MESSAGE.id);
+          const chatHistory = messages;
           const assistantMessageId = generateId();
           const tempAssistantMessage: Message = {
             id: assistantMessageId,
@@ -413,7 +514,15 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
             summaryEnabled: appSettings?.summaryEnabled ?? true,
             injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
             onToolStatus: (event) => {
-              setToolStatus(event);
+              setToolStatuses(prev => {
+                const idx = prev.findIndex(e => e.toolName === event.toolName);
+                if (idx >= 0) {
+                  const updated = [...prev];
+                  updated[idx] = event;
+                  return updated;
+                }
+                return [...prev, event];
+              });
             },
           });
           const reader = aiResponse.stream.getReader();
@@ -520,7 +629,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
   const toggleSessionPinById = async (sessionId: string) => {
     try {
       await toggleSessionPin(sessionId);
-      await loadSessions();
+      await loadSessions(true);
     } catch (error) {
       console.error('切换会话置顶状态失败:', error);
     }
@@ -535,17 +644,17 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         break;
       case 'create_session':
         // 创建会话已在后端完成，刷新列表并切换
-        loadSessions();
+        loadSessions(true);
         if (action.payload?.sessionId) {
           switchSession(action.payload.sessionId);
         }
         break;
       case 'delete_session':
         // 删除已在后端完成，刷新列表
-        loadSessions();
+        loadSessions(true);
         break;
       case 'refresh_sessions':
-        loadSessions();
+        loadSessions(true);
         break;
     }
   };
@@ -568,7 +677,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
   const duplicateSessionById = async (sessionId: string) => {
     try {
       await duplicateSessionApi(sessionId);
-      await loadSessions();
+      await loadSessions(true);
     } catch (error) {
       console.error('复制会话失败:', error);
       throw error;
@@ -684,10 +793,12 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     history,
     isTyping,
     isLoading,
-    toolStatus,
+    isMessagesLoading,
+    toolStatuses,
     messagesEndRef,
     knowledgeBaseStatus,
     pendingImages,
+    sessionHasContent,
     sendMessage,
     sendFile,
     clearPendingImages,

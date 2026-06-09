@@ -13,6 +13,7 @@ export interface ModelConfig {
   numCtx?: number;
   apiKey?: string;
   baseUrl?: string;
+  isFCMode?: boolean; // FC 模式下自动提升 numCtx
 }
 
 export interface AvailableModel {
@@ -140,7 +141,7 @@ export function switchModel(modelId: string): ModelConfig {
   return buildModelConfig(modelId);
 }
 
-export function buildModelConfig(modelId: string): ModelConfig {
+export function buildModelConfig(modelId: string, options?: { isFCMode?: boolean }): ModelConfig {
   const available = AVAILABLE_MODELS.find(m => m.id === modelId);
   if (!available) {
     throw new Error(`未知的模型: ${modelId}`);
@@ -152,10 +153,12 @@ export function buildModelConfig(modelId: string): ModelConfig {
     provider,
     model,
     temperature: 0.7,
+    isFCMode: options?.isFCMode,
   };
 
   if (provider === 'ollama') {
-    config.numCtx = 4096;
+    // FC 模式需要更大上下文容纳工具 Schema 和调用结果
+    config.numCtx = options?.isFCMode ? 6144 : 4096;
     config.baseUrl = OLLAMA_BASE_URL;
   } else if (provider === 'deepseek') {
     config.apiKey = deepseekApiKey;
@@ -234,5 +237,25 @@ export function getModelInfo(): {
     hasZhipuApiKey: !!zhipuApiKey,
     supportsVision: current?.supportsVision ?? false,
     supportsFunctionCalling: current?.supportsFunctionCalling ?? false,
+  };
+}
+
+/**
+ * 获取当前模型的能力参数（上下文长度 + FC 支持）
+ * 用于工具注册和消息裁剪等场景，替代硬编码的 ID 前缀判断
+ */
+export function getModelCapabilities(modelId?: string): {
+  contextLength: number;
+  supportsFC: boolean;
+  supportsVision: boolean;
+} {
+  const id = modelId || currentModelId;
+  const available = AVAILABLE_MODELS.find(m => m.id === id);
+  const config = buildModelConfig(id, { isFCMode: true });
+
+  return {
+    contextLength: config.numCtx ?? (id.startsWith('ollama:') ? 4096 : 32768),
+    supportsFC: available?.supportsFunctionCalling ?? false,
+    supportsVision: available?.supportsVision ?? false,
   };
 }

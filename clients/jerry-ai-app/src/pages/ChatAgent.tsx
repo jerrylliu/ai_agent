@@ -17,7 +17,7 @@
 
 import { useState, useEffect, useRef } from "react";
 
-import { ChevronRight, ChevronLeft, Check } from "lucide-react";
+import { ChevronRight, ChevronLeft, Check, Bot } from "lucide-react";
 
 import { useChat } from "../hooks/useChat";
 import { useTheme } from "../hooks/useTheme";
@@ -101,10 +101,12 @@ const ChatAgent: React.FC = () => {
     history,
     isTyping,
     isLoading,
-    toolStatus,
+    isMessagesLoading,
+    toolStatuses,
     messagesEndRef,
     knowledgeBaseStatus,
     pendingImages,
+    sessionHasContent,
     sendMessage,
     sendFile,
     clearPendingImages,
@@ -238,6 +240,22 @@ const ChatAgent: React.FC = () => {
 
   const { theme, cycleTheme, setTheme } = useTheme();
 
+  // 输入框位置模式：center = 欢迎页居中，bottom = 对话底部
+  // 改用 sessionHasContent 判断，已发过消息的会话不会回欢迎页
+  const [inputMode, setInputMode] = useState<'center' | 'bottom'>(
+    sessionHasContent.has(currentSessionId) ? 'bottom' : 'center'
+  );
+
+  useEffect(() => {
+    if (sessionHasContent.has(currentSessionId) || isMessagesLoading) {
+      // 有内容标记，或正在加载消息 → 底部模式
+      setInputMode('bottom');
+    } else {
+      // 加载完毕且无内容 → 欢迎页
+      setInputMode('center');
+    }
+  }, [currentSessionId, sessionHasContent, isMessagesLoading]);
+
   // ==================== JSX 渲染区域 ====================
   return (
     <>
@@ -308,6 +326,7 @@ const ChatAgent: React.FC = () => {
 
         {/* ==================== 中间聊天区域 ==================== */}
         <div className="flex-1 flex flex-col min-w-0">
+          {/* 头部始终显示 */}
           <HeaderContent
             knowledgeBaseStatus={knowledgeBaseStatus}
             showMoreMenu={showMoreMenu}
@@ -324,36 +343,66 @@ const ChatAgent: React.FC = () => {
 
           <KbFeedbackToast feedback={kbFeedback} />
 
-          <MessageList
-            messages={messages}
-            isTyping={isTyping}
-            toolStatus={toolStatus}
-            messagesEndRef={messagesEndRef}
-            currentSessionId={currentSessionId}
-            feedbackState={feedbackState}
-            onFeedbackStateChange={setFeedbackState}
-            onCopyToast={setCopyToast}
-            onFeedbackToast={setFeedbackToast}
-            onUpdateMessage={updateMessage}
-            onDeleteMessage={handleDeleteMessage}
-            onAlert={handleAlert}
-            isSessionSwitchRef={isSessionSwitchRef}
-            isAtBottomRef={isAtBottomRef}
-          />
+          {/* 输入框动画容器 */}
+          <div className="flex-1 relative min-h-0">
+            {/* 消息列表 */}
+            {messages.length > 0 && (
+              <div className="absolute inset-0 bottom-[90px] flex flex-col overflow-hidden">
+                <MessageList
+                  messages={messages}
+                  isTyping={isTyping}
+                  toolStatuses={toolStatuses}
+                  messagesEndRef={messagesEndRef}
+                  currentSessionId={currentSessionId}
+                  feedbackState={feedbackState}
+                  onFeedbackStateChange={setFeedbackState}
+                  onCopyToast={setCopyToast}
+                  onFeedbackToast={setFeedbackToast}
+                  onUpdateMessage={updateMessage}
+                  onDeleteMessage={handleDeleteMessage}
+                  onAlert={handleAlert}
+                  isSessionSwitchRef={isSessionSwitchRef}
+                  isAtBottomRef={isAtBottomRef}
+                />
+              </div>
+            )}
 
-          <ChatInput
-            inputValue={inputValue}
-            onInputChange={setInputValue}
-            onSend={handleSend}
-            onKeyDown={handleKeyDown}
-            isTyping={isTyping}
-            onStopGeneration={stopGeneration}
-            pendingImages={pendingImages}
-            onClearPendingImages={clearPendingImages}
-            onRemovePendingImage={removePendingImage}
-            onSendFile={sendFile}
-            supportsVision={supportsVision}
-          />
+            {/* 标题 + 输入框：同一个绝对定位容器，一起从居中移动到底部 */}
+            <div
+              className="absolute left-1/2 max-w-[750px] transition-[top,width] duration-500 ease-in-out pointer-events-none"
+              style={{
+                width: inputMode === 'center' ? '80%' : '95%',
+                top: inputMode === 'center' ? '43%' : 'calc(100% - 180px)',
+                transform: inputMode === 'center' ? 'translate(-50%, -50%)' : 'translate(-50%, 0)',
+              }}
+            >
+              {/* 欢迎标题：底部时淡出 */}
+              <div
+                className="flex items-center justify-center gap-1 mb-10 transition-opacity duration-500 ease-in-out"
+                style={{ opacity: inputMode === 'center' ? 1 : 0 }}
+              >
+                <Bot className="h-8 w-8 text-primary cyberpunk-header-title" />
+                <h2 className="text-2xl font-medium text-foreground cyberpunk-useremail">你好，我是以太忆核</h2>
+              </div>
+
+              <div className="pointer-events-auto">
+                <ChatInput
+                  inputValue={inputValue}
+                  onInputChange={setInputValue}
+                  onSend={handleSend}
+                  onKeyDown={handleKeyDown}
+                  isTyping={isTyping}
+                  onStopGeneration={stopGeneration}
+                  pendingImages={pendingImages}
+                  onClearPendingImages={clearPendingImages}
+                  onRemovePendingImage={removePendingImage}
+                  onSendFile={sendFile}
+                  supportsVision={supportsVision}
+                  compact={inputMode === 'bottom'}
+                />
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* ==================== 右侧模型设置面板 ==================== */}

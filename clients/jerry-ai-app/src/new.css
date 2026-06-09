@@ -235,14 +235,14 @@ button.decorum-tb-btn {
 /* ---------- cyberpunk-ai-msg：AI消息卡片发光效果 ---------- */
 /* 白色底色 + #FFFF7A 发光边框 + #FFFF7A 微发光文字 */
 .cyberpunk .cyberpunk-ai-msg {
-  background-color: rgba(255, 255, 255, 0.05);
-  border-color: #FFFF7A44;
-  box-shadow: 0 0 6px #FFFF7A44, 0 0 12px #FFFF7A22;
+  background-color: rgba(95, 246, 255, 0.15);
+  border: 1px solid #5FF6FF44;
+  box-shadow: 0 0 6px #5FF6FF44, 0 0 12px #5FF6FF22;
   transition: box-shadow 0.3s ease;
 }
 
 .cyberpunk .cyberpunk-ai-msg:hover {
-  box-shadow: 0 0 8px #FFFF7A66, 0 0 16px #FFFF7A33;
+  box-shadow: 0 0 8px #5FF6FF66, 0 0 16px #5FF6FF33;
 }
 
 .cyberpunk .cyberpunk-ai-msg p,
@@ -254,8 +254,8 @@ button.decorum-tb-btn {
 .cyberpunk .cyberpunk-ai-msg h4,
 .cyberpunk .cyberpunk-ai-msg td,
 .cyberpunk .cyberpunk-ai-msg th {
-  color: #FFFF7A;
-  text-shadow: 0 0 4px #FFFF7A66, 0 0 8px #FFFF7A33;
+  color: rgb(95, 246, 255);
+  text-shadow: 0 0 4px #5FF6FF55, 0 0 8px #5FF6FF33;
 }
 
 .cyberpunk .cyberpunk-ai-msg code,
@@ -265,17 +265,25 @@ button.decorum-tb-btn {
 
 /* ---------- cyberpunk-user-msg：用户消息卡片发光效果 ---------- */
 /* 白色底色 + #5FF6FF 发光边框 + #5FF6FF 微发光文字 */
-.cyberpunk .cyberpunk-user-msg {
+/* .cyberpunk .cyberpunk-user-msg {
   background-color: rgba(255, 255, 255, 0.05);
   border: 1px solid #5FF6FF44;
   box-shadow: 0 0 6px #5FF6FF44, 0 0 12px #5FF6FF22;
   color: #5FF6FF;
   text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
   transition: box-shadow 0.3s ease;
+} */
+.cyberpunk .cyberpunk-user-msg {
+  background-color: rgba(0, 255, 170, 0.15);
+  border: 1px solid #00ffaa44;
+  box-shadow: 0 0 6px #00ffaa44, 0 0 12px #00ffaa22;
+  color: rgb(0, 255, 170);
+  text-shadow: 0 0 5px #00ffaa, 0 0 8px #00ffaa33;
+  transition: box-shadow 0.3s ease;
 }
 
 .cyberpunk .cyberpunk-user-msg:hover {
-  box-shadow: 0 0 8px #5FF6FF66, 0 0 16px #5FF6FF33;
+  box-shadow: 0 0 8px #00ffaa, 0 0 16px #00ffaa33;
 }
 
 /* ---------- cyberpunk-input-glow：输入框聚焦发光 ---------- */
@@ -289,16 +297,57 @@ button.decorum-tb-btn {
   border-color: #5FF6FF22;
 }
 
+/* ---------- cyberpunk-welcome-input：欢迎页输入框容器 ---------- */
+.cyberpunk .cyberpunk-welcome-input {
+  border-color: #FFFF7A88;
+  background-color: #1F111E;
+  box-shadow: 0 0 1px #1F111E, 0 0 1px #1F111E, 0 0 2px #1F111E;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.cyberpunk .cyberpunk-welcome-input:focus-within {
+  border-color: #FFFF7A88;
+  box-shadow: 0 0 8px #FFFF7A88, 0 0 16px #FFFF7A44, 0 0 24px #FFFF7A22;
+}
+
+/* ---------- cyberpunk-plus-btn：欢迎页+号按钮发光 ---------- */
+.cyberpunk .cyberpunk-plus-btn svg {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+  transition: filter 0.3s ease;
+}
+
+.cyberpunk .cyberpunk-plus-btn:hover svg {
+  filter: drop-shadow(0 0 5px #5FF6FFAA) drop-shadow(0 0 10px #5FF6FF66);
+}
+
+/* ---------- cyberpunk-send-btn：发送按钮发光 ---------- */
+.cyberpunk .cyberpunk-send-btn {
+  box-shadow: var(--cyberpunk-glow-sm);
+}
+
+.cyberpunk .cyberpunk-send-btn:hover {
+  box-shadow: 0 0 10px #ff5247AA, 0 0 20px #ff524766;
+  background-color: #ff5247;
+}
+
+/* ---------- cyberpunk-plus-menu：+号弹出菜单赛博朋克样式 ---------- */
+.cyberpunk .cyberpunk-plus-menu {
+  border-color: #1F111E;
+  box-shadow: 0 0 10px #00ffaa44, 0 0 20px #00ffaa22;
+  background-color: #00ffaa;
+}
+
 /* ---------- cyberpunk-history：对话历史模块（#5FF6FF） ---------- */
 .cyberpunk .cyberpunk-history svg,
 .cyberpunk .cyberpunk-history .lucide {
-  color: #5FF6FF;
-  filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
+  color:#FFFF7A;
+  filter: drop-shadow(0 0 3px #FFFF7A66) drop-shadow(0 0 6px #FFFF7A33);
 }
 
 .cyberpunk .cyberpunk-history {
-  color: #5FF6FF;
-  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+  color: #00ffaa;
+  text-shadow: 0 0 4px #00ffaa66, 0 0 8px #00ffaa33;
 }
 
 /* ---------- cyberpunk-recent：最近的问题模块（#FFFF7A） ---------- */

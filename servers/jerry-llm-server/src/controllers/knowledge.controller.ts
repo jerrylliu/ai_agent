@@ -160,7 +160,7 @@ export class KnowledgeController {
   @Get('types')
   async getDocumentTypes() {
     try {
-      const { getDocumentTypes } = await import('../fundamentals/vector-store.js');
+      const { getDocumentTypes } = await import('../fundamentals/vector-store/index.js');
       const types = await getDocumentTypes();
       return { success: true, types };
     } catch (error: any) {
@@ -176,7 +176,7 @@ export class KnowledgeController {
   @Get('documents')
   async getAllDocuments() {
     try {
-      const { getAllDocuments } = await import('../fundamentals/vector-store.js');
+      const { getAllDocuments } = await import('../fundamentals/vector-store/index.js');
       const documents = await getAllDocuments();
       return { success: true, documentCount: documents.length, documents };
     } catch (error: any) {
@@ -194,7 +194,7 @@ export class KnowledgeController {
     @Query('query') query: string,
   ) {
     try {
-      const { debugSearch, getAllDocumentsWithDebug } = await import('../fundamentals/vector-store.js');
+      const { debugSearch, getAllDocumentsWithDebug } = await import('../fundamentals/vector-store/index.js');
       const debugInfo = await debugSearch(query || '测试查询', 5);
       const documentsInfo = await getAllDocumentsWithDebug();
       return { success: true, searchDebug: debugInfo, documentsInfo };
@@ -213,7 +213,7 @@ export class KnowledgeController {
     @Body() body: { text: string },
   ) {
     try {
-      const { previewChunking } = await import('../fundamentals/vector-store.js');
+      const { previewChunking } = await import('../fundamentals/vector-store/index.js');
       if (!body.text) {
         return { success: false, message: '请提供 text 参数' };
       }
@@ -239,7 +239,7 @@ export class KnowledgeController {
     @Body() body: { text: string },
   ) {
     try {
-      const { previewEmbedding } = await import('../fundamentals/vector-store.js');
+      const { previewEmbedding } = await import('../fundamentals/vector-store/index.js');
       if (!body.text) {
         return { success: false, message: '请提供 text 参数' };
       }
@@ -272,7 +272,7 @@ export class KnowledgeController {
 
       // 额外清理可能存在的无版本管理的孤岛向量
       try {
-        const { clearKnowledgeBase } = await import('../fundamentals/vector-store.js');
+        const { clearKnowledgeBase } = await import('../fundamentals/vector-store/index.js');
         await clearKnowledgeBase();
       } catch {
         // 向量库清理失败不影响结果
