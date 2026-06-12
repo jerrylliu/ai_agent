@@ -9,7 +9,9 @@ import { AppService } from '../app.service';
 import { SessionService } from '../services/session.service';
 import { UsageService } from '../services/usage.service';
 import { EvaluationService } from '../services/evaluation.service';
+import { ToolUsageService } from '../services/tool-usage.service';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard.js';
+import { handleConfirmationResponse } from '../fundamentals/human-in-the-loop.js';
 import { logger } from '../fundamentals/logger';
 
 // @Controller('chat') 声明该类为 NestJS 控制器，路由前缀为 /chat
@@ -23,6 +25,7 @@ export class ChatController {
     private readonly sessionService: SessionService,
     private readonly usageService: UsageService,
     private readonly evaluationService: EvaluationService,
+    private readonly toolUsageService: ToolUsageService,
   ) {}
 
   // ==================== 对话生成接口 ====================
@@ -43,6 +46,7 @@ export class ChatController {
       memoryEnabled?: boolean; // 记忆功能开关
       summaryEnabled?: boolean; // 摘要功能开关
       injectMemory?: boolean; // 是否注入记忆到上下文
+      imageModel?: string; // 图片生成模型偏好
     },
     // @Res() 注入 Express 原生 Response 对象，用于手动控制流式响应
     @Res() res: Response,
@@ -71,7 +75,7 @@ export class ChatController {
     // 调用服务层的 prompt 方法，传入取消回调函数、userId、功能开关和 AbortController
     await this.appService.prompt(
       body.message, body.images, body.history, res, body.sessionId, () => cancelled, req.userId,
-      body.memoryEnabled, body.summaryEnabled, body.injectMemory, llmAbortController,
+      body.memoryEnabled, body.summaryEnabled, body.injectMemory, llmAbortController, body.imageModel,
     );
   }
 
@@ -285,5 +289,95 @@ export class ChatController {
   ) {
     const daysNum = parseInt(days, 10) || 7;
     return this.evaluationService.getEvaluationStats(req.userId, daysNum);
+  }
+
+  // ==================== 工具使用统计接口 ====================
+
+  /**
+   * GET /chat/tool-usage?days=7
+   * 获取工具调用使用统计
+   */
+  @Get('tool-usage')
+  async getToolUsageStats(
+    @Query('days') days: string = '7',
+    @Req() req: any,
+  ) {
+    const daysNum = parseInt(days, 10) || 7;
+    return this.toolUsageService.getToolUsageStats(req.userId, daysNum);
+  }
+
+  // ==================== 人工确认接口 ====================
+
+  /**
+   * POST /chat/confirm
+   * 用户对工具调用的确认/拒绝响应
+   */
+  @Post('confirm')
+  async handleConfirmation(
+    @Body() body: { confirmationId: string; confirmed: boolean },
+  ) {
+    const success = handleConfirmationResponse(body.confirmationId, body.confirmed);
+    return { success, confirmationId: body.confirmationId };
+  }
+
+  // ==================== 会话标签/分类管理接口 ====================
+
+  /**
+   * PUT /chat/sessions/:sessionId/tags
+   * 更新会话标签
+   */
+  @Put('sessions/:sessionId/tags')
+  async updateSessionTags(
+    @Param('sessionId') sessionId: string,
+    @Body() body: { tags: string[] },
+    @Req() req: any,
+  ) {
+    return this.sessionService.updateSessionTags(sessionId, body.tags, req.userId);
+  }
+
+  /**
+   * PUT /chat/sessions/:sessionId/category
+   * 更新会话分类
+   */
+  @Put('sessions/:sessionId/category')
+  async updateSessionCategory(
+    @Param('sessionId') sessionId: string,
+    @Body() body: { category: string },
+    @Req() req: any,
+  ) {
+    return this.sessionService.updateSessionCategory(sessionId, body.category, req.userId);
+  }
+
+  /**
+   * GET /chat/sessions/by-tag/:tag
+   * 按标签查询会话
+   */
+  @Get('sessions/by-tag/:tag')
+  async getSessionsByTag(
+    @Param('tag') tag: string,
+    @Req() req: any,
+  ) {
+    return this.sessionService.getSessionsByTag(tag, req.userId);
+  }
+
+  /**
+   * GET /chat/sessions/by-category/:category
+   * 按分类查询会话
+   */
+  @Get('sessions/by-category/:category')
+  async getSessionsByCategory(
+    @Param('category') category: string,
+    @Req() req: any,
+  ) {
+    return this.sessionService.getSessionsByCategory(category, req.userId);
+  }
+
+  /**
+   * GET /chat/tags
+   * 获取用户所有标签
+   */
+  @Get('tags')
+  async getAllTags(@Req() req: any) {
+    return this.sessionService.getAllTags(req.userId);
   }
 }

@@ -17,10 +17,12 @@ import { ChromaClient } from 'chromadb';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
+import { eventBus } from '../event-bus.js';
 import {
   COLLECTION_NAME,
   embeddings,
   initializeVectorStore,
+  resetVectorStore,
   getBM25Index,
   getBM25DocumentStore,
 } from './store-state.js';
@@ -122,6 +124,13 @@ export async function clearKnowledgeBase(): Promise<void> {
     // 清空 BM25 索引
     await clearBM25Index();
     logger.info('BM25 索引已清空', { module: 'VectorStore' });
+
+    // 重置内存中的向量存储实例，下次操作时会重新加载新集合
+    resetVectorStore();
+    logger.info('向量存储实例已重置', { module: 'VectorStore' });
+
+    // 通知缓存：知识库已清空
+    eventBus.emit('knowledge-base-updated', '知识库清空');
   } catch (error) {
     logger.error('清空知识库失败', { module: 'VectorStore', error: String(error) });
   }
@@ -322,6 +331,9 @@ export async function removeDocumentVersion(versionId: number): Promise<void> {
     }
 
     logger.info('版本向量数据删除完成', { module: 'VectorStore', versionId });
+
+    // 通知缓存：知识库已更新
+    eventBus.emit('knowledge-base-updated', '版本删除');
   } catch (error: any) {
     logger.error('删除版本向量数据失败', { module: 'VectorStore', versionId, error: error.message, stack: error.stack });
     throw error;
@@ -393,6 +405,9 @@ export async function updateVersionVectorStatus(versionId: number, newStatus: st
     }
 
     logger.info('版本向量状态更新完成', { module: 'VectorStore', versionId, newStatus });
+
+    // 通知缓存：知识库已更新（版本状态变更影响检索结果的 versionStatus 过滤）
+    eventBus.emit('knowledge-base-updated', '版本状态变更');
   } catch (error: any) {
     logger.error('更新版本向量状态失败', { module: 'VectorStore', versionId, newStatus, error: error.message, stack: error.stack });
     throw error;
@@ -424,7 +439,9 @@ export async function reindexVersion(
   };
 
   logger.info('开始重新添加向量', { module: 'VectorStore', versionId, documentId });
-  const chunkCount = await addDocuments([textContent], [metadata]);
+  const chunkCount = await addDocuments([textContent], [metadata], {
+    chunkingStrategy: 'parent-child',
+  });
   logger.info('版本重新向量化完成', { module: 'VectorStore', versionId, documentId, chunkCount });
   return chunkCount;
 }

@@ -1,4 +1,18 @@
+/**
+ * 知识库检索工具（增强版）
+ *
+ * 集成三阶段检索增强策略：
+ * 1. Query Rewriting：LLM 改写用户查询，提升召回率
+ * 2. Multi-hop Search：多跳检索，根据首轮结果追问式二次检索
+ * 3. Result Reranking：对检索结果相关性重排
+ *
+ * 所有增强策略均可通过参数独立开关，降级时自动回退到原始混合检索。
+ */
+
 import { hybridSearchKnowledgeBase } from '../vector-store';
+import { rewriteQuery, type RewrittenQuery } from '../vector-store/query-rewriter';
+import { multiHopSearch, type MultiHopResult } from '../vector-store/multi-hop-search';
+import { rerankResults, type RerankedResult } from '../vector-store/result-reranker';
 import { logger } from '../logger';
 
 export const searchKnowledgeBaseSchema = {
@@ -32,6 +46,23 @@ export interface SearchKnowledgeBaseParams {
   query: string;
   top_k?: number;
   document_id?: number;
+  /** 检索增强选项（内部使用，不暴露给 LLM） */
+  _options?: SearchEnhancementOptions;
+}
+
+export interface SearchEnhancementOptions {
+  /** 是否启用查询改写，默认 true */
+  enableQueryRewrite?: boolean;
+  /** 是否启用多跳检索，默认 true */
+  enableMultiHop?: boolean;
+  /** 是否启用结果重排，默认 true */
+  enableRerank?: boolean;
+  /** 重排策略：dashscope（默认）、llm、keyword */
+  rerankStrategy?: 'dashscope' | 'llm' | 'keyword';
+  /** 多跳最大跳数，默认 2 */
+  maxHops?: number;
+  /** LLM 模型 ID，默认 deepseek:deepseek-v4-flash */
+  modelId?: string;
 }
 
 export interface SearchKnowledgeBaseResult {
@@ -41,22 +72,47 @@ export interface SearchKnowledgeBaseResult {
     score: number;
     documentId: string;
     versionId: string;
+    /** 来自第几跳（多跳检索时有效） */
+    hop?: number;
+    /** 重排相关性分数（启用重排时有效） */
+    rerankScore?: number;
   }>;
   total: number;
   query: string;
+  /** 检索增强元信息 */
+  meta?: {
+    /** 查询是否被改写 */
+    queryRewritten: boolean;
+    /** 改写后的主查询 */
+    rewrittenQuery?: string;
+    /** 实际执行的跳数 */
+    hopsExecuted?: number;
+    /** 是否进行了重排 */
+    reranked: boolean;
+    /** 各阶段耗时(ms) */
+    timings: {
+      queryRewrite?: number;
+      search?: number;
+      rerank?: number;
+      total: number;
+    };
+  };
 }
 
 export async function executeSearchKnowledgeBase(
   params: SearchKnowledgeBaseParams,
+  context?: { originalQuery?: string },
 ): Promise<SearchKnowledgeBaseResult> {
-  const startTime = Date.now();
+  const totalStartTime = Date.now();
+  const timings: NonNullable<SearchKnowledgeBaseResult['meta']>['timings'] = { total: 0 };
 
-  logger.info('FC工具 [search_knowledge_base] 开始执行', {
+  logger.info('FC工具 [search_knowledge_base] 开始执行（增强版）', {
     module: 'Tool:SearchKnowledgeBase',
     rawParams: JSON.stringify(params),
     query: params.query,
     top_k: params.top_k,
     document_id: params.document_id,
+    options: params._options,
   });
 
   if (!params.query || !params.query.trim()) {
@@ -68,39 +124,140 @@ export async function executeSearchKnowledgeBase(
       results: [],
       total: 0,
       query: params.query || '',
+      meta: {
+        queryRewritten: false,
+        reranked: false,
+        timings: { total: 0 },
+      },
     };
   }
 
   const topK = params.top_k || 3;
-  // versionStatus 过滤在 hybridSearchKnowledgeBase 内部通过结果后过滤实现
-  // 仅 active 状态的向量可被搜索到
+  const opts = params._options || {};
+  const enableQueryRewrite = opts.enableQueryRewrite ?? true;
+  const enableMultiHop = opts.enableMultiHop ?? true;
+  const enableRerank = opts.enableRerank ?? true;
   const filter: Record<string, string> = {};
 
   if (params.document_id) {
     filter.documentId = String(params.document_id);
   }
 
-  logger.info('FC工具 [search_knowledge_base] 调用 hybridSearchKnowledgeBase', {
+  // ==================== 阶段 1：查询改写 ====================
+  let rewrittenQuery: RewrittenQuery | undefined;
+  if (enableQueryRewrite) {
+    const rewriteStart = Date.now();
+    try {
+      rewrittenQuery = await rewriteQuery(params.query, {
+        enabled: true,
+        modelId: opts.modelId,
+      });
+      timings.queryRewrite = Date.now() - rewriteStart;
+
+      logger.info('FC工具 [search_knowledge_base] 查询改写完成', {
+        module: 'Tool:SearchKnowledgeBase',
+        originalQuery: params.query.substring(0, 100),
+        mainQuery: rewrittenQuery.mainQuery.substring(0, 100),
+        subQueryCount: rewrittenQuery.subQueries.length,
+        wasRewritten: rewrittenQuery.wasRewritten,
+        duration: timings.queryRewrite,
+      });
+    } catch (error: any) {
+      timings.queryRewrite = Date.now() - rewriteStart;
+      logger.warn('FC工具 [search_knowledge_base] 查询改写失败，使用原始查询', {
+        module: 'Tool:SearchKnowledgeBase',
+        error: error.message,
+      });
+    }
+  }
+
+  // ==================== 阶段 2：多跳检索 ====================
+  let searchResult: MultiHopResult;
+  const searchStart = Date.now();
+
+  // 缓存 key 用用户原始输入（context.originalQuery），而非 LLM 生成的工具参数（params.query）
+  // 因为 LLM 每次生成的 params.query 可能有微小差异（如多一个空格），导致缓存 key 不一致
+  const cacheKeyOverride = context?.originalQuery || params.query;
+
+  logger.info('FC工具 [search_knowledge_base] 进入检索阶段', {
     module: 'Tool:SearchKnowledgeBase',
-    query: params.query,
-    topK,
-    vectorWeight: 0.7,
-    bm25Weight: 0.3,
-    filter: JSON.stringify(filter),
+    originalQuery: params.query.substring(0, 100),
+    rewrittenMainQuery: rewrittenQuery?.mainQuery?.substring(0, 100),
+    enableMultiHop,
+    cacheKeyOverride: cacheKeyOverride.substring(0, 100),
+    cacheKeyOverrideSource: context?.originalQuery ? 'context.originalQuery(用户原始输入)' : 'params.query(LLM生成)',
   });
 
-  let results: Array<{ content: string; metadata: any; score: number; vectorScore: number; sources: string[] }>;
   try {
-    results = await hybridSearchKnowledgeBase(
-      params.query,
-      topK,
-      0.7,
-      0.3,
-      Object.keys(filter).length > 0 ? filter : undefined,
-    );
+    if (enableMultiHop) {
+      searchResult = await multiHopSearch(
+        params.query,
+        rewrittenQuery,
+        topK,
+        {
+          maxHops: opts.maxHops ?? 2,
+          enabled: true,
+          modelId: opts.modelId,
+          filter: Object.keys(filter).length > 0 ? filter : undefined,
+          cacheKeyOverride,
+        },
+      );
+    } else {
+      // 单跳：直接用改写后的查询检索
+      // 传入 cacheKeyOverride = 用户原始输入，确保同一用户输入命中缓存
+      // （改写后的查询每次可能不同，导致缓存 key 不一致）
+      const query = rewrittenQuery?.mainQuery ?? params.query;
+      const rawResults = await hybridSearchKnowledgeBase(
+        query,
+        topK,
+        0.7,
+        0.3,
+        Object.keys(filter).length > 0 ? filter : undefined,
+        cacheKeyOverride,
+      );
+      searchResult = {
+        results: rawResults.map(r => ({ ...r, hop: 1 })),
+        hopsExecuted: 1,
+        hopDetails: [{ hop: 1, query, resultCount: rawResults.length }],
+      };
+
+      // 子查询也检索
+      if (rewrittenQuery?.subQueries && rewrittenQuery.subQueries.length > 0) {
+        for (const subQ of rewrittenQuery.subQueries) {
+          const subResults = await hybridSearchKnowledgeBase(
+            subQ,
+            topK,
+            0.7,
+            0.3,
+            Object.keys(filter).length > 0 ? filter : undefined,
+          );
+          for (const r of subResults) {
+            if (!searchResult.results.some(existing => existing.content === r.content)) {
+              searchResult.results.push({ ...r, hop: 1 });
+            }
+          }
+          searchResult.hopDetails.push({ hop: 1, query: subQ, resultCount: subResults.length });
+        }
+        // 重新排序取 topK
+        searchResult.results.sort((a, b) => b.score - a.score);
+        searchResult.results = searchResult.results.slice(0, topK);
+      }
+    }
+
+    timings.search = Date.now() - searchStart;
+
+    logger.info('FC工具 [search_knowledge_base] 检索完成', {
+      module: 'Tool:SearchKnowledgeBase',
+      resultCount: searchResult.results.length,
+      hopsExecuted: searchResult.hopsExecuted,
+      duration: timings.search,
+    });
   } catch (searchError: any) {
-    const duration = Date.now() - startTime;
-    logger.error('FC工具 [search_knowledge_base] hybridSearchKnowledgeBase 调用失败', {
+    timings.search = Date.now() - searchStart;
+    const duration = Date.now() - totalStartTime;
+    timings.total = duration;
+
+    logger.error('FC工具 [search_knowledge_base] 检索失败', {
       module: 'Tool:SearchKnowledgeBase',
       query: params.query,
       duration,
@@ -110,27 +267,67 @@ export async function executeSearchKnowledgeBase(
     throw searchError;
   }
 
-  const duration = Date.now() - startTime;
+  // ==================== 阶段 3：结果重排 ====================
+  let rerankedResults: RerankedResult[];
+  let wasReranked = false;
 
-  logger.info('FC工具 [search_knowledge_base] hybridSearchKnowledgeBase 返回结果', {
-    module: 'Tool:SearchKnowledgeBase',
-    query: params.query,
-    resultCount: results.length,
-    duration,
-  });
+  if (enableRerank && searchResult.results.length > 1) {
+    const rerankStart = Date.now();
+    try {
+      rerankedResults = await rerankResults(
+        params.query,
+        searchResult.results,
+        {
+          enabled: true,
+          strategy: opts.rerankStrategy ?? 'dashscope',
+          modelId: opts.modelId,
+        },
+      );
+      timings.rerank = Date.now() - rerankStart;
+      wasReranked = true;
 
-  const mappedResults = results.map((r, idx) => {
+      logger.info('FC工具 [search_knowledge_base] 结果重排完成', {
+        module: 'Tool:SearchKnowledgeBase',
+        resultCount: rerankedResults.length,
+        duration: timings.rerank,
+        topRerankScores: rerankedResults.slice(0, 3).map(r => r.rerankScore.toFixed(3)),
+      });
+    } catch (error: any) {
+      timings.rerank = Date.now() - rerankStart;
+      logger.warn('FC工具 [search_knowledge_base] 结果重排失败，使用原始排序', {
+        module: 'Tool:SearchKnowledgeBase',
+        error: error.message,
+      });
+      rerankedResults = searchResult.results.map(r => ({
+        ...r,
+        originalScore: r.score,
+        rerankScore: r.score,
+      }));
+    }
+  } else {
+    rerankedResults = searchResult.results.map(r => ({
+      ...r,
+      originalScore: r.score,
+      rerankScore: r.score,
+    }));
+  }
+
+  // ==================== 构建最终结果 ====================
+  const totalDuration = Date.now() - totalStartTime;
+  timings.total = totalDuration;
+
+  const mappedResults = rerankedResults.map((r, idx) => {
     const contentPreview = r.content.length > 100 ? r.content.substring(0, 100) + '...' : r.content;
     logger.debug(`FC工具 [search_knowledge_base] 结果 #${idx + 1}`, {
       module: 'Tool:SearchKnowledgeBase',
       index: idx + 1,
       score: r.score,
-      vectorScore: r.vectorScore,
+      rerankScore: r.rerankScore,
+      hop: r.hop,
       source: r.metadata?.source || '未知来源',
       documentId: r.metadata?.documentId || '',
       versionId: r.metadata?.versionId || '',
       contentPreview,
-      contentLength: r.content.length,
     });
 
     return {
@@ -139,6 +336,8 @@ export async function executeSearchKnowledgeBase(
       score: r.score,
       documentId: r.metadata?.documentId || '',
       versionId: r.metadata?.versionId || '',
+      hop: r.hop,
+      rerankScore: wasReranked ? r.rerankScore : undefined,
     };
   });
 
@@ -146,15 +345,22 @@ export async function executeSearchKnowledgeBase(
     results: mappedResults,
     total: mappedResults.length,
     query: params.query,
+    meta: {
+      queryRewritten: rewrittenQuery?.wasRewritten ?? false,
+      rewrittenQuery: rewrittenQuery?.wasRewritten ? rewrittenQuery.mainQuery : undefined,
+      hopsExecuted: searchResult.hopsExecuted,
+      reranked: wasReranked,
+      timings,
+    },
   };
 
-  logger.info('FC工具 [search_knowledge_base] 执行完成，返回结果摘要', {
+  logger.info('FC工具 [search_knowledge_base] 执行完成（增强版）', {
     module: 'Tool:SearchKnowledgeBase',
     query: params.query,
     totalResults: finalResult.total,
-    duration,
-    resultScores: mappedResults.map(r => r.score),
-    resultSources: mappedResults.map(r => r.source),
+    duration: totalDuration,
+    meta: finalResult.meta,
+    resultScores: mappedResults.map(r => r.score.toFixed(4)),
   });
 
   return finalResult;

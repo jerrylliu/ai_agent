@@ -19,6 +19,7 @@ import {
 import {
   initializeBM25Index,
 } from './bm25-index.js';
+import { LRUCache, searchCache } from '../cache.js';
 
 // ==================== 纯向量检索 ====================
 
@@ -37,27 +38,67 @@ export async function searchKnowledgeBase(
   // 与 hybridSearchKnowledgeBase 保持一致，避免不同搜索路径结果差异过大
   minSimilarity: number = 0.55,
   filter?: Record<string, any>,
+  /** 缓存 key 覆盖：默认用 query 生成缓存 key，传入此参数则用此值生成 key。
+   *  FC 模式下查询会被改写，改写结果每次不同导致缓存永远命中不了，
+   *  传入原始查询作为 cacheKeyOverride 可确保同一用户输入命中缓存。 */
+  cacheKeyOverride?: string,
 ): Promise<Array<{ content: string; metadata: any; score: number }>> {
   const store = await initializeVectorStore();
 
-  logger.info('搜索知识库', { module: 'VectorStore', query });
+  logger.info('搜索知识库', { module: 'VectorStore', query: query.substring(0, 100), cacheKeyOverride: cacheKeyOverride?.substring(0, 100) });
   if (filter) {
     logger.debug('搜索过滤条件', { module: 'VectorStore', filter });
+  }
+
+  // 缓存查询：优先用 cacheKeyOverride 生成 key（FC 模式下确保同一用户输入命中缓存）
+  const cacheKey = cacheKeyOverride
+    ? LRUCache.makeKey(cacheKeyOverride, filter)
+    : LRUCache.makeKey(query, filter);
+  logger.info('搜索缓存key生成', {
+    module: 'VectorStore',
+    usedOverride: !!cacheKeyOverride,
+    cacheKeySource: cacheKeyOverride ? 'cacheKeyOverride(原始查询)' : 'query(改写查询)',
+    actualQueryForHash: (cacheKeyOverride || query).substring(0, 100),
+    filterKeys: filter ? Object.keys(filter).sort().join(',') : 'none',
+    cacheKey,
+  });
+  const cached = searchCache.get(cacheKey);
+  if (cached) {
+    logger.info('搜索命中缓存', { module: 'VectorStore', query: query.substring(0, 100), cacheKey });
+    return cached;
   }
 
   try {
     // 向量检索：不在 where 中过滤 versionStatus，改为结果后过滤（兼容旧数据无 versionStatus 字段）
     const searchFilter = { ...filter };
     delete searchFilter.versionStatus;
-    const results = await store.similaritySearchWithScore(query, topK * 3, Object.keys(searchFilter).length > 0 ? searchFilter : undefined);
+    const effectiveFilter = Object.keys(searchFilter).length > 0 ? searchFilter : undefined;
 
-    logger.info('检索到结果', { module: 'VectorStore', resultCount: results.length });
+    logger.info('执行向量检索', {
+      module: 'VectorStore',
+      query: query.substring(0, 100),
+      topK,
+      minSimilarity,
+      effectiveFilter,
+      requestCount: topK * 3,
+    });
+
+    const results = await store.similaritySearchWithScore(query, topK * 3, effectiveFilter);
+
+    logger.info('向量检索原始结果', {
+      module: 'VectorStore',
+      resultCount: results.length,
+      scoreRange: results.length > 0
+        ? { min: Math.min(...results.map(r => r[1])).toFixed(4), max: Math.max(...results.map(r => r[1])).toFixed(4) }
+        : 'N/A',
+    });
 
     results.forEach(([doc, score], i) => {
       logger.debug('搜索结果', { module: 'VectorStore', index: i, score: score.toFixed(4), docType: doc.metadata?.doc_type, versionStatus: doc.metadata?.versionStatus });
     });
 
     // 后过滤：只保留 active 版本（无 versionStatus 的旧数据视为 active）
+    const beforeFilterCount = results.length;
     const filtered = results
       .filter(([doc, score]) => {
         // 相似度过滤
@@ -68,15 +109,46 @@ export async function searchKnowledgeBase(
       })
       .slice(0, topK);
 
-    logger.info('搜索结果过滤完成', { module: 'VectorStore', minSimilarity, filteredCount: filtered.length });
+    const similarityFilteredOut = beforeFilterCount - results.filter(([doc, score]) => score <= minSimilarity).length;
+    const versionFilteredOut = results.filter(([doc, score]) => score <= minSimilarity).length - filtered.length;
 
-    return filtered.map(([doc, score]) => ({
-      content: doc.pageContent,
-      metadata: doc.metadata,
-      score,
-    }));
+    logger.info('搜索结果过滤完成', {
+      module: 'VectorStore',
+      minSimilarity,
+      beforeFilter: beforeFilterCount,
+      similarityFilteredOut,
+      versionFilteredOut,
+      finalCount: filtered.length,
+    });
+
+    // Parent-Child 展开：如果命中 child chunk，返回 parent 内容
+    const finalResults = filtered.map(([doc, score]) => {
+      const meta = doc.metadata || {};
+      if (meta.chunk_role === 'child' && meta.parent_content) {
+        return {
+          content: meta.parent_content,
+          metadata: { ...meta, _childContent: doc.pageContent },
+          score,
+        };
+      }
+      return {
+        content: doc.pageContent,
+        metadata: doc.metadata,
+        score,
+      };
+    });
+
+    // 写入缓存
+    searchCache.set(cacheKey, finalResults);
+
+    return finalResults;
   } catch (error: any) {
-    logger.error('搜索失败', { module: 'VectorStore', error: error.message });
+    logger.error('搜索失败', {
+      module: 'VectorStore',
+      query: query.substring(0, 100),
+      error: error.message,
+      errorStack: error.stack?.substring(0, 300),
+    });
     return [];
   }
 }
@@ -99,14 +171,44 @@ export async function hybridSearchKnowledgeBase(
   vectorWeight: number = 0.7,
   bm25Weight: number = 0.3,
   filter?: Record<string, any>,
+  /** 缓存 key 覆盖：默认用 query 生成缓存 key，传入此参数则用此值生成 key。
+   *  FC 模式下查询会被改写，改写结果每次不同导致缓存永远命中不了，
+   *  传入原始查询作为 cacheKeyOverride 可确保同一用户输入命中缓存。 */
+  cacheKeyOverride?: string,
 ): Promise<Array<{ content: string; metadata: any; score: number; vectorScore: number; sources: string[] }>> {
-  logger.info('混合搜索知识库', { module: 'VectorStore', query, vectorWeight, bm25Weight });
+  logger.info('混合搜索知识库', { module: 'VectorStore', query: query.substring(0, 100), vectorWeight, bm25Weight, cacheKeyOverride: cacheKeyOverride?.substring(0, 100) });
+
+  // 缓存查询：优先用 cacheKeyOverride 生成 key（FC 模式下确保同一用户输入命中缓存）
+  const cacheKey = cacheKeyOverride
+    ? LRUCache.makeKey(cacheKeyOverride, { ...filter, _type: 'hybrid', _vw: vectorWeight, _bw: bm25Weight })
+    : LRUCache.makeKey(query, { ...filter, _type: 'hybrid', _vw: vectorWeight, _bw: bm25Weight });
+  logger.info('混合搜索缓存key生成', {
+    module: 'VectorStore',
+    caller: cacheKeyOverride ? 'FC工具路径' : '非FC路径(子查询/2跳/RAG)',
+    usedOverride: !!cacheKeyOverride,
+    cacheKeySource: cacheKeyOverride ? 'cacheKeyOverride(原始查询)' : 'query(改写查询)',
+    actualQueryForHash: (cacheKeyOverride || query).substring(0, 100),
+    filterKeys: filter ? Object.keys(filter).sort().join(',') : 'none',
+    cacheKey,
+  });
+  const cached = searchCache.get(cacheKey);
+  if (cached) {
+    logger.info('混合搜索命中缓存', { module: 'VectorStore', query: query.substring(0, 100), cacheKey });
+    return cached;
+  }
 
   // 并行执行向量检索和 BM25 检索
+  // 向量检索内部也有缓存，传入 cacheKeyOverride 保持一致
   const [vectorResults, bm25Results] = await Promise.all([
-    searchKnowledgeBase(query, topK * 2, 0.55, filter),
+    searchKnowledgeBase(query, topK * 2, 0.55, filter, cacheKeyOverride),
     bm25Search(query, topK * 2, filter),
   ]);
+
+  logger.info('混合搜索两路检索完成', {
+    module: 'VectorStore',
+    vectorResultCount: vectorResults.length,
+    bm25ResultCount: bm25Results.length,
+  });
 
   // RRF (Reciprocal Rank Fusion) 融合
   // 每个文档的融合分数 = 向量权重 / (k + 向量排名) + BM25权重 / (k + BM25排名)
@@ -175,7 +277,7 @@ export async function hybridSearchKnowledgeBase(
     });
   });
 
-  return results.map(result => ({
+  const finalResults = results.map(result => ({
     content: result.content,
     metadata: result.metadata,
     score: result.score,
@@ -184,6 +286,11 @@ export async function hybridSearchKnowledgeBase(
     // 来源列表（从 metadata.source 提取）
     sources: result.metadata?.source ? [result.metadata.source] : [],
   }));
+
+  // 写入缓存
+  searchCache.set(cacheKey, finalResults);
+
+  return finalResults;
 }
 
 // ==================== BM25 检索（内部） ====================
@@ -208,11 +315,20 @@ async function bm25Search(
     const bm25DocumentStore = getBM25DocumentStore();
 
     if (!bm25Index || bm25Index.documentCount === 0) {
-      logger.info('BM25 索引为空，跳过关键词检索', { module: 'VectorStore' });
+      logger.info('BM25 索引为空，跳过关键词检索', { module: 'VectorStore', indexExists: !!bm25Index });
       return [];
     }
 
+    logger.debug('BM25 检索开始', {
+      module: 'VectorStore',
+      query: query.substring(0, 100),
+      topK,
+      documentCount: bm25Index.documentCount,
+    });
+
     const searchResults = bm25Index.search(query, { limit: topK * 2 });
+
+    logger.debug('BM25 检索原始结果', { module: 'VectorStore', resultCount: searchResults.length });
 
     let results = searchResults
       .map((result: any) => {
@@ -226,6 +342,7 @@ async function bm25Search(
 
     // 元数据过滤
     if (filter) {
+      const beforeMetaFilter = results.length;
       results = results.filter((result: any) => {
         for (const [key, value] of Object.entries(filter)) {
           if (key === 'versionStatus') continue; // versionStatus 在后过滤中处理
@@ -233,17 +350,47 @@ async function bm25Search(
         }
         return true;
       });
+      logger.debug('BM25 元数据过滤', {
+        module: 'VectorStore',
+        beforeFilter: beforeMetaFilter,
+        afterFilter: results.length,
+        filter,
+      });
     }
 
     // 版本状态过滤：仅返回 active 版本
+    const beforeVersionFilter = results.length;
     results = results.filter((result: any) => {
       const vs = result.metadata?.versionStatus;
       return !vs || vs === 'active';
     });
+    if (beforeVersionFilter !== results.length) {
+      logger.debug('BM25 版本状态过滤', {
+        module: 'VectorStore',
+        beforeFilter: beforeVersionFilter,
+        afterFilter: results.length,
+        versionFilteredOut: beforeVersionFilter - results.length,
+      });
+    }
 
-    return results.slice(0, topK);
+    return results.slice(0, topK).map((r: any) => {
+      // Parent-Child 展开：如果命中 child chunk，返回 parent 内容
+      if (r.metadata?.chunk_role === 'child' && r.metadata?.parent_content) {
+        return {
+          content: r.metadata.parent_content,
+          metadata: { ...r.metadata, _childContent: r.content },
+          score: r.score,
+        };
+      }
+      return r;
+    });
   } catch (error: any) {
-    logger.warn('BM25 搜索失败', { module: 'VectorStore', error: error.message });
+    logger.warn('BM25 搜索失败', {
+      module: 'VectorStore',
+      query: query.substring(0, 100),
+      error: error.message,
+      errorStack: error.stack?.substring(0, 300),
+    });
     return [];
   }
 }

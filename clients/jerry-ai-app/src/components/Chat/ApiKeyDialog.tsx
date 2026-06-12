@@ -59,7 +59,14 @@ const ApiKeyDialog: React.FC<ApiKeyDialogProps> = ({
             className="bg-blue-600 hover:bg-blue-700 text-white cyberpunk-apikey-dialog-save"
             disabled={!apiKeyInput.trim()}
             onClick={async () => {
-              const result = await onConfigureApiKey(provider, apiKeyInput.trim());
+              const trimmedKey = apiKeyInput.trim();
+              // 检查 API Key 是否包含非 ASCII 字符（会导致 ByteString 错误）
+              const nonAsciiMatch = trimmedKey.match(/[^\x00-\x7F]/g);
+              if (nonAsciiMatch) {
+                onAlert(`API Key 包含非 ASCII 字符（可能复制时带入了中文引号或空格），请检查后重新输入`);
+                return;
+              }
+              const result = await onConfigureApiKey(provider, trimmedKey);
               if (result.success) {
                 onClose();
                 onApiKeyInputChange('');

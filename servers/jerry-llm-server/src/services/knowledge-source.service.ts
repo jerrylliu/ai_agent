@@ -340,7 +340,9 @@ export class KnowledgeSourceService {
         });
       }
 
-      const chunkCount = await addDocuments(texts, metadataList);
+      const chunkCount = await addDocuments(texts, metadataList, {
+        chunkingStrategy: 'parent-child',
+      });
       chunksAdded = newPages.length > 0 ? Math.round(chunkCount * (newPages.length / pagesToVectorize.length)) : 0;
       chunksUpdated = chunkCount - chunksAdded;
     }

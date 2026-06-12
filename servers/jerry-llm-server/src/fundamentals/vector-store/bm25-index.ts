@@ -167,7 +167,11 @@ export function deleteFromBM25Index(id: string): void {
   if (!bm25Index) return;
 
   try {
-    bm25Index.remove(id);
+    // MiniSearch.remove 需要传入完整文档对象（与添加时一致）
+    const doc = getBM25DocumentStore().get(id);
+    if (doc) {
+      bm25Index.remove({ id, content: doc.content, metadata: doc.metadata });
+    }
     getBM25DocumentStore().delete(id);
     saveBM25Index().catch(err => logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(err) }));
   } catch (error) {

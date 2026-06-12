@@ -3,6 +3,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { logger } from './logger';
 import { config } from './config';
+import { llmRateLimiter } from './llm-rate-limiter';
 
 export type ModelProvider = 'ollama' | 'deepseek' | 'zhipu';
 
@@ -105,7 +106,26 @@ export function getCurrentModelId(): string {
 }
 
 export function setDeepseekApiKey(apiKey: string): void {
-  deepseekApiKey = apiKey;
+  // 清理 API Key：去除首尾空白、中文引号等常见复制错误
+  const cleaned = apiKey.trim()
+    .replace(/[\u201C\u201D]/g, '"')  // 中文双引号 → 英文双引号
+    .replace(/[\u2018\u2019]/g, "'")  // 中文单引号 → 英文单引号
+    .replace(/\u3000/g, ' ');          // 全角空格 → 半角空格
+
+  if (cleaned !== apiKey) {
+    logger.warn('DeepSeek API Key 已自动清理空白字符和中文标点', { module: 'ModelProvider' });
+  }
+
+  // 检查是否仍包含非 ASCII 字符
+  const nonAsciiMatch = cleaned.match(/[^\x00-\x7F]/g);
+  if (nonAsciiMatch) {
+    logger.error('DeepSeek API Key 包含非 ASCII 字符，这可能导致 API 调用失败', {
+      module: 'ModelProvider',
+      nonAsciiChars: nonAsciiMatch.map(c => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`),
+    });
+  }
+
+  deepseekApiKey = cleaned;
 }
 
 export function getDeepseekApiKey(): string {
@@ -113,7 +133,25 @@ export function getDeepseekApiKey(): string {
 }
 
 export function setZhipuApiKey(apiKey: string): void {
-  zhipuApiKey = apiKey;
+  // 清理 API Key：去除首尾空白、中文引号等常见复制错误
+  const cleaned = apiKey.trim()
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\u3000/g, ' ');
+
+  if (cleaned !== apiKey) {
+    logger.warn('智谱 API Key 已自动清理空白字符和中文标点', { module: 'ModelProvider' });
+  }
+
+  const nonAsciiMatch = cleaned.match(/[^\x00-\x7F]/g);
+  if (nonAsciiMatch) {
+    logger.error('智谱 API Key 包含非 ASCII 字符，这可能导致 API 调用失败', {
+      module: 'ModelProvider',
+      nonAsciiChars: nonAsciiMatch.map(c => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`),
+    });
+  }
+
+  zhipuApiKey = cleaned;
 }
 
 export function getZhipuApiKey(): string {
@@ -193,6 +231,12 @@ export function createLLM(config?: ModelConfig): BaseChatModel {
       throw new Error('DeepSeek 模型需要 API Key');
     }
 
+    // 验证 API Key 不包含非 ASCII 字符（会导致 ByteString 错误）
+    const nonAsciiMatch = modelConfig.apiKey.match(/[^\x00-\x7F]/g);
+    if (nonAsciiMatch) {
+      throw new Error(`DeepSeek API Key 包含非 ASCII 字符: ${nonAsciiMatch.map(c => `U+${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join(', ')}。请检查 API Key 是否被错误复制（可能包含中文引号或空格）`);
+    }
+
     return new ChatOpenAI({
       model: modelConfig.model,
       temperature: modelConfig.temperature ?? 0.7,
@@ -206,6 +250,12 @@ export function createLLM(config?: ModelConfig): BaseChatModel {
   if (modelConfig.provider === 'zhipu') {
     if (!modelConfig.apiKey) {
       throw new Error('智谱模型需要 API Key');
+    }
+
+    // 验证 API Key 不包含非 ASCII 字符
+    const nonAsciiMatch = modelConfig.apiKey.match(/[^\x00-\x7F]/g);
+    if (nonAsciiMatch) {
+      throw new Error(`智谱 API Key 包含非 ASCII 字符: ${nonAsciiMatch.map(c => `U+${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join(', ')}。请检查 API Key 是否被错误复制`);
     }
 
     return new ChatOpenAI({
@@ -258,4 +308,94 @@ export function getModelCapabilities(modelId?: string): {
     supportsFC: available?.supportsFunctionCalling ?? false,
     supportsVision: available?.supportsVision ?? false,
   };
+}
+
+// ==================== 限流 LLM 调用 ====================
+
+/**
+ * 创建受限流保护的 LLM 实例
+ *
+ * 返回的 LLM 实例的 invoke、stream 和 bindTools 方法都会被限流保护：
+ * - 快速操作（查询改写、追问判断、重排序）使用 fast 池
+ * - 流式生成（主对话）使用 streaming 池
+ * - Ollama 本地模型不限流
+ * - bindTools 返回的实例也继承限流保护
+ *
+ * @param config 模型配置
+ * @param pool 限流池类型：'fast' 或 'streaming'
+ * @returns 包装后的 LLM 实例
+ */
+export function createRateLimitedLLM(
+  config?: ModelConfig,
+  pool: 'fast' | 'streaming' = 'fast',
+): BaseChatModel {
+  const llm = createLLM(config);
+  const provider = config?.provider || getCurrentModelId().split(':')[0] as ModelProvider;
+
+  // Ollama 不限流，直接返回原始实例
+  if (provider === 'ollama') {
+    return llm;
+  }
+
+  // 包装 invoke 方法，加入限流
+  const originalInvoke = llm.invoke.bind(llm);
+  llm.invoke = async function (...args: any[]) {
+    return llmRateLimiter.execute(
+      provider,
+      pool,
+      () => originalInvoke(...args),
+      `${pool}_invoke`,
+    );
+  };
+
+  // 包装 stream 方法，加入限流（SSE 流式场景）
+  if (typeof llm.stream === 'function') {
+    const originalStream = llm.stream.bind(llm);
+    llm.stream = async function (...args: any[]) {
+      return llmRateLimiter.execute(
+        provider,
+        pool,
+        () => originalStream(...args),
+        `${pool}_stream`,
+      );
+    };
+  }
+
+  // 包装 bindTools 方法，确保返回的实例也受限流保护
+  if (typeof llm.bindTools === 'function') {
+    const originalBindTools = llm.bindTools.bind(llm);
+    (llm as any).bindTools = function (...args: any[]) {
+      const boundLLM = originalBindTools(...args);
+
+      // 包装 bindTools 返回实例的 invoke 方法
+      if (typeof boundLLM.invoke === 'function') {
+        const boundInvoke = boundLLM.invoke.bind(boundLLM);
+        boundLLM.invoke = async function (...invokeArgs: any[]) {
+          return llmRateLimiter.execute(
+            provider,
+            pool,
+            () => boundInvoke(...invokeArgs),
+            `${pool}_fc_invoke`,
+          );
+        };
+      }
+
+      // 包装 bindTools 返回实例的 stream 方法
+      if (typeof boundLLM.stream === 'function') {
+        const boundStream = boundLLM.stream.bind(boundLLM);
+        boundLLM.stream = async function (...streamArgs: any[]) {
+          return llmRateLimiter.execute(
+            provider,
+            pool,
+            () => boundStream(...streamArgs),
+            `${pool}_fc_stream`,
+          );
+        };
+      }
+
+      return boundLLM;
+    };
+  }
+
+  return llm;
 }

@@ -23,9 +23,11 @@
     "@langchain/classic": "^1.0.29",
     "@langchain/community": "^1.1.28",
     "@langchain/core": "^1.1.39",
+    "@langchain/langgraph": "^1.4.1",
     "@langchain/ollama": "^1.1.39",
     "@langchain/openai": "^1.4.5",
     "@langchain/textsplitters": "^1.0.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@nestjs/common": "^11.1.18",
     "@nestjs/core": "^11.1.18",
     "@nestjs/platform-express": "^11.0.1",
@@ -45,6 +47,8 @@
     "minisearch": "^7.2.0",
     "mysql2": "^3.21.0",
     "nest-winston": "^1.10.2",
+    "node-sql-parser": "^5.4.0",
+    "nodemailer": "^8.0.11",
     "pdf-parse": "^1.1.1",
     "puppeteer": "^25.1.0",
     "reflect-metadata": "^0.2.2",
@@ -94,6 +98,9 @@
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s"

@@ -20,6 +20,11 @@ export const API_ENDPOINTS = {
   AUTH_AVATAR: `${API_BASE_URL}/auth/avatar`,
   DOCUMENTS: `${API_BASE_URL}/documents`,
   KNOWLEDGE_SOURCES: `${API_BASE_URL}/knowledge-sources`,
+  CACHE_STATS: `${API_BASE_URL}/cache/stats`,
+  CACHE_CONFIG: `${API_BASE_URL}/cache/config`,
+  CACHE_CLEAR: `${API_BASE_URL}/cache/clear`,
+  RATE_LIMITER_STATUS: `${API_BASE_URL}/rate-limiter/status`,
+  RATE_LIMITER_CONFIG: `${API_BASE_URL}/rate-limiter/config`,
 } as const;
 
 export const MAX_HISTORY_ITEMS = 10;

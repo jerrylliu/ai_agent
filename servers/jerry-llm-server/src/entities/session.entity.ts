@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
 @Entity()
 export class Session {
@@ -16,6 +16,12 @@ export class Session {
   
   @Column({ default: false })
   isPinned: boolean;
+  
+  @Column({ type: 'simple-json', nullable: true })
+  tags: string[];
+  
+  @Column({ nullable: true })
+  category: string;
   
   @CreateDateColumn()
   createdAt: Date;

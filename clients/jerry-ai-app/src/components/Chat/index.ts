@@ -1,6 +1,7 @@
 export { default as HeaderContent } from './HeaderContent';
 export { default as MemorySummaryDialog } from './MemorySummaryDialog';
 export { default as TokenUsagePanel } from './TokenUsagePanel';
+export { default as ToolUsagePanel } from './ToolUsagePanel';
 export { default as EvaluationPanel } from './EvaluationPanel';
 export { default as ChatBubble } from './ChatBubble';
 export { default as MessageList } from './MessageList';

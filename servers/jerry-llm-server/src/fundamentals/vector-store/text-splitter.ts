@@ -5,6 +5,7 @@
  * - 通用文本切分器（默认）
  * - 代码文件切分器（按语言识别）
  * - Markdown 切分器（按标题层级）
+ * - Parent-Child 切分器（小粒度检索 + 大粒度上下文）
  *
  * 切分器本身无状态，不依赖向量存储的共享状态。
  */
@@ -18,6 +19,108 @@ export const DEFAULT_CHUNK_SIZE = 500;
 
 /** 默认切分块重叠大小 */
 export const DEFAULT_CHUNK_OVERLAP = 50;
+
+/** Parent-Child 切分：父块默认大小 */
+export const DEFAULT_PARENT_CHUNK_SIZE = 1500;
+
+/** Parent-Child 切分：父块默认重叠 */
+export const DEFAULT_PARENT_CHUNK_OVERLAP = 200;
+
+/** Parent-Child 切分：子块默认大小 */
+export const DEFAULT_CHILD_CHUNK_SIZE = 300;
+
+/** Parent-Child 切分：子块默认重叠 */
+export const DEFAULT_CHILD_CHUNK_OVERLAP = 50;
+
+// ==================== Parent-Child 切分 ====================
+
+/**
+ * Parent-Child 切分结果
+ */
+export interface ParentChildChunk {
+  /** 父块（大粒度，提供完整上下文） */
+  parent: {
+    text: string;
+    index: number;
+  };
+  /** 子块列表（小粒度，用于精准检索） */
+  children: Array<{
+    text: string;
+    index: number;
+    /** 子块在父块文本中的起始偏移 */
+    offsetInParent: number;
+  }>;
+}
+
+/**
+ * Parent-Child 切分：将文档先切成大块（Parent），再将每个大块切成小块（Child）
+ *
+ * 检索时用 Child 匹配（精准），命中后返回 Parent 内容（完整上下文）。
+ *
+ * @param text 文档文本
+ * @param options 切分参数
+ * @returns Parent-Child 切分结果数组
+ */
+export async function parentChildSplit(
+  text: string,
+  options?: {
+    /** 父块大小，默认 1500 */
+    parentChunkSize?: number;
+    /** 父块重叠，默认 200 */
+    parentChunkOverlap?: number;
+    /** 子块大小，默认 300 */
+    childChunkSize?: number;
+    /** 子块重叠，默认 50 */
+    childChunkOverlap?: number;
+  },
+): Promise<ParentChildChunk[]> {
+  const parentSize = options?.parentChunkSize ?? DEFAULT_PARENT_CHUNK_SIZE;
+  const parentOverlap = options?.parentChunkOverlap ?? DEFAULT_PARENT_CHUNK_OVERLAP;
+  const childSize = options?.childChunkSize ?? DEFAULT_CHILD_CHUNK_SIZE;
+  const childOverlap = options?.childChunkOverlap ?? DEFAULT_CHILD_CHUNK_OVERLAP;
+
+  // 第一步：切成父块
+  const parentSplitter = new RecursiveCharacterTextSplitter({
+    chunkSize: parentSize,
+    chunkOverlap: parentOverlap,
+  });
+  const parentTexts = await parentSplitter.splitText(text);
+
+  // 第二步：每个父块切成子块
+  const childSplitter = new RecursiveCharacterTextSplitter({
+    chunkSize: childSize,
+    chunkOverlap: childOverlap,
+  });
+
+  const results: ParentChildChunk[] = [];
+
+  for (let pIdx = 0; pIdx < parentTexts.length; pIdx++) {
+    const parentText = parentTexts[pIdx];
+    const childTexts = await childSplitter.splitText(parentText);
+
+    const children: ParentChildChunk['children'] = [];
+    let currentOffset = 0;
+
+    for (let cIdx = 0; cIdx < childTexts.length; cIdx++) {
+      const childText = childTexts[cIdx];
+      // 计算子块在父块中的偏移量
+      const offsetInParent = parentText.indexOf(childText, currentOffset);
+      children.push({
+        text: childText,
+        index: cIdx,
+        offsetInParent: offsetInParent >= 0 ? offsetInParent : currentOffset,
+      });
+      currentOffset = (offsetInParent >= 0 ? offsetInParent : currentOffset) + childText.length;
+    }
+
+    results.push({
+      parent: { text: parentText, index: pIdx },
+      children,
+    });
+  }
+
+  return results;
+}
 
 // ==================== 切分器工厂 ====================
 

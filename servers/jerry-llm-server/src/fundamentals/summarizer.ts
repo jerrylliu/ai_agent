@@ -110,6 +110,27 @@ export async function generateSummary(
   }
 
   try {
+    // 验证 API Key 和 baseURL 不包含非 ASCII 字符（会导致 ByteString 错误）
+    const nonAsciiMatch = apiKey.match(/[^\x00-\x7F]/g);
+    if (nonAsciiMatch) {
+      logger.error('DeepSeek API Key 包含非 ASCII 字符，可能导致 ByteString 错误', {
+        module: 'Summarizer',
+        nonAsciiChars: nonAsciiMatch.map(c => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`),
+        apiKeyLength: apiKey.length,
+      });
+      return generateLocalSummary(messages, existingSummary);
+    }
+
+    const baseUrlNonAscii = DEEPSEEK_BASE_URL.match(/[^\x00-\x7F]/g);
+    if (baseUrlNonAscii) {
+      logger.error('DeepSeek Base URL 包含非 ASCII 字符', {
+        module: 'Summarizer',
+        baseUrl: DEEPSEEK_BASE_URL,
+        nonAsciiChars: baseUrlNonAscii.map(c => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`),
+      });
+      return generateLocalSummary(messages, existingSummary);
+    }
+
     const llm = new ChatOpenAI({
       model: 'deepseek-chat',
       temperature: 0.3,
@@ -118,6 +139,24 @@ export async function generateSummary(
         baseURL: DEEPSEEK_BASE_URL,
       },
     });
+
+    // 调试：检查 client 配置中是否有非 ASCII 字符
+    const clientConfig = (llm as any).clientConfig;
+    if (clientConfig) {
+      for (const [key, value] of Object.entries(clientConfig)) {
+        if (typeof value === 'string' && /[^\x00-\x7F]/.test(value)) {
+          logger.error('ChatOpenAI clientConfig 包含非 ASCII 字符', {
+            module: 'Summarizer',
+            key,
+            valuePreview: value.substring(0, 50),
+            nonAsciiIndices: [...value].reduce((acc: number[], char, i) => {
+              if (char.charCodeAt(0) > 255) acc.push(i);
+              return acc;
+            }, []),
+          });
+        }
+      }
+    }
 
     // 构建用户消息
     let userContent: string;
@@ -153,7 +192,25 @@ export async function generateSummary(
 
     return summary;
   } catch (error: any) {
-    logger.error('DeepSeek 摘要生成失败，降级为本地摘要', { module: 'Summarizer', error: error.message });
+    // 详细诊断 ByteString 错误
+    if (error.message?.includes('ByteString')) {
+      const apiKeyPreview = apiKey ? `${apiKey.substring(0, 3)}...${apiKey.substring(apiKey.length - 3)}` : '(empty)';
+      const apiKeyHasNonAscii = apiKey ? /[^\x00-\x7F]/.test(apiKey) : false;
+      const baseUrlValue = DEEPSEEK_BASE_URL;
+      const baseUrlHasNonAscii = /[^\x00-\x7F]/.test(baseUrlValue);
+      logger.error('DeepSeek 摘要生成失败 - ByteString 诊断', {
+        module: 'Summarizer',
+        error: error.message,
+        stack: error.stack,
+        apiKeyPreview,
+        apiKeyLength: apiKey?.length,
+        apiKeyHasNonAscii,
+        baseUrl: baseUrlValue,
+        baseUrlHasNonAscii,
+      });
+    } else {
+      logger.error('DeepSeek 摘要生成失败，降级为本地摘要', { module: 'Summarizer', error: error.message });
+    }
     return generateLocalSummary(messages, existingSummary);
   }
 }

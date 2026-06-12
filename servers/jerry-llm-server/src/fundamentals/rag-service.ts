@@ -80,7 +80,7 @@ export async function handleDocumentUpload(file: any): Promise<{
 
     logger.info('文档解析完成', { module: 'RagService', charCount: textContent.length });
 
-    // 添加到知识库（addDocuments 内部会用 RecursiveCharacterTextSplitter 统一切分）
+    // 添加到知识库（使用 Parent-Child 切分策略：小粒度检索 + 大粒度上下文）
     // 注意：旧上传路径（/knowledge/upload）不经过文档版本管理，
     // 补充 legacyUpload 标识以便与版本管理上传的文档区分，
     // 这些向量无法通过版本管理界面进行更新/归档/删除，只能通过 /knowledge/clear 全量清空
@@ -94,7 +94,9 @@ export async function handleDocumentUpload(file: any): Promise<{
       versionId: 'legacy',
     };
 
-    const docCount = await addDocuments([textContent], [metadata]);
+    const docCount = await addDocuments([textContent], [metadata], {
+      chunkingStrategy: 'parent-child',
+    });
 
     if (tempFilePath !== filePath) {
       fs.unlinkSync(tempFilePath);

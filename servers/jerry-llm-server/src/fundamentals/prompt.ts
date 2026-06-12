@@ -21,8 +21,10 @@ import * as http from 'http';
 
 import { retrieveFromKnowledgeBase } from './rag-service';
 import { getKnowledgeBaseStats } from './vector-store';
-import { createLLM, buildModelConfig, getCurrentModelId, getModelInfo, getModelCapabilities } from './model-provider';
+import { createLLM, createRateLimitedLLM, buildModelConfig, getCurrentModelId, getModelInfo, getModelCapabilities } from './model-provider';
 import { getToolSchemasForModel, executeTool, hasTool, getAvailableToolNames } from './tools';
+import { resolveDataBindings, getSessionPlan, storeStepOutput, findMatchingStep } from './tools/plan-execute';
+import { routeRequest, applyAgentToolWhitelist } from './router/agent-router';
 import { formatSearchResultAsSummary } from './tools/search-web';
 import { logger } from './logger';
 import { config } from './config';
@@ -93,6 +95,63 @@ function filterThinkTags(content: string, inThinkBlock: boolean): { text: string
   return { text: result, inThinkBlock: inThink };
 }
 
+/**
+ * 过滤模型输出的原始工具调用格式文本
+ * 当模型的 function calling 失败时，可能将工具调用格式作为文本输出，
+ * 例如 DeepSeek 的 <｜｜DSML｜｜tool_calls> 格式
+ * 这些内容不应展示给用户
+ *
+ * 注意：检测用正则不带 /g 标志（避免 lastIndex 问题），
+ *       过滤用正则带 /g 标志（需要全局替换）
+ */
+
+// 检测用正则（不带 /g，避免 .test() 的 lastIndex 副作用）
+const RAW_TOOL_CALL_DETECT_PATTERNS = [
+  /<｜｜DSML｜｜[^>]*>/,                     // DeepSeek DSML 标签
+  /<\/｜｜DSML｜｜[^>]*>/,                    // DeepSeek DSML 闭合标签
+  /<\|\|DSML\|\|[^>]*>/,                     // DeepSeek DSML 标签（ASCII 编码）
+  /<\/\|\|DSML\|\|[^>]*>/,                   // DeepSeek DSML 闭合标签（ASCII 编码）
+  /<tool_calls>[\s\S]*?<\/tool_calls>/,      // 通用 tool_calls 标签
+  /<function_call>[\s\S]*?<\/function_call>/, // 通用 function_call 标签
+];
+
+// 过滤用正则（带 /g，用于全局替换）
+const RAW_TOOL_CALL_REPLACE_PATTERNS = [
+  /<｜｜DSML｜｜[^>]*>/g,
+  /<\/｜｜DSML｜｜[^>]*>/g,
+  /<\|\|DSML\|\|[^>]*>/g,
+  /<\/\|\|DSML\|\|[^>]*>/g,
+  /<tool_calls>[\s\S]*?<\/tool_calls>/g,
+  /<function_call>[\s\S]*?<\/function_call>/g,
+];
+
+/**
+ * 检测文本是否包含原始工具调用格式
+ */
+function containsRawToolCallFormat(text: string): boolean {
+  return RAW_TOOL_CALL_DETECT_PATTERNS.some(pattern => pattern.test(text));
+}
+
+/**
+ * 过滤文本中的原始工具调用格式标签
+ */
+function filterRawToolCalls(text: string): string {
+  let result = text;
+  for (const pattern of RAW_TOOL_CALL_REPLACE_PATTERNS) {
+    result = result.replace(pattern, '');
+  }
+  return result.trim();
+}
+
+/**
+ * 判断文本是否可能是原始工具调用格式的开头（用于流式缓冲决策）
+ * 只检查常见的起始标记，避免对正常文本过度缓冲
+ */
+function isPossibleRawToolCallStart(text: string): boolean {
+  // 检查是否以 < 开头且可能是工具调用标签的起始
+  return /^[<｜]/.test(text) || text.includes('<|') || text.includes('<｜');
+}
+
 // Token 估算：中文约 1.5 字符/token，英文约 4 字符/token
 function estimateTokens(text: string): number {
   const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
@@ -118,6 +177,48 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
       return content;
     }
   }
+
+  if (toolName === 'generate_image') {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed.type === 'image' && parsed.images && parsed.images.length > 0) {
+        // 图片已在流式输出前由服务端注入，LLM 只需用文字描述结果
+        const imageCount = parsed.images.length;
+        return `图片生成成功！共生成 ${imageCount} 张图片，实际使用模型：${parsed.model || '未知'}。请用文字描述图片内容，并告知用户实际使用的模型名称。重要：图片已自动展示给用户，不要在回答中再输出任何 ![...](...) 格式的图片 Markdown，只需文字描述即可。`;
+      }
+      return parsed.message || content;
+    } catch {
+      return content;
+    }
+  }
+
+  if (toolName === 'create_mindmap') {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed.type === 'mindmap' && parsed.mermaidCode) {
+        // 将 Mermaid 代码转为 Markdown 代码块，让 LLM 在最终回答中原样输出
+        return `思维导图生成成功！请将以下 Mermaid 代码块原样展示给用户（不要修改代码块内容）：\n\n\`\`\`mermaid\n${parsed.mermaidCode}\n\`\`\``;
+      }
+      return parsed.message || content;
+    } catch {
+      return content;
+    }
+  }
+
+  if (toolName === 'generate_chart') {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed.type === 'chart' && parsed.echartsOption) {
+        // 将 ECharts 配置转为 JSON 代码块，前端自动渲染
+        const optionJson = JSON.stringify(parsed.echartsOption, null, 2);
+        return `图表生成成功！请将以下 ECharts 配置代码块原样展示给用户（不要修改代码块内容）：\n\n\`\`\`echarts\n${optionJson}\n\`\`\``;
+      }
+      return parsed.message || content;
+    } catch {
+      return content;
+    }
+  }
+
   // 其他工具保持原始内容
   return content;
 }
@@ -265,6 +366,17 @@ function buildFCSystemPrompt(): string {
     get_weather: '查询指定城市的天气信息（实时天气、7天预报、24小时逐小时预报）',
     calculate: '执行精确的数学计算（支持大数运算、科学计算、三角函数、对数等）',
     manage_session: '管理用户的会话（对话），包括创建、删除、重命名、置顶/取消置顶、切换、查询列表等',
+    create_plan: '为复杂多步骤任务创建执行计划',
+    update_plan_step: '更新计划中某个步骤的状态（完成/失败/跳过）',
+    get_plan: '查看当前执行计划的进度',
+    crawl_webpage: '深度抓取指定网页的完整内容（当搜索摘要不够详细时使用）',
+    create_document: '在知识库中创建新文档',
+    update_document: '更新知识库中已有文档的内容',
+    summarize_document: '对指定文档生成摘要',
+    compare_documents: '对比两个文档的差异',
+    generate_chart: '根据数据生成图表（折线图、柱状图、饼图等）',
+    generate_image: '根据文字描述生成图片（文生图）',
+    create_mindmap: '生成思维导图',
   };
 
   // 工具列表
@@ -320,7 +432,77 @@ ${toolList}
 - 重命名：action=rename，需要 session_id 和 title
 - 置顶/取消置顶：action=pin/unpin，需要 session_id
 - 切换对话：action=switch，需要 session_id
-- 查看会话：action=list；搜索：action=search，提供 keyword`;
+- 查看会话：action=list；搜索：action=search，提供 keyword
+- 添加标签：action=add_tag，需要 session_id 和 tag
+- 移除标签：action=remove_tag，需要 session_id 和 tag
+- 设置分类：action=set_category，需要 session_id 和 category
+- 查看所有标签：action=list_tags`;
+  }
+
+  if (availableTools.includes('create_plan')) {
+    prompt += `\n\n规划规则：
+- 对于需要3个以上步骤的复杂任务，先调用 create_plan 创建执行计划
+- 每完成一个步骤，调用 update_plan_step 更新状态，并在 output 字段中传递结构化数据供后续步骤引用
+- 用户询问进度时，调用 get_plan 查看
+- 简单问题不需要创建计划，直接回答即可
+
+数据绑定（步骤间数据传递）：
+- 当后续步骤需要使用前序步骤的输出时，在 create_plan 的 step 中声明 inputMapping
+- inputMapping 格式：{ "参数名": "$stepN.output" } 或 { "参数名": "$stepN.output.字段路径" }
+- 例：第2步需要使用第1步搜索结果的 results 字段：inputMapping={ "data": "$step1.output.results" }
+- 系统会在执行第2步前自动解析 $stepN.output 表达式，把实际值填入参数
+- 你不需要在第2步的工具调用参数里手动复制第1步的结果，只需在 create_plan 时声明 inputMapping`;
+  }
+
+  if (availableTools.includes('crawl_webpage')) {
+    prompt += `\n\n网页抓取规则：
+- 当 search_web 返回的摘要信息不够详细，需要获取网页全文时，调用 crawl_webpage
+- 需要提供完整的网页 URL
+- 如果网页是动态渲染的（如 SPA），可设置 enable_js_rendering=true（较慢，仅在必要时使用）`;
+  }
+
+  if (availableTools.includes('create_document')) {
+    prompt += `\n\n文档操作规则：
+- 创建文档：create_document，需要提供 title 和 content
+- 更新文档：update_document，需要提供 documentId 和新 content
+- 生成摘要：summarize_document，需要提供 documentId
+- 对比文档：compare_documents，需要提供两个文档的 documentId1 和 documentId2
+- 文档内容支持 Markdown 格式`;
+  }
+
+  if (availableTools.includes('generate_chart')) {
+    prompt += `\n\n图表生成规则：
+- 当用户要求生成图表、数据可视化时，必须调用 generate_chart 工具，不要仅用文字描述
+- 支持图表类型：line（折线图）、bar（柱状图）、pie（饼图）、scatter（散点图）、radar（雷达图）、heatmap（热力图）、funnel（漏斗图）
+- 可以直接提供 echartsOption（完整 ECharts 配置），也可以提供 chartType + data 让工具自动构建
+- data 格式：line/bar 为 { labels: string[], series: Array<{name, values}> }；pie 为 { items: Array<{name, value}> }`;
+  }
+
+  if (availableTools.includes('generate_image')) {
+    prompt += `\n\n文生图规则：
+- 当用户要求生成图片、画图、绘图时，必须调用 generate_image 工具，不要仅用文字描述
+- 模型选择：wan2.7-image-pro（高质量，细节丰富，适合精细图片）和 wan2.7-image（快速生成，适合简单图片）
+- 用户未指定模型时默认使用 wan2.7-image-pro；用户要求快速生成时使用 wan2.7-image
+- 回答时请根据工具返回结果中标注的实际模型名称来描述，不要自行推测使用的模型
+- prompt 描述越详细，生成效果越好，建议包含主体、风格、颜色、构图等要素
+- 支持尺寸：512*512、768*768、1024*1024、1024*1536、1536*1024
+- 图片只需展示一次，使用 ![描述](URL) 格式，不要重复输出同一张图片`;
+  }
+
+  if (availableTools.includes('create_mindmap')) {
+    prompt += `\n\n思维导图规则：
+- 当用户要求生成思维导图时，必须调用 create_mindmap 工具，不要仅用文字描述
+- 需要提供 title（中心主题）和 content（Mermaid mindmap 语法的内容）
+- content 格式示例：root((中心主题))\\n  分支1\\n    子分支1-1\\n  分支2\\n    子分支2-1
+- 适用于整理知识结构、梳理逻辑关系、总结归纳等场景`;
+  }
+
+  if (availableTools.includes('execute_workflow')) {
+    prompt += `\n\n工作流（流水线）规则：
+- 当用户的需求涉及多个工具组合（如"搜索并画图"、"搜索并整理为文档"）且匹配某个预置流水线时，优先调用 execute_workflow，比手动调用多个工具更稳定
+- templateId 必须从工具描述中列出的可用流水线 ID 中选择
+- userInput 传入用户的原始问题或主题
+- 如果没有匹配的预置流水线，请改用 create_plan 创建自定义计划，并通过 inputMapping 实现步骤间数据传递`;
   }
 
   // 兜底声明：工具不可用时的处理 + 上下文策略
@@ -523,11 +705,31 @@ async function promptWithFunctionCalling(
   userId?: string,
   sessionId?: string,
   onUsageComplete?: (usage: UsageData) => void,
+  imageModel?: string,
 ) {
   const modelInfo = getModelInfo();
   const supportsVision = modelInfo.supportsVision;
 
   let fcSystemPrompt = buildFCSystemPrompt();
+
+  // ==================== Agent Router：意图路由 ====================
+  // 根据用户输入选择最合适的 Agent，决定 system prompt 增量和工具白名单
+  // 路由失败时回落到 general Agent，不阻断主流程
+  const routing = routeRequest(promptText);
+  if (routing.agent.extraPrompt) {
+    fcSystemPrompt += routing.agent.extraPrompt;
+  }
+  if (routing.suggestedWorkflow) {
+    fcSystemPrompt += `\n\n用户输入匹配预置流水线 "${routing.suggestedWorkflow.templateId}"（${routing.suggestedWorkflow.reason}）。如果该流水线符合用户需求，请优先调用 execute_workflow 工具触发。`;
+  }
+  logger.info('FC模式：Agent 路由决策', {
+    module: 'PromptService',
+    agentRole: routing.agent.role,
+    agentName: routing.agent.name,
+    matchedBy: routing.matchedBy,
+    score: routing.score,
+    suggestedWorkflow: routing.suggestedWorkflow?.templateId,
+  });
 
   const currentDate = new Date();
   const dateStr = `${currentDate.getFullYear()}年${currentDate.getMonth() + 1}月${currentDate.getDate()}日`;
@@ -605,10 +807,12 @@ async function promptWithFunctionCalling(
   }
   messages.push(new HumanMessage({ content: userContent }));
 
-  const llm = createLLM(buildModelConfig(getCurrentModelId(), { isFCMode: true }));
+  const llm = createRateLimitedLLM(buildModelConfig(getCurrentModelId(), { isFCMode: true }), 'streaming');
   const currentModelId = getCurrentModelId();
   const caps = getModelCapabilities(currentModelId);
   const toolSchemas = await getToolSchemasForModel(currentModelId, { contextLength: caps.contextLength, supportsFC: caps.supportsFC, query: promptText });
+  // 应用 Agent 工具白名单：在 general Agent 下不过滤，专业 Agent 下只暴露其专长工具
+  const filteredToolSchemas = applyAgentToolWhitelist(toolSchemas, routing.agent);
   if (!llm.bindTools) {
     throw new FCFallbackError('当前模型不支持 bindTools', '');
   }
@@ -617,8 +821,8 @@ async function promptWithFunctionCalling(
   let llmWithTools;
   try {
     llmWithTools = !caps.supportsFC
-      ? llm.bindTools(toolSchemas)
-      : llm.bindTools(toolSchemas, { tool_choice: 'auto' });
+      ? llm.bindTools(filteredToolSchemas)
+      : llm.bindTools(filteredToolSchemas, { tool_choice: 'auto' });
   } catch (bindError: any) {
     logger.warn('FC模式：bindTools 失败，降级到RAG注入模式', {
       module: 'PromptService',
@@ -636,6 +840,8 @@ async function promptWithFunctionCalling(
   let usedCalculate = false;
   let sessionAction: any = null;
   let fcKnowledgeBaseResult = ''; // 收集 FC 模式下已获取的知识库结果，降级时复用
+  let collectedImages: Array<{ url: string; alt: string }> = []; // 收集工具生成的图片
+  let collectedMindmaps: Array<{ mermaidCode: string; title: string }> = []; // 收集工具生成的思维导图
 
   // 启动心跳，在工具调用循环期间保持连接活跃
   const heartbeatTimer = startHeartbeat(res);
@@ -796,9 +1002,42 @@ async function promptWithFunctionCalling(
         // 通知客户端：工具开始执行
         sendToolStatus(res, toolCall.name, 'executing');
 
+        // 数据绑定解析：如果该工具调用对应计划中的某个步骤，且步骤声明了 inputMapping，
+        // 则将参数中的 $stepN.output.xxx 表达式替换为实际值
+        let effectiveArgs = toolCall.args;
+        let matchedStepId: number | undefined;
+        if (sessionId) {
+          const plan = getSessionPlan(sessionId);
+          if (plan) {
+            const matchingStep = findMatchingStep(sessionId, toolCall.name);
+            if (matchingStep) {
+              matchedStepId = matchingStep.id;
+              // 合并 inputMapping 到原始参数（inputMapping 优先级高于 LLM 输出）
+              const argsWithMapping = matchingStep.inputMapping
+                ? { ...toolCall.args, ...matchingStep.inputMapping }
+                : toolCall.args;
+              effectiveArgs = resolveDataBindings(argsWithMapping, plan);
+              if (effectiveArgs !== toolCall.args) {
+                logger.info('FC模式：数据绑定已应用', {
+                  module: 'PromptService',
+                  toolName: toolCall.name,
+                  stepId: matchedStepId,
+                  hasInputMapping: !!matchingStep.inputMapping,
+                });
+              }
+            }
+          }
+        }
+
         try {
-          const result = await executeTool(toolCall.name, toolCall.args, { userId });
+          const result = await executeTool(toolCall.name, effectiveArgs, { userId, sessionId, res, imageModel, originalQuery: promptText });
           const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+
+          // 数据绑定：将工具结果存入匹配的计划步骤的 output 字段，供后续步骤引用
+          if (matchedStepId !== undefined && sessionId) {
+            storeStepOutput(sessionId, matchedStepId, result);
+          }
+
           logger.info('FC模式：工具执行成功，构造 ToolMessage', {
             module: 'PromptService',
             toolName: toolCall.name,
@@ -853,6 +1092,20 @@ async function promptWithFunctionCalling(
           if (toolCall.name === 'search_knowledge_base' && content) {
             fcKnowledgeBaseResult = content;
           }
+
+          // 收集图片生成结果，流式输出时直接注入到前端
+          if (toolCall.name === 'generate_image' && result?.type === 'image' && result?.images) {
+            for (const img of result.images) {
+              if (img.url) {
+                collectedImages.push({ url: img.url, alt: '生成的图片' });
+              }
+            }
+          }
+
+          // 收集思维导图结果，流式输出时直接注入到前端
+          if (toolCall.name === 'create_mindmap' && result?.type === 'mindmap' && result?.mermaidCode) {
+            collectedMindmaps.push({ mermaidCode: result.mermaidCode, title: result.title });
+          }
         }
 
         messages.push(new ToolMessage({
@@ -869,12 +1122,28 @@ async function promptWithFunctionCalling(
         messagesLength: messages.length,
       });
     } else {
-      // 检测本地模型可能输出疑似工具调用意图的文本（如"调用 search_web"）
+      // 检测模型输出疑似工具调用意图的文本（如"调用 search_web"）
+      // 策略：只检测"明确说要调用工具但没调"的情况，不检测"描述已有结果"的情况
       const textContent = typeof aiMessage.content === 'string' ? aiMessage.content : '';
       const toolNamePattern = getAvailableToolNames().join('|');
-      const suspectedIntent = toolNamePattern
-        ? new RegExp(`(?:调用|使用|执行|运行)\\s*(?:工具)?\\s*(${toolNamePattern})`, 'i').test(textContent)
+
+      // 第一类：模型明确说要调用某个工具但没实际调用（始终检测）
+      // 例如："调用 search_web 工具"、"使用 generate_image 来生成"
+      const explicitIntent = toolNamePattern
+        ? new RegExp(`(?:调用|使用|执行|运行)\\s*(?:工具)?\\s*(?:${toolNamePattern})`, 'i').test(textContent)
         : false;
+
+      // 第二类：模型表达了工具意图但没实际调用（仅在未执行过任何工具时检测）
+      // 例如："我来生成一张图片"、"让我画一个图"
+      // 注意：如果已经执行过工具，LLM 回复中自然会包含"图片"等词汇，这是对结果的描述，不应误判
+      const alreadyUsedTools = toolCallsMade.length > 0;
+      const implicitIntent = !alreadyUsedTools && (
+        /(?:生成|画|绘制|创建|制作).*(?:图片|图像|画作|插图)/i.test(textContent)
+        || /(?:生成|创建|制作).*(?:思维导图|脑图)/i.test(textContent)
+        || /(?:生成|创建|制作|绘制).*(?:图表|折线图|柱状图|饼图|雷达图)/i.test(textContent)
+      );
+
+      const suspectedIntent = explicitIntent || implicitIntent;
 
       if (suspectedIntent && iteration < MAX_TOOL_ITERATIONS - 1) {
         logger.info('FC模式：检测到疑似工具调用意图文本，添加提示重试', {
@@ -884,6 +1153,21 @@ async function promptWithFunctionCalling(
         messages.push(aiMessage);
         messages.push(new HumanMessage({
           content: '请直接使用工具调用功能来执行上述操作，而不是用文字描述。如果你需要调用工具，请使用正确的工具调用格式。',
+        }));
+        continue; // 继续下一轮迭代
+      }
+
+      // 检测模型输出了原始工具调用格式（如 DeepSeek 的 DSML 标签）
+      // 这说明模型的 function calling 失败了，需要重试
+      const hasRawToolCallFormat = containsRawToolCallFormat(textContent);
+      if (hasRawToolCallFormat && iteration < MAX_TOOL_ITERATIONS - 1) {
+        logger.warn('FC模式：检测到原始工具调用格式文本，function calling 可能失败，添加提示重试', {
+          module: 'PromptService',
+          textPreview: textContent.substring(0, 300),
+        });
+        // 不推送原始格式文本，直接要求重试
+        messages.push(new HumanMessage({
+          content: '你上一次的回复包含了工具调用的原始格式文本，这不是正确的工具调用方式。请使用工具调用功能（function calling）来执行操作，或者直接用自然语言回答用户问题。不要输出任何工具调用格式的文本。',
         }));
         continue; // 继续下一轮迭代
       }
@@ -907,6 +1191,7 @@ async function promptWithFunctionCalling(
           calculateCount: toolCallsMade.filter(tc => tc.name === 'calculate').length,
           toolCalls: toolCallsMade.map(tc => tc.name),
         };
+        const injectedImageUrls: string[] = []; // 记录已注入的图片 URL，用于过滤 LLM 重复输出
         try {
           // 先发送 metadata 和 session_action 事件
           sendMetadata(res, ragMetadata);
@@ -914,12 +1199,37 @@ async function promptWithFunctionCalling(
             sendSessionAction(res, sessionAction);
           }
 
+          // 在 LLM 回答之前，直接注入工具生成的图片和思维导图
+          // 这样无论 LLM 如何回答，用户都能看到可视化内容
+          let fcFullResponse = '';
+          if (collectedImages.length > 0) {
+            const imageContent = collectedImages
+              .map((img, i) => `![${img.alt}${collectedImages.length > 1 ? ` ${i + 1}` : ''}](${img.url})`)
+              .join('\n');
+            sendContent(res, imageContent + '\n\n');
+            process.stdout.write(imageContent + '\n\n');
+            fcFullResponse = imageContent + '\n\n';
+            injectedImageUrls.push(...collectedImages.map(img => img.url));
+          }
+          if (collectedMindmaps.length > 0) {
+            for (const mm of collectedMindmaps) {
+              const mermaidContent = '```mermaid\n' + mm.mermaidCode + '\n```\n\n';
+              sendContent(res, mermaidContent);
+              process.stdout.write(mermaidContent);
+              fcFullResponse += mermaidContent;
+            }
+          }
+
           const stream = await llm.stream(messages, {
             signal: abortController?.signal,
           });
           let chunkCount = 0;
-          let fcFullResponse = '';
+          // fcFullResponse 已在上方初始化（可能包含注入的图片/思维导图内容）
           let inThinkBlock = false;
+          let rawToolCallBuffer = ''; // 缓冲可能的原始工具调用格式
+          let rawToolCallDetected = false; // 是否已检测到原始格式
+          let imageMarkdownBuffer = ''; // 缓冲可能的图片 Markdown（用于过滤重复图片）
+          const hasInjectedImages = injectedImageUrls.length > 0;
           for await (const chunk of stream) {
             if (isCancelled && isCancelled()) {
               logger.info('FC模式流式：检测到取消信号，停止生成', { module: 'PromptService' });
@@ -929,10 +1239,123 @@ async function promptWithFunctionCalling(
             const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
             inThinkBlock = filtered.inThinkBlock;
             if (filtered.text) {
-              fcFullResponse += filtered.text;
-              sendContent(res, filtered.text);
-              process.stdout.write(filtered.text);
+              // 智能缓冲策略：
+              // 1. 如果已确认包含原始工具调用格式，持续缓冲并过滤
+              // 2. 如果文本以 < 或 ｜ 开头（可能是标签起始），短暂缓冲等待判断
+              // 3. 其他情况立即输出，不引入延迟
+              if (rawToolCallDetected) {
+                // 已确认有原始格式，持续缓冲过滤
+                rawToolCallBuffer += filtered.text;
+                if (containsRawToolCallFormat(rawToolCallBuffer)) {
+                  const cleaned = filterRawToolCalls(rawToolCallBuffer);
+                  if (cleaned) {
+                    fcFullResponse += cleaned;
+                    sendContent(res, cleaned);
+                    process.stdout.write(cleaned);
+                  }
+                  rawToolCallBuffer = '';
+                }
+              } else if (isPossibleRawToolCallStart(filtered.text) && rawToolCallBuffer.length < 50) {
+                // 可能是标签起始，短暂缓冲等待更多数据
+                rawToolCallBuffer += filtered.text;
+                if (containsRawToolCallFormat(rawToolCallBuffer)) {
+                  // 确认是原始格式，切换到过滤模式
+                  rawToolCallDetected = true;
+                  const cleaned = filterRawToolCalls(rawToolCallBuffer);
+                  if (cleaned) {
+                    fcFullResponse += cleaned;
+                    sendContent(res, cleaned);
+                    process.stdout.write(cleaned);
+                  }
+                  rawToolCallBuffer = '';
+                } else if (rawToolCallBuffer.length >= 50) {
+                  // 缓冲足够长且不是原始格式，安全输出
+                  fcFullResponse += rawToolCallBuffer;
+                  sendContent(res, rawToolCallBuffer);
+                  process.stdout.write(rawToolCallBuffer);
+                  rawToolCallBuffer = '';
+                }
+              } else {
+                // 正常文本，立即输出
+                if (rawToolCallBuffer) {
+                  // 先输出缓冲区内容
+                  fcFullResponse += rawToolCallBuffer;
+                  sendContent(res, rawToolCallBuffer);
+                  process.stdout.write(rawToolCallBuffer);
+                  rawToolCallBuffer = '';
+                }
+                // 过滤 LLM 重复输出的图片 Markdown（服务端已注入过图片）
+                let outputText = filtered.text;
+                if (hasInjectedImages && outputText.includes('![')) {
+                  // 可能包含图片 Markdown，缓冲后过滤
+                  imageMarkdownBuffer += outputText;
+                  // 检查缓冲区是否包含完整的图片 Markdown
+                  const imageMarkdownPattern = /!\[[^\]]*\]\([^)]+\)/g;
+                  const hasCompleteImageMarkdown = imageMarkdownPattern.test(imageMarkdownBuffer);
+                  if (hasCompleteImageMarkdown || imageMarkdownBuffer.length > 500) {
+                    // 缓冲区足够长，可以安全过滤
+                    const cleaned = imageMarkdownBuffer.replace(/!\[[^\]]*\]\([^)]+\)\s*/g, (match) => {
+                      // 检查是否包含已注入的图片 URL
+                      for (const url of injectedImageUrls) {
+                        if (match.includes(url)) return ''; // 过滤重复图片
+                      }
+                      return match; // 保留非重复图片
+                    });
+                    if (cleaned) {
+                      fcFullResponse += cleaned;
+                      sendContent(res, cleaned);
+                      process.stdout.write(cleaned);
+                    }
+                    imageMarkdownBuffer = '';
+                  }
+                  // 否则继续缓冲，不输出
+                } else {
+                  // 检查图片缓冲区是否有残留
+                  if (imageMarkdownBuffer) {
+                    // 缓冲区中没有完整图片 Markdown，安全输出
+                    const cleaned = imageMarkdownBuffer.replace(/!\[[^\]]*\]\([^)]+\)\s*/g, (match) => {
+                      for (const url of injectedImageUrls) {
+                        if (match.includes(url)) return '';
+                      }
+                      return match;
+                    });
+                    if (cleaned) {
+                      fcFullResponse += cleaned;
+                      sendContent(res, cleaned);
+                      process.stdout.write(cleaned);
+                    }
+                    imageMarkdownBuffer = '';
+                  }
+                  fcFullResponse += outputText;
+                  sendContent(res, outputText);
+                  process.stdout.write(outputText);
+                }
+              }
             }
+          }
+          // 输出缓冲区剩余内容
+          if (rawToolCallBuffer) {
+            const cleaned = filterRawToolCalls(rawToolCallBuffer);
+            if (cleaned) {
+              fcFullResponse += cleaned;
+              sendContent(res, cleaned);
+              process.stdout.write(cleaned);
+            }
+          }
+          // 输出图片 Markdown 缓冲区残留内容
+          if (imageMarkdownBuffer) {
+            const cleaned = imageMarkdownBuffer.replace(/!\[[^\]]*\]\([^)]+\)\s*/g, (match) => {
+              for (const url of injectedImageUrls) {
+                if (match.includes(url)) return '';
+              }
+              return match;
+            });
+            if (cleaned) {
+              fcFullResponse += cleaned;
+              sendContent(res, cleaned);
+              process.stdout.write(cleaned);
+            }
+            imageMarkdownBuffer = '';
           }
           logger.info('FC模式流式响应完成', { module: 'PromptService', chunkCount, fcFullResponseLength: fcFullResponse.length, estimatedOutputTokens: estimateTokens(fcFullResponse) });
           res.end();
@@ -962,7 +1385,18 @@ async function promptWithFunctionCalling(
             let fallbackContent = typeof aiMessage.content === 'string'
               ? aiMessage.content
               : JSON.stringify(aiMessage.content);
-            fallbackContent = fallbackContent.replace(/<think>[\s\S]*?<\/think>/gs, "");
+            fallbackContent = fallbackContent.replace(/<think[\s\S]*?<\/think>/gs, "");
+            // 过滤原始工具调用格式
+            fallbackContent = filterRawToolCalls(fallbackContent);
+            // 过滤 LLM 重复输出的图片 Markdown（服务端已注入过图片）
+            if (injectedImageUrls.length > 0) {
+              fallbackContent = fallbackContent.replace(/!\[[^\]]*\]\([^)]+\)\s*/g, (match) => {
+                for (const url of injectedImageUrls) {
+                  if (match.includes(url)) return '';
+                }
+                return match;
+              });
+            }
             if (!res.writableEnded) {
               // fallback 时也需要发送 metadata，否则客户端收不到
               sendMetadata(res, ragMetadata);
@@ -1033,6 +1467,8 @@ async function promptWithFunctionCalling(
       let chunkCount = 0;
       let fullResponse = '';
       let inThinkBlock = false;
+      let rawToolCallBuffer = '';
+      let rawToolCallDetected = false;
       for await (const chunk of stream) {
         if (isCancelled && isCancelled()) {
           break;
@@ -1041,9 +1477,53 @@ async function promptWithFunctionCalling(
         const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
         inThinkBlock = filtered.inThinkBlock;
         if (filtered.text) {
-          fullResponse += filtered.text;
-          sendContent(res, filtered.text);
-          process.stdout.write(filtered.text);
+          if (rawToolCallDetected) {
+            rawToolCallBuffer += filtered.text;
+            if (containsRawToolCallFormat(rawToolCallBuffer)) {
+              const cleaned = filterRawToolCalls(rawToolCallBuffer);
+              if (cleaned) {
+                fullResponse += cleaned;
+                sendContent(res, cleaned);
+                process.stdout.write(cleaned);
+              }
+              rawToolCallBuffer = '';
+            }
+          } else if (isPossibleRawToolCallStart(filtered.text) && rawToolCallBuffer.length < 50) {
+            rawToolCallBuffer += filtered.text;
+            if (containsRawToolCallFormat(rawToolCallBuffer)) {
+              rawToolCallDetected = true;
+              const cleaned = filterRawToolCalls(rawToolCallBuffer);
+              if (cleaned) {
+                fullResponse += cleaned;
+                sendContent(res, cleaned);
+                process.stdout.write(cleaned);
+              }
+              rawToolCallBuffer = '';
+            } else if (rawToolCallBuffer.length >= 50) {
+              fullResponse += rawToolCallBuffer;
+              sendContent(res, rawToolCallBuffer);
+              process.stdout.write(rawToolCallBuffer);
+              rawToolCallBuffer = '';
+            }
+          } else {
+            if (rawToolCallBuffer) {
+              fullResponse += rawToolCallBuffer;
+              sendContent(res, rawToolCallBuffer);
+              process.stdout.write(rawToolCallBuffer);
+              rawToolCallBuffer = '';
+            }
+            fullResponse += filtered.text;
+            sendContent(res, filtered.text);
+            process.stdout.write(filtered.text);
+          }
+        }
+      }
+      if (rawToolCallBuffer) {
+        const cleaned = filterRawToolCalls(rawToolCallBuffer);
+        if (cleaned) {
+          fullResponse += cleaned;
+          sendContent(res, cleaned);
+          process.stdout.write(cleaned);
         }
       }
       logger.info('FC模式：达到最大迭代后强制生成回答完成', { module: 'PromptService', chunkCount, fullResponseLength: fullResponse.length });
@@ -1108,6 +1588,7 @@ export const promptTemplate = async (
   userId?: string,
   sessionId?: string,
   onUsageComplete?: (usage: UsageData) => void,
+  imageModel?: string,
 ) => {
   const modelInfo = getModelInfo();
   let fcError: any = null;
@@ -1116,7 +1597,7 @@ export const promptTemplate = async (
     logger.info('当前模型支持Function Calling，使用FC模式', { module: 'PromptService', modelId: getCurrentModelId() });
     try {
       return await promptWithFunctionCalling(
-        promptText, images, history, res, sessionSummary, userMemories, isCancelled, abortController, userId, sessionId, onUsageComplete,
+        promptText, images, history, res, sessionSummary, userMemories, isCancelled, abortController, userId, sessionId, onUsageComplete, imageModel,
       );
     } catch (err: any) {
       fcError = err;
@@ -1283,7 +1764,7 @@ ${docList}
     // 流式调用
     logger.info('开始流式调用模型', { module: 'PromptService', modelId: getCurrentModelId() });
     
-    const llm = createLLM();
+    const llm = createRateLimitedLLM(undefined, 'streaming');
     const ragStartTime = Date.now();
 
     const ragMetadata = {
@@ -1307,6 +1788,8 @@ ${docList}
       let chunkCount = 0;
       let fullResponse = '';
       let inThinkBlock = false;
+      let rawToolCallBuffer = '';
+      let rawToolCallDetected = false;
       for await (const chunk of stream) {
         // 检查客户端是否已断开连接（双重保险：即使 abort 信号未生效，也能通过标志位退出循环）
         if (isCancelled && isCancelled()) {
@@ -1317,9 +1800,53 @@ ${docList}
         const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
         inThinkBlock = filtered.inThinkBlock;
         if (filtered.text) {
-          fullResponse += filtered.text;
-          sendContent(res, filtered.text);
-          process.stdout.write(filtered.text);
+          if (rawToolCallDetected) {
+            rawToolCallBuffer += filtered.text;
+            if (containsRawToolCallFormat(rawToolCallBuffer)) {
+              const cleaned = filterRawToolCalls(rawToolCallBuffer);
+              if (cleaned) {
+                fullResponse += cleaned;
+                sendContent(res, cleaned);
+                process.stdout.write(cleaned);
+              }
+              rawToolCallBuffer = '';
+            }
+          } else if (isPossibleRawToolCallStart(filtered.text) && rawToolCallBuffer.length < 50) {
+            rawToolCallBuffer += filtered.text;
+            if (containsRawToolCallFormat(rawToolCallBuffer)) {
+              rawToolCallDetected = true;
+              const cleaned = filterRawToolCalls(rawToolCallBuffer);
+              if (cleaned) {
+                fullResponse += cleaned;
+                sendContent(res, cleaned);
+                process.stdout.write(cleaned);
+              }
+              rawToolCallBuffer = '';
+            } else if (rawToolCallBuffer.length >= 50) {
+              fullResponse += rawToolCallBuffer;
+              sendContent(res, rawToolCallBuffer);
+              process.stdout.write(rawToolCallBuffer);
+              rawToolCallBuffer = '';
+            }
+          } else {
+            if (rawToolCallBuffer) {
+              fullResponse += rawToolCallBuffer;
+              sendContent(res, rawToolCallBuffer);
+              process.stdout.write(rawToolCallBuffer);
+              rawToolCallBuffer = '';
+            }
+            fullResponse += filtered.text;
+            sendContent(res, filtered.text);
+            process.stdout.write(filtered.text);
+          }
+        }
+      }
+      if (rawToolCallBuffer) {
+        const cleaned = filterRawToolCalls(rawToolCallBuffer);
+        if (cleaned) {
+          fullResponse += cleaned;
+          sendContent(res, cleaned);
+          process.stdout.write(cleaned);
         }
       }
       logger.info('流式响应完成', { module: 'PromptService', chunkCount, fullResponseLength: fullResponse.length, estimatedOutputTokens: estimateTokens(fullResponse) });
@@ -1360,7 +1887,7 @@ ${docList}
     }
   } else {
     const nonStreamStartTime = Date.now();
-    const llm = createLLM();
+    const llm = createRateLimitedLLM(undefined, 'streaming');
     const result = await llm.invoke(conversions);
     // 去除 think 标签
     if (typeof result.content === 'string') {

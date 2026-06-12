@@ -1,7 +1,10 @@
 // API 端点常量导入
 import { API_ENDPOINTS } from './constants';
 import { Session, Message } from '../types/session';
-import { parseSSEFrames, handleSSEEvents } from './sse-parser';
+import { parseSSEFrames, handleSSEEvents, type ConfirmationRequestEvent } from './sse-parser';
+
+// 重新导出 SSE 类型，供其他模块使用
+export type { ConfirmationRequestEvent } from './sse-parser';
 
 // 类型定义
 export interface ChatHistoryItem {
@@ -107,7 +110,7 @@ export async function getAIResponse(
   history: Message[] = [],
   sessionId?: string,
   signal?: AbortSignal,
-  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean; onToolStatus?: ((event: ToolStatusEvent) => void) | null }
+  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean; imageModel?: string; onToolStatus?: ((event: ToolStatusEvent) => void) | null; onConfirmationRequest?: ((event: ConfirmationRequestEvent) => void) | null }
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
     method: 'POST',
@@ -124,6 +127,7 @@ export async function getAIResponse(
   let contextCount = 0;
   let sessionAction: SessionAction | null = null;
   const toolStatusCallback = options?.onToolStatus ?? null;
+  const confirmationCallback = options?.onConfirmationRequest ?? null;
 
   const modifiedStream = new ReadableStream<string>({
     async start(controller) {
@@ -151,6 +155,11 @@ export async function getAIResponse(
             onToolStatus: (event) => {
               if (toolStatusCallback) {
                 toolStatusCallback(event);
+              }
+            },
+            onConfirmationRequest: (event) => {
+              if (confirmationCallback) {
+                confirmationCallback(event);
               }
             },
             onContent: (text) => {
@@ -1309,4 +1318,147 @@ export async function getEvaluationStats(days: number = 7): Promise<EvaluationSt
     headers: getAuthHeaders(),
   });
   return handleResponse<EvaluationStats>(response);
+}
+
+// ============================================
+// 工具调用统计 API
+// ============================================
+
+export interface ToolUsageStats {
+  totalCalls: number;
+  successCalls: number;
+  failedCalls: number;
+  successRate: number;
+  avgDurationMs: number;
+  byTool: Record<string, {
+    calls: number;
+    successRate: number;
+    avgDurationMs: number;
+  }>;
+  dailyStats: Record<string, {
+    calls: number;
+    successCalls: number;
+  }>;
+  recentRecords: Array<{
+    id: number;
+    userId: string;
+    sessionId: string;
+    toolName: string;
+    success: boolean;
+    durationMs: number;
+    paramsSummary: string;
+    errorMessage: string;
+    modelId: string;
+    createdAt: string;
+  }>;
+}
+
+/**
+ * 获取工具调用统计
+ * @param days 统计最近多少天（默认 7 天）
+ */
+export async function getToolUsageStats(days: number = 7): Promise<ToolUsageStats> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/tool-usage?days=${days}`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<ToolUsageStats>(response);
+}
+
+/**
+ * 响应工具调用确认请求
+ */
+export async function respondToConfirmation(
+  confirmationId: string,
+  confirmed: boolean,
+): Promise<{ success: boolean; confirmationId: string }> {
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/confirm`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ confirmationId, confirmed }),
+  });
+  return handleResponse<{ success: boolean; confirmationId: string }>(response);
+}
+
+// ============================================
+// 缓存与限流管理 API
+// ============================================
+
+export interface CacheConfig {
+  maxEntries: number;
+  maxItemSizeKB: number;
+  defaultTTLMinutes: number;
+}
+
+export interface CacheStats {
+  hits: number;
+  misses: number;
+  hitRate: number;
+  size: number;
+  maxSize: number;
+  memoryUsageKB: number;
+}
+
+export interface RateLimiterConfig {
+  fastPoolMax: number;
+  streamingPoolMax: number;
+  tokenWaitTimeout: number;
+}
+
+export interface RateLimiterStatus {
+  fastPool: { running: number; max: number; queueLength: number };
+  streamingPool: { running: number; max: number; queueLength: number };
+  tokenBuckets: Record<string, number>;
+}
+
+/** 获取缓存统计 */
+export async function getCacheStats(): Promise<CacheStats> {
+  const response = await fetch(API_ENDPOINTS.CACHE_STATS, { headers: getAuthHeaders() });
+  return handleResponse<CacheStats>(response);
+}
+
+/** 获取缓存配置 */
+export async function getCacheConfig(): Promise<CacheConfig> {
+  const response = await fetch(API_ENDPOINTS.CACHE_CONFIG, { headers: getAuthHeaders() });
+  return handleResponse<CacheConfig>(response);
+}
+
+/** 更新缓存配置 */
+export async function updateCacheConfig(config: Partial<CacheConfig>): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(API_ENDPOINTS.CACHE_CONFIG, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(config),
+  });
+  return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+/** 清空缓存 */
+export async function clearCache(): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(API_ENDPOINTS.CACHE_CLEAR, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+/** 获取限流器状态 */
+export async function getRateLimiterStatus(): Promise<RateLimiterStatus> {
+  const response = await fetch(API_ENDPOINTS.RATE_LIMITER_STATUS, { headers: getAuthHeaders() });
+  return handleResponse<RateLimiterStatus>(response);
+}
+
+/** 获取限流器配置 */
+export async function getRateLimiterConfig(): Promise<RateLimiterConfig> {
+  const response = await fetch(API_ENDPOINTS.RATE_LIMITER_CONFIG, { headers: getAuthHeaders() });
+  return handleResponse<RateLimiterConfig>(response);
+}
+
+/** 更新限流器配置 */
+export async function updateRateLimiterConfig(config: Partial<RateLimiterConfig>): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(API_ENDPOINTS.RATE_LIMITER_CONFIG, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(config),
+  });
+  return handleResponse<{ success: boolean; message: string }>(response);
 }

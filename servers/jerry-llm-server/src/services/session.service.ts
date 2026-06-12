@@ -150,6 +150,57 @@ export class SessionService {
     return null;
   }
 
+  // 更新会话标签
+  async updateSessionTags(sessionId: string, tags: string[], userId?: string) {
+    const where: any = { sessionId };
+    if (userId) {
+      where.userId = userId;
+    }
+    await this.sessionRepository.update(where, { tags });
+    return this.sessionRepository.findOne({ where });
+  }
+
+  // 更新会话分类
+  async updateSessionCategory(sessionId: string, category: string, userId?: string) {
+    const where: any = { sessionId };
+    if (userId) {
+      where.userId = userId;
+    }
+    await this.sessionRepository.update(where, { category });
+    return this.sessionRepository.findOne({ where });
+  }
+
+  // 按标签查询会话
+  async getSessionsByTag(tag: string, userId: string = 'default') {
+    const sessions = await this.sessionRepository.find({
+      where: { userId },
+      order: { isPinned: 'DESC', updatedAt: 'DESC' },
+    });
+    return sessions.filter(s => s.tags && s.tags.includes(tag));
+  }
+
+  // 按分类查询会话
+  async getSessionsByCategory(category: string, userId: string = 'default') {
+    return this.sessionRepository.find({
+      where: { userId, category },
+      order: { isPinned: 'DESC', updatedAt: 'DESC' },
+    });
+  }
+
+  // 获取所有标签
+  async getAllTags(userId: string = 'default'): Promise<string[]> {
+    const sessions = await this.sessionRepository.find({ where: { userId } });
+    const tagSet = new Set<string>();
+    for (const s of sessions) {
+      if (s.tags) {
+        for (const t of s.tags) {
+          tagSet.add(t);
+        }
+      }
+    }
+    return [...tagSet];
+  }
+
   // 更新消息
   async updateMessage(id: string, content: string) {
     return this.chatHistoryRepository.update(

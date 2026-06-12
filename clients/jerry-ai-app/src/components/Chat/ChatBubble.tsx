@@ -1,12 +1,10 @@
 import React from "react";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Button } from "../ui/button";
 import { Database, ThumbsUp, ThumbsDown } from "lucide-react";
 import MarkdownRenderer from "../MarkdownRenderer";
 import { formatTime } from "../../lib/utils";
 import type { Message } from "../../types/session";
 import { submitFeedback } from "../../lib/api";
-import { DEFAULT_USER_AVATAR_URL, DEFAULT_AI_AVATAR_URL } from "../../lib/constants";
 
 interface ChatBubbleProps {
   message: Message;

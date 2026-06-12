@@ -2,6 +2,12 @@
  * ChatAgent.tsx - 以太忆核聊天主页面
  *
  * 本文件是整个AI聊天应用的核心页面组件，负责整合所有子模块和状态管理。
+ * 状态管理已迁移到 Zustand stores：
+ * - useUIStore: UI 开关、输入状态、面板状态
+ * - useSettingsStore: 应用设置（persist 中间件自动同步 localStorage）
+ * - useToastStore: Toast/反馈状态
+ * - useConfirmStore: 确认弹窗状态
+ *
  * 子组件已模块化到 components/Chat/ 目录下：
  * - HeaderContent: 聊天头部（AI信息、知识库状态、操作菜单）
  * - MessageList: 消息列表（虚拟滚动、消息渲染、AI输入动画）
@@ -15,7 +21,7 @@
  * - EvaluationPanel: 准确率评估面板
  */
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 
 import { ChevronRight, ChevronLeft, Check, Bot } from "lucide-react";
 
@@ -24,12 +30,12 @@ import { useTheme } from "../hooks/useTheme";
 import { useAuth } from "../hooks/useAuth";
 
 import { AuthDialog } from "../components/AuthDialog";
-import { clearKnowledgeBase } from "../lib/api";
+import { clearKnowledgeBase, respondToConfirmation } from "../lib/api";
 import { DocumentManager } from '../components/Document';
 import { KnowledgeSourceManager } from '../components/KnowledgeSource';
 import { ErrorBoundary } from '../components/ui/error-boundary';
 import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
-import SettingsDialog, { type AppSettings } from '../components/Settings/SettingsDialog';
+import SettingsDialog from '../components/Settings/SettingsDialog';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 
 import {
@@ -41,52 +47,87 @@ import {
   KbFeedbackToast,
   MemorySummaryDialog,
   TokenUsagePanel,
+  ToolUsagePanel,
   EvaluationPanel,
 } from '../components/Chat';
 
+import { useUIStore } from '../stores/ui-store';
+import { useSettingsStore } from '../stores/settings-store';
+import { useToastStore } from '../stores/toast-store';
+import { useConfirmStore } from '../stores/confirm-store';
+import { useShallow } from 'zustand/react/shallow';
+
 const ChatAgent: React.FC = () => {
-  // ==================== 本地状态管理 ====================
-  const [inputValue, setInputValue] = useState("");
-  const [searchKeyword, setSearchKeyword] = useState("");
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
-  const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
-  const [apiKeyDialogProvider, setApiKeyDialogProvider] = useState<'deepseek' | 'zhipu'>('deepseek');
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [showModelPanel, setShowModelPanel] = useState(false);
-  const [showSidebar, setShowSidebar] = useState(true);
-  const [showHistoryList, setShowHistoryList] = useState(true);
-  const [showRecentQuestions, setShowRecentQuestions] = useState(true);
-  const [showAuthDialog, setShowAuthDialog] = useState(false);
-  const [showMemorySummary, setShowMemorySummary] = useState(false);
-  const [showTokenUsage, setShowTokenUsage] = useState(false);
-  const [showEvaluation, setShowEvaluation] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [showDocumentManager, setShowDocumentManager] = useState(false);
-  const [showKnowledgeSourceManager, setShowKnowledgeSourceManager] = useState(false);
-  const [avatarUploading, setAvatarUploading] = useState(false);
-  const [copyToast, setCopyToast] = useState<{ show: boolean; message: string; x: number; y: number }>({ show: false, message: '', x: 0, y: 0 });
-  const [feedbackState, setFeedbackState] = useState<Record<string, 'positive' | 'negative' | null>>({});
-  const [feedbackToast, setFeedbackToast] = useState<{ show: boolean; message: string; x: number; y: number }>({ show: false, message: '', x: 0, y: 0 });
+  // ==================== Zustand 状态管理 ====================
+  const {
+    inputValue, setInputValue,
+    searchKeyword, setSearchKeyword,
+    showMoreMenu, setShowMoreMenu,
+    showApiKeyDialog, setShowApiKeyDialog,
+    apiKeyDialogProvider, setApiKeyDialogProvider,
+    apiKeyInput, setApiKeyInput,
+    showModelPanel, setShowModelPanel,
+    showSidebar, setShowSidebar,
+    showHistoryList, setShowHistoryList,
+    showRecentQuestions, setShowRecentQuestions,
+    showAuthDialog, setShowAuthDialog,
+    showMemorySummary, setShowMemorySummary,
+    showTokenUsage, setShowTokenUsage,
+    showToolUsage, setShowToolUsage,
+    showEvaluation, setShowEvaluation,
+    showSettings, setShowSettings,
+    showDocumentManager, setShowDocumentManager,
+    showKnowledgeSourceManager, setShowKnowledgeSourceManager,
+    avatarUploading, setAvatarUploading,
+    inputMode, setInputMode,
+  } = useUIStore(useShallow((state) => ({
+    inputValue: state.inputValue,
+    setInputValue: state.setInputValue,
+    searchKeyword: state.searchKeyword,
+    setSearchKeyword: state.setSearchKeyword,
+    showMoreMenu: state.showMoreMenu,
+    setShowMoreMenu: state.setShowMoreMenu,
+    showApiKeyDialog: state.showApiKeyDialog,
+    setShowApiKeyDialog: state.setShowApiKeyDialog,
+    apiKeyDialogProvider: state.apiKeyDialogProvider,
+    setApiKeyDialogProvider: state.setApiKeyDialogProvider,
+    apiKeyInput: state.apiKeyInput,
+    setApiKeyInput: state.setApiKeyInput,
+    showModelPanel: state.showModelPanel,
+    setShowModelPanel: state.setShowModelPanel,
+    showSidebar: state.showSidebar,
+    setShowSidebar: state.setShowSidebar,
+    showHistoryList: state.showHistoryList,
+    setShowHistoryList: state.setShowHistoryList,
+    showRecentQuestions: state.showRecentQuestions,
+    setShowRecentQuestions: state.setShowRecentQuestions,
+    showAuthDialog: state.showAuthDialog,
+    setShowAuthDialog: state.setShowAuthDialog,
+    showMemorySummary: state.showMemorySummary,
+    setShowMemorySummary: state.setShowMemorySummary,
+    showTokenUsage: state.showTokenUsage,
+    setShowTokenUsage: state.setShowTokenUsage,
+    showToolUsage: state.showToolUsage,
+    setShowToolUsage: state.setShowToolUsage,
+    showEvaluation: state.showEvaluation,
+    setShowEvaluation: state.setShowEvaluation,
+    showSettings: state.showSettings,
+    setShowSettings: state.setShowSettings,
+    showDocumentManager: state.showDocumentManager,
+    setShowDocumentManager: state.setShowDocumentManager,
+    showKnowledgeSourceManager: state.showKnowledgeSourceManager,
+    setShowKnowledgeSourceManager: state.setShowKnowledgeSourceManager,
+    avatarUploading: state.avatarUploading,
+    setAvatarUploading: state.setAvatarUploading,
+    inputMode: state.inputMode,
+    setInputMode: state.setInputMode,
+  })));
 
-  // 确认/提示弹窗状态
-  const [deleteMsgConfirmOpen, setDeleteMsgConfirmOpen] = useState(false);
-  const [deleteMsgTargetId, setDeleteMsgTargetId] = useState<string | null>(null);
-  const [alertOpen, setAlertOpen] = useState(false);
-  const [alertMessage, setAlertMessage] = useState('');
-
-  // 应用设置状态
-  const [appSettings, setAppSettings] = useState<AppSettings>(() => {
-    try {
-      const saved = localStorage.getItem('app-settings');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return { memoryEnabled: true, summaryEnabled: true, injectMemoryOnNewSession: true };
-  });
-
-  const handleSettingsChange = (newSettings: AppSettings) => {
-    setAppSettings(newSettings);
-    localStorage.setItem('app-settings', JSON.stringify(newSettings));
-  };
+  const { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel, updateSettings } = useSettingsStore();
+  // 传递给 useChat 的 appSettings 对象
+  const appSettings = { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel };
+  const toast = useToastStore();
+  const confirm = useConfirmStore();
 
   // DOM引用
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -130,30 +171,54 @@ const ChatAgent: React.FC = () => {
     supportsVision,
     switchModel,
     configureApiKey,
-  } = useChat(isAuthenticated, appSettings);
+  } = useChat(isAuthenticated, appSettings, (event) => {
+    // 收到工具确认请求时，加入确认队列
+    confirm.showToolConfirmation(event);
+  });
 
   // 虚拟滚动相关
   const isAtBottomRef = useRef(true);
   const isSessionSwitchRef = useRef(false);
 
-  // 知识库操作反馈状态
-  const [kbFeedback, setKbFeedback] = useState<{
-    show: boolean;
-    success: boolean;
-    message: string;
-  }>({ show: false, success: false, message: '' });
-
   // 删除消息执行函数
   const executeDeleteMessage = async () => {
-    if (!deleteMsgTargetId) return;
-    setDeleteMsgConfirmOpen(false);
+    const targetId = confirm.deleteMsgTargetId;
+    if (!targetId) return;
+    confirm.cancelDeleteMessage(); // 关闭弹窗并清空 targetId，防止竞态
     try {
-      await deleteMessage(deleteMsgTargetId);
+      await deleteMessage(targetId);
     } catch (error: any) {
-      setAlertMessage('删除消息失败: ' + (error.message || '未知错误'));
-      setAlertOpen(true);
+      confirm.showAlert('删除消息失败: ' + (error.message || '未知错误'));
     }
   };
+
+  // 工具调用确认处理函数
+  // 用 ref 保存当前确认的 ID，避免 closeToolConfirmation 后状态丢失
+  const pendingToolConfirmIdRef = useRef<string | null>(null);
+
+  // 当队列头部变化时，同步更新 ref
+  const currentConfirmation = confirm.currentToolConfirmation();
+  if (currentConfirmation && pendingToolConfirmIdRef.current !== currentConfirmation.id) {
+    pendingToolConfirmIdRef.current = currentConfirmation.id;
+  }
+
+  const handleToolConfirmation = async (confirmed: boolean) => {
+    const confirmId = pendingToolConfirmIdRef.current;
+    if (!confirmId) return;
+    pendingToolConfirmIdRef.current = null;
+    confirm.closeToolConfirmation(); // 移除队列头部，下一个自动显示
+    try {
+      const result = await respondToConfirmation(confirmId, confirmed);
+      if (!result.success) {
+        confirm.showAlert('确认响应失败，该请求可能已超时，请重试');
+      }
+    } catch (error: any) {
+      confirm.showAlert('确认响应失败: ' + (error.message || '网络错误'));
+    }
+  };
+
+  // 标记是否由按钮触发的确认，防止 onOpenChange 重复调用
+  const toolConfirmTriggeredRef = useRef(false);
 
   // 副作用: 组件挂载时检查知识库状态
   useEffect(() => {
@@ -179,24 +244,24 @@ const ChatAgent: React.FC = () => {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith('image/')) {
-      setKbFeedback({ show: true, success: false, message: '请选择图片文件（JPG/PNG/GIF/WebP）' });
-      setTimeout(() => setKbFeedback(prev => ({ ...prev, show: false })), 3000);
+      toast.setKbFeedback({ show: true, success: false, message: '请选择图片文件（JPG/PNG/GIF/WebP）' });
+      setTimeout(() => toast.hideKbFeedback(), 3000);
       return;
     }
     if (file.size > 20 * 1024 * 1024) {
-      setKbFeedback({ show: true, success: false, message: '图片大小不能超过 20MB' });
-      setTimeout(() => setKbFeedback(prev => ({ ...prev, show: false })), 3000);
+      toast.setKbFeedback({ show: true, success: false, message: '图片大小不能超过 20MB' });
+      setTimeout(() => toast.hideKbFeedback(), 3000);
       return;
     }
     setAvatarUploading(true);
     try {
       await uploadAvatar(file);
-      setKbFeedback({ show: true, success: true, message: '头像更新成功' });
-      setTimeout(() => setKbFeedback(prev => ({ ...prev, show: false })), 3000);
+      toast.setKbFeedback({ show: true, success: true, message: '头像更新成功' });
+      setTimeout(() => toast.hideKbFeedback(), 3000);
     } catch (err: any) {
       const msg = err?.message || '头像上传失败，请重试';
-      setKbFeedback({ show: true, success: false, message: msg });
-      setTimeout(() => setKbFeedback(prev => ({ ...prev, show: false })), 3000);
+      toast.setKbFeedback({ show: true, success: false, message: msg });
+      setTimeout(() => toast.hideKbFeedback(), 3000);
     } finally {
       setAvatarUploading(false);
       if (avatarInputRef.current) {
@@ -229,29 +294,20 @@ const ChatAgent: React.FC = () => {
   };
 
   const handleAlert = (message: string) => {
-    setAlertMessage(message);
-    setAlertOpen(true);
+    confirm.showAlert(message);
   };
 
   const handleDeleteMessage = (messageId: string) => {
-    setDeleteMsgTargetId(messageId);
-    setDeleteMsgConfirmOpen(true);
+    confirm.confirmDeleteMessage(messageId);
   };
 
-  const { theme, cycleTheme, setTheme } = useTheme();
+  const { theme, setTheme } = useTheme();
 
   // 输入框位置模式：center = 欢迎页居中，bottom = 对话底部
-  // 改用 sessionHasContent 判断，已发过消息的会话不会回欢迎页
-  const [inputMode, setInputMode] = useState<'center' | 'bottom'>(
-    sessionHasContent.has(currentSessionId) ? 'bottom' : 'center'
-  );
-
   useEffect(() => {
     if (sessionHasContent.has(currentSessionId) || isMessagesLoading) {
-      // 有内容标记，或正在加载消息 → 底部模式
       setInputMode('bottom');
     } else {
-      // 加载完毕且无内容 → 欢迎页
       setInputMode('center');
     }
   }, [currentSessionId, sessionHasContent, isMessagesLoading]);
@@ -333,15 +389,16 @@ const ChatAgent: React.FC = () => {
             onToggleMoreMenu={() => setShowMoreMenu(!showMoreMenu)}
             onClearKnowledgeBase={clearKnowledgeBase}
             onCheckKnowledgeBaseStatus={checkKnowledgeBaseStatus}
-            onKbFeedback={setKbFeedback}
+            onKbFeedback={toast.setKbFeedback}
             onOpenMemorySummary={() => setShowMemorySummary(true)}
             onOpenDocumentManager={() => setShowDocumentManager(true)}
             onOpenKnowledgeSourceManager={() => setShowKnowledgeSourceManager(true)}
             onOpenTokenUsage={() => setShowTokenUsage(true)}
+            onOpenToolUsage={() => setShowToolUsage(true)}
             onOpenEvaluation={() => setShowEvaluation(true)}
           />
 
-          <KbFeedbackToast feedback={kbFeedback} />
+          <KbFeedbackToast feedback={toast.kbFeedback} />
 
           {/* 输入框动画容器 */}
           <div className="flex-1 relative min-h-0">
@@ -354,10 +411,10 @@ const ChatAgent: React.FC = () => {
                   toolStatuses={toolStatuses}
                   messagesEndRef={messagesEndRef}
                   currentSessionId={currentSessionId}
-                  feedbackState={feedbackState}
-                  onFeedbackStateChange={setFeedbackState}
-                  onCopyToast={setCopyToast}
-                  onFeedbackToast={setFeedbackToast}
+                  feedbackState={toast.feedbackState}
+                  onFeedbackStateChange={toast.setFeedbackState}
+                  onCopyToast={(t) => t.show ? toast.showCopyToast(t.message, t.x, t.y) : toast.hideCopyToast()}
+                  onFeedbackToast={(t) => t.show ? toast.showFeedbackToast(t.message, t.x, t.y) : toast.hideFeedbackToast()}
                   onUpdateMessage={updateMessage}
                   onDeleteMessage={handleDeleteMessage}
                   onAlert={handleAlert}
@@ -449,6 +506,10 @@ const ChatAgent: React.FC = () => {
         open={showTokenUsage}
         onClose={() => setShowTokenUsage(false)}
       />
+      <ToolUsagePanel
+        open={showToolUsage}
+        onClose={() => setShowToolUsage(false)}
+      />
       <EvaluationPanel
         open={showEvaluation}
         onClose={() => setShowEvaluation(false)}
@@ -459,11 +520,11 @@ const ChatAgent: React.FC = () => {
         theme={theme}
         onThemeChange={setTheme}
         settings={appSettings}
-        onSettingsChange={handleSettingsChange}
+        onSettingsChange={updateSettings}
       />
       {showDocumentManager && (
-        <div className="fixed inset-0 z-50 bg-black/50">
-          <div className="absolute right-0 top-0 bottom-0 w-full max-w-4xl bg-card shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/50" style={{ top: '25px' }}>
+          <div className="absolute inset-0 bg-card shadow-2xl">
             <ErrorBoundary>
               <DocumentManager onClose={() => setShowDocumentManager(false)} onRefreshKnowledgeBase={checkKnowledgeBaseStatus} />
             </ErrorBoundary>
@@ -471,8 +532,8 @@ const ChatAgent: React.FC = () => {
         </div>
       )}
       {showKnowledgeSourceManager && (
-        <div className="fixed inset-0 z-50 bg-black/50">
-          <div className="absolute right-0 top-0 bottom-0 w-full max-w-4xl bg-card shadow-2xl">
+        <div className="fixed inset-0 z-50 bg-black/50" style={{ top: '25px' }}>
+          <div className="absolute inset-0 bg-card shadow-2xl">
             <ErrorBoundary>
               <KnowledgeSourceManager onClose={() => setShowKnowledgeSourceManager(false)} onContentChange={checkKnowledgeBaseStatus} />
             </ErrorBoundary>
@@ -481,33 +542,33 @@ const ChatAgent: React.FC = () => {
       )}
 
       {/* 复制成功提示 Toast */}
-      {copyToast.show && (
+      {toast.copyToast.show && (
         <div
           className="fixed z-[100] animate-in fade-in slide-in-from-bottom-2 duration-300 pointer-events-none"
-          style={{ left: copyToast.x, top: copyToast.y, transform: 'translate(-50%, -100%)' }}
+          style={{ left: toast.copyToast.x, top: toast.copyToast.y, transform: 'translate(-50%, -100%)' }}
         >
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg shadow-lg bg-green-600 text-white text-xs whitespace-nowrap">
             <Check className="h-3 w-3" />
-            {copyToast.message}
+            {toast.copyToast.message}
           </div>
         </div>
       )}
       {/* 反馈提示 Toast */}
-      {feedbackToast.show && (
+      {toast.feedbackToast.show && (
         <div
           className="fixed z-[100] animate-in fade-in slide-in-from-bottom-2 duration-300 pointer-events-none"
-          style={{ left: feedbackToast.x, top: feedbackToast.y, transform: 'translate(-50%, -100%)' }}
+          style={{ left: toast.feedbackToast.x, top: toast.feedbackToast.y, transform: 'translate(-50%, -100%)' }}
         >
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg shadow-lg bg-blue-600 text-white text-xs whitespace-nowrap">
-            {feedbackToast.message}
+            {toast.feedbackToast.message}
           </div>
         </div>
       )}
 
       {/* 删除消息确认弹窗 */}
       <ConfirmDialog
-        open={deleteMsgConfirmOpen}
-        onOpenChange={setDeleteMsgConfirmOpen}
+        open={confirm.deleteMsgConfirmOpen}
+        onOpenChange={(open) => { if (!open) confirm.closeDeleteConfirm(); }}
         title="删除消息"
         description="确定要删除这条消息吗？将同时删除AI的回复。"
         confirmLabel="确认删除"
@@ -517,13 +578,37 @@ const ChatAgent: React.FC = () => {
 
       {/* 错误提示弹窗 */}
       <ConfirmDialog
-        open={alertOpen}
-        onOpenChange={setAlertOpen}
+        open={confirm.alertOpen}
+        onOpenChange={(open) => { if (!open) confirm.closeAlert(); }}
         title="提示"
-        description={alertMessage}
+        description={confirm.alertMessage}
         confirmLabel="确定"
         cancelLabel=""
-        onConfirm={() => setAlertOpen(false)}
+        onConfirm={() => confirm.closeAlert()}
+      />
+
+      {/* 工具调用确认弹窗（队列模式：逐个显示，处理完一个自动显示下一个） */}
+      <ConfirmDialog
+        open={confirm.toolConfirmationQueue.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !toolConfirmTriggeredRef.current) {
+            handleToolConfirmation(false);
+          }
+          toolConfirmTriggeredRef.current = false;
+        }}
+        title="工具调用确认"
+        description={
+          currentConfirmation
+            ? `${currentConfirmation.message}\n\n工具：${currentConfirmation.toolName}\n操作：${currentConfirmation.paramsSummary}\n风险等级：${currentConfirmation.riskLevel === 'high' ? '高' : currentConfirmation.riskLevel === 'medium' ? '中' : '低'}`
+            : ''
+        }
+        confirmLabel="确认执行"
+        cancelLabel="拒绝"
+        variant={currentConfirmation?.riskLevel === 'high' ? 'destructive' : undefined}
+        onConfirm={() => {
+          toolConfirmTriggeredRef.current = true;
+          handleToolConfirmation(true);
+        }}
       />
     </>
   );

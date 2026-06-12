@@ -19,13 +19,13 @@ import {
   switchModel as switchModelApi,
   setModelApiKey,
 } from '../lib/api';
-import type { AvailableModel, ToolStatusEvent } from '../lib/api';
-import type { AppSettings } from '../components/Settings/SettingsDialog';
+import type { AvailableModel, ToolStatusEvent, ConfirmationRequestEvent } from '../lib/api';
+import type { AppSettings } from '../stores/settings-store';
 import { generateId, generateSessionId } from '../lib/utils';
 import { ERROR_MESSAGE } from '../lib/constants';
 import { Session, Message, HistoryItem } from '../types/session';
 
-export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
+export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, onConfirmationRequest?: (event: ConfirmationRequestEvent) => void) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => generateSessionId());
   const [messages, setMessages] = useState<Message[]>([]);
@@ -375,6 +375,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         memoryEnabled: appSettings?.memoryEnabled ?? true,
         summaryEnabled: appSettings?.summaryEnabled ?? true,
         injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
+        imageModel: appSettings?.imageModel ?? 'wan2.7-image-pro',
         onToolStatus: (event) => {
           setToolStatuses(prev => {
             // 更新同名工具的状态，或追加新工具
@@ -387,6 +388,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
             return [...prev, event];
           });
         },
+        onConfirmationRequest: onConfirmationRequest || undefined,
       });
       
       // 设置知识库来源标记
@@ -462,8 +464,8 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
         const cleaned = (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content.trim())
           ? prev.slice(0, -1)
           : prev;
-        // 更新缓存
-        messagesCacheRef.current.set(currentSessionId, cleaned);
+        // 更新缓存（使用 ref 确保即使会话已切换也能写入正确的会话）
+        messagesCacheRef.current.set(currentSessionIdRef.current, cleaned);
         return cleaned;
       });
     }
@@ -524,6 +526,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
                 return [...prev, event];
               });
             },
+            onConfirmationRequest: onConfirmationRequest || undefined,
           });
           const reader = aiResponse.stream.getReader();
           let fullResponse = '';
@@ -590,9 +593,14 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
     try {
       await updateMessageApi(messageId, content);
       // 更新本地消息列表
-      setMessages(prev => prev.map(msg =>
-        msg.id === messageId ? { ...msg, content } : msg
-      ));
+      setMessages(prev => {
+        const updated = prev.map(msg =>
+          msg.id === messageId ? { ...msg, content } : msg
+        );
+        // 同步更新缓存，防止切换会话后修改丢失
+        messagesCacheRef.current.set(currentSessionId, updated);
+        return updated;
+      });
     } catch (error) {
       console.error('更新消息失败:', error);
       throw error;
@@ -614,7 +622,10 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings) {
           );
         }
 
-        return prev.filter(msg => !idsToRemove.includes(msg.id));
+        const updated = prev.filter(msg => !idsToRemove.includes(msg.id));
+        // 同步更新缓存，防止切换会话后已删除消息从旧缓存恢复
+        messagesCacheRef.current.set(currentSessionId, updated);
+        return updated;
       });
     } catch (error) {
       console.error('删除消息失败:', error);

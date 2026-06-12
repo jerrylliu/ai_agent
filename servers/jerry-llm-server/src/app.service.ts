@@ -34,6 +34,7 @@ export class AppService {
     summaryEnabled?: boolean,
     injectMemory?: boolean,
     abortController?: AbortController,
+    imageModel?: string,
   ) {
     // 获取会话摘要（如果摘要功能已启用）
     let sessionSummary: string | undefined;
@@ -73,6 +74,7 @@ export class AppService {
           });
         }
       },
+      imageModel,
     );
   }
 

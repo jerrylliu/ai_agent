@@ -10,11 +10,12 @@
  *   \n
  *
  * 事件类型：
- *   - metadata:       RAG 元数据
- *   - session_action: 会话操作指令
- *   - tool_status:    工具调用进度
- *   - heartbeat:      保活心跳
- *   - content:        AI 回复文本
+ *   - metadata:              RAG 元数据
+ *   - session_action:        会话操作指令
+ *   - tool_status:           工具调用进度
+ *   - confirmation_request:  工具调用人工确认请求
+ *   - heartbeat:             保活心跳
+ *   - content:               AI 回复文本
  */
 
 import type { ToolStatusEvent, SessionAction } from './api';
@@ -29,6 +30,14 @@ export interface SSEParseResult {
   events: SSEEvent[];
   /** 剩余未完成帧的 buffer */
   remainingBuffer: string;
+}
+
+export interface ConfirmationRequestEvent {
+  id: string;
+  toolName: string;
+  paramsSummary: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  message: string;
 }
 
 /**
@@ -77,6 +86,7 @@ export function handleSSEEvents(
     onMetadata?: (metadata: { usedKnowledgeBase: boolean; contextCount: number; [key: string]: any }) => void;
     onSessionAction?: (action: SessionAction) => void;
     onToolStatus?: (event: ToolStatusEvent) => void;
+    onConfirmationRequest?: (event: ConfirmationRequestEvent) => void;
     onContent?: (text: string) => void;
     onHeartbeat?: () => void;
   },
@@ -107,6 +117,15 @@ export function handleSSEEvents(
           callbacks.onToolStatus?.(toolEvent);
         } catch (e) {
           console.warn('解析 tool_status 事件失败:', e);
+        }
+        break;
+      }
+      case 'confirmation_request': {
+        try {
+          const confirmEvent: ConfirmationRequestEvent = JSON.parse(event.eventData);
+          callbacks.onConfirmationRequest?.(confirmEvent);
+        } catch (e) {
+          console.warn('解析 confirmation_request 事件失败:', e);
         }
         break;
       }

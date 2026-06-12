@@ -12,16 +12,20 @@ const ManageSessionActionSchema = z.enum([
   'unpin',
   'switch',
   'search',
+  'add_tag',
+  'remove_tag',
+  'set_category',
+  'list_tags',
 ]);
 
 const ManageSessionParamsSchema = z.object({
   action: ManageSessionActionSchema.describe(
-    '要执行的操作：list=列出会话, create=新建会话, delete=删除会话, rename=重命名, pin=置顶, unpin=取消置顶, switch=切换到某会话, search=搜索会话',
+    '要执行的操作：list=列出会话, create=新建会话, delete=删除会话, rename=重命名, pin=置顶, unpin=取消置顶, switch=切换到某会话, search=搜索会话, add_tag=添加标签, remove_tag=移除标签, set_category=设置分类, list_tags=列出所有标签',
   ),
   session_id: z
     .string()
     .optional()
-    .describe('目标会话ID（delete/rename/pin/unpin/switch 时必填）'),
+    .describe('目标会话ID（delete/rename/pin/unpin/switch/add_tag/remove_tag/set_category 时必填）'),
   title: z
     .string()
     .optional()
@@ -30,6 +34,14 @@ const ManageSessionParamsSchema = z.object({
     .string()
     .optional()
     .describe('搜索关键词（search 时使用，按标题模糊匹配）'),
+  tag: z
+    .string()
+    .optional()
+    .describe('标签名称（add_tag/remove_tag 时使用）'),
+  category: z
+    .string()
+    .optional()
+    .describe('分类名称（set_category 时使用）'),
 });
 
 // ==================== FC Tool Schema ====================
@@ -54,14 +66,18 @@ export const manageSessionSchema = {
             'unpin',
             'switch',
             'search',
+            'add_tag',
+            'remove_tag',
+            'set_category',
+            'list_tags',
           ],
           description:
-            '要执行的操作：list=列出会话, create=新建会话, delete=删除会话, rename=重命名, pin=置顶, unpin=取消置顶, switch=切换到某会话, search=搜索会话',
+            '要执行的操作：list=列出会话, create=新建会话, delete=删除会话, rename=重命名, pin=置顶, unpin=取消置顶, switch=切换到某会话, search=搜索会话, add_tag=添加标签, remove_tag=移除标签, set_category=设置分类, list_tags=列出所有标签',
         },
         session_id: {
           type: 'string',
           description:
-            '目标会话ID（delete/rename/pin/unpin/switch 时必填）',
+            '目标会话ID（delete/rename/pin/unpin/switch/add_tag/remove_tag/set_category 时必填）',
         },
         title: {
           type: 'string',
@@ -71,6 +87,14 @@ export const manageSessionSchema = {
         keyword: {
           type: 'string',
           description: '搜索关键词（search 时使用，按标题模糊匹配）',
+        },
+        tag: {
+          type: 'string',
+          description: '标签名称（add_tag/remove_tag 时使用）',
+        },
+        category: {
+          type: 'string',
+          description: '分类名称（set_category 时使用）',
         },
       },
       required: ['action'],
@@ -87,6 +111,8 @@ export interface ManageSessionParams {
   session_id?: string;
   title?: string;
   keyword?: string;
+  tag?: string;
+  category?: string;
 }
 
 export interface ManageSessionResult {
@@ -175,6 +201,14 @@ export async function executeManageSession(
         return await handleSwitch(userId, validated.session_id);
       case 'search':
         return await handleSearch(userId, validated.keyword);
+      case 'add_tag':
+        return await handleAddTag(userId, validated.session_id, validated.tag);
+      case 'remove_tag':
+        return await handleRemoveTag(userId, validated.session_id, validated.tag);
+      case 'set_category':
+        return await handleSetCategory(userId, validated.session_id, validated.category);
+      case 'list_tags':
+        return await handleListTags(userId);
       default:
         return {
           success: false,
@@ -474,5 +508,112 @@ async function handleSearch(
     success: true,
     message: `找到 ${matched.length} 个匹配"${keyword}"的会话：\n${sessionList.join('\n')}`,
     data: { sessions: matched },
+  };
+}
+
+async function handleAddTag(
+  userId: string,
+  sessionId?: string,
+  tag?: string,
+): Promise<ManageSessionResult> {
+  if (!sessionId) {
+    return { success: false, message: '添加标签需要提供 session_id 参数。' };
+  }
+  if (!tag || !tag.trim()) {
+    return { success: false, message: '添加标签需要提供 tag 参数。' };
+  }
+
+  const session = await sessionServiceInstance.getSessionBySessionId(sessionId);
+  if (!session) {
+    return { success: false, message: `未找到 ID 为 ${sessionId} 的会话。` };
+  }
+
+  const tags = [...(session.tags || [])];
+  if (tags.includes(tag.trim())) {
+    return { success: true, message: `会话"${session.title}"已有标签"${tag.trim()}"。` };
+  }
+  tags.push(tag.trim());
+
+  await sessionServiceInstance.updateSessionTags(sessionId, tags, userId);
+
+  return {
+    success: true,
+    message: `已为会话"${session.title}"添加标签"${tag.trim()}"，当前标签：${tags.join(', ')}`,
+    frontend_action: { type: 'refresh_sessions', payload: {} },
+  };
+}
+
+async function handleRemoveTag(
+  userId: string,
+  sessionId?: string,
+  tag?: string,
+): Promise<ManageSessionResult> {
+  if (!sessionId) {
+    return { success: false, message: '移除标签需要提供 session_id 参数。' };
+  }
+  if (!tag || !tag.trim()) {
+    return { success: false, message: '移除标签需要提供 tag 参数。' };
+  }
+
+  const session = await sessionServiceInstance.getSessionBySessionId(sessionId);
+  if (!session) {
+    return { success: false, message: `未找到 ID 为 ${sessionId} 的会话。` };
+  }
+
+  const tags = [...(session.tags || [])];
+  const idx = tags.indexOf(tag.trim());
+  if (idx === -1) {
+    return { success: true, message: `会话"${session.title}"没有标签"${tag.trim()}"。` };
+  }
+  tags.splice(idx, 1);
+
+  await sessionServiceInstance.updateSessionTags(sessionId, tags, userId);
+
+  return {
+    success: true,
+    message: `已从会话"${session.title}"移除标签"${tag.trim()}"，当前标签：${tags.length > 0 ? tags.join(', ') : '无'}`,
+    frontend_action: { type: 'refresh_sessions', payload: {} },
+  };
+}
+
+async function handleSetCategory(
+  userId: string,
+  sessionId?: string,
+  category?: string,
+): Promise<ManageSessionResult> {
+  if (!sessionId) {
+    return { success: false, message: '设置分类需要提供 session_id 参数。' };
+  }
+  if (!category || !category.trim()) {
+    return { success: false, message: '设置分类需要提供 category 参数。' };
+  }
+
+  const session = await sessionServiceInstance.getSessionBySessionId(sessionId);
+  if (!session) {
+    return { success: false, message: `未找到 ID 为 ${sessionId} 的会话。` };
+  }
+
+  await sessionServiceInstance.updateSessionCategory(sessionId, category.trim(), userId);
+
+  return {
+    success: true,
+    message: `已将会议"${session.title}"的分类设置为"${category.trim()}"`,
+    frontend_action: { type: 'refresh_sessions', payload: {} },
+  };
+}
+
+async function handleListTags(
+  userId: string,
+): Promise<ManageSessionResult> {
+  const tags = await sessionServiceInstance.getAllTags(userId);
+
+  if (tags.length === 0) {
+    return { success: true, message: '当前没有任何标签。' };
+  }
+
+  return {
+    success: true,
+    message: `当前所有标签：${tags.join(', ')}`,
+    data: { tags },
   };
 }

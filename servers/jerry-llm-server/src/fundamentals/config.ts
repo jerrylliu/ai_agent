@@ -53,6 +53,12 @@ export const config = {
   /** 智谱 API 基础 URL */
   zhipuBaseUrl: process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4',
 
+  /** DashScope API 基础 URL（用于 qwen3-vl-rerank 等） */
+  dashscopeBaseUrl: process.env.DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com',
+
+  /** DashScope API Key（用于 Reranker 等服务） */
+  dashscopeApiKey: process.env.DASHSCOPE_API_KEY || '',
+
   /** 日志级别 */
   logLevel: process.env.LOG_LEVEL || 'info',
 
@@ -75,5 +81,43 @@ export const config = {
   get corsOrigins(): string[] {
     const raw = process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:3000';
     return raw.split(',').map(s => s.trim()).filter(Boolean);
+  },
+
+  /**
+   * send_notification / mcp_proxy 工具相关配置
+   * 这些配置项均为可选，未配置时对应通道/工具会被自动跳过
+   */
+  notify: {
+    /** 飞书消息：独立的 AppID（与知识库同步用的飞书可分离） */
+    feishuAppId: process.env.NOTIFY_FEISHU_APP_ID || '',
+    feishuAppSecret: process.env.NOTIFY_FEISHU_APP_SECRET || '',
+    /** 飞书域名，海外版填 larksuite.com */
+    feishuDomain: process.env.NOTIFY_FEISHU_DOMAIN || '',
+    /** SMTP 邮件 */
+    smtpHost: process.env.NOTIFY_SMTP_HOST || '',
+    smtpPort: parseInt(process.env.NOTIFY_SMTP_PORT || '465', 10),
+    smtpUser: process.env.NOTIFY_SMTP_USER || '',
+    smtpPass: process.env.NOTIFY_SMTP_PASS || '',
+    /** 发件人地址，未设置则使用 smtpUser */
+    smtpFrom: process.env.NOTIFY_SMTP_FROM || '',
+    /** MCP Server 配置：JSON 数组字符串，例如 '[{"name":"fs","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}]' */
+    mcpServers: process.env.NOTIFY_MCP_SERVERS || '',
+  },
+
+  /**
+   * query_database 工具：外部业务库连接配置
+   * 与主业务库（DB_*）完全隔离；强烈建议使用只读账号
+   */
+  queryDb: {
+    host: process.env.NOTIFY_DB_HOST || '',
+    port: parseInt(process.env.NOTIFY_DB_PORT || '3306', 10),
+    user: process.env.NOTIFY_DB_USER || '',
+    password: process.env.NOTIFY_DB_PASSWORD || '',
+    database: process.env.NOTIFY_DB_DATABASE || '',
+    /** 表名白名单：逗号分隔；为空时允许查询所有表（不推荐） */
+    get allowedTables(): string[] {
+      const raw = process.env.NOTIFY_DB_ALLOWED_TABLES || '';
+      return raw.split(',').map(s => s.trim()).filter(Boolean);
+    },
   },
 } as const;

@@ -47,14 +47,25 @@ function createExtractorLLM(): ChatOpenAI | ChatOllama | null {
   const apiKey = getDeepseekApiKey();
 
   if (apiKey && apiKey.trim() !== '') {
-    return new ChatOpenAI({
-      model: 'deepseek-chat',
-      temperature: 0.1,
-      apiKey,
-      configuration: {
-        baseURL: DEEPSEEK_BASE_URL,
-      },
-    });
+    // 验证 API Key 不包含非 ASCII 字符（会导致 ByteString 错误）
+    const nonAsciiMatch = apiKey.match(/[^\x00-\x7F]/g);
+    if (nonAsciiMatch) {
+      logger.error('DeepSeek API Key 包含非 ASCII 字符，回退到本地模型', {
+        module: 'MemoryExtractor',
+        nonAsciiChars: nonAsciiMatch.map(c => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`),
+        apiKeyLength: apiKey.length,
+      });
+      // 回退到本地模型
+    } else {
+      return new ChatOpenAI({
+        model: 'deepseek-chat',
+        temperature: 0.1,
+        apiKey,
+        configuration: {
+          baseURL: DEEPSEEK_BASE_URL,
+        },
+      });
+    }
   }
 
   // 回退到本地 Ollama 模型

@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
-import { Send, X, Plus, Image, FileText } from "lucide-react";
+import { Send, X, Plus, Image, FileText, ImageIcon } from "lucide-react";
 import { Button } from "../ui/button";
+import { useSettingsStore } from "../../stores/settings-store";
 
 interface ChatInputProps {
   inputValue: string;
@@ -17,6 +18,29 @@ interface ChatInputProps {
   /** 底部紧凑模式：更小的 textarea 和 padding */
   compact?: boolean;
 }
+
+/** 图片生成模型切换按钮 */
+const ImageModelToggle: React.FC = () => {
+  const { imageModel, updateSetting } = useSettingsStore();
+  const isPro = imageModel === 'wan2.7-image-pro';
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => updateSetting('imageModel', isPro ? 'wan2.7-image' : 'wan2.7-image-pro')}
+      className={`rounded-full h-7 px-2 text-xs font-medium transition-all duration-200 ${
+        isPro
+          ? 'bg-amber-50 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/50'
+          : 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50'
+      }`}
+      title={`当前图片模型：${isPro ? 'Pro（高品质）' : '标准（快速）'}，点击切换`}
+    >
+      <ImageIcon className="h-3 w-3 mr-1" />
+      {isPro ? 'Pro' : '标准'}
+    </Button>
+  );
+};
 
 const ChatInput: React.FC<ChatInputProps> = ({
   inputValue,
@@ -92,7 +116,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
         {/* 下方：功能按钮栏 */}
         <div className={`flex items-center justify-between px-3 ${compact ? 'pb-2' : 'pb-3'}`}>
           {/* 左侧：+号按钮及弹出菜单 */}
-          <div className="relative">
+          <div className="relative flex items-center gap-1">
             <Button
               variant="ghost"
               size="icon"
@@ -101,6 +125,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
             >
               <Plus className="h-5 w-5" />
             </Button>
+
+            {/* 图片模型切换按钮 */}
+            <ImageModelToggle />
 
             {/* +号弹出菜单 */}
             {showPlusMenu && (

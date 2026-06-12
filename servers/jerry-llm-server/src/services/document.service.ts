@@ -297,7 +297,9 @@ export class DocumentService {
       logger.info('开始向量化入库', { module: 'DocumentService', versionId, documentId });
 
       try {
-        const chunkCount = await addDocuments([textContent], [metadata]);
+        const chunkCount = await addDocuments([textContent], [metadata], {
+          chunkingStrategy: 'parent-child',
+        });
         logger.info('向量化入库完成', { module: 'DocumentService', versionId, documentId, chunkCount });
 
         await this.versionRepo.update(versionId, {

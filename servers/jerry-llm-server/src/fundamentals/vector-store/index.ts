@@ -11,6 +11,9 @@
  *   bm25-index.ts     — BM25 索引管理
  *   vector-crud.ts    — 文档增删
  *   vector-search.ts  — 检索（向量 + 混合）
+ *   query-rewriter.ts — 查询改写（LLM 改写查询提升召回）
+ *   multi-hop-search.ts — 多跳检索（追问式二次检索）
+ *   result-reranker.ts  — 结果重排（LLM/关键词相关性重排）
  *   vector-version.ts — 版本管理 + 维护
  */
 
@@ -32,8 +35,17 @@ export {
   markdownSplitter,
   getSplitterByFileType,
   isMarkdownContent,
+  parentChildSplit,
   DEFAULT_CHUNK_SIZE,
   DEFAULT_CHUNK_OVERLAP,
+  DEFAULT_PARENT_CHUNK_SIZE,
+  DEFAULT_PARENT_CHUNK_OVERLAP,
+  DEFAULT_CHILD_CHUNK_SIZE,
+  DEFAULT_CHILD_CHUNK_OVERLAP,
+} from './text-splitter.js';
+
+export type {
+  ParentChildChunk,
 } from './text-splitter.js';
 
 // ==================== BM25 索引 ====================
@@ -58,6 +70,23 @@ export {
   searchKnowledgeBase,
   hybridSearchKnowledgeBase,
 } from './vector-search.js';
+
+// ==================== 检索增强 ====================
+export {
+  rewriteQuery,
+  type RewrittenQuery,
+} from './query-rewriter.js';
+
+export {
+  multiHopSearch,
+  type MultiHopResult,
+} from './multi-hop-search.js';
+
+export {
+  rerankResults,
+  type RerankableResult,
+  type RerankedResult,
+} from './result-reranker.js';
 
 // ==================== 版本管理与维护 ====================
 export {

@@ -27,6 +27,21 @@ const TOOL_LABELS: Record<string, string> = {
   get_weather: '查询天气',
   calculate: '计算',
   manage_session: '管理会话',
+  create_plan: '创建计划',
+  update_plan_step: '更新计划',
+  get_plan: '查看计划',
+  crawl_webpage: '抓取网页',
+  create_document: '创建文档',
+  update_document: '更新文档',
+  summarize_document: '生成摘要',
+  compare_documents: '对比文档',
+  generate_chart: '生成图表',
+  generate_image: '生成图片',
+  create_mindmap: '生成思维导图',
+  execute_workflow: '执行工作流',
+  send_notification: '发送通知',
+  query_database: '查询数据库',
+  mcp_proxy: '调用MCP工具',
 };
 
 /**
@@ -86,6 +101,38 @@ export function sendSessionAction(res: Response | undefined, action: Record<stri
 export function sendContent(res: Response | undefined, text: string) {
   if (!res || res.writableEnded) return;
   res.write(`event: content\ndata: ${JSON.stringify(text)}\n\n`);
+}
+
+/**
+ * 发送 confirmation_request 事件（人工确认请求）
+ * 当工具需要用户确认时，通过此事件推送确认对话框信息到前端
+ */
+export function sendConfirmationRequest(
+  res: Response | undefined,
+  data: {
+    id: string;
+    toolName: string;
+    paramsSummary: string;
+    riskLevel: 'low' | 'medium' | 'high';
+    message: string;
+  },
+) {
+  if (!res || res.writableEnded) return;
+  res.write(`event: confirmation_request\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
+ * 发送工作流相关事件
+ * 事件类型：workflow_start / workflow_step_start / workflow_step_done / workflow_complete
+ * 与 tool_status / content 事件并行推送，前端可独立渲染流水线进度面板
+ */
+export function sendWorkflowEvent(
+  res: Response | undefined,
+  eventType: 'workflow_start' | 'workflow_step_start' | 'workflow_step_done' | 'workflow_complete',
+  data: Record<string, any>,
+) {
+  if (!res || res.writableEnded) return;
+  res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
 }
 
 /**

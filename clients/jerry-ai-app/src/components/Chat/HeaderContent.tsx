@@ -1,9 +1,7 @@
 import React, { useState } from "react";
-import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import { Button } from "../ui/button";
-import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star } from "lucide-react";
+import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star, Wrench } from "lucide-react";
 import { ConfirmDialog } from "../ui/confirm-dialog";
-import { DEFAULT_AI_AVATAR_URL } from "../../lib/constants";
 
 interface KbFeedback {
     show: boolean;
@@ -26,11 +24,12 @@ interface HeaderContentProps {
     onOpenDocumentManager?: () => void;
     onOpenKnowledgeSourceManager?: () => void;
     onOpenTokenUsage?: () => void;
+    onOpenToolUsage?: () => void;
     onOpenEvaluation?: () => void;
 }
 
 const HeaderContent: React.FC<HeaderContentProps> = (props) => {
-    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager, onOpenTokenUsage, onOpenEvaluation } = props;
+    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager, onOpenTokenUsage, onOpenToolUsage, onOpenEvaluation } = props;
 
     // 重置知识库确认弹窗状态
     const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
@@ -136,6 +135,12 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                                     onClick={() => { onToggleMoreMenu(); onOpenTokenUsage?.(); }}
                                 >
                                     <BarChart3 className="h-4 w-4 mr-2" />Token 用量
+                                </button>
+                                <button
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center cyberpunk-menu-item"
+                                    onClick={() => { onToggleMoreMenu(); onOpenToolUsage?.(); }}
+                                >
+                                    <Wrench className="h-4 w-4 mr-2" />工具调用
                                 </button>
                                 <button
                                     className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center cyberpunk-menu-item"

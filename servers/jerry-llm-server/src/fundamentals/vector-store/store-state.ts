@@ -27,14 +27,101 @@ export const EMBEDDING_MODEL = 'bge-large';
 /** ChromaDB 数据持久化目录 */
 export const PERSIST_DIR = path.join(__dirname, '..', '..', '..', 'chromadb_data');
 
-/** 批量添加文档时的批次大小 */
-export const BATCH_SIZE = 1;
+/** 批量添加文档时的批次大小（增大批次减少 Ollama 请求次数，提升入库速度） */
+export const BATCH_SIZE = 20;
+
+/** 入库并发控制：同时允许的最大嵌入请求数 */
+export const MAX_EMBEDDING_CONCURRENCY = 2;
 
 /** 创建嵌入模型实例（全局单例） */
 export const embeddings = new OllamaEmbeddings({
   model: EMBEDDING_MODEL,
   baseUrl: config.ollamaBaseUrl,
 });
+
+// ==================== 入库并发信号量 ====================
+
+/**
+ * 简易信号量：控制 addDocuments 的并发数
+ * 防止多个知识源同步 + 文档上传同时请求 Ollama 嵌入导致排队或 OOM
+ */
+class Semaphore {
+  private queue: Array<{ resolve: () => void; callerId: string; enqueuedAt: number }> = [];
+  private running = 0;
+  private nextCallerId = 0;
+
+  constructor(private max: number) {}
+
+  async acquire(callerTag?: string): Promise<string> {
+    const callerId = callerTag ?? `caller_${this.nextCallerId++}`;
+
+    if (this.running < this.max) {
+      this.running++;
+      logger.info('嵌入信号量：获取成功，立即执行', {
+        module: 'VectorStore',
+        callerId,
+        running: this.running,
+        max: this.max,
+        queueLength: this.queue.length,
+      });
+      return callerId;
+    }
+
+    const enqueuedAt = Date.now();
+    logger.info('嵌入信号量：并发已满，进入等待队列', {
+      module: 'VectorStore',
+      callerId,
+      running: this.running,
+      max: this.max,
+      queueLength: this.queue.length + 1,
+    });
+
+    return new Promise<string>((resolve) => {
+      this.queue.push({ resolve: () => resolve(callerId), callerId, enqueuedAt });
+    });
+  }
+
+  release(callerId: string): void {
+    this.running--;
+
+    if (this.queue.length > 0) {
+      const next = this.queue.shift()!;
+      const waitMs = Date.now() - next.enqueuedAt;
+      this.running++;
+      logger.info('嵌入信号量：释放后唤醒等待者', {
+        module: 'VectorStore',
+        releasedBy: callerId,
+        awakened: next.callerId,
+        waitMs,
+        running: this.running,
+        queueLength: this.queue.length,
+      });
+      next.resolve();
+    } else {
+      logger.info('嵌入信号量：释放，无等待者', {
+        module: 'VectorStore',
+        releasedBy: callerId,
+        running: this.running,
+        queueLength: 0,
+      });
+    }
+  }
+
+  /** 获取当前状态（用于监控） */
+  getStatus(): { running: number; max: number; queueLength: number } {
+    return { running: this.running, max: this.max, queueLength: this.queue.length };
+  }
+}
+
+/** 全局入库信号量 */
+const embeddingSemaphore = new Semaphore(MAX_EMBEDDING_CONCURRENCY);
+
+/**
+ * 获取入库信号量（供 vector-crud 使用）
+ */
+export function getEmbeddingSemaphore(): Semaphore {
+  return embeddingSemaphore;
+}
 
 // ==================== 可变状态 ====================
 

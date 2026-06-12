@@ -1,21 +1,97 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import mermaid from 'mermaid';
+
+// Mermaid 初始化（只执行一次）
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'default',
+  securityLevel: 'loose',
+  fontFamily: 'inherit',
+});
+
+let mermaidIdCounter = 0;
 
 interface MarkdownRendererProps {
   children: string;
   className?: string;
 }
 
+/**
+ * Mermaid 图表渲染组件
+ * 将 Mermaid 代码渲染为 SVG
+ */
+const MermaidBlock: React.FC<{ chart: string }> = React.memo(({ chart }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [svg, setSvg] = React.useState<string>('');
+  const [error, setError] = React.useState<string>('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const renderChart = async () => {
+      try {
+        const id = `mermaid-${++mermaidIdCounter}`;
+        const { svg: renderedSvg } = await mermaid.render(id, chart);
+        if (!cancelled) {
+          setSvg(renderedSvg);
+          setError('');
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setError(err?.message || 'Mermaid 渲染失败');
+          setSvg('');
+        }
+      }
+    };
+    renderChart();
+    return () => { cancelled = true; };
+  }, [chart]);
+
+  if (error) {
+    return (
+      <div className="mt-2 mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+        <p className="text-sm text-red-600 dark:text-red-400">思维导图渲染失败</p>
+        <pre className="mt-1 text-xs text-red-500 dark:text-red-300 overflow-x-auto">{chart}</pre>
+      </div>
+    );
+  }
+
+  if (!svg) {
+    return (
+      <div className="mt-2 mb-4 p-4 bg-gray-50 dark:bg-slate-800 rounded-lg animate-pulse">
+        <p className="text-sm text-gray-400">正在渲染思维导图...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="mt-2 mb-4 p-4 bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600 overflow-x-auto"
+      style={{ maxWidth: '100%' }}
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+});
+
 const CodeBlock: React.FC<any> = React.memo(({ inline, className, children }) => {
   const match = /language-(\w+)/.exec(className || '');
+  const language = match ? match[1] : '';
+  const codeContent = String(children).replace(/\n$/, '');
+
+  // Mermaid 代码块：渲染为思维导图/流程图
+  if (!inline && language === 'mermaid') {
+    return <MermaidBlock chart={codeContent} />;
+  }
+
   return !inline && match ? (
     <div className="mt-2 mb-4 rounded-lg overflow-x-auto max-w-full">
       <SyntaxHighlighter
         style={vscDarkPlus}
-        language={match[1]}
+        language={language}
         PreTag="div"
         wrapLines={true}
         showLineNumbers={false}
@@ -32,7 +108,7 @@ const CodeBlock: React.FC<any> = React.memo(({ inline, className, children }) =>
           borderRadius: '6px',
         }}
       >
-        {String(children).replace(/\n$/, '')}
+        {codeContent}
       </SyntaxHighlighter>
     </div>
   ) : (
@@ -43,7 +119,7 @@ const CodeBlock: React.FC<any> = React.memo(({ inline, className, children }) =>
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = React.memo(({ children, className }) => {
   // 缓存过滤后的内容，避免每次渲染都执行正则替换
   const content = useMemo(() => {
-    return children.replace(/<tool_call>[\s\S]*?<\/think>/gs, '');
+    return children.replace(/<think[\s\S]*?<\/think>/gs, '');
   }, [children]);
 
   return (
