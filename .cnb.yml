@@ -9,10 +9,9 @@ jerrydev:
         NODE_ENV: "production"
         # 如果仓库是私密的，SSH 私钥也可以直接贴在这里（注意缩进）
         DEPLOY_SSH_KEY: |
-          -----BEGIN OPENSSH PRIVATE KEY-----
-          b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-          ... (你的私钥内容) ...
-          -----END OPENSSH PRIVATE KEY-----
+          # -----BEGIN OPENSSH PRIVATE KEY-----
+          # ... (你的私钥内容) ...
+          # -----END OPENSSH PRIVATE KEY-----
 
       docker:
         image: alpine:latest
