@@ -503,7 +503,8 @@ export async function getToolSchemasForModel(modelId: string, options?: { contex
   // 小上下文或 FC 弱：核心工具 + 压缩 Schema
   const coreTools = ['search_knowledge_base', 'list_knowledge_base', 'calculate'];
   // FC 能力弱但上下文够大：多给几个工具（但压缩 Schema）
-  const extendedTools = ['search_knowledge_base', 'list_knowledge_base', 'calculate', 'search_web', 'get_weather'];
+  // 包含新增的外部 API 集成工具：send_notification / query_database / mcp_proxy
+  const extendedTools = ['search_knowledge_base', 'list_knowledge_base', 'calculate', 'search_web', 'get_weather', 'send_notification', 'query_database', 'mcp_proxy'];
   const filteredNames = allNames.filter(name =>
     (effectiveCtx >= 8192 ? extendedTools : coreTools).includes(name)
   );
@@ -528,29 +529,35 @@ export async function getToolSchemasForModel(modelId: string, options?: { contex
 /**
  * 工具语义描述，用于关键词匹配检索
  * 当工具数量超过 TOOL_RETRIEVAL_THRESHOLD 时，根据用户 query 匹配最相关的工具
+ *
+ * 格式约定：
+ *   - 普通关键词：用空格分隔（每命中 +3 分）
+ *   - 强意图词（动词短语等高判别力词）：用"!!"前缀（命中 +10 分）
+ *     用于让"发邮件/发消息/查数据库"等明确意图压过"内容/文件"等通用名词
  */
 const TOOL_SEMANTIC_DESCRIPTIONS: Record<string, string> = {
-  search_knowledge_base: '搜索 知识库 文档 上传 文件 内容 查找 资料',
+  search_knowledge_base: '搜索 知识库 文档 上传 文件 查找 资料',
   list_knowledge_base: '列出 概览 清单 有什么 包含 哪些 文档列表 知识库内容',
-  search_web: '联网 搜索 网页 互联网 最新 新闻 实时 在线 查询',
-  get_weather: '天气 气温 温度 下雨 晴天 阴天 湿度 风力 空气质量 预报',
-  calculate: '计算 数学 运算 算术 公式 三角函数 对数 开方 乘除',
-  manage_session: '会话 对话 新建 删除 重命名 置顶 切换 管理',
+  search_web: '!!联网搜索 !!最新新闻 !!实时信息 联网 搜索 网页 互联网 最新 新闻 实时 在线 查询',
+  get_weather: '!!查天气 !!天气预报 天气 气温 温度 下雨 晴天 阴天 湿度 风力 空气质量 预报',
+  calculate: '!!计算 !!算一下 数学 运算 算术 公式 三角函数 对数 开方 乘除',
+  manage_session: '!!新建会话 !!删除会话 !!切换会话 会话 对话 新建 删除 重命名 置顶 切换 管理',
   create_plan: '规划 计划 步骤 任务 分步 执行 复杂 多步骤',
   update_plan_step: '更新 步骤 状态 完成 失败 跳过',
   get_plan: '查看 计划 进度 回顾 状态',
-  crawl_webpage: '抓取 网页 全文 深度 内容 阅读 读取 页面',
-  create_document: '创建 新建 文档 笔记 记录 写入 保存',
-  update_document: '更新 修改 编辑 文档 版本 变更',
-  summarize_document: '摘要 总结 概括 文档 核心 要点',
-  compare_documents: '对比 比较 差异 不同 文档 区别',
-  generate_chart: '图表 折线图 柱状图 饼图 数据可视化 绘图',
-  generate_image: '图片 画图 生成图 文生图 图像 绘画',
-  create_mindmap: '思维导图 脑图 知识结构 逻辑关系 梳理',
-  execute_workflow: '工作流 流水线 流程 一键 自动化 组合 多步 模板',
-  send_notification: '通知 提醒 飞书 邮件 邮箱 钉钉 webhook 推送 告诉 发消息 发邮件',
-  query_database: '数据库 查询 SQL 业务数据 统计 订单 销售 用户 表',
-  mcp_proxy: 'MCP GitHub 文件系统 Slack Notion 外部工具 生态 扩展',
+  crawl_webpage: '!!抓取网页 !!读取网页 抓取 网页 全文 深度 阅读 读取 页面',
+  create_document: '!!创建文档 !!新建文档 创建 新建 文档 笔记 记录 写入 保存',
+  update_document: '!!更新文档 !!修改文档 更新 修改 编辑 文档 版本 变更',
+  summarize_document: '!!生成摘要 !!总结文档 摘要 总结 概括 文档 核心 要点',
+  compare_documents: '!!对比文档 !!比较文档 对比 比较 差异 不同 文档 区别',
+  generate_chart: '!!画图 !!生成图表 !!可视化 图表 折线图 柱状图 饼图 数据可视化 绘图',
+  generate_image: '!!画图 !!生成图片 !!文生图 图片 画图 生成图 图像 绘画',
+  create_mindmap: '!!思维导图 !!脑图 思维导图 脑图 知识结构 逻辑关系 梳理',
+  execute_workflow: '!!执行工作流 !!运行流水线 工作流 流水线 流程 一键 自动化 组合 多步 模板',
+  // ---------------- 外部 API 集成工具：意图词重点加权 ----------------
+  send_notification: '!!发邮件 !!发消息 !!发送邮件 !!发送消息 !!发飞书 !!发钉钉 !!发通知 !!推送 !!提醒我 !!告诉 !!通知 通知 提醒 飞书 邮件 邮箱 钉钉 webhook 推送 告诉 发消息 发邮件 发送',
+  query_database: '!!查数据库 !!查表 !!查询数据 !!统计销售 !!统计订单 !!查订单 !!查用户 数据库 查询 SQL 业务数据 统计 订单 销售 用户 表',
+  mcp_proxy: '!!调用MCP !!使用MCP !!MCP工具 MCP GitHub 文件系统 Slack Notion 外部工具 生态 扩展',
 };
 
 /** 动态工具选择阈值，工具数超过此值才启用 */
@@ -591,11 +598,18 @@ export function selectToolsByQuery(query: string): string[] {
     const descLower = desc.toLowerCase();
     let score = 0;
 
-    // 关键词精确匹配
+    // 关键词匹配：区分"强意图词"（!! 前缀，权重 10）和"普通词"（权重 3）
+    // 这样"发邮件/查数据库"等明确意图能压过"内容/文件"等通用名词
     const keywords = descLower.split(/\s+/);
     for (const kw of keywords) {
-      if (queryLower.includes(kw)) {
-        score += 3; // 精确匹配权重高
+      if (!kw) continue;
+      if (kw.startsWith('!!')) {
+        const intent = kw.slice(2);
+        if (intent && queryLower.includes(intent)) {
+          score += 10; // 强意图词命中：极高权重
+        }
+      } else if (queryLower.includes(kw)) {
+        score += 3; // 普通词命中
       }
     }
 

@@ -25,6 +25,12 @@ export interface AvailableModel {
   requiresApiKey: boolean;
   supportsVision: boolean;
   supportsFunctionCalling: boolean;
+  /**
+   * 是否支持 tool_choice 参数（强制工具调用）。
+   * 大多数模型支持，但 DeepSeek "Thinking mode"（推理模型）等不支持，
+   * 传该参数会返回 400 错误。
+   */
+  supportsToolChoice?: boolean;
 }
 
 export const AVAILABLE_MODELS: AvailableModel[] = [
@@ -63,6 +69,7 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
     requiresApiKey: true,
     supportsVision: false,
     supportsFunctionCalling: true,
+    supportsToolChoice: false, // DeepSeek V4 系列 Thinking mode 不支持 tool_choice
   },
   {
     id: 'deepseek:deepseek-v4-pro',
@@ -72,6 +79,7 @@ export const AVAILABLE_MODELS: AvailableModel[] = [
     requiresApiKey: true,
     supportsVision: false,
     supportsFunctionCalling: true,
+    supportsToolChoice: false, // Thinking mode 不支持 tool_choice 参数
   },
   {
     id: 'zhipu:glm-4.6v',
@@ -298,6 +306,8 @@ export function getModelCapabilities(modelId?: string): {
   contextLength: number;
   supportsFC: boolean;
   supportsVision: boolean;
+  /** 是否支持 tool_choice 参数（强制工具调用） */
+  supportsToolChoice: boolean;
 } {
   const id = modelId || currentModelId;
   const available = AVAILABLE_MODELS.find(m => m.id === id);
@@ -307,6 +317,8 @@ export function getModelCapabilities(modelId?: string): {
     contextLength: config.numCtx ?? (id.startsWith('ollama:') ? 4096 : 32768),
     supportsFC: available?.supportsFunctionCalling ?? false,
     supportsVision: available?.supportsVision ?? false,
+    // 默认所有 FC 模型都支持 tool_choice，除非明确标注为 false
+    supportsToolChoice: available?.supportsToolChoice ?? true,
   };
 }
 

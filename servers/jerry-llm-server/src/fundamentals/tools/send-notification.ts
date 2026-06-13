@@ -25,6 +25,7 @@
 import nodemailer from 'nodemailer';
 import { logger } from '../logger';
 import { config } from '../config';
+import { isChartImageUrl, parseChartImageUrl, chartPngDataUri, isMindmapImageUrl, parseMindmapImageUrl, mindmapPngDataUri } from './multimodal-output';
 
 // ==================== 配置常量 ====================
 
@@ -113,6 +114,32 @@ export const sendNotificationSchema = {
           type: 'string',
           description: 'Webhook 地址，仅 channel=webhook 时必填，必须是 https 开头的外网地址',
         },
+        attachments: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              filename: {
+                type: 'string',
+                description: '附件文件名（含扩展名，如 report.pdf、star-sky.png、readme.md）。扩展名决定 MIME 类型',
+              },
+              url: {
+                type: 'string',
+                description: '附件文件的 URL。接受：generate_image 返回的 images[].url、generate_chart 返回的 imageUrl、create_mindmap 返回的 imageUrl，或任意 http/https URL / base64 data URI',
+              },
+              content: {
+                type: 'string',
+                description: 'Base64 编码的文件内容（如无 url 可用此字段），支持任意文件类型',
+              },
+              cid: {
+                type: 'string',
+                description: 'Content-ID。图片文件设置此值后可嵌入正文，非图片文件忽略',
+              },
+            },
+          },
+          description:
+            '附件列表。图片（png/jpg/gif/webp）自动内嵌到邮件正文；PDF/Word/Markdown/txt 等非图片文件作为传统附件附在邮件中。当 generate_chart/create_mindmap/generate_image 返回图片URL时，直接填入此字段即可把图表/思维导图/图片嵌入邮件',
+        },
       },
       required: ['channel', 'title', 'content'],
     },
@@ -127,6 +154,13 @@ export interface SendNotificationParams {
   content: string;
   recipients?: string[];
   webhookUrl?: string;
+  /** 附件：图片会自动内嵌到邮件正文（email 通道），飞书/webhook 暂不支持附件 */
+  attachments?: Array<{
+    filename: string;
+    url?: string;
+    content?: string;
+    cid?: string;
+  }>;
 }
 
 export interface SendNotificationResult {
@@ -287,16 +321,190 @@ function getSmtpTransporter(): nodemailer.Transporter {
   return cachedSmtpTransporter;
 }
 
-/** 把 Markdown 简单转 HTML：实现非常简化，仅处理换行和常见字符转义 */
-function markdownToBasicHtml(md: string): string {
-  return md
+/** 构造邮件 HTML 正文：内嵌图片 + 普通附件列表 */
+function buildEmailHtml(
+  content: string,
+  inlineImages: Array<{ cid: string; filename: string; sizeBytes: number; sourceUrl?: string }>,
+  fileAttachments: Array<{ filename: string; sizeBytes: number }>,
+): string {
+  // 将 Markdown 换行转为 <br/>，基本字符转义
+  const bodyHtml = content
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\n/g, '<br/>');
+
+  // 生成图片 <img> 标签
+  let imagesHtml = '';
+  for (const img of inlineImages) {
+    const sizeStr = img.sizeBytes > 0 ? ` (${(img.sizeBytes / 1024).toFixed(1)} KB)` : '';
+    const linkHtml = img.sourceUrl
+      ? ` <a href="${img.sourceUrl}" style="color:#2196F3;font-size:11px;">查看原图</a>`
+      : '';
+    imagesHtml += `<div style="margin-top:12px;text-align:center">
+  <img src="cid:${img.cid}" alt="${img.filename}" style="max-width:100%;height:auto;border-radius:4px;"/>
+  <p style="color:#888;font-size:12px;">${img.filename}${sizeStr}${linkHtml}</p>
+</div>\n`;
+  }
+
+  // 生成普通附件列表
+  let filesHtml = '';
+  if (fileAttachments.length > 0) {
+    filesHtml = '<hr style="border:none;border-top:1px solid #e0e0e0;margin:20px 0;"/>\n';
+    filesHtml += '<p style="color:#666;font-size:14px;"><strong>附件：</strong></p>\n<ul style="color:#888;font-size:13px;padding-left:18px;">\n';
+    for (const f of fileAttachments) {
+      const sizeStr = f.sizeBytes > 0 ? ` (${(f.sizeBytes / 1024).toFixed(1)} KB)` : '';
+      filesHtml += `  <li>${f.filename}${sizeStr}</li>\n`;
+    }
+    filesHtml += '</ul>\n';
+  }
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;max-width:600px;">
+  <div style="padding:16px 0;">${bodyHtml || '<p>(无正文)</p>'}</div>
+  ${imagesHtml}
+  ${filesHtml}
+</body>
+</html>`;
 }
 
-/** 通过 SMTP 发邮件 */
+/** 解析 base64 data URI，支持任意 MIME 类型（image/png, application/pdf, text/plain 等） */
+function parseDataUri(uri: string): { mimeType: string; base64: string } | null {
+  if (!uri.startsWith('data:')) return null;
+  const match = uri.match(/^data:([^;]+);base64,(.+)$/);
+  if (match) {
+    return { mimeType: match[1], base64: match[2] };
+  }
+  return null;
+}
+
+/** 根据文件扩展名推断 MIME 类型，覆盖常见文件格式 */
+function inferMimeType(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  const map: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp',
+    svg: 'image/svg+xml',
+    ico: 'image/x-icon',
+    pdf: 'application/pdf',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    zip: 'application/zip',
+    rar: 'application/x-rar-compressed',
+    '7z': 'application/x-7z-compressed',
+    tar: 'application/x-tar',
+    gz: 'application/gzip',
+    md: 'text/markdown',
+    txt: 'text/plain',
+    csv: 'text/csv',
+    json: 'application/json',
+    xml: 'application/xml',
+    html: 'text/html',
+    htm: 'text/html',
+    mp3: 'audio/mpeg',
+    mp4: 'video/mp4',
+    avi: 'video/x-msvideo',
+    wav: 'audio/wav',
+  };
+  return map[ext || ''] || 'application/octet-stream';
+}
+
+/** 判断 MIME 类型是否属于图片，图片文件内嵌正文，非图片作为附件 */
+function isImageMime(mimeType: string): boolean {
+  return mimeType.startsWith('image/');
+}
+
+/** 从 URL 下载文件并转为 Base64，支持 data URI 直接解析、内部图表协议 */
+async function downloadAttachmentToBase64(url: string): Promise<{ base64: string; mimeType: string } | null> {
+  // data URI：直接解析
+  const parsed = parseDataUri(url);
+  if (parsed) return parsed;
+
+  // 内部协议 fc://chart/{key}：从缓存取出 ECharts option，puppeteer 本地渲染 PNG
+  if (isChartImageUrl(url)) {
+    const option = parseChartImageUrl(url);
+    if (!option) {
+      logger.warn('邮件附件：图表缓存已过期或不存在', { module: 'SendNotification', url });
+      return null;
+    }
+    const dataUri = await chartPngDataUri(option);
+    if (!dataUri) return null;
+    // chartPngDataUri 一定返回标准 data:image/png;base64,xxx 格式
+    const result = parseDataUri(dataUri);
+    if (!result) {
+      logger.warn('邮件附件：图表 data URI 解析失败', { module: 'SendNotification' });
+    }
+    return result;
+  }
+
+  // 内部协议 fc://mindmap/{key}：从缓存取出 Mermaid 代码，puppeteer 本地渲染 PNG
+  if (isMindmapImageUrl(url)) {
+    const mermaidCode = parseMindmapImageUrl(url);
+    if (!mermaidCode) {
+      logger.warn('邮件附件：思维导图缓存已过期或不存在', { module: 'SendNotification', url });
+      return null;
+    }
+    const dataUri = await mindmapPngDataUri(mermaidCode);
+    if (!dataUri) return null;
+    const result = parseDataUri(dataUri);
+    if (!result) {
+      logger.warn('邮件附件：思维导图 data URI 解析失败', { module: 'SendNotification' });
+    }
+    return result;
+  }
+
+  // HTTP/HTTPS URL：下载
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    // DashScope OSS 签名 URL 需要 Bearer Token 鉴权，否则 403
+    const fetchHeaders: Record<string, string> = {};
+    const isDashScopeOss = url.includes('dashscope') || url.includes('oss-accelerate');
+    if (isDashScopeOss && config.dashscopeApiKey) {
+      fetchHeaders['Authorization'] = `Bearer ${config.dashscopeApiKey}`;
+    }
+    let resp = await fetch(url, { signal: ctrl.signal, headers: fetchHeaders });
+
+    // 如果带 Auth 仍然 403，回退到不带鉴权重试
+    if (resp.status === 403 && Object.keys(fetchHeaders).length > 0) {
+      logger.info('邮件附件：带鉴权下载 403，回退到无鉴权重试', { module: 'SendNotification', url: url.substring(0, 100) });
+      const ctrl2 = new AbortController();
+      const timer2 = setTimeout(() => ctrl2.abort(), REQUEST_TIMEOUT_MS);
+      try {
+        resp = await fetch(url, { signal: ctrl2.signal });
+      } finally {
+        clearTimeout(timer2);
+      }
+    }
+    clearTimeout(timer);
+
+    if (!resp.ok) {
+      logger.warn('邮件附件：下载文件失败', { module: 'SendNotification', url, status: resp.status });
+      return null;
+    }
+
+    const arrayBuffer = await resp.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const mimeType = resp.headers.get('content-type') || 'application/octet-stream';
+    const base64 = buffer.toString('base64');
+    return { mimeType, base64 };
+  } catch (e: any) {
+    logger.warn('邮件附件：下载文件异常', { module: 'SendNotification', url, error: e.message });
+    return null;
+  }
+}
+
+/** 通过 SMTP 发邮件，支持内嵌图片附件 */
 async function sendEmail(params: SendNotificationParams): Promise<SendNotificationResult> {
   if (!emailAvailable) {
     return { success: false, channel: 'email', delivered: 0, errors: ['邮件通道未配置 NOTIFY_SMTP_HOST/USER/PASS'] };
@@ -311,14 +519,105 @@ async function sendEmail(params: SendNotificationParams): Promise<SendNotificati
     return { success: false, channel: 'email', delivered: 0, errors: ['recipients 中没有合法邮箱地址'] };
   }
 
+  // ----- 处理附件：分为内嵌图片和普通附件 -----
+  const inlineImages: Array<{ cid: string; filename: string; sizeBytes: number; sourceUrl?: string }> = [];
+  const fileAttachments: Array<{ filename: string; sizeBytes: number }> = [];
+  const nodemailerAttachments: Array<{
+    filename: string;
+    content: Buffer;
+    cid?: string;
+    contentType: string;
+    contentDisposition?: 'inline' | 'attachment';
+  }> = [];
+
+  if (params.attachments && params.attachments.length > 0) {
+    for (let i = 0; i < params.attachments.length; i++) {
+      const att = params.attachments[i];
+      const attFilename = att.filename || `attachment_${i + 1}.bin`;
+      const attCid = att.cid || `att_${i}_${Date.now()}`;
+
+      let base64: string | undefined;
+      let mimeType = inferMimeType(attFilename); // 从文件名扩展名推断
+
+      // 优先从 URL 下载，其次用 content（base64）
+      if (att.url) {
+        const result = await downloadAttachmentToBase64(att.url);
+        if (result) {
+          base64 = result.base64;
+          // url 下载的 MIME 优先于文件名推断
+          if (result.mimeType && result.mimeType !== 'application/octet-stream') {
+            mimeType = result.mimeType;
+          }
+        }
+      } else if (att.content) {
+        base64 = att.content;
+        // 如果 content 是 data URI，从中提取真实 MIME
+        if (base64.startsWith('data:')) {
+          const parsed = parseDataUri(base64);
+          if (parsed) {
+            mimeType = parsed.mimeType;
+            base64 = parsed.base64;
+          }
+        }
+      }
+
+      if (!base64) {
+        logger.warn('邮件附件：跳过无法获取内容的附件', {
+          module: 'SendNotification',
+          filename: attFilename,
+          hasUrl: !!att.url,
+          hasContent: !!att.content,
+        });
+        continue;
+      }
+
+      const contentBuffer = Buffer.from(base64, 'base64');
+      const isImage = isImageMime(mimeType);
+
+      nodemailerAttachments.push({
+        filename: attFilename,
+        content: contentBuffer,
+        contentType: mimeType,
+        cid: isImage ? attCid : undefined,
+        // 图片：内嵌到正文(cid 引用)；非图片：真实附件
+        contentDisposition: isImage ? 'inline' : 'attachment',
+      });
+
+      if (isImage) {
+        // 保留原始来源 URL（仅 http/https，data URI 与 fc:// 内部协议无法在邮件客户端打开）
+        const sourceUrl =
+          att.url && (att.url.startsWith('http://') || att.url.startsWith('https://'))
+            ? att.url
+            : undefined;
+        inlineImages.push({ cid: attCid, filename: attFilename, sizeBytes: contentBuffer.length, sourceUrl });
+      } else {
+        fileAttachments.push({ filename: attFilename, sizeBytes: contentBuffer.length });
+      }
+
+      logger.info('邮件附件：文件已加载', {
+        module: 'SendNotification',
+        filename: attFilename,
+        mimeType,
+        isImage,
+        cid: isImage ? attCid : undefined,
+        sizeBytes: contentBuffer.length,
+      });
+    }
+  }
+
+  // ----- 构造 HTML 正文（内嵌图片 + 附件列表） -----
+  const html = buildEmailHtml(params.content, inlineImages, fileAttachments);
+  const textContent = params.content; // 纯文本备选
+
   const transporter = getSmtpTransporter();
   try {
     const info = await transporter.sendMail({
       from: config.notify.smtpFrom || config.notify.smtpUser,
       to: validRecipients.join(','),
       subject: params.title,
-      text: params.content,
-      html: markdownToBasicHtml(params.content),
+      text: textContent,
+      html,
+      attachments: nodemailerAttachments.length > 0 ? nodemailerAttachments : undefined,
     });
     return {
       success: true,

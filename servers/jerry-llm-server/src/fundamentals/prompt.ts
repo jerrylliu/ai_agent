@@ -28,9 +28,246 @@ import { routeRequest, applyAgentToolWhitelist } from './router/agent-router';
 import { formatSearchResultAsSummary } from './tools/search-web';
 import { logger } from './logger';
 import { config } from './config';
+import { mindmapImageUrl } from './tools/multimodal-output';
+
+/**
+ * 跨轮次资产缓存：保存上轮 FC 循环生成的图片/图表/思维导图 URL，
+ * 下一轮对话时注入到系统消息中，让 LLM 可以直接使用而非重新生成。
+ * TTL 5 分钟（覆盖"请提供邮箱→回复邮箱"的间隔）
+ */
+const sessionAssetCache = new Map<string, {
+  images: Array<{ url: string; alt: string }>;
+  charts: Array<{ imageUrl: string; chartType?: string }>;
+  mindmaps: Array<{ imageUrl: string; title?: string }>;
+  expiresAt: number;
+  consumed: boolean;
+}>();
+const ASSET_CACHE_TTL = 5 * 60 * 1000;
+
+/** 保存会话资产 */
+function saveSessionAssets(
+  sessionId: string | undefined,
+  collectedImages: Array<{ url: string; alt: string }>,
+  collectedChartOptions: Array<{ option: any; chartType?: string; imageUrl?: string }>,
+  collectedMindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }>,
+) {
+  if (!sessionId) {
+    logger.debug('FC资产缓存：跳过保存（sessionId 为空）', { module: 'PromptService' });
+    return;
+  }
+  const charts = collectedChartOptions
+    .filter(c => c.imageUrl)
+    .map(c => ({ imageUrl: c.imageUrl!, chartType: c.chartType }));
+  // 思维导图：优先用工具返回的 imageUrl，否则通过 mindmapImageUrl() 生成
+  const mindmaps = collectedMindmaps.map(m => ({ imageUrl: m.imageUrl || mindmapImageUrl(m.mermaidCode), title: m.title }));
+  sessionAssetCache.set(sessionId, {
+    images: collectedImages,
+    charts,
+    mindmaps,
+    expiresAt: Date.now() + ASSET_CACHE_TTL,
+    consumed: false,
+  });
+  logger.info('FC资产缓存：已保存本轮生成的多媒体 URL', {
+    module: 'PromptService',
+    sessionId,
+    imageCount: collectedImages.length,
+    chartCount: charts.length,
+    mindmapCount: mindmaps.length,
+  });
+}
+
+/** 获取会话资产并清理过期项 */
+function getSessionAssets(sessionId: string | undefined): string | null {
+  if (!sessionId) return null;
+  const entry = sessionAssetCache.get(sessionId);
+  if (!entry) return null;
+  if (entry.expiresAt < Date.now()) {
+    sessionAssetCache.delete(sessionId);
+    return null;
+  }
+  if (entry.consumed) return null; // 已注入过，不重复注入
+  entry.consumed = true; // 标记已消费，直到下次 saveSessionAssets 重置
+
+  const parts: string[] = [];
+  if (entry.images.length > 0) {
+    parts.push('图片：\n' + entry.images.map((img, i) => `  ${i + 1}. ${img.url}`).join('\n'));
+  }
+  if (entry.charts.length > 0) {
+    parts.push('图表：\n' + entry.charts.map((ch, i) => `  ${i + 1}. imageUrl: ${ch.imageUrl}`).join('\n'));
+  }
+  if (entry.mindmaps.length > 0) {
+    parts.push('思维导图：\n' + entry.mindmaps.map((mm, i) => `  ${i + 1}. imageUrl: ${mm.imageUrl}`).join('\n'));
+  }
+  if (parts.length === 0) return null;
+  // 强化版提示词：短 + 直接 + 放在前面
+  // LLM 看到"发邮件"等词时容易重新生成内容，必须强硬告知已有 URL 可直接用
+  return `\n\n⚠️ 上一轮对话中已生成以下多媒体内容，URL 仍然有效：\n${parts.join('\n\n')}\n\n【重要】以上 URL 可以直接作为 send_notification 的 attachments[].url 参数。如果用户说"发到邮箱""把这些发给我"等，只需调 send_notification，填入上面的 URL，绝对不要再调 generate_image / generate_chart / create_mindmap。`;
+}
 
 // ==================== FC 模式进度通知辅助函数 ====================
 // SSE 写入函数已提取到 sse-writer.ts
+
+// ==================== 防嘴炮·工具意图检测 ====================
+/**
+ * 用户意图检测结果
+ */
+interface ToolIntentDetection {
+  /** 是否需要强制 LLM 必须调用工具（true 时 tool_choice 不能用 auto） */
+  shouldForce: boolean;
+  /** 锁定到的具体工具名（如能精准识别），为空则用 'required' 让模型自选 */
+  specificTool?: string;
+  /** 命中的判断依据（用于日志和调试） */
+  reason: string;
+}
+
+/**
+ * 根据用户消息检测是否表达了"必须调用工具"的意图。
+ *
+ * 设计哲学（参考 OpenAI Cookbook / Anthropic Tool Use Guide）：
+ * - 不试图覆盖所有 NLU 场景，而是用"高置信度白名单"覆盖最常见的
+ *   多媒体生成场景，因为这类场景模型最容易"嘴炮"（输出文字而不调工具）。
+ * - 查询类（搜索/天气/计算）保留 auto，让模型自己决定（这些工具不调
+ *   也能用知识回答，强制反而可能影响体验）。
+ * - 无法判断时返回 shouldForce=false，由 LLM 自行决定。
+ *
+ * 命中示例：
+ *   "生成一张星空图片"      → specificTool='generate_image'
+ *   "画一个西安天气图表"    → specificTool='generate_chart'
+ *   "做一个前端学习思维导图" → specificTool='create_mindmap'
+ *   "帮我做点什么"           → shouldForce=false（太模糊）
+ */
+function detectToolIntent(userMessage: string): ToolIntentDetection {
+  if (!userMessage || userMessage.trim().length === 0) {
+    return { shouldForce: false, reason: '空消息' };
+  }
+  const text = userMessage.toLowerCase();
+
+  // ---- 动词集合：表示"创造、产出某物"的所有常见说法 ----
+  // 中英文混合，覆盖正式/口语/敬语/祈使
+  const createVerbs = '生成|创建|制作|做(?:一|个|出)?|画|绘制|帮我.{0,5}(?:做|画|生成|搞|弄|来)|给我.{0,5}(?:做|画|生成|来)|来.{0,3}个|来.{0,3}张|输出|产出|create|generate|make|draw|build|design';
+
+  // ---- 1. generate_image：图片/图像/照片/海报/封面/插画 ----
+  // 兼容 "XX图"（风景图、星空图、海报图等任意 N 字定语 + 图）
+  // 兼容英文 image/photo/picture/poster/illustration
+  const imagePattern = new RegExp(
+    `(?:${createVerbs}).{0,20}(?:图片|图像|照片|海报|封面|插画|插图|画作|画|壁纸|头像|logo|图$|图[，。、；！？\\s]|image|photo|picture|poster|illustration|wallpaper|avatar)`,
+    'i'
+  );
+  if (imagePattern.test(text)) {
+    return { shouldForce: true, specificTool: 'generate_image', reason: '匹配图片生成关键词' };
+  }
+
+  // ---- 2. create_mindmap：思维导图/脑图/知识图谱（结构化） ----
+  const mindmapPattern = new RegExp(
+    `(?:${createVerbs}).{0,20}(?:思维导图|脑图|知识图谱|结构图|大纲图|mindmap|mind map)`,
+    'i'
+  );
+  if (mindmapPattern.test(text)) {
+    return { shouldForce: true, specificTool: 'create_mindmap', reason: '匹配思维导图关键词' };
+  }
+
+  // ---- 3. generate_chart：图表/折线图/柱状图/饼图/雷达图/趋势图 ----
+  const chartPattern = new RegExp(
+    `(?:${createVerbs}).{0,20}(?:图表|折线图|柱状图|条形图|饼图|雷达图|散点图|趋势图|分布图|占比图|chart|line chart|bar chart|pie chart|radar chart)`,
+    'i'
+  );
+  if (chartPattern.test(text)) {
+    return { shouldForce: true, specificTool: 'generate_chart', reason: '匹配图表生成关键词' };
+  }
+
+  // ---- 4. send_notification：发邮件/发送到邮箱（明确动作 + 邮箱实体） ----
+  // 仅当同时出现"发/发送"和"邮箱/邮件/email"才触发，避免误判"我邮箱是 xxx"
+  const sendEmailPattern = /(?:发送?|寄|email).{0,30}(?:邮箱|邮件|email|@)/i;
+  const hasEmailAction = sendEmailPattern.test(text);
+  if (hasEmailAction) {
+    return { shouldForce: true, specificTool: 'send_notification', reason: '匹配邮件发送关键词' };
+  }
+
+  // ---- 兜底：用户明确说"调用工具"等元描述（罕见但存在） ----
+  if (/调用.{0,5}工具|use.{0,5}tool|call.{0,5}function/i.test(text)) {
+    return { shouldForce: true, reason: '用户明确要求调用工具' };
+  }
+
+  return { shouldForce: false, reason: '未识别强烈工具意图' };
+}
+
+/**
+ * LLM-as-Judge：用一个轻量 LLM 调用判断 AI 输出是否是"嘴炮"
+ * （即口头答应了工具调用但没真的调用）
+ *
+ * 业内主流做法（参考 Microsoft Semantic Kernel / LangChain ReflectionAgent）：
+ * - 把 user 原始请求 + AI 文本回复，作为输入交给一个轻量 LLM
+ * - 让其判断"这个 AI 回复到底是真的回答完了，还是嘴炮"
+ * - 输出严格 JSON 结构（is_mouth_cannon + reason）
+ *
+ * 设计取舍：
+ * - 复用主 LLM 客户端（带 rate limit），不引入新依赖
+ * - 短超时（5 秒），失败时 fail-open（不重试，保留原回复）
+ * - 仅在前两道正则防线都没命中时调用，所以总开销很低
+ */
+async function llmAsToolIntentJudge(
+  userMessage: string,
+  aiResponse: string,
+  abortController?: AbortController,
+): Promise<{ isMouthCannon: boolean; reason: string }> {
+  // 截断输入，避免长上下文影响 judge LLM 的判断
+  const truncatedUser = userMessage.length > 400 ? userMessage.slice(0, 400) + '...' : userMessage;
+  const truncatedAi = aiResponse.length > 400 ? aiResponse.slice(0, 400) + '...' : aiResponse;
+
+  const judgePrompt = `你是一个对话质量审核员。请判断下面的"AI回复"是否属于"嘴炮"。
+
+判断标准：
+- AI 回复中明确说要"做某事"（如生成图片、画图表、发邮件等需要实际操作才能完成的事），但回复中并没有给出实际成果（图片URL/数据/结果），只是文字承诺，那就是嘴炮。
+- AI 回复只是询问用户更多信息（如"请提供邮箱"）、纯文本回答问题、或者已经给出了结果（如分析结论、代码、文字描述），那就不是嘴炮。
+
+用户请求：
+"""${truncatedUser}"""
+
+AI 回复：
+"""${truncatedAi}"""
+
+请严格按以下 JSON 格式输出，不要有任何额外文字：
+{"is_mouth_cannon": true/false, "reason": "一句话理由"}`;
+
+  try {
+    // 复用主 LLM（无 tools 绑定，纯文本判断）
+    // 不用 isFCMode=true，避免 tools schema 干扰；temperature 留默认值
+    const llm = createLLM(buildModelConfig(getCurrentModelId(), { isFCMode: false }));
+    const judgePromise = llm.invoke([new HumanMessage(judgePrompt)], {
+      signal: abortController?.signal,
+    });
+    // 5 秒超时：avoid 阻塞主流程
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('LLM-as-Judge timeout')), 5000),
+    );
+    const judgeResp = await Promise.race([judgePromise, timeoutPromise]);
+    const judgeText = typeof (judgeResp as any).content === 'string'
+      ? (judgeResp as any).content
+      : JSON.stringify((judgeResp as any).content);
+
+    // 提取 JSON（兼容模型返回 ```json...``` 包裹的情况）
+    const jsonMatch = judgeText.match(/\{[\s\S]*?"is_mouth_cannon"[\s\S]*?\}/);
+    if (!jsonMatch) {
+      logger.warn('LLM-as-Judge：无法解析输出 JSON，fail-open', {
+        module: 'PromptService',
+        judgePreview: judgeText.slice(0, 200),
+      });
+      return { isMouthCannon: false, reason: '判断器输出无法解析' };
+    }
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      isMouthCannon: parsed.is_mouth_cannon === true,
+      reason: typeof parsed.reason === 'string' ? parsed.reason : '未提供理由',
+    };
+  } catch (err: any) {
+    // 失败时 fail-open，让原回复正常返回（避免误杀）
+    logger.warn('LLM-as-Judge：调用失败，fail-open', {
+      module: 'PromptService',
+      error: err.message,
+    });
+    return { isMouthCannon: false, reason: '判断器异常' };
+  }
+}
 
 // ==================== Token 预算策略 ====================
 
@@ -184,7 +421,11 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
       if (parsed.type === 'image' && parsed.images && parsed.images.length > 0) {
         // 图片已在流式输出前由服务端注入，LLM 只需用文字描述结果
         const imageCount = parsed.images.length;
-        return `图片生成成功！共生成 ${imageCount} 张图片，实际使用模型：${parsed.model || '未知'}。请用文字描述图片内容，并告知用户实际使用的模型名称。重要：图片已自动展示给用户，不要在回答中再输出任何 ![...](...) 格式的图片 Markdown，只需文字描述即可。`;
+        // 保留图片 URL，LLM 可传给 send_notification.attachments
+        const imageUrlLines = parsed.images
+          .map((img: any, i: number) => `图片${imageCount > 1 ? ` ${i + 1}` : ''} URL：${img.url}`)
+          .join('\n');
+        return `图片生成成功！共生成 ${imageCount} 张图片，实际使用模型：${parsed.model || '未知'}。\n${imageUrlLines}\n\n请用文字描述图片内容，并告知用户实际使用的模型名称。如果用户要求发邮件，把上面的图片 URL 传给 send_notification 的 attachments 字段即可。重要：图片已自动展示给用户，不要在回答中再输出任何 ![...](...) 格式的图片 Markdown，只需文字描述即可。`;
       }
       return parsed.message || content;
     } catch {
@@ -196,8 +437,11 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
     try {
       const parsed = JSON.parse(content);
       if (parsed.type === 'mindmap' && parsed.mermaidCode) {
-        // 将 Mermaid 代码转为 Markdown 代码块，让 LLM 在最终回答中原样输出
-        return `思维导图生成成功！请将以下 Mermaid 代码块原样展示给用户（不要修改代码块内容）：\n\n\`\`\`mermaid\n${parsed.mermaidCode}\n\`\`\``;
+        // 把 imageUrl 放在最前面，LLM 必须看到并传给 send_notification.attachments
+        const imageUrlLine = parsed.imageUrl
+          ? `**静态图片链接**（传给 send_notification.attachments 用）：${parsed.imageUrl}\n\n`
+          : '';
+        return `思维导图生成成功！${imageUrlLine}思维导图已自动展示给用户，请用文字简要描述内容即可，不要再输出任何 \`\`\`mermaid 代码块（前端会自动渲染）。如果用户要求发邮件，把 imageUrl 传给 send_notification.attachments 字段。`;
       }
       return parsed.message || content;
     } catch {
@@ -209,9 +453,11 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
     try {
       const parsed = JSON.parse(content);
       if (parsed.type === 'chart' && parsed.echartsOption) {
-        // 将 ECharts 配置转为 JSON 代码块，前端自动渲染
-        const optionJson = JSON.stringify(parsed.echartsOption, null, 2);
-        return `图表生成成功！请将以下 ECharts 配置代码块原样展示给用户（不要修改代码块内容）：\n\n\`\`\`echarts\n${optionJson}\n\`\`\``;
+        // 把 imageUrl 放在最前面，LLM 必须看到并传给 send_notification.attachments
+        const imageUrlLine = parsed.imageUrl
+          ? `**静态图片链接**（传给 send_notification.attachments 用）：${parsed.imageUrl}\n\n`
+          : '';
+        return `图表生成成功！${parsed.chartType ? `类型：${parsed.chartType}。` : ''}${imageUrlLine}图表已自动以交互式形式展示给用户，请用文字简要描述图表内容即可，不要再输出任何 \`\`\`echarts 代码块（前端会自动渲染）。如果用户要求发邮件，把 imageUrl 传给 send_notification.attachments 字段。`;
       }
       return parsed.message || content;
     } catch {
@@ -374,9 +620,13 @@ function buildFCSystemPrompt(): string {
     update_document: '更新知识库中已有文档的内容',
     summarize_document: '对指定文档生成摘要',
     compare_documents: '对比两个文档的差异',
-    generate_chart: '根据数据生成图表（折线图、柱状图、饼图等）',
+    generate_chart: '根据数据生成图表（折线图、柱状图、饼图等），返回 imageUrl 可嵌入邮件',
     generate_image: '根据文字描述生成图片（文生图）',
-    create_mindmap: '生成思维导图',
+    create_mindmap: '生成思维导图，返回 imageUrl 可嵌入邮件',
+    // ---------------- 外部 API 集成工具（方案 A） ----------------
+    send_notification: '发送通知到飞书消息、邮件、Webhook（钉钉/企业微信群机器人），用于把任务结果主动推送给用户或团队',
+    query_database: '查询外部业务数据库（仅支持 SELECT 语句），自动经过 SQL 安全网关校验，可用于统计订单/用户/销售等业务数据',
+    mcp_proxy: '通过 MCP（Model Context Protocol）调用外部生态工具（如 GitHub、文件系统、Slack、Notion 等），用于扩展能力',
   };
 
   // 工具列表
@@ -475,7 +725,8 @@ ${toolList}
 - 当用户要求生成图表、数据可视化时，必须调用 generate_chart 工具，不要仅用文字描述
 - 支持图表类型：line（折线图）、bar（柱状图）、pie（饼图）、scatter（散点图）、radar（雷达图）、heatmap（热力图）、funnel（漏斗图）
 - 可以直接提供 echartsOption（完整 ECharts 配置），也可以提供 chartType + data 让工具自动构建
-- data 格式：line/bar 为 { labels: string[], series: Array<{name, values}> }；pie 为 { items: Array<{name, value}> }`;
+- data 格式：line/bar 为 { labels: string[], series: Array<{name, values}> }；pie 为 { items: Array<{name, value}> }
+- 工具返回 imageUrl 字段（图表的静态 PNG 图片 URL），如果用户要求发图表邮件，把 imageUrl 传给 send_notification 的 attachments 字段即可`;
   }
 
   if (availableTools.includes('generate_image')) {
@@ -494,7 +745,8 @@ ${toolList}
 - 当用户要求生成思维导图时，必须调用 create_mindmap 工具，不要仅用文字描述
 - 需要提供 title（中心主题）和 content（Mermaid mindmap 语法的内容）
 - content 格式示例：root((中心主题))\\n  分支1\\n    子分支1-1\\n  分支2\\n    子分支2-1
-- 适用于整理知识结构、梳理逻辑关系、总结归纳等场景`;
+- 适用于整理知识结构、梳理逻辑关系、总结归纳等场景
+- 工具返回 imageUrl 字段（Mermaid Ink 渲染的静态 PNG 图片），如果用户要求发思维导图邮件，把 imageUrl 传给 send_notification 的 attachments 字段即可`;
   }
 
   if (availableTools.includes('execute_workflow')) {
@@ -503,6 +755,38 @@ ${toolList}
 - templateId 必须从工具描述中列出的可用流水线 ID 中选择
 - userInput 传入用户的原始问题或主题
 - 如果没有匹配的预置流水线，请改用 create_plan 创建自定义计划，并通过 inputMapping 实现步骤间数据传递`;
+  }
+
+  // ---------------- 外部 API 集成工具（方案 A） ----------------
+  if (availableTools.includes('send_notification')) {
+    prompt += `\n\n通知发送规则：
+- 当用户要求"通知/提醒/告诉/发邮件/发消息/推送/告知"等场景时，调用 send_notification
+- 如果用户的请求中缺少必要参数（收件人、主题等），请一次性列出所有缺失信息让用户补充，不要逐条追问
+- channel 必须从 'feishu'（飞书）、'email'（邮件）、'webhook'（钉钉/企业微信群机器人）三选一
+- title 是通知标题（邮件主题/卡片标题），content 是通知正文（支持 Markdown）
+- recipients 是接收人列表：feishu 通道传 open_id 或邮箱地址；email 通道传邮箱地址；webhook 通道无需此字段
+- webhookUrl 仅 channel=webhook 时必填，必须是 https 开头的外网地址
+- 也可作为工作流末尾步骤，把搜索/分析结果主动推送出去
+- 如果用户要求发图表/思维导图邮件：先调用 generate_chart 或 create_mindmap，拿到返回的 imageUrl 字段，再将 imageUrl 填入 send_notification.attachments。示例：先 generate_chart(...) 得到 { imageUrl: "<chart-url>" }，再 send_notification({ channel:"email", content:"分析结果", attachments:[{filename:"chart.png", url: imageUrl}] })。绝对不要把 ECharts 配置代码或 Mermaid 文本当正文发出去——图表必须作为附件图片嵌入邮件
+- 如果用户要求发图片邮件：先调用 generate_image 生成图片，拿到返回的 images[].url 后，再调用 send_notification，把图片 URL 填入 attachments 字段。示例：send_notification({channel:"email", title:"星空图片", content:"这是自动生成的星空图片", recipients:["用户邮箱"], attachments:[{filename:"star-sky.png", url:"<generate_image返回的url>", cid:"img1"}]})
+- attachments 支持所有常见文件格式：图片(png/jpg/gif/webp)自动内嵌正文，PDF/Word/Excel/Markdown/txt/zip 等作为附件附在邮件中。系统自动根据文件扩展名识别 MIME 类型`;
+  }
+
+  if (availableTools.includes('query_database')) {
+    prompt += `\n\n数据库查询规则：
+- 当用户询问业务数据（订单、销售额、用户数、统计、报表等需要查表的问题）时，调用 query_database
+- sql 参数必须是 SELECT 语句（INSERT/UPDATE/DELETE 等会被安全网关拒绝）
+- 自动经过 AST 校验：表名白名单 + 强制 LIMIT，无需手动添加 LIMIT
+- purpose 参数描述本次查询的业务目的，会展示在用户确认弹窗中
+- 查询结果可后续传给 generate_chart 进行可视化（建议主动询问用户是否需要画图）`;
+  }
+
+  if (availableTools.includes('mcp_proxy')) {
+    prompt += `\n\nMCP 工具调用规则：
+- 当需要使用 MCP（Model Context Protocol）生态工具（如 GitHub、文件系统、Slack、Notion 等）时，调用 mcp_proxy
+- 必须从工具描述中列出的"已接入工具"里选择具体的 server 和 tool
+- arguments 是传给具体 MCP 工具的参数对象，结构由该工具的 inputSchema 决定
+- 此调用属于高风险操作，会弹出用户确认弹窗，请在调用前清楚地向用户说明你将要做什么`;
   }
 
   // 兜底声明：工具不可用时的处理 + 上下文策略
@@ -747,6 +1031,14 @@ async function promptWithFunctionCalling(
     logger.info('FC模式：已注入用户记忆', { module: 'PromptService', memoryCount: userMemories.length });
   }
 
+  // 注入上一轮 FC 循环中已生成的多媒体资源 URL（图片/图表/思维导图）
+  // 这样模型在后续轮次中可以直接引用，无需重新生成
+  const sessionAssets = getSessionAssets(sessionId);
+  if (sessionAssets) {
+    fcSystemPrompt += sessionAssets;
+    logger.info('FC模式：已注入上一轮的多媒体资源 URL', { module: 'PromptService', sessionId });
+  }
+
   const messages: Array<SystemMessage | HumanMessage | AIMessage | ToolMessage> = [
     new SystemMessage(fcSystemPrompt),
   ];
@@ -816,13 +1108,68 @@ async function promptWithFunctionCalling(
   if (!llm.bindTools) {
     throw new FCFallbackError('当前模型不支持 bindTools', '');
   }
+  // ==================== 防嘴炮·防线 1：tool_choice 自适应 ====================
+  // 当用户消息明确表达了"创造性多媒体生成"意图（如生成图片/图表/思维导图），
+  // 强制 LLM 必须返回 tool_calls，禁止它只输出"我来生成..."的嘴炮文字。
+  // 这是 OpenAI / Anthropic 官方推荐的最稳做法。
+  // 注意：only 仅锁定我们能确定的工具，避免误锁查询型场景（搜索/天气/计算）。
+  // 注意：DeepSeek Thinking mode 等模型不支持 tool_choice 参数（会报 400），
+  //       必须用 caps.supportsToolChoice 守卫，否则整个 FC 调用会失败降级到 RAG。
+  const intentDetection = detectToolIntent(promptText || '');
+  let toolChoiceParam: any = 'auto';
+  if (intentDetection.shouldForce && caps.supportsFC && caps.supportsToolChoice && filteredToolSchemas.length > 0) {
+    // 检查锁定的具体工具是否在白名单内（防止 Agent 路由删掉了该工具）
+    const targetToolAvailable = intentDetection.specificTool
+      ? filteredToolSchemas.some(s => s?.function?.name === intentDetection.specificTool)
+      : false;
+    if (intentDetection.specificTool && targetToolAvailable) {
+      // 用户意图非常明确（如"生成一张图片"），且工具确实可用，锁定到具体工具
+      toolChoiceParam = { type: 'function', function: { name: intentDetection.specificTool } };
+      logger.info('FC模式：检测到强烈工具意图，锁定 tool_choice 到具体工具', {
+        module: 'PromptService',
+        tool: intentDetection.specificTool,
+        reason: intentDetection.reason,
+      });
+    } else {
+      // 用户表达了工具意图但具体工具不可用 / 意图不够精确，强制必须调用某个工具
+      // 注意：'required' 在工具列表为空时会报错，所以前面已经判断 length>0
+      toolChoiceParam = 'required';
+      logger.info('FC模式：检测到工具意图，设置 tool_choice = required', {
+        module: 'PromptService',
+        reason: intentDetection.reason,
+        specificToolUnavailable: !!intentDetection.specificTool && !targetToolAvailable,
+      });
+    }
+  } else if (intentDetection.shouldForce && !caps.supportsToolChoice) {
+    // 模型不支持 tool_choice，但仍记录意图，由防线 2/3 兜底
+    logger.info('FC模式：检测到工具意图但当前模型不支持 tool_choice，跳过强制（依赖防线 2/3 兜底）', {
+      module: 'PromptService',
+      reason: intentDetection.reason,
+      modelId: getCurrentModelId(),
+    });
+  }
   // FC 能力弱的模型对 tool_choice 参数支持不佳，不传该参数
   // bindTools 失败时静默降级到 RAG 模式
-  let llmWithTools;
+  // 注意：tool_choice='required' 或锁定具体工具，仅应在"首轮模型调用"生效，
+  //   否则后续轮次模型也被强制反复调工具，会死循环。
+  //   因此我们额外维护一个 'auto' 版本的 llmWithToolsAuto，从第二轮起切换。
+  let llmWithTools;       // 首轮用（可能带 required / 锁定工具）
+  let llmWithToolsAuto;   // 第二轮起用（始终 auto），避免死循环
   try {
-    llmWithTools = !caps.supportsFC
-      ? llm.bindTools(filteredToolSchemas)
-      : llm.bindTools(filteredToolSchemas, { tool_choice: 'auto' });
+    if (!caps.supportsFC) {
+      llmWithTools = llm.bindTools(filteredToolSchemas);
+      llmWithToolsAuto = llmWithTools;
+    } else if (!caps.supportsToolChoice) {
+      // 模型不支持 tool_choice，绑定时不传该参数
+      llmWithTools = llm.bindTools(filteredToolSchemas);
+      llmWithToolsAuto = llmWithTools;
+    } else {
+      llmWithTools = llm.bindTools(filteredToolSchemas, { tool_choice: toolChoiceParam });
+      // 仅当首轮真的设置了非 auto 的 toolChoiceParam 时才需要单独的 auto 版本
+      llmWithToolsAuto = toolChoiceParam === 'auto'
+        ? llmWithTools
+        : llm.bindTools(filteredToolSchemas, { tool_choice: 'auto' });
+    }
   } catch (bindError: any) {
     logger.warn('FC模式：bindTools 失败，降级到RAG注入模式', {
       module: 'PromptService',
@@ -832,7 +1179,10 @@ async function promptWithFunctionCalling(
     throw new FCFallbackError(`bindTools 失败: ${bindError.message}`, '');
   }
 
-  const MAX_TOOL_ITERATIONS = 5;
+  const MAX_TOOL_ITERATIONS = 10;
+  const MAX_NO_PROGRESS_ROUNDS = 2; // 连续无进展轮数上限
+  let noProgressCount = 0;          // 连续无进展计数器
+  let stoppedByNoProgress = false;  // 是否由无进展检测触发退出
   let toolCallsMade: Array<{ name: string; args: any }> = [];
   let usedKnowledgeBase = false;
   let usedWebSearch = false;
@@ -841,7 +1191,8 @@ async function promptWithFunctionCalling(
   let sessionAction: any = null;
   let fcKnowledgeBaseResult = ''; // 收集 FC 模式下已获取的知识库结果，降级时复用
   let collectedImages: Array<{ url: string; alt: string }> = []; // 收集工具生成的图片
-  let collectedMindmaps: Array<{ mermaidCode: string; title: string }> = []; // 收集工具生成的思维导图
+  let collectedMindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }> = []; // 收集工具生成的思维导图
+  let collectedChartOptions: Array<{ option: any; chartType?: string; imageUrl?: string }> = []; // 收集工具生成的图表 ECharts option
 
   // 启动心跳，在工具调用循环期间保持连接活跃
   const heartbeatTimer = startHeartbeat(res);
@@ -856,6 +1207,20 @@ async function promptWithFunctionCalling(
       return;
     }
 
+    // 连续无进展检测：如果在第 0 轮之后连续 MAX_NO_PROGRESS_ROUNDS 轮无进展，强制退出
+    if (iteration > 0 && noProgressCount >= MAX_NO_PROGRESS_ROUNDS) {
+      logger.warn('FC模式：连续无进展，提前退出工具调用循环', {
+        module: 'PromptService',
+        iteration: iteration + 1,
+        noProgressCount,
+        toolCallsMade: toolCallsMade.map(tc => tc.name),
+      });
+      stoppedByNoProgress = true;
+      break;
+    }
+
+    let iterationHadProgress = false; // 本轮工具调用是否有任何进展
+
     logger.info('FC模式：调用模型', { module: 'PromptService', iteration: iteration + 1, messageCount: messages.length });
 
     // 通知客户端：模型正在思考
@@ -863,7 +1228,10 @@ async function promptWithFunctionCalling(
 
     let response: any;
     try {
-      response = await llmWithTools.invoke(messages, {
+      // 首轮使用 llmWithTools（可能带 tool_choice=required/锁定工具）
+      // 第二轮起切换到 llmWithToolsAuto，让模型自由决定是继续调工具还是给最终答案
+      const activeLlm = iteration === 0 ? llmWithTools : llmWithToolsAuto;
+      response = await activeLlm.invoke(messages, {
         signal: abortController?.signal,
       });
     } catch (invokeError: any) {
@@ -873,8 +1241,36 @@ async function promptWithFunctionCalling(
         if (res && !res.writableEnded) res.end();
         return;
       }
-      logger.error('FC模式：LLM调用失败，降级到RAG注入模式', { module: 'PromptService', error: invokeError.message });
-      throw new FCFallbackError(invokeError.message, fcKnowledgeBaseResult);
+
+      // 终极安全网：如果 provider 不支持 tool_choice（如 DeepSeek Thinking mode 报 400），
+      // 自动创建无 tool_choice 绑定重试一次，覆盖所有未知模型
+      const isToolChoiceError = /tool_choice/i.test(invokeError.message || invokeError.toString());
+      if (isToolChoiceError) {
+        logger.warn('FC模式：LLM 调用报 tool_choice 错误，自动重试无 tool_choice', {
+          module: 'PromptService',
+          error: invokeError.message,
+          modelId: getCurrentModelId(),
+        });
+        try {
+          const llmNoToolChoice = llm.bindTools(filteredToolSchemas);
+          response = await llmNoToolChoice.invoke(messages, {
+            signal: abortController?.signal,
+          });
+          // 同时修正常驻绑定，避免后续迭代再次失败
+          llmWithTools = llmNoToolChoice;
+          llmWithToolsAuto = llmNoToolChoice;
+          logger.info('FC模式：无 tool_choice 重试成功', { module: 'PromptService' });
+        } catch (retryError: any) {
+          logger.error('FC模式：无 tool_choice 重试也失败，降级到 RAG', {
+            module: 'PromptService',
+            error: retryError.message,
+          });
+          throw new FCFallbackError(retryError.message, fcKnowledgeBaseResult);
+        }
+      } else {
+        logger.error('FC模式：LLM调用失败，降级到RAG注入模式', { module: 'PromptService', error: invokeError.message });
+        throw new FCFallbackError(invokeError.message, fcKnowledgeBaseResult);
+      }
     }
 
     const aiMessage = response as AIMessage;
@@ -1075,6 +1471,7 @@ async function promptWithFunctionCalling(
         // 只在工具实际执行成功时记录到 metadata
         if (success) {
           toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
+          iterationHadProgress = true; // 本轮有工具调用成功
         }
 
         if (success && result) {
@@ -1102,9 +1499,14 @@ async function promptWithFunctionCalling(
             }
           }
 
+          // 收集图表 echartsOption：稍后注入 ```echarts 代码块给前端渲染（交互式图表）
+          if (toolCall.name === 'generate_chart' && result?.echartsOption) {
+            collectedChartOptions.push({ option: result.echartsOption, chartType: result.chartType, imageUrl: result?.imageUrl });
+          }
+
           // 收集思维导图结果，流式输出时直接注入到前端
           if (toolCall.name === 'create_mindmap' && result?.type === 'mindmap' && result?.mermaidCode) {
-            collectedMindmaps.push({ mermaidCode: result.mermaidCode, title: result.title });
+            collectedMindmaps.push({ mermaidCode: result.mermaidCode, title: result.title, imageUrl: result?.imageUrl });
           }
         }
 
@@ -1121,6 +1523,13 @@ async function promptWithFunctionCalling(
         totalToolCallsSoFar: toolCallsMade.length,
         messagesLength: messages.length,
       });
+
+      // 无进展计数器：本轮有成功 → 重置；本轮全失败 → 累加
+      if (iterationHadProgress) {
+        noProgressCount = 0;
+      } else {
+        noProgressCount++;
+      }
     } else {
       // 检测模型输出疑似工具调用意图的文本（如"调用 search_web"）
       // 策略：只检测"明确说要调用工具但没调"的情况，不检测"描述已有结果"的情况
@@ -1133,15 +1542,30 @@ async function promptWithFunctionCalling(
         ? new RegExp(`(?:调用|使用|执行|运行)\\s*(?:工具)?\\s*(?:${toolNamePattern})`, 'i').test(textContent)
         : false;
 
+      // ==================== 防嘴炮·防线 2：宽松正则 + 复用意图检测 ====================
       // 第二类：模型表达了工具意图但没实际调用（仅在未执行过任何工具时检测）
-      // 例如："我来生成一张图片"、"让我画一个图"
       // 注意：如果已经执行过工具，LLM 回复中自然会包含"图片"等词汇，这是对结果的描述，不应误判
       const alreadyUsedTools = toolCallsMade.length > 0;
-      const implicitIntent = !alreadyUsedTools && (
-        /(?:生成|画|绘制|创建|制作).*(?:图片|图像|画作|插图)/i.test(textContent)
-        || /(?:生成|创建|制作).*(?:思维导图|脑图)/i.test(textContent)
-        || /(?:生成|创建|制作|绘制).*(?:图表|折线图|柱状图|饼图|雷达图)/i.test(textContent)
+      // 反问保护：如果 AI 回复以问号结尾（"你想生成什么样的图片？"），说明它在向用户索取信息
+      // 这种情况不算嘴炮，应放行让前端展示给用户
+      const isAskingUser = /[?？]\s*$/.test(textContent.trim());
+      // 复用 detectToolIntent（防线 1 同款逻辑），保证两处判断口径一致
+      const aiTextIntent = !alreadyUsedTools && !isAskingUser ? detectToolIntent(textContent) : null;
+      // 兜底正则：捕捉 detectToolIntent 漏掉的"自我宣言"模式
+      // 这些是 LLM"嘴炮"的典型话术，覆盖 90% 中文 LLM 行为
+      const selfDeclarationPattern = !alreadyUsedTools && !isAskingUser && (
+        // 1. "我(来|会|将|马上|这就|这便|稍等)... 生成/画/创建/做"
+        /(?:我(?:来|会|将|马上|这就|这便|稍等|帮你|给你|为你|来给你|来帮你)).{0,30}(?:生成|画|绘制|创建|制作|做|输出|展示|展现|设计|准备)/i.test(textContent)
+        // 2. "让我... 先/来 + 调用/试试/帮你/给你"
+        || /(?:让我|请允许我|稍等).{0,15}(?:先|来|帮你|给你|尝试|试试|调用)/i.test(textContent)
+        // 3. "下面(是|为你|给你)..."、"接下来(我会)..."、"现在(开始)..."（嘴炮但还没动）
+        || /(?:下面|接下来|现在|马上).{0,10}(?:是|为|给|开始|就).{0,20}(?:生成|创建|制作|画|绘制|展示|输出|演示)/i.test(textContent)
+        // 4. "需要/可以... 工具/调用 + 帮你..."
+        || /(?:需要|可以|能够).{0,10}(?:调用|使用).{0,10}(?:工具|功能|api|插件)/i.test(textContent)
+        // 5. 英文兜底
+        || /\b(?:i(?:'ll| will| am going to| can| shall)|let me|i'm going to)\b.{0,30}(?:generate|create|make|draw|design|build|use.{0,5}tool|call.{0,5}function)/i.test(textContent)
       );
+      const implicitIntent = (aiTextIntent?.shouldForce ?? false) || selfDeclarationPattern;
 
       const suspectedIntent = explicitIntent || implicitIntent;
 
@@ -1157,6 +1581,35 @@ async function promptWithFunctionCalling(
         continue; // 继续下一轮迭代
       }
 
+      // ==================== 防嘴炮·防线 3：LLM-as-Judge ====================
+      // 如果前两道防线都没命中，但模型既没调用工具又输出了较长内容（>30 字符）
+      // 且当前对话开头还没动过任何工具，可能是被前面正则漏掉的嘴炮形式。
+      // 用一个轻量 LLM 调用来兜底判断（成本约 0.001¥/次，只在前两层都漏判时触发）。
+      // isAskingUser 时跳过：反问句几乎不会是嘴炮，省一次 LLM 调用
+      const shouldRunJudge = !alreadyUsedTools
+        && !isAskingUser
+        && textContent.length > 30
+        && iteration < MAX_TOOL_ITERATIONS - 1;
+      if (shouldRunJudge) {
+        // 检查是否已被取消，避免在用户中断后还跑 judge
+        if (isCancelled && isCancelled()) {
+          logger.info('FC模式：LLM-as-Judge 跳过（已取消）', { module: 'PromptService' });
+        } else {
+          const judgeResult = await llmAsToolIntentJudge(promptText || '', textContent, abortController);
+          if (judgeResult.isMouthCannon) {
+            logger.warn('FC模式：LLM-as-Judge 判定为嘴炮，强制重试', {
+              module: 'PromptService',
+              judgeReason: judgeResult.reason,
+              textPreview: textContent.substring(0, 200),
+            });
+            messages.push(aiMessage);
+            messages.push(new HumanMessage({
+              content: `用户的请求需要你实际调用工具来完成（${judgeResult.reason}）。请立即使用 function calling 调用对应的工具，不要再用文字描述要做什么。`,
+            }));
+            continue; // 继续下一轮迭代
+          }
+        }
+      }
       // 检测模型输出了原始工具调用格式（如 DeepSeek 的 DSML 标签）
       // 这说明模型的 function calling 失败了，需要重试
       const hasRawToolCallFormat = containsRawToolCallFormat(textContent);
@@ -1202,6 +1655,7 @@ async function promptWithFunctionCalling(
           // 在 LLM 回答之前，直接注入工具生成的图片和思维导图
           // 这样无论 LLM 如何回答，用户都能看到可视化内容
           let fcFullResponse = '';
+
           if (collectedImages.length > 0) {
             const imageContent = collectedImages
               .map((img, i) => `![${img.alt}${collectedImages.length > 1 ? ` ${i + 1}` : ''}](${img.url})`)
@@ -1219,6 +1673,18 @@ async function promptWithFunctionCalling(
               fcFullResponse += mermaidContent;
             }
           }
+          if (collectedChartOptions.length > 0) {
+            for (const ch of collectedChartOptions) {
+              const optionJson = JSON.stringify(ch.option, null, 2);
+              const chartContent = '```echarts\n' + optionJson + '\n```\n\n';
+              sendContent(res, chartContent);
+              process.stdout.write(chartContent);
+              fcFullResponse += chartContent;
+            }
+          }
+
+          // 保存本轮生成的资产 URL 到跨轮次缓存，下一轮对话可直接引用
+          saveSessionAssets(sessionId, collectedImages, collectedChartOptions, collectedMindmaps);
 
           const stream = await llm.stream(messages, {
             signal: abortController?.signal,
@@ -1419,7 +1885,18 @@ async function promptWithFunctionCalling(
     }
   }
 
-  logger.warn('FC模式：达到最大工具调用次数，强制生成最终回答', { module: 'PromptService', maxIterations: MAX_TOOL_ITERATIONS });
+  if (stoppedByNoProgress) {
+    logger.warn('FC模式：无进展检测退出，强制生成最终回答', {
+      module: 'PromptService',
+      iterations: toolCallsMade.length,
+      toolCalls: toolCallsMade.map(tc => tc.name),
+    });
+  } else {
+    logger.warn('FC模式：达到最大工具调用次数，强制生成最终回答', {
+      module: 'PromptService',
+      maxIterations: MAX_TOOL_ITERATIONS,
+    });
+  }
 
   // 停止心跳
   stopHeartbeat(heartbeatTimer);

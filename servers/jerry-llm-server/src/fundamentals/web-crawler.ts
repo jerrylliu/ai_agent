@@ -208,7 +208,7 @@ function findSystemChrome(): string | undefined {
   return undefined;
 }
 
-async function launchBrowser(): Promise<Browser> {
+export async function launchBrowser(): Promise<Browser> {
   const executablePath = await findSystemChrome();
   if (executablePath) {
     logger.info('使用系统浏览器', { module: 'WebCrawler', path: executablePath });

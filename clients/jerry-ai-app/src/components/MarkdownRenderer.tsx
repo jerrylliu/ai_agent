@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import mermaid from 'mermaid';
+import * as echarts from 'echarts';
 
 // Mermaid 初始化（只执行一次）
 mermaid.initialize({
@@ -77,6 +78,64 @@ const MermaidBlock: React.FC<{ chart: string }> = React.memo(({ chart }) => {
   );
 });
 
+/**
+ * ECharts 交互式图表渲染组件
+ * 将 ECharts JSON 配置渲染为交互式图表
+ */
+const EChartsBlock: React.FC<{ optionJson: string }> = React.memo(({ optionJson }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const [error, setError] = React.useState<string>('');
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    try {
+      const option = JSON.parse(optionJson);
+      if (!chartRef.current) {
+        chartRef.current = echarts.init(containerRef.current);
+      }
+      chartRef.current.setOption(option, true);
+      setError('');
+    } catch (err: any) {
+      setError(err?.message || 'ECharts 渲染失败');
+    }
+
+    const handleResize = () => {
+      chartRef.current?.resize();
+    };
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [optionJson]);
+
+  useEffect(() => {
+    return () => {
+      chartRef.current?.dispose();
+      chartRef.current = null;
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <div className="mt-2 mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+        <p className="text-sm text-red-600 dark:text-red-400">图表渲染失败</p>
+        <pre className="mt-1 text-xs text-red-500 dark:text-red-300 overflow-x-auto">{optionJson}</pre>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="mt-2 mb-4 p-4 bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600"
+      style={{ width: '100%', height: '400px' }}
+    />
+  );
+});
+
 const CodeBlock: React.FC<any> = React.memo(({ inline, className, children }) => {
   const match = /language-(\w+)/.exec(className || '');
   const language = match ? match[1] : '';
@@ -85,6 +144,11 @@ const CodeBlock: React.FC<any> = React.memo(({ inline, className, children }) =>
   // Mermaid 代码块：渲染为思维导图/流程图
   if (!inline && language === 'mermaid') {
     return <MermaidBlock chart={codeContent} />;
+  }
+
+  // ECharts 代码块：渲染为交互式图表
+  if (!inline && language === 'echarts') {
+    return <EChartsBlock optionJson={codeContent} />;
   }
 
   return !inline && match ? (
