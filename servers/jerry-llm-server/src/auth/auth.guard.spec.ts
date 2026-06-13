@@ -9,6 +9,15 @@
  * - 验证成功放行并附加 req.user
  */
 
+// Mock config + typeorm 防止 import 触发 JWT_SECRET 检查
+jest.mock('../fundamentals/config', () => ({
+  config: { jwtSecret: 'test-jwt-secret' },
+}));
+jest.mock('@nestjs/typeorm', () => ({
+  InjectRepository: () => () => {},
+  getRepositoryToken: () => 'mockRepo',
+}));
+
 import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
 import { UnauthorizedException } from '@nestjs/common';

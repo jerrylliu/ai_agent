@@ -5,6 +5,11 @@
  * 覆盖：正常计算／表达式为空／安全校验拦截／无效表达式
  */
 
+// Mock logger 防止 logger → config 链触发 JWT_SECRET 检查
+jest.mock('../logger', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+}));
+
 import { executeCalculate, calculateSchema } from './calculate';
 
 describe('calculate 工具', () => {

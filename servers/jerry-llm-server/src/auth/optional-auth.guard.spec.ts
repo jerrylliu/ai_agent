@@ -5,6 +5,15 @@
  * 覆盖：无 header 放行 / 格式错误放行 / token 无效放行 / 有效 token / tokenVersion 不匹配
  */
 
+// Mock config + typeorm 防止 import 触发 JWT_SECRET 检查
+jest.mock('../fundamentals/config', () => ({
+  config: { jwtSecret: 'test-jwt-secret' },
+}));
+jest.mock('@nestjs/typeorm', () => ({
+  InjectRepository: () => () => {},
+  getRepositoryToken: () => 'mockRepo',
+}));
+
 import { OptionalAuthGuard } from './optional-auth.guard';
 
 describe('OptionalAuthGuard', () => {
