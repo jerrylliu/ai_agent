@@ -1,0 +1,19 @@
+# servers/jerry-llm-server/Dockerfile
+FROM node:20-slim AS builder
+RUN npm install -g pnpm
+WORKDIR /app
+COPY pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY servers/jerry-llm-server/package.json ./servers/jerry-llm-server/
+RUN pnpm install --frozen-lockfile --filter jerry-llm-server
+COPY servers/jerry-llm-server/ ./servers/jerry-llm-server/
+RUN cd servers/jerry-llm-server && pnpm build
+
+FROM node:20-slim AS runner
+RUN npm install -g pnpm
+WORKDIR /app
+COPY --from=builder /app/servers/jerry-llm-server/dist ./dist
+COPY --from=builder /app/servers/jerry-llm-server/package.json ./
+COPY --from=builder /app/pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile
+EXPOSE 3000
+CMD ["node", "dist/main.js"]
