@@ -88,6 +88,7 @@ describe('SessionService', () => {
       getMockRepo('autoEvaluation'),
       mockSummaryService as any,
       mockMemoryService as any,
+      getMockRepo('generatedDocument'),
     );
   }
 

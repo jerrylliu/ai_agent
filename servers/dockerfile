@@ -11,6 +11,16 @@ RUN cd servers/jerry-llm-server && pnpm build
 FROM node:20-slim AS runner
 RUN npm install -g pnpm
 WORKDIR /app
+
+# 安装 Puppeteer 所需系统依赖 + 中文字体（用于 PDF/图表生成）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-noto-cjk \
+    fonts-noto-cjk-extra \
+    libnss3 libnspr4 libatk-bridge2.0-0 libdrm2 libxkbcommon0 \
+    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/servers/jerry-llm-server/dist ./dist
 COPY --from=builder /app/servers/jerry-llm-server/package.json ./
 COPY --from=builder /app/pnpm-lock.yaml ./

@@ -25,6 +25,7 @@ export const API_ENDPOINTS = {
   CACHE_CLEAR: `${API_BASE_URL}/cache/clear`,
   RATE_LIMITER_STATUS: `${API_BASE_URL}/rate-limiter/status`,
   RATE_LIMITER_CONFIG: `${API_BASE_URL}/rate-limiter/config`,
+  SPEECH_TRANSCRIBE: `${API_BASE_URL}/speech/transcribe`,
 } as const;
 
 export const MAX_HISTORY_ITEMS = 10;

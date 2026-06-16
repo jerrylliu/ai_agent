@@ -215,7 +215,7 @@ export function parseChartImageUrl(url: string): Record<string, any> | null {
 let cachedBrowser: Browser | null = null;
 let browserPromise: Promise<Browser> | null = null;
 
-async function getBrowser(): Promise<Browser> {
+export async function getBrowser(): Promise<Browser> {
   if (cachedBrowser) return cachedBrowser;
 
   // 并发场景下避免重复 launch

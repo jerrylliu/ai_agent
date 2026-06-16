@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
 
-import { sendToolStatus, startHeartbeat, stopHeartbeat, sendMetadata, sendSessionAction, sendContent } from './sse-writer';
+import { sendToolStatus, startHeartbeat, stopHeartbeat, sendMetadata, sendSessionAction, sendContent, sendFileCard } from './sse-writer';
 
 /**
  * FC 模式降级到 RAG 模式时携带已获取的知识库结果
@@ -29,27 +29,46 @@ import { formatSearchResultAsSummary } from './tools/search-web';
 import { logger } from './logger';
 import { config } from './config';
 import { mindmapImageUrl } from './tools/multimodal-output';
+import { MultiLevelCache } from './multi-level-cache';
 
 /**
- * 跨轮次资产缓存：保存上轮 FC 循环生成的图片/图表/思维导图 URL，
+ * ========================================================================
+ * 跨轮次资产缓存：保存上轮 FC 循环生成的图片/图表/思维导图/文档 URL，
  * 下一轮对话时注入到系统消息中，让 LLM 可以直接使用而非重新生成。
- * TTL 5 分钟（覆盖"请提供邮箱→回复邮箱"的间隔）
+ *
+ * 缓存架构：MultiLevelCache（L1 内存 LRU + L2 Redis）
+ *   - L1：进程内 Map（< 0.1ms）
+ *   - L2：Redis（跨实例共享 + 重启不丢）
+ *   - Redis 不可用时自动降级为纯 L1，与改造前行为一致
+ *
+ * TTL 1 小时：覆盖"生成 → 切走 → 回来要求发邮件"等较长间隔
+ * （与 ChatGPT/Claude 主流对话连贯感时长一致）
+ * 文档实体本身 TTL 是 7 天（DB），这里仅控制"提示注入"的持续时间。
+ * ========================================================================
  */
-const sessionAssetCache = new Map<string, {
+interface SessionAssetEntry {
   images: Array<{ url: string; alt: string }>;
   charts: Array<{ imageUrl: string; chartType?: string }>;
   mindmaps: Array<{ imageUrl: string; title?: string }>;
-  expiresAt: number;
-  consumed: boolean;
-}>();
-const ASSET_CACHE_TTL = 5 * 60 * 1000;
+  fileCards: Array<{ fileUrl: string; filename: string; format: string }>;
+}
+
+const ASSET_CACHE_TTL_SEC = 60 * 60; // 1 小时
+
+const sessionAssetCache = new MultiLevelCache<SessionAssetEntry>({
+  namespace: 'session-asset',
+  ttlSec: ASSET_CACHE_TTL_SEC,
+  l1MaxSize: 1000, // 假设并发会话数 < 1000，超过会 LRU 淘汰
+  ttlJitterRatio: 0.1, // ±10% 抖动，防雪崩
+});
 
 /** 保存会话资产 */
-function saveSessionAssets(
+async function saveSessionAssets(
   sessionId: string | undefined,
   collectedImages: Array<{ url: string; alt: string }>,
   collectedChartOptions: Array<{ option: any; chartType?: string; imageUrl?: string }>,
   collectedMindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }>,
+  collectedFileCards: Array<{ key: string; filename: string; format: string }> = [],
 ) {
   if (!sessionId) {
     logger.debug('FC资产缓存：跳过保存（sessionId 为空）', { module: 'PromptService' });
@@ -60,12 +79,33 @@ function saveSessionAssets(
     .map(c => ({ imageUrl: c.imageUrl!, chartType: c.chartType }));
   // 思维导图：优先用工具返回的 imageUrl，否则通过 mindmapImageUrl() 生成
   const mindmaps = collectedMindmaps.map(m => ({ imageUrl: m.imageUrl || mindmapImageUrl(m.mermaidCode), title: m.title }));
-  sessionAssetCache.set(sessionId, {
+  // 文档：把 key 转为 fc://document/{key} 内部协议（与 send_notification.attachments 链路一致）
+  const fileCards = collectedFileCards.map(f => ({
+    fileUrl: `fc://document/${f.key}`,
+    filename: f.filename,
+    format: f.format,
+  }));
+
+  // 本轮无任何新资产时，保留上一轮缓存（仅刷新 TTL），避免被空数据覆盖
+  // 场景：第 1 轮生成内容 → 第 2 轮发邮件（无新资产）→ 第 3 轮再次发邮件
+  // 若直接覆盖，第 3 轮会读到空数组，导致模型重新生成
+  const hasNewAssets =
+    collectedImages.length > 0 || charts.length > 0 || mindmaps.length > 0 || fileCards.length > 0;
+  if (!hasNewAssets) {
+    // touch：仅续期，不覆盖内容；若 key 已不存在则什么都不做（多级缓存内部保证降级安全）
+    await sessionAssetCache.touch(sessionId);
+    logger.debug('FC资产缓存：本轮无新资产，已尝试续期', {
+      module: 'PromptService',
+      sessionId,
+    });
+    return;
+  }
+
+  await sessionAssetCache.set(sessionId, {
     images: collectedImages,
     charts,
     mindmaps,
-    expiresAt: Date.now() + ASSET_CACHE_TTL,
-    consumed: false,
+    fileCards,
   });
   logger.info('FC资产缓存：已保存本轮生成的多媒体 URL', {
     module: 'PromptService',
@@ -73,20 +113,15 @@ function saveSessionAssets(
     imageCount: collectedImages.length,
     chartCount: charts.length,
     mindmapCount: mindmaps.length,
+    fileCardCount: fileCards.length,
   });
 }
 
 /** 获取会话资产并清理过期项 */
-function getSessionAssets(sessionId: string | undefined): string | null {
+async function getSessionAssets(sessionId: string | undefined): Promise<string | null> {
   if (!sessionId) return null;
-  const entry = sessionAssetCache.get(sessionId);
+  const entry = await sessionAssetCache.get(sessionId);
   if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    sessionAssetCache.delete(sessionId);
-    return null;
-  }
-  if (entry.consumed) return null; // 已注入过，不重复注入
-  entry.consumed = true; // 标记已消费，直到下次 saveSessionAssets 重置
 
   const parts: string[] = [];
   if (entry.images.length > 0) {
@@ -98,10 +133,18 @@ function getSessionAssets(sessionId: string | undefined): string | null {
   if (entry.mindmaps.length > 0) {
     parts.push('思维导图：\n' + entry.mindmaps.map((mm, i) => `  ${i + 1}. imageUrl: ${mm.imageUrl}`).join('\n'));
   }
+  if (entry.fileCards.length > 0) {
+    parts.push(
+      '文档（PDF/Word/HTML）：\n' +
+        entry.fileCards
+          .map((f, i) => `  ${i + 1}. filename: "${f.filename}"，format: ${f.format}，fileUrl: ${f.fileUrl}`)
+          .join('\n'),
+    );
+  }
   if (parts.length === 0) return null;
   // 强化版提示词：短 + 直接 + 放在前面
   // LLM 看到"发邮件"等词时容易重新生成内容，必须强硬告知已有 URL 可直接用
-  return `\n\n⚠️ 上一轮对话中已生成以下多媒体内容，URL 仍然有效：\n${parts.join('\n\n')}\n\n【重要】以上 URL 可以直接作为 send_notification 的 attachments[].url 参数。如果用户说"发到邮箱""把这些发给我"等，只需调 send_notification，填入上面的 URL，绝对不要再调 generate_image / generate_chart / create_mindmap。`;
+  return `\n\n⚠️ 上一轮对话中已生成以下多媒体内容，URL 仍然有效：\n${parts.join('\n\n')}\n\n【重要】以上 URL 可以直接作为 send_notification 的 attachments[].url 参数。如果用户说"发到邮箱""把这些发给我""把刚才的文档发给我"等，只需调 send_notification，填入上面对应的 URL（图片用 url，文档用 fileUrl），绝对不要再调 generate_image / generate_chart / create_mindmap / generate_document 重新生成。`;
 }
 
 // ==================== FC 模式进度通知辅助函数 ====================
@@ -465,6 +508,19 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
     }
   }
 
+  if (toolName === 'generate_document') {
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed.success && parsed.type === 'document') {
+        // fileUrl 必须保留：用户要求邮件发送时，LLM 需要把它填入 send_notification.attachments
+        return `文档"${parsed.filename}"（${parsed.format?.toUpperCase()}，${(parsed.sizeBytes / 1024).toFixed(1)} KB）已生成成功。\n**fileUrl**（发邮件用）：${parsed.fileUrl}\n\n文件卡片已自动展示给用户，包含下载和预览按钮，请用一两句话简要说明文档内容即可，不要再列出文档结构或重复描述章节。如果用户要求发邮件，把上面的 fileUrl 传给 send_notification.attachments[].url 字段。`;
+      }
+      return parsed.message || content;
+    } catch {
+      return content;
+    }
+  }
+
   // 其他工具保持原始内容
   return content;
 }
@@ -623,6 +679,7 @@ function buildFCSystemPrompt(): string {
     generate_chart: '根据数据生成图表（折线图、柱状图、饼图等），返回 imageUrl 可嵌入邮件',
     generate_image: '根据文字描述生成图片（文生图）',
     create_mindmap: '生成思维导图，返回 imageUrl 可嵌入邮件',
+    generate_document: '把 Markdown 内容生成为 PDF / Word(docx) / HTML 文件，返回 fileUrl 可作为邮件附件发送',
     // ---------------- 外部 API 集成工具（方案 A） ----------------
     send_notification: '发送通知到飞书消息、邮件、Webhook（钉钉/企业微信群机器人），用于把任务结果主动推送给用户或团队',
     query_database: '查询外部业务数据库（仅支持 SELECT 语句），自动经过 SQL 安全网关校验，可用于统计订单/用户/销售等业务数据',
@@ -747,6 +804,16 @@ ${toolList}
 - content 格式示例：root((中心主题))\\n  分支1\\n    子分支1-1\\n  分支2\\n    子分支2-1
 - 适用于整理知识结构、梳理逻辑关系、总结归纳等场景
 - 工具返回 imageUrl 字段（Mermaid Ink 渲染的静态 PNG 图片），如果用户要求发思维导图邮件，把 imageUrl 传给 send_notification 的 attachments 字段即可`;
+  }
+
+  if (availableTools.includes('generate_document')) {
+    prompt += `\n\n文档生成规则（PDF / Word / HTML）：
+- 当用户要求"生成 PDF/Word/docx/HTML 文档"、"导出为文件"、"做一份报告/手册"等场景时，调用 generate_document
+- 必须提供 title（文档标题）、content（Markdown 格式正文）、format（'pdf' / 'docx' / 'html' 三选一）
+- content 必须是 Markdown：用 # 表示标题、- 表示列表、**xx** 加粗、\`\`\` 代码块、> 引用
+- 用户未指定格式时，默认选 pdf（最通用、可直接打印）；要求"可编辑"时选 docx；只在网页查看选 html
+- 工具返回 fileUrl 字段（内部协议 fc://document/xxx），如果用户要求邮件发送，把 fileUrl 直接填入 send_notification.attachments[].url 即可。示例：先 generate_document({title:"周报",content:"...",format:"pdf"}) 得到 { fileUrl }，再 send_notification({channel:"email", title:"本周周报", content:"详见附件", recipients:["x@x.com"], attachments:[{filename:"周报.pdf", url: fileUrl}]})
+- 不要把整段 Markdown 内容塞进 send_notification.content 当邮件正文——文档必须作为附件发送`;
   }
 
   if (availableTools.includes('execute_workflow')) {
@@ -1033,7 +1100,8 @@ async function promptWithFunctionCalling(
 
   // 注入上一轮 FC 循环中已生成的多媒体资源 URL（图片/图表/思维导图）
   // 这样模型在后续轮次中可以直接引用，无需重新生成
-  const sessionAssets = getSessionAssets(sessionId);
+  // 多级缓存（L1 内存 + L2 Redis）异步读取，单次开销 ~1-3ms（L1 命中 < 0.1ms）
+  const sessionAssets = await getSessionAssets(sessionId);
   if (sessionAssets) {
     fcSystemPrompt += sessionAssets;
     logger.info('FC模式：已注入上一轮的多媒体资源 URL', { module: 'PromptService', sessionId });
@@ -1193,6 +1261,7 @@ async function promptWithFunctionCalling(
   let collectedImages: Array<{ url: string; alt: string }> = []; // 收集工具生成的图片
   let collectedMindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }> = []; // 收集工具生成的思维导图
   let collectedChartOptions: Array<{ option: any; chartType?: string; imageUrl?: string }> = []; // 收集工具生成的图表 ECharts option
+  let collectedFileCards: Array<{ key: string; filename: string; format: string; sizeBytes: number; downloadUrl: string; previewUrl: string; expiresAt: number; favorited: boolean }> = []; // 收集 generate_document 生成的文件卡片
 
   // 启动心跳，在工具调用循环期间保持连接活跃
   const heartbeatTimer = startHeartbeat(res);
@@ -1508,6 +1577,20 @@ async function promptWithFunctionCalling(
           if (toolCall.name === 'create_mindmap' && result?.type === 'mindmap' && result?.mermaidCode) {
             collectedMindmaps.push({ mermaidCode: result.mermaidCode, title: result.title, imageUrl: result?.imageUrl });
           }
+
+          // 收集 generate_document 生成的文件卡片：稍后通过 SSE file_card 事件推送
+          if (toolCall.name === 'generate_document' && result?.success && result?.type === 'document') {
+            collectedFileCards.push({
+              key: result.key,
+              filename: result.filename,
+              format: result.format,
+              sizeBytes: result.sizeBytes,
+              downloadUrl: result.downloadUrl,
+              previewUrl: result.previewUrl,
+              expiresAt: result.expiresAt,
+              favorited: false,
+            });
+          }
         }
 
         messages.push(new ToolMessage({
@@ -1682,9 +1765,21 @@ async function promptWithFunctionCalling(
               fcFullResponse += chartContent;
             }
           }
+          // 推送文件卡片：通过独立 SSE 事件，不污染正文
+          if (collectedFileCards.length > 0) {
+            for (const card of collectedFileCards) {
+              sendFileCard(res, card);
+            }
+          }
 
           // 保存本轮生成的资产 URL 到跨轮次缓存，下一轮对话可直接引用
-          saveSessionAssets(sessionId, collectedImages, collectedChartOptions, collectedMindmaps);
+          // 用 fire-and-forget：缓存写入失败不应阻塞 LLM 流式响应（业务核心路径）
+          // L1 内存写是同步完成的，仅 L2 Redis 写为异步；最坏情况 Redis 失败也只丢 L2，L1 已生效
+          saveSessionAssets(sessionId, collectedImages, collectedChartOptions, collectedMindmaps, collectedFileCards)
+            .catch((e) => logger.warn('saveSessionAssets 失败（已忽略）', {
+              module: 'PromptService',
+              err: e?.message || String(e),
+            }));
 
           const stream = await llm.stream(messages, {
             signal: abortController?.signal,

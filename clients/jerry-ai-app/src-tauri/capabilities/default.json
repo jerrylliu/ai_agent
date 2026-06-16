@@ -13,6 +13,10 @@
       "identifier": "fs:allow-write-text-file",
       "allow": [{ "path": "**" }]
     },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [{ "path": "**" }]
+    },
     "core:window:allow-close",
     "core:window:allow-center",
     "core:window:allow-minimize",

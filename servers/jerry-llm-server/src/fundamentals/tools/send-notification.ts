@@ -26,6 +26,7 @@ import nodemailer from 'nodemailer';
 import { logger } from '../logger';
 import { config } from '../config';
 import { isChartImageUrl, parseChartImageUrl, chartPngDataUri, isMindmapImageUrl, parseMindmapImageUrl, mindmapPngDataUri } from './multimodal-output';
+import { isDocumentUrl, getCachedDocument } from './generate-document';
 
 // ==================== 配置常量 ====================
 
@@ -461,6 +462,19 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
       logger.warn('邮件附件：思维导图 data URI 解析失败', { module: 'SendNotification' });
     }
     return result;
+  }
+
+  // 内部协议 fc://document/{key}：从持久化服务读取 generate_document 生成的文件
+  if (isDocumentUrl(url)) {
+    const doc = await getCachedDocument(url);
+    if (!doc) {
+      logger.warn('邮件附件：文档已过期/不存在或权限不足', { module: 'SendNotification', url });
+      return null;
+    }
+    return {
+      base64: doc.buffer.toString('base64'),
+      mimeType: doc.mimeType,
+    };
   }
 
   // HTTP/HTTPS URL：下载

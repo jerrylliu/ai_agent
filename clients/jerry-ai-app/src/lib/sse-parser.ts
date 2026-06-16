@@ -41,6 +41,24 @@ export interface ConfirmationRequestEvent {
 }
 
 /**
+ * generate_document 工具产出的文件卡片事件
+ * 前端在 AI 消息下方渲染下载/预览卡片
+ */
+export interface FileCardEvent {
+  key: string;
+  filename: string;
+  format: string;
+  sizeBytes: number;
+  /** 相对路径，前端拼接 baseUrl */
+  downloadUrl: string;
+  previewUrl: string;
+  /** 过期时间戳（毫秒） */
+  expiresAt: number;
+  /** 用户收藏标记 */
+  favorited: boolean;
+}
+
+/**
  * 从 buffer 中解析所有完整的 SSE 帧
  *
  * @param buffer 当前累积的文本 buffer
@@ -87,6 +105,7 @@ export function handleSSEEvents(
     onSessionAction?: (action: SessionAction) => void;
     onToolStatus?: (event: ToolStatusEvent) => void;
     onConfirmationRequest?: (event: ConfirmationRequestEvent) => void;
+    onFileCard?: (event: FileCardEvent) => void;
     onContent?: (text: string) => void;
     onHeartbeat?: () => void;
   },
@@ -126,6 +145,15 @@ export function handleSSEEvents(
           callbacks.onConfirmationRequest?.(confirmEvent);
         } catch (e) {
           console.warn('解析 confirmation_request 事件失败:', e);
+        }
+        break;
+      }
+      case 'file_card': {
+        try {
+          const fileEvent: FileCardEvent = JSON.parse(event.eventData);
+          callbacks.onFileCard?.(fileEvent);
+        } catch (e) {
+          console.warn('解析 file_card 事件失败:', e);
         }
         break;
       }

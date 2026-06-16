@@ -1,12 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { MoreThan, Repository } from 'typeorm';
 import { ChatHistory } from '../entities/chat-history.entity';
 import { Session } from '../entities/session.entity';
 import { SessionSummary } from '../entities/session-summary.entity';
 import { LlmUsage } from '../entities/llm-usage.entity';
 import { MessageFeedback } from '../entities/message-feedback.entity';
 import { AutoEvaluation } from '../entities/auto-evaluation.entity';
+import { GeneratedDocument } from '../entities/generated-document.entity';
 import { logger } from '../fundamentals/logger';
 import { SummaryService } from './summary.service';
 import { MemoryService } from './memory.service';
@@ -26,6 +27,8 @@ export class SessionService {
     private messageFeedbackRepository: Repository<MessageFeedback>,
     @InjectRepository(AutoEvaluation)
     private autoEvaluationRepository: Repository<AutoEvaluation>,
+    @InjectRepository(GeneratedDocument)
+    private generatedDocumentRepository: Repository<GeneratedDocument>,
     private readonly summaryService: SummaryService,
     private readonly memoryService: MemoryService,
   ) {}
@@ -73,10 +76,57 @@ export class SessionService {
 
   // 获取会话历史
   async getSessionHistory(sessionId: string) {
-    return this.chatHistoryRepository.find({
+    const messages = await this.chatHistoryRepository.find({
       where: { sessionId },
       order: { createdAt: 'ASC' },
     });
+
+    // 关联 generated_document：把当前会话下未过期的文档按时间顺序贴回最近的 assistant 消息
+    // 这样重启或重新加载历史后，文件卡片不会丢失
+    const now = new Date();
+    const docs = await this.generatedDocumentRepository.find({
+      where: { sessionId, expiresAt: MoreThan(now) },
+      order: { createdAt: 'ASC' },
+    });
+
+    if (docs.length === 0) {
+      return messages.map((m) => ({ ...m, attachments: [] as any[] }));
+    }
+
+    // 把每个 doc 关联到最近一条早于（或等于）其 createdAt 的 assistant 消息
+    const enriched = messages.map((m) => ({ ...m, attachments: [] as any[] }));
+    const assistantIdxList = enriched
+      .map((m, idx) => ({ idx, role: m.role, createdAt: new Date(m.createdAt as any) }))
+      .filter((x) => x.role === 'assistant');
+
+    for (const doc of docs) {
+      const docTime = new Date(doc.createdAt as any).getTime();
+      // 找到 createdAt 不晚于 docTime 的最后一条 assistant；找不到则贴到第一条 assistant
+      let target = -1;
+      for (const a of assistantIdxList) {
+        if (a.createdAt.getTime() <= docTime + 60 * 1000) {
+          // 容忍 1 分钟时钟漂移：assistant 消息保存稍晚于文档生成
+          target = a.idx;
+        } else {
+          break;
+        }
+      }
+      if (target === -1 && assistantIdxList.length > 0) target = assistantIdxList[0].idx;
+      if (target !== -1) {
+        enriched[target].attachments.push({
+          key: doc.key,
+          filename: doc.filename,
+          format: doc.format,
+          sizeBytes: Number(doc.sizeBytes),
+          downloadUrl: `/chat/documents/download/${doc.key}`,
+          previewUrl: `/chat/documents/preview/${doc.key}`,
+          expiresAt: doc.expiresAt.getTime(),
+          favorited: doc.favorited,
+        });
+      }
+    }
+
+    return enriched;
   }
 
   // 获取所有会话

@@ -21,7 +21,7 @@
  * - EvaluationPanel: 准确率评估面板
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ChevronRight, ChevronLeft, Check, Bot } from "lucide-react";
 
@@ -35,6 +35,8 @@ import { DocumentManager } from '../components/Document';
 import { KnowledgeSourceManager } from '../components/KnowledgeSource';
 import { ErrorBoundary } from '../components/ui/error-boundary';
 import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
+import { FavoriteDocumentsPanel } from '../components/FavoriteDocumentsPanel';
+import { FavoriteDocProvider } from '../contexts/FavoriteDocContext';
 import SettingsDialog from '../components/Settings/SettingsDialog';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 
@@ -128,6 +130,9 @@ const ChatAgent: React.FC = () => {
   const appSettings = { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel };
   const toast = useToastStore();
   const confirm = useConfirmStore();
+
+  // 侧边栏 Tab：会话列表 / 我的收藏
+  const [showFavoritesTab, setShowFavoritesTab] = useState(false);
 
   // DOM引用
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -314,7 +319,7 @@ const ChatAgent: React.FC = () => {
 
   // ==================== JSX 渲染区域 ====================
   return (
-    <>
+    <FavoriteDocProvider>
       <div className="flex h-full bg-background relative">
         {/* ==================== 左侧边栏区域 ==================== */}
         <div className="relative h-full">
@@ -344,27 +349,60 @@ const ChatAgent: React.FC = () => {
                   setSearchKeyword={setSearchKeyword}
                   onToggleSidebar={() => setShowSidebar(!showSidebar)}
                 />
-                <SessionList
-                  sessions={sessions}
-                  currentSessionId={currentSessionId}
-                  searchKeyword={searchKeyword}
-                  isLoading={isLoading}
-                  history={history}
-                  showHistoryList={showHistoryList}
-                  showRecentQuestions={showRecentQuestions}
-                  onSwitchSession={handleSwitchSession}
-                  onDeleteSession={deleteSession}
-                  onTogglePin={toggleSessionPin}
-                  onHistoryClick={handleHistoryClick}
-                  onToggleHistoryList={() => setShowHistoryList(!showHistoryList)}
-                  onToggleRecentQuestions={() => setShowRecentQuestions(!showRecentQuestions)}
-                  onClearHistory={clearHistory}
-                  onClearSearch={() => setSearchKeyword("")}
-                  onCreateSession={createNewSession}
-                  onRenameSession={renameSession}
-                  onDuplicateSession={duplicateSession}
-                  onExportSession={exportSession}
-                />
+
+                {/* Tab 切换栏：会话 / 我的收藏 */}
+                <div className="flex border-b border-border mx-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowFavoritesTab(false)}
+                    className={`flex-1 py-2 text-xs font-medium transition-colors text-center ${
+                      !showFavoritesTab
+                        ? 'text-foreground border-b-2 border-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    会话
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowFavoritesTab(true)}
+                    className={`flex-1 py-2 text-xs font-medium transition-colors text-center ${
+                      showFavoritesTab
+                        ? 'text-foreground border-b-2 border-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    我的收藏
+                  </button>
+                </div>
+
+                {/* 会话列表 / 收藏列表 */}
+                {showFavoritesTab ? (
+                  <FavoriteDocumentsPanel />
+                ) : (
+                  <SessionList
+                    sessions={sessions}
+                    currentSessionId={currentSessionId}
+                    searchKeyword={searchKeyword}
+                    isLoading={isLoading}
+                    history={history}
+                    showHistoryList={showHistoryList}
+                    showRecentQuestions={showRecentQuestions}
+                    onSwitchSession={handleSwitchSession}
+                    onDeleteSession={deleteSession}
+                    onTogglePin={toggleSessionPin}
+                    onHistoryClick={handleHistoryClick}
+                    onToggleHistoryList={() => setShowHistoryList(!showHistoryList)}
+                    onToggleRecentQuestions={() => setShowRecentQuestions(!showRecentQuestions)}
+                    onClearHistory={clearHistory}
+                    onClearSearch={() => setSearchKeyword("")}
+                    onCreateSession={createNewSession}
+                    onRenameSession={renameSession}
+                    onDuplicateSession={duplicateSession}
+                    onExportSession={exportSession}
+                  />
+                )}
+
                 <UserProfile
                   isAuthenticated={isAuthenticated}
                   user={user}
@@ -610,7 +648,7 @@ const ChatAgent: React.FC = () => {
           handleToolConfirmation(true);
         }}
       />
-    </>
+    </FavoriteDocProvider>
   );
 };
 

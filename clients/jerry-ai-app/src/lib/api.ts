@@ -1,10 +1,10 @@
 // API 端点常量导入
-import { API_ENDPOINTS } from './constants';
+import { API_ENDPOINTS, API_BASE_URL } from './constants';
 import { Session, Message } from '../types/session';
-import { parseSSEFrames, handleSSEEvents, type ConfirmationRequestEvent } from './sse-parser';
+import { parseSSEFrames, handleSSEEvents, type ConfirmationRequestEvent, type FileCardEvent } from './sse-parser';
 
 // 重新导出 SSE 类型，供其他模块使用
-export type { ConfirmationRequestEvent } from './sse-parser';
+export type { ConfirmationRequestEvent, FileCardEvent } from './sse-parser';
 
 // 类型定义
 export interface ChatHistoryItem {
@@ -19,6 +19,17 @@ export interface ChatHistoryRecord extends ChatHistoryItem {
   userId: string;
   createdAt: string;
   updatedAt: string;
+  /** 后端 getSessionHistory 关联的文件附件（generate_document 产物） */
+  attachments?: Array<{
+    key: string;
+    filename: string;
+    format: string;
+    sizeBytes: number;
+    downloadUrl: string;
+    previewUrl: string;
+    expiresAt: number;
+    favorited: boolean;
+  }>;
 }
 
 export interface UploadResponse {
@@ -94,6 +105,8 @@ export interface AIStreamResponse {
   contextCount: number;
   sessionAction: SessionAction | null;
   onToolStatus: ((event: ToolStatusEvent) => void) | null;
+  /** 本轮 SSE 推送的文件卡片（generate_document 生成） */
+  fileCards: FileCardEvent[];
 }
 
 /**
@@ -110,7 +123,7 @@ export async function getAIResponse(
   history: Message[] = [],
   sessionId?: string,
   signal?: AbortSignal,
-  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean; imageModel?: string; onToolStatus?: ((event: ToolStatusEvent) => void) | null; onConfirmationRequest?: ((event: ConfirmationRequestEvent) => void) | null }
+  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean; imageModel?: string; onToolStatus?: ((event: ToolStatusEvent) => void) | null; onConfirmationRequest?: ((event: ConfirmationRequestEvent) => void) | null; onFileCard?: ((event: FileCardEvent) => void) | null }
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
     method: 'POST',
@@ -128,6 +141,8 @@ export async function getAIResponse(
   let sessionAction: SessionAction | null = null;
   const toolStatusCallback = options?.onToolStatus ?? null;
   const confirmationCallback = options?.onConfirmationRequest ?? null;
+  const fileCardCallback = options?.onFileCard ?? null;
+  const fileCards: FileCardEvent[] = [];
 
   const modifiedStream = new ReadableStream<string>({
     async start(controller) {
@@ -162,6 +177,12 @@ export async function getAIResponse(
                 confirmationCallback(event);
               }
             },
+            onFileCard: (event) => {
+              fileCards.push(event);
+              if (fileCardCallback) {
+                fileCardCallback(event);
+              }
+            },
             onContent: (text) => {
               controller.enqueue(text);
             },
@@ -180,6 +201,7 @@ export async function getAIResponse(
     contextCount,
     sessionAction,
     onToolStatus: toolStatusCallback,
+    fileCards,
   };
 }
 
@@ -584,6 +606,100 @@ export async function changePassword(
     body: JSON.stringify(body),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+// ============================================
+// 语音识别 API
+// ============================================
+
+export interface TranscribeResult {
+  taskId: string;
+  status: 'pending' | 'success' | 'failed';
+  text?: string;
+  segments?: Array<{ start: number; end: number; text: string }>;
+  message?: string;
+}
+
+/** 提交长音频转写任务 */
+export async function submitTranscribe(file: File, format?: string): Promise<{ taskId: string; status: string }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (format) formData.append('format', format);
+
+  const token = localStorage.getItem('miaoma_auth_token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const response = await fetch(API_ENDPOINTS.SPEECH_TRANSCRIBE, {
+    method: 'POST',
+    headers,
+    body: formData,
+  });
+  return handleResponse<{ taskId: string; status: string }>(response);
+}
+
+/** 查询长音频转写结果 */
+export async function queryTranscribe(taskId: string): Promise<TranscribeResult> {
+  const response = await fetch(`${API_ENDPOINTS.SPEECH_TRANSCRIBE}/${taskId}`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<TranscribeResult>(response);
+}
+
+// ============================================
+// 生成文档管理 API（下载/预览/删除/收藏）
+// ============================================
+
+/**
+ * 用户主动删除生成的文档
+ */
+export async function deleteGeneratedDocument(key: string): Promise<{ success: boolean; message?: string }> {
+  const response = await fetch(`${API_BASE_URL}/chat/documents/${key}`, {
+    method: 'DELETE',
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean; message?: string }>(response);
+}
+
+/**
+ * 切换文档收藏状态
+ * 收藏的文档不参与自动清理（TTL/idle 都不删除）
+ */
+export async function setDocumentFavorite(
+  key: string,
+  favorited: boolean,
+): Promise<{ success: boolean; favorited: boolean; message?: string }> {
+  const response = await fetch(`${API_BASE_URL}/chat/documents/${key}/favorite`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ favorited }),
+  });
+  return handleResponse<{ success: boolean; favorited: boolean; message?: string }>(response);
+}
+
+/** 收藏文档的 API 返回类型（与 MessageAttachment 对齐） */
+export interface FavoriteDocument {
+  key: string;
+  filename: string;
+  format: string;
+  sizeBytes: number;
+  downloadUrl: string;
+  previewUrl: string;
+  expiresAt: number;
+  favorited: boolean;
+}
+
+/**
+ * 获取当前用户所有收藏且未过期的文档清单
+ * 用于"我的收藏"面板跨会话展示
+ */
+export async function fetchFavoriteDocuments(): Promise<FavoriteDocument[]> {
+  const response = await fetch(`${API_BASE_URL}/chat/documents/favorites`, {
+    method: 'GET',
+    headers: getAuthHeaders(),
+  });
+  const result = await handleResponse<{ success: boolean; data: FavoriteDocument[] }>(response);
+  return result.data || [];
 }
 
 export async function uploadAvatar(

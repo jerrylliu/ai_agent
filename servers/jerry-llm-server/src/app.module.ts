@@ -9,6 +9,9 @@ import { ModelController } from './controllers/model.controller.js';
 import { UploadController } from './controllers/upload.controller.js';
 import { DocumentController } from './controllers/document.controller.js';
 import { KnowledgeSourceController } from './controllers/knowledge-source.controller.js';
+import { RedisDashboardController } from './controllers/redis-dashboard.controller.js';
+import { SpeechController } from './controllers/speech.controller.js';
+import { SpeechService } from './services/speech.service.js';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ChatHistory } from './entities/chat-history.entity.js';
 import { Session } from './entities/session.entity.js';
@@ -26,6 +29,7 @@ import { LlmUsage } from './entities/llm-usage.entity.js';
 import { MessageFeedback } from './entities/message-feedback.entity.js';
 import { AutoEvaluation } from './entities/auto-evaluation.entity.js';
 import { ToolUsage } from './entities/tool-usage.entity.js';
+import { GeneratedDocument } from './entities/generated-document.entity.js';
 import { DocumentService } from './services/document.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
 import { KnowledgeSourceService } from './services/knowledge-source.service.js';
@@ -36,10 +40,13 @@ import { MemoryService } from './services/memory.service.js';
 import { UsageService } from './services/usage.service.js';
 import { EvaluationService } from './services/evaluation.service.js';
 import { ToolUsageService } from './services/tool-usage.service.js';
+import { GeneratedDocumentService } from './services/generated-document.service.js';
+import { GeneratedDocumentSchedulerService } from './services/generated-document-scheduler.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { WinstonLoggerModule } from './fundamentals/logger.js';
 import { initManageSession, setToolUsageCallback, initMcpProxy } from './fundamentals/tools/index.js';
 import { initDocumentTools } from './fundamentals/tools/document-ops.js';
+import { initGenerateDocumentTool } from './fundamentals/tools/generate-document.js';
 import { config } from './fundamentals/config.js';
 @Module({
   imports: [
@@ -52,20 +59,21 @@ import { config } from './fundamentals/config.js';
       username: config.db.username,
       password: config.db.password,
       database: config.db.database,
-      entities: [ChatHistory, Session, User, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage],
+      entities: [ChatHistory, Session, User, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage, GeneratedDocument],
       synchronize: true,
     }),
-    TypeOrmModule.forFeature([ChatHistory, Session, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage]),
+    TypeOrmModule.forFeature([ChatHistory, Session, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage, GeneratedDocument]),
     AuthModule,
   ],
-  controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController, DocumentController, KnowledgeSourceController],
-  providers: [AppService, SessionService, SummaryService, MemoryService, UsageService, EvaluationService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService, ToolUsageService],
+  controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController, DocumentController, KnowledgeSourceController, RedisDashboardController, SpeechController],
+  providers: [AppService, SessionService, SummaryService, MemoryService, UsageService, EvaluationService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService, ToolUsageService, GeneratedDocumentService, GeneratedDocumentSchedulerService, SpeechService],
 })
 export class AppModule implements OnModuleInit {
   constructor(
     private readonly sessionService: SessionService,
     private readonly toolUsageService: ToolUsageService,
     private readonly documentService: DocumentService,
+    private readonly generatedDocumentService: GeneratedDocumentService,
   ) {}
 
   onModuleInit() {
@@ -74,6 +82,18 @@ export class AppModule implements OnModuleInit {
     setToolUsageCallback((data) => this.toolUsageService.saveToolUsage(data));
     // 注入 DocumentService 到文档操作工具
     initDocumentTools(this.documentService);
+    // 注入 GeneratedDocumentService 到 generate_document 工具
+    initGenerateDocumentTool({
+      save: async (params) => {
+        const e = await this.generatedDocumentService.save(params);
+        return { key: e.key, expiresAt: e.expiresAt };
+      },
+      read: async (key, userId) => {
+        const r = await this.generatedDocumentService.read(key, userId);
+        if (!r) return null;
+        return { entity: { mimeType: r.entity.mimeType, filename: r.entity.filename }, buffer: r.buffer };
+      },
+    });
     // 异步初始化 MCP 客户端（启动 MCP Server 子进程并拉取 tools 列表）
     // 不 await：避免 MCP Server 启动慢拖慢主服务启动；失败也不影响其他工具
     initMcpProxy().catch(() => {

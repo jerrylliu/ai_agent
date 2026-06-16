@@ -120,4 +120,81 @@ export const config = {
       return raw.split(',').map(s => s.trim()).filter(Boolean);
     },
   },
+
+  /**
+   * generate_document 工具：AI 生成 PDF / Word / HTML 文档
+   */
+  document: {
+    /** 生成文档的存储目录（落盘根目录） */
+    storageDir: process.env.DOCUMENT_STORAGE_DIR || './tmp/documents',
+    /** 硬过期天数：从生成时间起，超过此天数自动删除 */
+    ttlDays: parseFloat(process.env.DOCUMENT_TTL_DAYS || '7'),
+    /** 闲置天数：超过此天数未访问自动删除 */
+    idleDays: parseFloat(process.env.DOCUMENT_IDLE_DAYS || '3'),
+    /** 后台清理任务间隔（分钟） */
+    cleanupIntervalMin: parseInt(process.env.DOCUMENT_CLEANUP_INTERVAL_MIN || '60', 10),
+    /** 单个文档最大尺寸（MB），超过会拒绝生成 */
+    maxDocSizeMB: parseInt(process.env.DOCUMENT_MAX_SIZE_MB || '20', 10),
+    /** 默认 PDF 纸张尺寸 */
+    pdfFormat: process.env.DOCUMENT_PDF_FORMAT || 'A4',
+  },
+
+  /**
+   * Redis 配置 —— 多级缓存 L2 / 限流 / 分布式锁的共享存储
+   *
+   * 设计要点：
+   * 1. enabled 默认 false，便于桌面端 / 个人开发机零依赖运行
+   * 2. 任何 Redis 操作失败都必须降级到内存方案，不能影响主业务
+   * 3. commandTimeout 必须够小（默认 300ms），避免 Redis 抖动拖垮 LLM 推理链路
+   * 4. keyPrefix 由 ioredis 自动追加，业务代码内拼 key 时无需重复带前缀
+   */
+  redis: {
+    /** 总开关：false / 未配置时全部走内存降级 */
+    enabled: (process.env.REDIS_ENABLED || '').toLowerCase() === 'true',
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: parseInt(process.env.REDIS_PORT || '6379', 10),
+    /** AUTH 密码；生产环境强制要求 */
+    password: process.env.REDIS_PASSWORD || undefined,
+    /** 库编号 0-15，不同业务建议分库 */
+    db: parseInt(process.env.REDIS_DB || '0', 10),
+    /** 全局 Key 前缀，业务代码内拼 key 时无需重复 */
+    keyPrefix: process.env.REDIS_KEY_PREFIX || 'jerry:',
+    /** 单条命令超时（ms），防止 Redis 抖动阻塞主流程 */
+    commandTimeoutMs: parseInt(process.env.REDIS_COMMAND_TIMEOUT_MS || '300', 10),
+  },
+
+  /**
+   * 火山引擎 ASR（语音识别）配置
+   * 未配置时语音识别功能不可用，不影响其他功能
+   * 使用 V3 大模型流式语音识别 API
+   */
+  volcAsr: {
+    /** 应用 ID（对应 X-Api-App-Key） */
+    appId: process.env.VOLC_ASR_APP_ID || '',
+    /** API Key / Access Token（对应 X-Api-Access-Key） */
+    accessToken: process.env.VOLC_ASR_ACCESS_TOKEN || '',
+    /** V3 资源 ID（对应 X-Api-Resource-Id） */
+    resourceId: process.env.VOLC_ASR_RESOURCE_ID || 'volc.seedasr.sauc.duration',
+    /** 流式 ASR WebSocket 地址（V3 大模型） */
+    wsUrl: process.env.VOLC_ASR_WS_URL || 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
+    /** 录音文件识别 HTTP 地址 */
+    httpUrl: process.env.VOLC_ASR_HTTP_URL || 'https://openspeech.bytedance.com/api/v1/auc',
+  },
+
+  /**
+   * 限流（Rate Limit）配置 —— 基于 Redis 的滑动窗口实现
+   *
+   * 默认 30 次/分钟，主要用于防止 AI 对话接口被恶意刷取（每次请求都会调用 LLM，
+   * 直接消耗 Token 与算力，必须有兜底保护）。
+   */
+  rateLimit: {
+    /** 单用户每分钟最多多少次 AI 对话请求；0 = 不限流 */
+    chatPerMin: parseInt(process.env.RATE_LIMIT_CHAT_PER_MIN || '30', 10),
+    /**
+     * Redis 不可用时的兜底策略：
+     * - true（fail-open）：直接放行，避免限流组件故障导致全员被拒，体验优先
+     * - false（fail-close）：拒绝请求，安全优先（适合金融等强合规场景）
+     */
+    failOpen: (process.env.RATE_LIMIT_FAIL_OPEN || 'true').toLowerCase() === 'true',
+  },
 } as const;

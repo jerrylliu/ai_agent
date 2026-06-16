@@ -347,6 +347,7 @@ describe('useChat', () => {
         contextCount: 0,
         sessionAction: null,
         onToolStatus: null,
+        fileCards: [],
       });
 
       const { result } = renderHook(() => useChat(false));

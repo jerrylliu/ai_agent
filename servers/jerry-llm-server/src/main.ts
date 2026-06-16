@@ -6,8 +6,14 @@ import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import * as express from 'express';
 import * as path from 'path';
 import * as fs from 'fs';
+import { createServer } from 'http';
+import { WebSocketServer } from 'ws';
 import { validateSearchWebConfig, validateWeatherConfig } from './fundamentals/tools';
 import { config } from './fundamentals/config';
+import { closeRedis, getRedis } from './fundamentals/redis-client';
+import { createSpeechWsHandler } from './gateways/speech.gateway';
+import { SpeechService } from './services/speech.service';
+import { AuthService } from './auth/auth.service';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -19,6 +25,10 @@ async function bootstrap() {
 
   validateSearchWebConfig();
   validateWeatherConfig();
+
+  // 预热 Redis 连接（启动时即建立连接，避免首请求 cold start）
+  // 如果 REDIS_ENABLED=false，getRedis() 返回 null，本调用不会有任何副作用
+  getRedis();
   
   // 配置 bodyParser，支持大文件上传
   app.use(express.json({ limit: '50mb' }));
@@ -71,7 +81,48 @@ async function bootstrap() {
   // 例如：文件 uploads/logo.png 可以通过 http://localhost:3000/files/logo.png 访问
   app.use('/files', express.static(uploadDir));
 
-  // 启动服务器，监听 3000 端口（或使用环境变量 PORT 指定的端口）
+  // ============================================
+  // 配置音频文件目录（ASR 长音频转写临时存储）
+  // ============================================
+  const audioDir = path.join(__dirname, '..', 'tmp', 'audios');
+  if (!fs.existsSync(audioDir)) {
+    fs.mkdirSync(audioDir, { recursive: true });
+  }
+  app.use('/audios', express.static(audioDir));
+
+  // ============================================
+  // 启动 HTTP 服务器
+  // ============================================
   await app.listen(config.port);
+
+  // ============================================
+  // 语音识别 WebSocket 服务器
+  // 挂载到同一 HTTP 服务器，路径 /api/speech/stream
+  // ============================================
+  const httpServer = app.getHttpServer();
+  const wss = new WebSocketServer({ server: httpServer, path: '/api/speech/stream' });
+  const speechService = app.get(SpeechService);
+  const authService = app.get(AuthService);
+  wss.on('connection', createSpeechWsHandler(speechService, authService));
+
+  // ============================================
+  // 优雅关闭：进程收到 SIGINT/SIGTERM 时回收 Redis 连接
+  // 防止 Redis Server 端 TCP TIME_WAIT 堆积，并让未完成命令有机会返回结果
+  // ============================================
+  const gracefulShutdown = async (signal: string) => {
+    // eslint-disable-next-line no-console
+    console.log(`[main] 收到 ${signal}，开始优雅关闭...`);
+    try {
+      await app.close();
+      await closeRedis();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[main] 优雅关闭失败', e);
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.on('SIGINT', () => void gracefulShutdown('SIGINT'));
+  process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'));
 }
 bootstrap();

@@ -8,6 +8,7 @@ import { createPlanSchema, executeCreatePlan, type CreatePlanParams, type Create
 import { crawlWebpageSchema, executeCrawlWebpage, type CrawlWebpageParams, type CrawlWebpageResult } from './crawl-webpage';
 import { createDocumentSchema, executeCreateDocument, type CreateDocumentParams, type CreateDocumentResult, updateDocumentSchema, executeUpdateDocument, type UpdateDocumentParams, type UpdateDocumentResult, summarizeDocumentSchema, executeSummarizeDocument, type SummarizeDocumentParams, type SummarizeDocumentResult, compareDocumentsSchema, executeCompareDocuments, type CompareDocumentsParams, type CompareDocumentsResult, initDocumentTools } from './document-ops';
 import { generateChartSchema, executeGenerateChart, type GenerateChartParams, type GenerateChartResult, generateImageSchema, executeGenerateImage, type GenerateImageParams, type GenerateImageResult, createMindmapSchema, executeCreateMindmap, type CreateMindmapParams, type CreateMindmapResult } from './multimodal-output';
+import { generateDocumentSchema, executeGenerateDocument, type GenerateDocumentParams, type GenerateDocumentResult } from './generate-document';
 import { sendNotificationSchema, executeSendNotification, validateSendNotificationConfig, isSendNotificationAvailable, type SendNotificationParams, type SendNotificationResult } from './send-notification';
 import { queryDatabaseSchema, executeQueryDatabase, validateQueryDatabaseConfig, isQueryDatabaseAvailable, type QueryDatabaseParams, type QueryDatabaseResult } from './query-database';
 import { buildMcpProxySchema, executeMcpProxy, validateMcpProxyConfig, isMcpProxyAvailable, initMcpProxy, type McpProxyParams, type McpProxyResult } from './mcp-proxy';
@@ -135,6 +136,10 @@ function buildToolsMap(): Record<string, ToolDefinition> {
       schema: createMindmapSchema,
       executor: executeCreateMindmap as (params: any) => Promise<any>,
     },
+    generate_document: {
+      schema: generateDocumentSchema,
+      executor: executeGenerateDocument as (params: any, context?: ToolContext) => Promise<any>,
+    },
     execute_workflow: {
       schema: buildExecuteWorkflowSchema(),
       executor: executeExecuteWorkflow as (params: any, context?: ToolContext) => Promise<any>,
@@ -241,6 +246,7 @@ const TOOL_COMPACT_DESCRIPTIONS: Record<string, string> = {
   generate_chart: '生成图表，折线柱状饼图等，数据可视化时使用',
   generate_image: '文生图，根据文字描述生成图片，需要图片时使用',
   create_mindmap: '生成思维导图，整理知识结构梳理逻辑时使用',
+  generate_document: '生成PDF/Word/HTML文档文件，返回fileUrl可作为邮件附件发送，用户要文档导出时使用',
   execute_workflow: '一键执行预置流水线，多步任务匹配模板时优先用此工具',
   send_notification: '发送通知到飞书邮件Webhook，任务完成或主动提醒时使用',
   query_database: '查询外部业务库执行SELECT语句，需要业务数据时使用',
@@ -303,6 +309,11 @@ const TOOL_COMPACT_PARAM_DESCRIPTIONS: Record<string, Record<string, string>> = 
   create_mindmap: {
     title: '中心主题',
     content: '思维导图内容',
+  },
+  generate_document: {
+    title: '文档标题',
+    content: '文档正文(Markdown)',
+    format: '输出格式',
   },
   execute_workflow: {
     templateId: '流水线模板ID',

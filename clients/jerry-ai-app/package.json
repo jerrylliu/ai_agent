@@ -24,6 +24,7 @@
     "@tauri-apps/plugin-opener": "^2.5.3",
     "class-variance-authority": "0.7.1",
     "clsx": "^2.1.1",
+    "docx-preview": "^0.3.7",
     "echarts": "^6.1.0",
     "echarts-for-react": "^3.0.6",
     "lucide-react": "^1.8.0",

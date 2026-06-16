@@ -438,6 +438,22 @@ button.decorum-tb-btn {
   filter: drop-shadow(0 0 3px #5FF6FF66) drop-shadow(0 0 6px #5FF6FF33);
 }
 
+/* ---------- cyberpunk-filecard：文件卡片样式 ---------- */
+
+/* 文件标题：沿用 cyberpunk-unauth 的 #ff5247 颜色 + 发光 */
+.cyberpunk .filecard-title {
+  color: #ff5247;
+  text-shadow: 0 0 4px #ff524766, 0 0 8px #ff524733;
+}
+
+/* 下载按钮：图标和文字颜色统一为黑色 #000000（含 hover 与子元素） */
+.cyberpunk .filecard-download-btn,
+.cyberpunk .filecard-download-btn:hover,
+.cyberpunk .filecard-download-btn span,
+.cyberpunk .filecard-download-btn svg {
+  color: #000000 !important;
+}
+
 /* ---------- 模型列表项选中状态（赛博朋克主题） ---------- */
 /* 选中状态背景：#5FF6FF 高透明度，边框发光 */
 .cyberpunk .dark\:bg-blue-900\/30 {

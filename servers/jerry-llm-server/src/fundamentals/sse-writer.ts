@@ -122,6 +122,27 @@ export function sendConfirmationRequest(
 }
 
 /**
+ * 发送 file_card 事件（generate_document 生成的文件卡片）
+ * 前端在 AI 消息下方渲染下载/预览卡片，与 chart/mindmap 同级
+ */
+export function sendFileCard(
+  res: Response | undefined,
+  data: {
+    key: string;
+    filename: string;
+    format: string;
+    sizeBytes: number;
+    downloadUrl: string;
+    previewUrl: string;
+    expiresAt: number;
+    favorited: boolean;
+  },
+) {
+  if (!res || res.writableEnded) return;
+  res.write(`event: file_card\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
  * 发送工作流相关事件
  * 事件类型：workflow_start / workflow_step_start / workflow_step_done / workflow_complete
  * 与 tool_status / content 事件并行推送，前端可独立渲染流水线进度面板

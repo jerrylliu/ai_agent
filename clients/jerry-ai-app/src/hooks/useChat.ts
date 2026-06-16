@@ -218,6 +218,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
           content: msg.content,
           role: msg.role as 'user' | 'assistant',
           timestamp: new Date(msg.createdAt),
+          attachments: Array.isArray(msg.attachments) ? msg.attachments : [],
         }));
         setMessages(formattedMessages);
         messagesCacheRef.current.set(sessionId, formattedMessages);
@@ -367,6 +368,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
         role: 'assistant',
         timestamp: new Date(),
         fromKnowledgeBase: false,
+        attachments: [],
       };
       setMessages(prev => [...prev, tempAssistantMessage]);
 
@@ -389,6 +391,29 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
           });
         },
         onConfirmationRequest: onConfirmationRequest || undefined,
+        onFileCard: (event) => {
+          // 实时把文件卡片挂到正在生成的 AI 消息上
+          setMessages(prev => prev.map(msg =>
+            msg.id === assistantMessageId
+              ? {
+                  ...msg,
+                  attachments: [
+                    ...(msg.attachments || []),
+                    {
+                      key: event.key,
+                      filename: event.filename,
+                      format: event.format,
+                      sizeBytes: event.sizeBytes,
+                      downloadUrl: event.downloadUrl,
+                      previewUrl: event.previewUrl,
+                      expiresAt: event.expiresAt,
+                      favorited: event.favorited,
+                    },
+                  ],
+                }
+              : msg
+          ));
+        },
       });
       
       // 设置知识库来源标记
@@ -508,6 +533,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
             content: '',
             role: 'assistant',
             timestamp: new Date(),
+            attachments: [],
           };
           setMessages(prev => [...prev, tempAssistantMessage]);
 
@@ -527,6 +553,28 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
               });
             },
             onConfirmationRequest: onConfirmationRequest || undefined,
+            onFileCard: (event) => {
+              setMessages(prev => prev.map(msg =>
+                msg.id === assistantMessageId
+                  ? {
+                      ...msg,
+                      attachments: [
+                        ...(msg.attachments || []),
+                        {
+                          key: event.key,
+                          filename: event.filename,
+                          format: event.format,
+                          sizeBytes: event.sizeBytes,
+                          downloadUrl: event.downloadUrl,
+                          previewUrl: event.previewUrl,
+                          expiresAt: event.expiresAt,
+                          favorited: event.favorited,
+                        },
+                      ],
+                    }
+                  : msg
+              ));
+            },
           });
           const reader = aiResponse.stream.getReader();
           let fullResponse = '';

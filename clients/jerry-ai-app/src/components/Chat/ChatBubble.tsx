@@ -1,9 +1,10 @@
-import React from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { Button } from "../ui/button";
 import { Database, ThumbsUp, ThumbsDown } from "lucide-react";
 import MarkdownRenderer from "../MarkdownRenderer";
+import { FileCard } from "../FileCard";
 import { formatTime } from "../../lib/utils";
-import type { Message } from "../../types/session";
+import type { Message, MessageAttachment } from "../../types/session";
 import { submitFeedback } from "../../lib/api";
 
 interface ChatBubbleProps {
@@ -31,6 +32,37 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
   onDeleteMessage,
   onAlert,
 }) => {
+  // 局部管理 attachments 的变更（删除/收藏），不需要冒泡到 useChat
+  const [localAttachments, setLocalAttachments] = useState<MessageAttachment[] | undefined>(message.attachments);
+
+  // 当 SSE 流式推送 file_card 事件后，useChat 更新 message.attachments，
+  // 但 ChatBubble 是同一实例（key 不变），需主动同步新 key 到 localAttachments
+  useEffect(() => {
+    if (!message.attachments) {
+      setLocalAttachments(undefined);
+      return;
+    }
+    setLocalAttachments(prev => {
+      const prevMap = new Map((prev || []).map(a => [a.key, a]));
+      return message.attachments!.map(att => {
+        const existing = prevMap.get(att.key);
+        return existing ? { ...att, favorited: existing.favorited } : att;
+      });
+    });
+  }, [message.attachments]);
+
+  const handleAttachmentDelete = useCallback((key: string) => {
+    setLocalAttachments(prev => prev?.filter(a => a.key !== key));
+  }, []);
+
+  const handleAttachmentFavoriteChange = useCallback((key: string, favorited: boolean) => {
+    setLocalAttachments(prev =>
+      prev?.map(a => a.key === key ? { ...a, favorited } : a),
+    );
+  }, []);
+
+  const attachments = localAttachments;
+
   return (
     <div
       className={`flex ${message.role === "user" ? "flex-row-reverse" : "flex-row"} gap-3`}
@@ -57,6 +89,19 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
             {message.role === "assistant" ? (
               <div className="min-w-0" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
                 <MarkdownRenderer>{message.content}</MarkdownRenderer>
+                {/* 文件附件卡片（generate_document 等工具产物） */}
+                {attachments && attachments.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    {attachments.map((att) => (
+                      <FileCard
+                        key={att.key}
+                        attachment={att}
+                        onDelete={handleAttachmentDelete}
+                        onFavoriteChange={handleAttachmentFavoriteChange}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
               /* 用户消息：支持图片预览 + Markdown渲染 */
