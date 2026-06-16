@@ -65,7 +65,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
 
   // 辅助: 标记会话有内容 + 持久化
   const markSessionHasContent = (sessionId: string) => {
-    setSessionHasContent(prev => {
+    setSessionHasContent((prev: Set<string>) => {
       if (prev.has(sessionId)) return prev;
       const next = new Set(prev);
       next.add(sessionId);
@@ -76,7 +76,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
 
   // 辅助: 移除会话的内容标记
   const unmarkSessionContent = (sessionId: string) => {
-    setSessionHasContent(prev => {
+    setSessionHasContent((prev: Set<string>) => {
       if (!prev.has(sessionId)) return prev;
       const next = new Set(prev);
       next.delete(sessionId);
