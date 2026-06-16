@@ -55,7 +55,6 @@ const MicButton: React.FC<{
 }> = ({ status, audioLevel, interimText, error, isUsingLocalFallback, onStart, onStop }) => {
   const isRecording = status === 'recording';
   const isConnecting = status === 'connecting';
-  const isStopping = status === 'stopping';
 
   const handleClick = () => {
     if (isRecording) {
@@ -67,18 +66,18 @@ const MicButton: React.FC<{
 
   // 根据状态选择图标 / 颜色
   const renderIcon = () => {
-    if (isConnecting || isStopping) return <Loader2 className="h-4 w-4 animate-spin" />;
+    if (isConnecting) return <Loader2 className="h-4 w-4 animate-spin" />;
     if (isRecording) return <MicOff className="h-4 w-4" />;
     return <Mic className="h-4 w-4" />;
   };
 
   const buttonClass = isRecording
     ? 'bg-red-100 dark:bg-red-900/30 text-red-500 hover:bg-red-200 dark:hover:bg-red-900/50'
-    : isConnecting || isStopping
+    : isConnecting
     ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-500'
     : 'hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-500 dark:text-gray-400';
 
-  const title = isConnecting ? '连接中...' : isStopping ? '处理中...' : isRecording ? '停止录音' : '语音输入';
+  const title = isConnecting ? '连接中...' : isRecording ? '停止录音' : '语音输入';
 
   return (
     <div className="relative">
@@ -86,7 +85,7 @@ const MicButton: React.FC<{
         variant="ghost"
         size="icon"
         onClick={handleClick}
-        disabled={isConnecting || isStopping}
+        disabled={isConnecting}
         className={`rounded-full h-8 w-8 transition-all duration-200 ${buttonClass}`}
         title={title}
       >
@@ -155,12 +154,18 @@ const ChatInput: React.FC<ChatInputProps> = ({
   // 语音识别 Hook（onFinal 仅作通知用，不写输入框，避免双写竞态）
   const speech = useSpeechRecognition();
 
-  // 单一数据源：录音中通过 useEffect 把 baseText + finalText + interimText 同步到输入框
+  // 单一数据源：录音中及停止后短期内，把 baseText + finalText + interimText 同步到输入框
   // 注意：依赖只用 finalText / interimText / status，不依赖 onInputChange
   React.useEffect(() => {
-    if (speech.status === 'recording' || speech.status === 'stopping') {
+    if (speech.status === 'recording') {
       const composed = baseTextRef.current + speech.finalText + speech.interimText;
-      // 仅在内容变化时写入，避免无意义重渲染
+      if (composed !== inputValueRef.current) {
+        onInputChangeRef.current(composed);
+      }
+    }
+    // idle 状态下如果 finalText 有更新（后端 final 静默替换），也同步到输入框
+    if (speech.status === 'idle' && baseTextRef.current) {
+      const composed = baseTextRef.current + speech.finalText;
       if (composed !== inputValueRef.current) {
         onInputChangeRef.current(composed);
       }
@@ -177,9 +182,11 @@ const ChatInput: React.FC<ChatInputProps> = ({
     if (prev !== 'connecting' && curr === 'connecting') {
       baseTextRef.current = inputValueRef.current;
     }
-    // 完全停止后清空基准
-    if (curr === 'idle') {
-      baseTextRef.current = '';
+    // idle 后延迟清空基准（等后端 final 静默替换完成）
+    if (curr === 'idle' && prev !== 'idle') {
+      setTimeout(() => {
+        baseTextRef.current = '';
+      }, 2000);
     }
     prevStatusRef.current = curr;
   }, [speech.status]);
@@ -243,7 +250,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             value={inputValue}
             onChange={(e) => {
               // 录音中禁止手动编辑（避免与语音同步冲突）
-              if (speech.status === 'recording' || speech.status === 'stopping') {
+              if (speech.status === 'recording') {
                 return;
               }
               onInputChange(e.target.value);
@@ -251,7 +258,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             onKeyDown={onKeyDown}
             placeholder={speech.isRecording ? '正在聆听...' : '请输入...'}
             rows={rows}
-            readOnly={speech.status === 'recording' || speech.status === 'stopping'}
+            readOnly={speech.status === 'recording'}
             className={`relative w-full resize-none bg-transparent px-5 text-sm text-foreground placeholder:text-gray-400 dark:placeholder:text-slate-500 focus:outline-none ${
               compact ? 'pt-3 pb-1' : 'pt-4 pb-2'
             } ${speech.isRecording ? 'cursor-not-allowed' : ''}`}

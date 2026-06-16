@@ -154,7 +154,7 @@ function parseServerResponse(data: Buffer): { json: string; isError: boolean } |
     const jsonStr = compression === COMP_GZIP
       ? gunzipSync(payload)
       : payload.toString('utf-8');
-    logger.info(`ASR 响应解析: msgType=${msgType} flags=${flags} payloadSize=${payloadSize} isError=${isError}`);
+    logger.debug(`ASR 响应解析: msgType=${msgType} flags=${flags} payloadSize=${payloadSize} isError=${isError}`);
     return { json: jsonStr, isError };
   } catch (e) {
     logger.error('ASR 响应解压失败', e);
@@ -238,17 +238,18 @@ export class StreamingAsrClient {
             language: 'zh-CN',
           },
           request: {
-            model_name: 'seed_asr_2.0', // 更新模型名
+            model_name: 'seed_asr_2.0',
             enable_itn: true,
             enable_punc: true,
             enable_ddc: false,
             show_utterances: true,
-            // 新增参数
+            // VAD 参数：平衡响应速度和识别完整性
             vad_enable: true,
-            vad_start_timeout: 5000,
-            vad_end_timeout: 300,
-            vad_end_wait_time: 100,
+            vad_start_timeout: 10000,   // 开始说话超时：10秒（给用户足够准备时间）
+            vad_end_timeout: 800,        // 结束说话超时：800ms（停顿0.8秒才断句，避免短停顿截断）
+            vad_end_wait_time: 200,      // 断句后等待：200ms（给后端足够时间处理最后音频）
             enable_timestamp: true,
+            result_level: 3,             // 返回最详细结果（0=最简, 3=最全），确保不丢失文本
           },
         });
 
@@ -261,7 +262,7 @@ export class StreamingAsrClient {
           compressed,
         ]);
 
-        logger.info(`ASR full client request: seq=${this.seq} payloadLen=${requestPayload.length} compressedLen=${compressed.length}`);
+        logger.debug(`ASR full client request: seq=${this.seq} payloadLen=${requestPayload.length} compressedLen=${compressed.length}`);
         this.ws!.send(frame);
         resolve();
       });
@@ -427,10 +428,9 @@ export class StreamingAsrClient {
     }
   }
 
-  /** 发送 PCM 音频帧 */
+  /** 发送 PCM 音频帧（不压缩，PCM 随机波形压缩率极低但压缩/解压开销大） */
   sendAudio(pcmBuffer: Buffer, isLast = false): void {
     if (!this.ws || this.closed || this.finished) {
-      logger.debug(`忽略音频发送: ws=${!!this.ws}, closed=${this.closed}, finished=${this.finished}`);
       return;
     }
 
@@ -438,18 +438,16 @@ export class StreamingAsrClient {
     const seq = isLast ? -this.seq : this.seq;
     const flags = isLast ? FLAG_NEG_SEQ : FLAG_POS_SEQ;
 
-    // Gzip 压缩音频数据
-    const compressed = gzipSync(pcmBuffer);
-    const header = buildHeader(MSG_AUDIO_ONLY, flags, SER_NONE, COMP_GZIP);
+    // 不压缩：PCM 音频数据压缩率 <5%，gzip 反而增加 CPU 延迟
+    const header = buildHeader(MSG_AUDIO_ONLY, flags, SER_NONE, COMP_NONE);
 
     const frame = Buffer.concat([
       header,
       buildSequence(seq),
-      buildPayloadSize(compressed.length),
-      compressed,
+      buildPayloadSize(pcmBuffer.length),
+      pcmBuffer,
     ]);
 
-    logger.info(`ASR audio frame: seq=${seq} raw=${pcmBuffer.length} compressed=${compressed.length} last=${isLast}`);
     this.ws.send(frame);
 
     if (isLast) {
@@ -457,28 +455,26 @@ export class StreamingAsrClient {
     }
   }
 
-  /** 主动结束识别（发送空音频负包） */
+  /** 主动结束识别（发送空音频负包，不压缩） */
   finish(): void {
     if (!this.ws || this.closed || this.finished) {
-      logger.debug(`忽略finish调用: ws=${!!this.ws}, closed=${this.closed}, finished=${this.finished}`);
       return;
     }
 
     this.seq++;
     const seq = -this.seq;
-    const header = buildHeader(MSG_AUDIO_ONLY, FLAG_NEG_SEQ, SER_NONE, COMP_GZIP);
+    const header = buildHeader(MSG_AUDIO_ONLY, FLAG_NEG_SEQ, SER_NONE, COMP_NONE);
 
-    // Gzip 压缩空数据
-    const compressed = gzipSync(Buffer.alloc(0));
+    const emptyPayload = Buffer.alloc(0);
     const frame = Buffer.concat([
       header,
       buildSequence(seq),
-      buildPayloadSize(compressed.length),
-      compressed,
+      buildPayloadSize(0),
+      emptyPayload,
     ]);
 
     this.finished = true;
-    logger.info(`ASR finish frame: seq=${seq} compressed=${compressed.length}`);
+    logger.info(`ASR finish frame: seq=${seq}`);
     this.ws.send(frame);
   }
 

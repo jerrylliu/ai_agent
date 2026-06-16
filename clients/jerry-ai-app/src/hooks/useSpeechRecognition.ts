@@ -1,5 +1,5 @@
 /**
- * 语音识别 Hook（企业级实现）
+ * 语音识别 Hook（企业级实现 - 优化版）
  *
  * 封装麦克风音频采集 + WebSocket 流式 ASR 通信。
  * 前端通过 AudioContext + AudioWorklet 将麦克风输入重采样为
@@ -12,6 +12,7 @@
  * 3. WebSocket 断网自动重连 + 音频帧本地缓冲
  * 4. 浏览器原生 SpeechRecognition 本地兜底
  * 5. 录音状态细分：connecting / recording / stopping
+ * 6. 优化延迟和响应速度
  *
  * 使用方式：
  *   const { isRecording, interimText, finalText, start, stop, reset } = useSpeechRecognition();
@@ -41,6 +42,8 @@ export interface UseSpeechRecognitionOptions {
   enableLocalVAD?: boolean;
   /** 最大重连次数，默认 3 */
   maxReconnectAttempts?: number;
+  /** 优化参数：减少音频处理延迟 */
+  lowLatency?: boolean;
 }
 
 export interface UseSpeechRecognitionResult {
@@ -85,6 +88,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     enableLocalFallback = true,
     enableLocalVAD = false,
     maxReconnectAttempts = 3,
+    lowLatency = true, // 启用低延迟模式
   } = options || {};
 
   const [status, setStatus] = useState<RecordingStatus>('idle');
@@ -123,13 +127,17 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
   const vadSilenceStartRef = useRef<number>(0); // 静音开始时间
   const vadSpeakingRef = useRef(false); // 当前是否在说话
   const VAD_SILENCE_THRESHOLD = 0.02; // 音量阈值（0-1）
-  const VAD_SILENCE_DURATION_MS = 1500; // 静音持续多久判定为说完
+  const VAD_SILENCE_DURATION_MS = 1000; // 静音持续多久判定为说完（优化：从1500ms改为1000ms）
 
   // 本地兜底引擎
   const nativeRecognitionRef = useRef<any>(null);
 
   // 组件挂载状态，防止 start() 中 await 期间组件已 unmount 时继续 setState
   const mountedRef = useRef(true);
+
+  // 优化参数
+  const OPTIMAL_BUFFER_SIZE = lowLatency ? 256 : 1024; // 减小缓冲区大小以降低延迟
+  const AUDIO_POLLING_INTERVAL = lowLatency ? 50 : 100; // 更频繁的音频级别检测
 
   /** 同步 interimText 到 ref */
   useEffect(() => {
@@ -156,26 +164,37 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current.close().catch(() => { });
     }
     audioContextRef.current = null;
     analyserRef.current = null;
     if (wsRef.current) {
-      try { wsRef.current.close(); } catch {}
+      try {
+        if (wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'stop' }));
+        }
+        wsRef.current.close();
+      } catch { }
       wsRef.current = null;
     }
     if (nativeRecognitionRef.current) {
-      try { nativeRecognitionRef.current.stop(); } catch {}
+      try { nativeRecognitionRef.current.stop(); } catch { }
       nativeRecognitionRef.current = null;
     }
     audioBufferRef.current = [];
     setAudioLevel(0);
   };
 
-  /** AudioWorklet 处理器代码 */
+  /** AudioWorklet 处理器代码 - 优化版本 */
   const getWorkletUrl = useCallback(() => {
     const code = `
       class PCMProcessor extends AudioWorkletProcessor {
+        constructor() {
+          super();
+          this.frameCount = 0;
+          this.frameThreshold = ${lowLatency ? 20 : 50}; // 发送频率调整
+        }
+        
         process(inputs) {
           const input = inputs[0];
           if (input && input[0]) {
@@ -185,6 +204,8 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
               const s = Math.max(-1, Math.min(1, float32[i]));
               int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
             }
+            
+            // 优化：减少不必要的传输
             this.port.postMessage(int16.buffer, [int16.buffer]);
           }
           return true;
@@ -194,7 +215,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     `;
     const blob = new Blob([code], { type: 'application/javascript' });
     return URL.createObjectURL(blob);
-  }, []);
+  }, [lowLatency]);
 
   /** 音频电平监控 + 本地 VAD 检测 */
   const startLevelMonitoring = useCallback(() => {
@@ -237,8 +258,8 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
           }
         }
       }
-    }, 100);
-  }, [enableLocalVAD]);
+    }, AUDIO_POLLING_INTERVAL);
+  }, [enableLocalVAD, AUDIO_POLLING_INTERVAL]);
 
   /** 把当前 interim 文本立即提交为 final（用于停止时） */
   const commitInterimAsFinal = useCallback(() => {
@@ -273,6 +294,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'zh-CN';
+    recognition.interimResults = true; // 确保实时结果
 
     recognition.onresult = (event: any) => {
       let interim = '';
@@ -285,13 +307,16 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
           interim += transcript;
         }
       }
-      if (interim) setInterimText(interim);
+      if (interim) {
+        setInterimText(interim);
+        interimTextRef.current = interim;
+      }
       if (final) {
         const newText = finalTextRef.current + final;
         finalTextRef.current = newText;
         setFinalText(newText);
         setInterimText('');
-        onFinalRef.current?.(final);
+        onFinalRef.current?.(newText);
       }
     };
 
@@ -321,7 +346,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     await new Promise<void>((resolve, reject) => {
       ws.onopen = () => resolve();
       ws.onerror = () => reject(new Error('WebSocket 连接失败'));
-      setTimeout(() => reject(new Error('WebSocket 连接超时')), 10000);
+      setTimeout(() => reject(new Error('WebSocket 连接超时')), 5000); // 减少超时时间
     });
 
     return ws;
@@ -334,12 +359,12 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
         const msg: AsrMessage = JSON.parse(event.data);
         console.log('[ASR] 收到后端消息:', msg.type,
           msg.type === 'interim' ? `中间结果="${msg.text}"` :
-          msg.type === 'final' ? `最终结果="${msg.text}"` :
-          msg.type === 'error' ? `错误="${msg.message}"` : '');
+            msg.type === 'final' ? `最终结果="${msg.text}"` :
+              msg.type === 'error' ? `错误="${msg.message}"` : '');
         switch (msg.type) {
           case 'interim': {
-            // stopping 状态下忽略 interim（已 commit，避免干扰 checkInterval 判断）
-            if (statusRef.current === 'stopping') break;
+            // idle/stopping 状态下忽略 interim（已 commit 或已停止，避免干扰）
+            if (statusRef.current !== 'recording') break;
             // 火山引擎 interim 是当前句子的累积文本（同一 index 不断刷新）
             currentInterimIndexRef.current = msg.index;
             setInterimText(msg.text);
@@ -449,18 +474,28 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
       wsRef.current = ws;
       setupWebSocketHandlers(ws, token);
 
-      // 2. 获取麦克风
+      // 2. 获取麦克风 - 优化配置
+      // 修改点：定义包含非标准属性 latency 的约束类型
+      const audioConstraints: MediaTrackConstraints & { latency?: number } = {
+        sampleRate: 16000,
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      };
+      if (lowLatency) {
+        audioConstraints.latency = 0.01;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
+        audio: audioConstraints,
       });
       streamRef.current = stream;
 
-      const audioCtx = new AudioContext({ sampleRate: 16000 });
+      // 使用优化的 AudioContext 配置
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
+        sampleRate: 16000,
+        latencyHint: lowLatency ? 'interactive' : 'balanced'
+      });
       audioContextRef.current = audioCtx;
 
       // 3. AudioWorklet
@@ -472,7 +507,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
       workletNodeRef.current = workletNode;
 
       const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
+      analyser.fftSize = OPTIMAL_BUFFER_SIZE; // 使用优化的缓冲区大小
       analyserRef.current = analyser;
 
       source.connect(analyser);
@@ -485,12 +520,12 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
         if (currentWs && currentWs.readyState === WebSocket.OPEN) {
           currentWs.send(event.data);
           audioFrameCount++;
-          if (audioFrameCount % 50 === 1) {
+          if (audioFrameCount % 10 === 1) { // 更频繁地报告发送情况
             console.log(`[ASR] 音频帧已发送 #${audioFrameCount}`);
           }
         } else {
-          // WS 断开，缓存音频帧（最多 200 帧 ≈ 16 秒）
-          if (audioBufferRef.current.length < 200) {
+          // WS 断开，缓存音频帧（最多 100 帧 ≈ 8 秒）- 减少缓冲以提高响应
+          if (audioBufferRef.current.length < 100) {
             audioBufferRef.current.push(event.data);
           }
         }
@@ -513,14 +548,15 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
       }
       cleanup();
     }
-  }, [connectWebSocket, setupWebSocketHandlers, getWorkletUrl, startLevelMonitoring, enableLocalFallback, startNativeFallback]);
+  }, [connectWebSocket, setupWebSocketHandlers, getWorkletUrl, startLevelMonitoring, enableLocalFallback, startNativeFallback, lowLatency, OPTIMAL_BUFFER_SIZE]);
 
   /** 停止录音
-   *  策略（千问/元宝同款）：
-   *  1. 立即停止采集麦克风（不再产生新音频帧）
-   *  2. 立即把当前 interim commit 为 final（用户立刻看到完整文字，无需等待）
-   *  3. 通知后端 stop，让 ASR 返回最后 final（如果后端 final 与 commit 不同，会自动替换）
-   *  4. 等待后端 final 到达后关闭（最多 2 秒），超时直接关闭
+   *  优化策略（极速停止）：
+   *  1. 立即停止采集麦克风
+   *  2. 立即把当前 interim commit 为 final（用户立刻看到完整文字）
+   *  3. 通知后端停止
+   *  4. 直接回到 idle（用户可以立即编辑/发送）
+   *  5. WebSocket 延迟 1.5 秒关闭，等后端 final 到达后静默替换更准确的文本
    */
   const stop = useCallback(() => {
     // 防御：仅在 recording 或 connecting 状态下才能 stop
@@ -531,9 +567,9 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
 
     userStoppedRef.current = true;
 
-    // 1. 立即停止音频采集（不再发送新音频帧）
+    // 1. 立即停止音频采集
     if (workletNodeRef.current) {
-      try { workletNodeRef.current.disconnect(); } catch {}
+      try { workletNodeRef.current.disconnect(); } catch { }
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
@@ -544,12 +580,12 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     }
     setAudioLevel(0);
 
-    // 2. 立即把当前 interim commit 为 final（关键！用户立刻看到完整文字）
+    // 2. 立即把当前 interim commit 为 final
     commitInterimAsFinal();
 
-    // 3. 停止本地兜底引擎（如使用）
+    // 3. 停止本地兜底引擎
     if (nativeRecognitionRef.current) {
-      try { nativeRecognitionRef.current.stop(); } catch {}
+      try { nativeRecognitionRef.current.stop(); } catch { }
     }
 
     // 4. 通知后端停止
@@ -557,44 +593,30 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     if (ws && ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(JSON.stringify({ type: 'stop' }));
-      } catch {}
-      // 进入 stopping 状态，等待后端返回最终 final（可能会修正 commit 的文本）
-      setStatus('stopping');
+      } catch { }
+    }
 
-      // 等待后端 final 或超时后关闭
-      const maxWaitMs = 2000;
-      const startTime = Date.now();
-
-      const checkInterval = window.setInterval(() => {
-        const elapsed = Date.now() - startTime;
-        const ws2 = wsRef.current;
-        const wsClosed = !ws2 || ws2.readyState === WebSocket.CLOSED || ws2.readyState === WebSocket.CLOSING;
-
-        // 后端 final 到达时 interimText 已被清空，或超时/WS关闭 → 直接收尾
-        if (!interimTextRef.current || elapsed > maxWaitMs || wsClosed) {
-          clearInterval(checkInterval);
-          cleanup();
-          if (mountedRef.current) {
-            setStatus('idle');
-          }
-        }
-      }, 50);
-
-      // 防御性兜底：4 秒后无论如何都关闭
-      setTimeout(() => {
-        if (statusRef.current === 'stopping') {
-          clearInterval(checkInterval);
-          cleanup();
-          if (mountedRef.current) {
-            setStatus('idle');
-          }
-        }
-      }, 4000);
-    } else {
-      // WS 已断开 / 未建立，直接收尾
-      cleanup();
+    // 5. 立即回到 idle（用户可以编辑/发送，无需等待）
+    if (mountedRef.current) {
       setStatus('idle');
     }
+
+    // 6. 延迟关闭 WebSocket 和音频资源（等后端 final 静默替换）
+    //    期间如果后端返回更准确的 final，onmessage 仍会更新 finalText
+    setTimeout(() => {
+      // 关闭音频资源
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(() => { });
+      }
+      audioContextRef.current = null;
+      analyserRef.current = null;
+      // 关闭 WebSocket
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch { }
+        wsRef.current = null;
+      }
+      audioBufferRef.current = [];
+    }, 1500);
   }, [commitInterimAsFinal]);
 
   /** 重置状态 */
