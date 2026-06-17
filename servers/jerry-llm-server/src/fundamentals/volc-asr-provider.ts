@@ -243,11 +243,11 @@ export class StreamingAsrClient {
             enable_punc: true,
             enable_ddc: false,
             show_utterances: true,
-            // VAD 参数：平衡响应速度和识别完整性
+            // VAD 参数：优化响应速度，减少等待感
             vad_enable: true,
             vad_start_timeout: 10000,   // 开始说话超时：10秒（给用户足够准备时间）
-            vad_end_timeout: 800,        // 结束说话超时：800ms（停顿0.8秒才断句，避免短停顿截断）
-            vad_end_wait_time: 200,      // 断句后等待：200ms（给后端足够时间处理最后音频）
+            vad_end_timeout: 400,        // 结束说话超时：400ms（停顿0.4秒即断句，大幅减少等待感）
+            vad_end_wait_time: 100,      // 断句后等待：100ms（减少后端处理延迟）
             enable_timestamp: true,
             result_level: 3,             // 返回最详细结果（0=最简, 3=最全），确保不丢失文本
           },

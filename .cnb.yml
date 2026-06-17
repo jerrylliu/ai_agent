@@ -1,4 +1,4 @@
-# .cnb.yml - miaoma-ai-app CI/CD 流水线
+# .cnb.yml - jerry-ai-app CI/CD 流水线
 
 # ===== jerrydev 分支 push 事件触发 =====
 jerrydev:

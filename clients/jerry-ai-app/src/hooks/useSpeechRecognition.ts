@@ -135,6 +135,9 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
   // 组件挂载状态，防止 start() 中 await 期间组件已 unmount 时继续 setState
   const mountedRef = useRef(true);
 
+  // stopping 状态的兜底超时 ID（需在 cleanup 之前声明）
+  const stoppingTimeoutRef = useRef<number | null>(null);
+
   // 优化参数
   const OPTIMAL_BUFFER_SIZE = lowLatency ? 256 : 1024; // 减小缓冲区大小以降低延迟
   const AUDIO_POLLING_INTERVAL = lowLatency ? 50 : 100; // 更频繁的音频级别检测
@@ -155,6 +158,10 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
 
   /** 清理所有音频和 WS 资源 */
   const cleanup = () => {
+    if (stoppingTimeoutRef.current) {
+      clearTimeout(stoppingTimeoutRef.current);
+      stoppingTimeoutRef.current = null;
+    }
     if (levelIntervalRef.current) {
       clearInterval(levelIntervalRef.current);
       levelIntervalRef.current = null;
@@ -363,8 +370,8 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
               msg.type === 'error' ? `错误="${msg.message}"` : '');
         switch (msg.type) {
           case 'interim': {
-            // idle/stopping 状态下忽略 interim（已 commit 或已停止，避免干扰）
-            if (statusRef.current !== 'recording') break;
+            // idle 状态下忽略 interim（已完全停止）
+            if (statusRef.current === 'idle') break;
             // 火山引擎 interim 是当前句子的累积文本（同一 index 不断刷新）
             currentInterimIndexRef.current = msg.index;
             setInterimText(msg.text);
@@ -373,6 +380,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
           }
           case 'final': {
             // 火山引擎 final 是该 index 句子的最终版本，存入 map
+            // 此处会自动覆盖 commitInterimAsFinal 写入的同 index 条目
             finalSentencesRef.current.set(msg.index, msg.text);
             // 拼接所有已 final 的句子
             const allFinals = Array.from(finalSentencesRef.current.entries())
@@ -393,6 +401,8 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
             setError(msg.message || '语音识别错误');
             break;
           case 'closed':
+            // 后端已关闭，commit 残留 interim
+            commitInterimAsFinal();
             setStatus('idle');
             break;
         }
@@ -435,7 +445,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     ws.onerror = () => {
       console.warn('[ASR] WebSocket 错误');
     };
-  }, [connectWebSocket, maxReconnectAttempts]);
+  }, [connectWebSocket, maxReconnectAttempts, commitInterimAsFinal]);
 
   /** 开始录音 */
   const start = useCallback(async () => {
@@ -551,12 +561,13 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
   }, [connectWebSocket, setupWebSocketHandlers, getWorkletUrl, startLevelMonitoring, enableLocalFallback, startNativeFallback, lowLatency, OPTIMAL_BUFFER_SIZE]);
 
   /** 停止录音
-   *  优化策略（极速停止）：
-   *  1. 立即停止采集麦克风
-   *  2. 立即把当前 interim commit 为 final（用户立刻看到完整文字）
-   *  3. 通知后端停止
-   *  4. 直接回到 idle（用户可以立即编辑/发送）
-   *  5. WebSocket 延迟 1.5 秒关闭，等后端 final 到达后静默替换更准确的文本
+   *  混合策略（即时反馈 + 后端 final 静默替换）：
+   *  1. 发送约 500ms 静音帧触发 VAD 断句（让后端把当前句子 finalize）
+   *  2. 立即停止采集麦克风
+   *  3. 立即把当前 interim commit 为 final（用户立刻看到完整文字）
+   *  4. 通知后端停止 → 后端会返回更准确的 final，静默替换 commit 的文本
+   *  5. 立即回到 idle（用户可以编辑/发送）
+   *  6. 保留 WS 2 秒等后端 final 到达后自动替换更准确的文本
    */
   const stop = useCallback(() => {
     // 防御：仅在 recording 或 connecting 状态下才能 stop
@@ -567,7 +578,23 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
 
     userStoppedRef.current = true;
 
-    // 1. 立即停止音频采集
+    // 1. 发送静音帧触发 VAD 断句（关键优化！）
+    //    火山引擎 VAD 需要检测到静音才会断句出 final。
+    //    在发送 stop 之前，先发约 500ms 的静音 PCM（全零），
+    //    让 VAD 检测到"说话结束"，从而主动 finalize 当前句子。
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN && !nativeRecognitionRef.current) {
+      try {
+        // 16kHz 16bit Mono = 32000 bytes/s，500ms = 16000 bytes
+        // 分 2 次发送，每次 8000 bytes（250ms），模拟自然静音
+        const silenceFrame = new ArrayBuffer(8000); // 全零 = 静音
+        ws.send(silenceFrame);
+        ws.send(silenceFrame);
+        console.log('[ASR] 已发送 500ms 静音帧触发 VAD 断句');
+      } catch { }
+    }
+
+    // 2. 立即停止音频采集
     if (workletNodeRef.current) {
       try { workletNodeRef.current.disconnect(); } catch { }
     }
@@ -580,30 +607,33 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     }
     setAudioLevel(0);
 
-    // 2. 立即把当前 interim commit 为 final
-    commitInterimAsFinal();
-
     // 3. 停止本地兜底引擎
     if (nativeRecognitionRef.current) {
       try { nativeRecognitionRef.current.stop(); } catch { }
     }
 
-    // 4. 通知后端停止
-    const ws = wsRef.current;
+    // 4. 立即把当前 interim commit 为 final（用户立刻看到完整文字）
+    commitInterimAsFinal();
+
+    // 5. 通知后端停止
     if (ws && ws.readyState === WebSocket.OPEN) {
       try {
         ws.send(JSON.stringify({ type: 'stop' }));
       } catch { }
     }
 
-    // 5. 立即回到 idle（用户可以编辑/发送，无需等待）
+    // 6. 立即回到 idle（用户可以编辑/发送，无需等待）
     if (mountedRef.current) {
       setStatus('idle');
     }
 
-    // 6. 延迟关闭 WebSocket 和音频资源（等后端 final 静默替换）
+    // 7. 延迟关闭 WS 和音频资源（保留 2 秒等后端 final 静默替换）
     //    期间如果后端返回更准确的 final，onmessage 仍会更新 finalText
-    setTimeout(() => {
+    //    finalSentencesRef.set(msg.index, msg.text) 会覆盖 commitInterimAsFinal 写入的同 index 条目
+    if (stoppingTimeoutRef.current) {
+      clearTimeout(stoppingTimeoutRef.current);
+    }
+    stoppingTimeoutRef.current = window.setTimeout(() => {
       // 关闭音频资源
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
         audioContextRef.current.close().catch(() => { });
@@ -616,7 +646,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
         wsRef.current = null;
       }
       audioBufferRef.current = [];
-    }, 1500);
+    }, 2000);
   }, [commitInterimAsFinal]);
 
   /** 重置状态 */

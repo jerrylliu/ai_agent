@@ -72,7 +72,13 @@ export class SpeechService implements OnModuleDestroy {
   sendAudio(userId: string, pcmBuffer: Buffer, isLast = false): boolean {
     const client = activeClients.get(userId);
     if (!client) return false;
+    const t0 = performance.now();
     client.sendAudio(pcmBuffer, isLast);
+    const relayMs = performance.now() - t0;
+    // 火山引擎 WS.send 是异步写缓冲，通常 <1ms；如果 >5ms 说明网络背压
+    if (relayMs > 5) {
+      logger.warn(`ASR→火山引擎 发送耗时过高 userId=${userId}: ${relayMs.toFixed(2)}ms`, { module: 'SpeechService' });
+    }
     return true;
   }
 
