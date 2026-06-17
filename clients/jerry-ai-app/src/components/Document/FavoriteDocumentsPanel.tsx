@@ -8,9 +8,9 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileText, Download, StarOff, AlertCircle, Loader2 } from 'lucide-react';
-import { fetchFavoriteDocuments, setDocumentFavorite, type FavoriteDocument } from '../lib/api';
-import { API_BASE_URL } from '../lib/constants';
-import { useFavoriteDocContext } from '../contexts/FavoriteDocContext';
+import { fetchFavoriteDocuments, setDocumentFavorite, type FavoriteDocument } from '../../lib/api';
+import { API_BASE_URL } from '../../lib/constants';
+import { useFavoriteDocContext } from '../../contexts/FavoriteDocContext';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

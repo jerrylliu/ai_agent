@@ -29,15 +29,15 @@ import { useChat } from "../hooks/useChat";
 import { useTheme } from "../hooks/useTheme";
 import { useAuth } from "../hooks/useAuth";
 
-import { AuthDialog } from "../components/AuthDialog";
+import { AuthDialog } from "../components/Auth";
 import { clearKnowledgeBase, respondToConfirmation } from "../lib/api";
 import { DocumentManager } from '../components/Document';
 import { KnowledgeSourceManager } from '../components/KnowledgeSource';
 import { ErrorBoundary } from '../components/ui/error-boundary';
 import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
-import { FavoriteDocumentsPanel } from '../components/FavoriteDocumentsPanel';
+import { FavoriteDocumentsPanel } from '../components/Document';
 import { FavoriteDocProvider } from '../contexts/FavoriteDocContext';
-import SettingsDialog from '../components/Settings/SettingsDialog';
+import { SettingsDialog } from '../components/Settings';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
 
 import {

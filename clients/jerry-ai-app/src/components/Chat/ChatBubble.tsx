@@ -1,8 +1,8 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { Button } from "../ui/button";
 import { Database, ThumbsUp, ThumbsDown } from "lucide-react";
-import MarkdownRenderer from "../MarkdownRenderer";
-import { FileCard } from "../FileCard";
+import MarkdownRenderer from "./MarkdownRenderer";
+import { FileCard } from "./FileCard";
 import { formatTime } from "../../lib/utils";
 import type { Message, MessageAttachment } from "../../types/session";
 import { submitFeedback } from "../../lib/api";

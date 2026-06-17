@@ -9,3 +9,5 @@ export { default as ChatInput } from './ChatInput';
 export { default as ModelPanel } from './ModelPanel';
 export { default as ApiKeyDialog } from './ApiKeyDialog';
 export { default as KbFeedbackToast } from './KbFeedbackToast';
+export { default as MarkdownRenderer } from './MarkdownRenderer';
+export { FileCard } from './FileCard';

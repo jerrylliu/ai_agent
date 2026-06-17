@@ -11,11 +11,11 @@
  */
 import { useEffect, useState, useCallback } from 'react';
 import { FileText, Download, Clock, AlertCircle, Star, Trash2 } from 'lucide-react';
-import type { MessageAttachment } from '../types/session';
-import { API_BASE_URL } from '../lib/constants';
-import { deleteGeneratedDocument, setDocumentFavorite } from '../lib/api';
-import { PopupMenu, type PopupMenuItem } from './PopupMenu';
-import { useFavoriteDocContext } from '../contexts/FavoriteDocContext';
+import type { MessageAttachment } from '../../types/session';
+import { API_BASE_URL } from '../../lib/constants';
+import { deleteGeneratedDocument, setDocumentFavorite } from '../../lib/api';
+import { PopupMenu, type PopupMenuItem } from '../ui/popup-menu';
+import { useFavoriteDocContext } from '../../contexts/FavoriteDocContext';
 
 interface FileCardProps {
   attachment: MessageAttachment;

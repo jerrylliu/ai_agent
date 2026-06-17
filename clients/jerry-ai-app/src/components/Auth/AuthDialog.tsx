@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
 import { X, Mail, Phone, User, Lock, Eye, EyeOff } from 'lucide-react';
-import { API_ENDPOINTS } from '../lib/constants';
+import { API_ENDPOINTS } from '../../lib/constants';
 
 interface AuthDialogProps {
   isOpen: boolean;
