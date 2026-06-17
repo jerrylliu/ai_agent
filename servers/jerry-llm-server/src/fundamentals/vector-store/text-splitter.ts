@@ -69,6 +69,9 @@ export interface ParentChildChunk {
  *
  * 检索时用 Child 匹配（精准），命中后返回 Parent 内容（完整上下文）。
  *
+ * 父块切分器会根据 documentType 选择对应类型（Markdown 按标题层级、代码按语言结构），
+ * 子块统一用通用 RecursiveCharacterTextSplitter（保证检索粒度一致）。
+ *
  * @param text 文档文本
  * @param options 切分参数
  * @returns Parent-Child 切分结果数组
@@ -84,21 +87,36 @@ export async function parentChildSplit(
     childChunkSize?: number;
     /** 子块重叠，默认 50 */
     childChunkOverlap?: number;
+    /** 文档类型，决定父块切分器选择；默认 'default' 走通用切分 */
+    documentType?: AdaptiveDocumentType;
+    /** 文件扩展名（带点或不带点均可），code 类型时用于选择语言切分器 */
+    fileType?: string;
   },
 ): Promise<ParentChildChunk[]> {
   const parentSize = options?.parentChunkSize ?? DEFAULT_PARENT_CHUNK_SIZE;
   const parentOverlap = options?.parentChunkOverlap ?? DEFAULT_PARENT_CHUNK_OVERLAP;
   const childSize = options?.childChunkSize ?? DEFAULT_CHILD_CHUNK_SIZE;
   const childOverlap = options?.childChunkOverlap ?? DEFAULT_CHILD_CHUNK_OVERLAP;
+  const documentType = options?.documentType ?? 'default';
 
-  // 第一步：切成父块
-  const parentSplitter = new RecursiveCharacterTextSplitter({
-    chunkSize: parentSize,
-    chunkOverlap: parentOverlap,
-  });
+  // 第一步：切成父块 —— 根据文档类型选择切分器
+  // Markdown 按标题层级切，代码按语言结构切，其他类型走通用切分
+  let parentSplitter: RecursiveCharacterTextSplitter;
+  if (documentType === 'markdown') {
+    parentSplitter = markdownSplitter(parentSize, parentOverlap);
+  } else if (documentType === 'code') {
+    // codeSplitter 内部会归一化扩展名并选择语言，未识别时降级为通用切分
+    parentSplitter = codeSplitter(options?.fileType || '', parentSize, parentOverlap);
+  } else {
+    parentSplitter = new RecursiveCharacterTextSplitter({
+      chunkSize: parentSize,
+      chunkOverlap: parentOverlap,
+    });
+  }
   const parentTexts = await parentSplitter.splitText(text);
 
   // 第二步：每个父块切成子块
+  // 子块统一用通用切分器，保证不同文档类型的检索粒度一致
   const childSplitter = new RecursiveCharacterTextSplitter({
     chunkSize: childSize,
     chunkOverlap: childOverlap,
@@ -218,7 +236,11 @@ export function getSplitterByFileType(
   const chunkSize = profile?.chunkSize ?? DEFAULT_CHUNK_SIZE;
   const chunkOverlap = profile?.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP;
 
-  if (isMarkdown || fileType === '.md') {
+  // 归一化扩展名为带点小写，兼容数据库里存 'pdf' 或 '.pdf' 两种格式
+  const rawType = (fileType || '').toLowerCase();
+  const normalizedType = rawType.startsWith('.') ? rawType : (rawType ? `.${rawType}` : '');
+
+  if (isMarkdown || normalizedType === '.md') {
     return markdownSplitter(chunkSize, chunkOverlap);
   }
 
@@ -227,8 +249,8 @@ export function getSplitterByFileType(
     '.js', '.jsx', '.ts', '.tsx', '.py', '.java',
     '.cpp', '.c', '.cs', '.go', '.rs', '.rb', '.php', '.swift',
   ];
-  if (codeExtensions.includes(fileType)) {
-    return codeSplitter(fileType, chunkSize, chunkOverlap);
+  if (codeExtensions.includes(normalizedType)) {
+    return codeSplitter(normalizedType, chunkSize, chunkOverlap);
   }
 
   // 默认：通用文本切分
@@ -240,7 +262,9 @@ export function getAdaptiveChunkingProfile(options: {
   mimeType?: string;
   content?: string;
 }): AdaptiveChunkingProfile {
-  const fileType = (options.fileType || '').toLowerCase();
+  // 统一扩展名格式为带点小写：数据库里可能存 'pdf' 也可能存 '.pdf'，这里归一化
+  const rawType = (options.fileType || '').toLowerCase();
+  const fileType = rawType.startsWith('.') ? rawType : (rawType ? `.${rawType}` : '');
   const mimeType = (options.mimeType || '').toLowerCase();
   const content = options.content || '';
   const isMarkdown = fileType === '.md' || mimeType.includes('markdown') || isMarkdownContent(content);

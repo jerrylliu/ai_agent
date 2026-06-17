@@ -293,6 +293,7 @@ export class DocumentService {
         versionStatus: VersionStatus.ACTIVE,
         source: version.fileUrl,
         fileType: version.fileType,
+        mimeType,  // 传给自适应 Chunking 做二次判断，避免扩展名格式不一致时降级为 default
       };
       logger.info('开始向量化入库', { module: 'DocumentService', versionId, documentId });
 
@@ -885,7 +886,7 @@ export class DocumentService {
                 version.documentId,
                 textContent,
                 vectorStatus,
-                { source: version.fileUrl, fileType: version.fileType },
+                { source: version.fileUrl, fileType: version.fileType, mimeType: this.getMimeTypeByExt(version.fileType) },
               );
               await this.versionRepo.update(op.versionId, {
                 parsingStatus: ParsingStatus.SUCCESS,
@@ -990,7 +991,7 @@ export class DocumentService {
               version.documentId,
               textContent,
               currentStatus,
-              { source: version.fileUrl, fileType: version.fileType },
+              { source: version.fileUrl, fileType: version.fileType, mimeType: this.getMimeTypeByExt(version.fileType) },
             );
             await this.versionRepo.update(op.versionId, {
               parsingStatus: ParsingStatus.SUCCESS,

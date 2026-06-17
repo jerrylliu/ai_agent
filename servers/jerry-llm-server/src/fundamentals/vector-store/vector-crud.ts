@@ -92,7 +92,6 @@ export async function addDocuments(
 
     const fileType = meta.fileType || '';
     const mimeType = meta.mimeType || '';
-    const isMD = isMarkdownContent(text);
     const adaptiveProfile = getAdaptiveChunkingProfile({ fileType, mimeType, content: text });
 
     if (chunkingStrategy === 'parent-child') {
@@ -103,6 +102,9 @@ export async function addDocuments(
         parentChunkOverlap: pcOptions?.parentChunkOverlap ?? adaptiveProfile.parentChunkOverlap,
         childChunkSize: pcOptions?.childChunkSize ?? adaptiveProfile.childChunkSize,
         childChunkOverlap: pcOptions?.childChunkOverlap ?? adaptiveProfile.childChunkOverlap,
+        // 传入文档类型和扩展名，让父块切分器按 Markdown 标题 / 代码结构切分
+        documentType: adaptiveProfile.documentType,
+        fileType,
       });
 
       logger.info('Parent-Child 切分文档', {
@@ -110,8 +112,14 @@ export async function addDocuments(
         docIndex: i,
         textLength: text.length,
         documentType: adaptiveProfile.documentType,
+        parentChunkSize: adaptiveProfile.parentChunkSize,
+        parentChunkOverlap: adaptiveProfile.parentChunkOverlap,
+        childChunkSize: adaptiveProfile.childChunkSize,
+        childChunkOverlap: adaptiveProfile.childChunkOverlap,
         parentCount: pcResult.length,
         totalChildren: pcResult.reduce((sum, pc) => sum + pc.children.length, 0),
+        parentSizes: pcResult.map(pc => pc.parent.text.length),
+        childSizes: pcResult.flatMap(pc => pc.children.map(c => c.text.length)),
       });
 
       for (const pc of pcResult) {
@@ -136,6 +144,8 @@ export async function addDocuments(
       }
     } else {
       // 传统 flat 切分
+      // isMD 只在 flat 模式下使用，用于让 getSplitterByFileType 优先走 Markdown 切分器
+      const isMD = isMarkdownContent(text);
       const splitter = getSplitterByFileType(fileType, isMD, adaptiveProfile);
 
       logger.info('切分文档', {
@@ -153,7 +163,7 @@ export async function addDocuments(
 
       const chunks = await splitter.splitText(text);
 
-      logger.debug('文档切分结果', {
+      logger.info('文档切分结果', {
         module: 'VectorStore',
         docIndex: i,
         chunkCount: chunks.length,

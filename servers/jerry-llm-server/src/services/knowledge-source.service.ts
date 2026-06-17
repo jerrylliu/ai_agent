@@ -337,6 +337,9 @@ export class KnowledgeSourceService {
           sourceName: source.name,
           crawledAt: new Date().toISOString(),
           versionStatus: 'active',
+          // 爬虫内容被拼成 Markdown 格式，显式标注类型，避免自适应 Chunking 降级为 default
+          fileType: 'md',
+          mimeType: 'text/markdown',
         });
       }
 

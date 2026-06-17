@@ -422,7 +422,7 @@ export async function reindexVersion(
   documentId: number,
   textContent: string,
   versionStatus: string,
-  fileInfo: { source: string; fileType: string },
+  fileInfo: { source: string; fileType: string; mimeType?: string },
 ): Promise<number> {
   logger.info('开始重新向量化版本', { module: 'VectorStore', versionId, documentId, versionStatus, textLength: textContent.length });
 
@@ -436,6 +436,8 @@ export async function reindexVersion(
     versionStatus,
     source: fileInfo.source,
     fileType: fileInfo.fileType,
+    // 传给自适应 Chunking，避免扩展名格式不一致时降级为 default
+    mimeType: fileInfo.mimeType || '',
   };
 
   logger.info('开始重新添加向量', { module: 'VectorStore', versionId, documentId });

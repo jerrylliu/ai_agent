@@ -12,6 +12,7 @@ import {
   isMarkdownContent,
   getSplitterByFileType,
   getAdaptiveChunkingProfile,
+  parentChildSplit,
 } from './text-splitter';
 
 describe('textSplitter', () => {
@@ -155,6 +156,103 @@ describe('textSplitter', () => {
     it('未知类型应返回通用切分器', () => {
       const s = getSplitterByFileType('.xyz');
       expect(s).toBeDefined();
+    });
+  });
+
+  describe('parentChildSplit（Parent-Child 切分）', () => {
+    // 构造一段带多个标题的 Markdown 文档，确保每个章节内容足够长以触发切分
+    const markdownDoc = [
+      '# 第一章 概述',
+      '这是第一章的内容，' + '概述描述。'.repeat(50),
+      '',
+      '## 1.1 背景',
+      '背景说明，' + '背景细节。'.repeat(50),
+      '',
+      '# 第二章 架构',
+      '架构内容，' + '架构描述。'.repeat(50),
+      '',
+      '## 2.1 模块设计',
+      '模块说明，' + '模块细节。'.repeat(50),
+    ].join('\n');
+
+    it('documentType=markdown 时父块应按标题切分', async () => {
+      const result = await parentChildSplit(markdownDoc, {
+        parentChunkSize: 800,
+        parentChunkOverlap: 100,
+        childChunkSize: 200,
+        childChunkOverlap: 30,
+        documentType: 'markdown',
+      });
+
+      // 至少切出多个父块
+      expect(result.length).toBeGreaterThan(1);
+
+      // Markdown 切分器会按标题边界切，父块文本应包含标题标记
+      const parentTexts = result.map(pc => pc.parent.text);
+      const hasHeading = parentTexts.some(t => /^#{1,6}\s/m.test(t));
+      expect(hasHeading).toBe(true);
+
+      // 每个父块都应有子块
+      for (const pc of result) {
+        expect(pc.children.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('documentType=default 时父块走通用切分', async () => {
+      const result = await parentChildSplit(markdownDoc, {
+        parentChunkSize: 800,
+        parentChunkOverlap: 100,
+        childChunkSize: 200,
+        childChunkOverlap: 30,
+        documentType: 'default',
+      });
+
+      expect(result.length).toBeGreaterThan(0);
+      for (const pc of result) {
+        expect(pc.children.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('documentType=code 时父块应按代码结构切分', async () => {
+      const codeDoc = [
+        'function foo() {',
+        '  const a = 1;',
+        '  ' + 'console.log(a);'.repeat(30),
+        '}',
+        '',
+        'function bar() {',
+        '  const b = 2;',
+        '  ' + 'console.log(b);'.repeat(30),
+        '}',
+      ].join('\n');
+
+      const result = await parentChildSplit(codeDoc, {
+        parentChunkSize: 600,
+        parentChunkOverlap: 80,
+        childChunkSize: 200,
+        childChunkOverlap: 30,
+        documentType: 'code',
+        fileType: '.js',
+      });
+
+      expect(result.length).toBeGreaterThan(0);
+      for (const pc of result) {
+        expect(pc.children.length).toBeGreaterThan(0);
+      }
+    });
+
+    it('不传 documentType 时应降级为通用切分（向后兼容）', async () => {
+      const result = await parentChildSplit(markdownDoc, {
+        parentChunkSize: 800,
+        parentChunkOverlap: 100,
+        childChunkSize: 200,
+        childChunkOverlap: 30,
+      });
+
+      expect(result.length).toBeGreaterThan(0);
+      for (const pc of result) {
+        expect(pc.children.length).toBeGreaterThan(0);
+      }
     });
   });
 });
