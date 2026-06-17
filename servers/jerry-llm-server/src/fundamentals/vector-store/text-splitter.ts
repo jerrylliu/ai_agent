@@ -32,6 +32,18 @@ export const DEFAULT_CHILD_CHUNK_SIZE = 300;
 /** Parent-Child 切分：子块默认重叠 */
 export const DEFAULT_CHILD_CHUNK_OVERLAP = 50;
 
+export type AdaptiveDocumentType = 'markdown' | 'code' | 'pdf' | 'word' | 'text' | 'default';
+
+export interface AdaptiveChunkingProfile {
+  documentType: AdaptiveDocumentType;
+  chunkSize: number;
+  chunkOverlap: number;
+  parentChunkSize: number;
+  parentChunkOverlap: number;
+  childChunkSize: number;
+  childChunkOverlap: number;
+}
+
 // ==================== Parent-Child 切分 ====================
 
 /**
@@ -201,9 +213,13 @@ export function markdownSplitter(
 export function getSplitterByFileType(
   fileType: string,
   isMarkdown: boolean = false,
+  profile?: Pick<AdaptiveChunkingProfile, 'chunkSize' | 'chunkOverlap'>,
 ): RecursiveCharacterTextSplitter {
+  const chunkSize = profile?.chunkSize ?? DEFAULT_CHUNK_SIZE;
+  const chunkOverlap = profile?.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP;
+
   if (isMarkdown || fileType === '.md') {
-    return markdownSplitter();
+    return markdownSplitter(chunkSize, chunkOverlap);
   }
 
   // 代码文件
@@ -212,11 +228,95 @@ export function getSplitterByFileType(
     '.cpp', '.c', '.cs', '.go', '.rs', '.rb', '.php', '.swift',
   ];
   if (codeExtensions.includes(fileType)) {
-    return codeSplitter(fileType);
+    return codeSplitter(fileType, chunkSize, chunkOverlap);
   }
 
   // 默认：通用文本切分
-  return textSplitter();
+  return textSplitter(chunkSize, chunkOverlap);
+}
+
+export function getAdaptiveChunkingProfile(options: {
+  fileType?: string;
+  mimeType?: string;
+  content?: string;
+}): AdaptiveChunkingProfile {
+  const fileType = (options.fileType || '').toLowerCase();
+  const mimeType = (options.mimeType || '').toLowerCase();
+  const content = options.content || '';
+  const isMarkdown = fileType === '.md' || mimeType.includes('markdown') || isMarkdownContent(content);
+
+  if (isMarkdown) {
+    return {
+      documentType: 'markdown',
+      chunkSize: 800,
+      chunkOverlap: 120,
+      parentChunkSize: 1800,
+      parentChunkOverlap: 240,
+      childChunkSize: 420,
+      childChunkOverlap: 70,
+    };
+  }
+
+  const codeExtensions = [
+    '.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.cpp', '.c', '.cs', '.go', '.rs', '.rb', '.php', '.swift',
+  ];
+  if (codeExtensions.includes(fileType) || mimeType.startsWith('text/x-')) {
+    return {
+      documentType: 'code',
+      chunkSize: 420,
+      chunkOverlap: 80,
+      parentChunkSize: 1200,
+      parentChunkOverlap: 180,
+      childChunkSize: 260,
+      childChunkOverlap: 60,
+    };
+  }
+
+  if (fileType === '.pdf' || mimeType.includes('pdf')) {
+    return {
+      documentType: 'pdf',
+      chunkSize: 900,
+      chunkOverlap: 150,
+      parentChunkSize: 2200,
+      parentChunkOverlap: 300,
+      childChunkSize: 450,
+      childChunkOverlap: 80,
+    };
+  }
+
+  if (['.doc', '.docx'].includes(fileType) || mimeType.includes('wordprocessingml') || mimeType.includes('msword')) {
+    return {
+      documentType: 'word',
+      chunkSize: 850,
+      chunkOverlap: 140,
+      parentChunkSize: 2000,
+      parentChunkOverlap: 260,
+      childChunkSize: 420,
+      childChunkOverlap: 70,
+    };
+  }
+
+  if (fileType === '.txt' || mimeType.startsWith('text/')) {
+    return {
+      documentType: 'text',
+      chunkSize: 650,
+      chunkOverlap: 100,
+      parentChunkSize: 1600,
+      parentChunkOverlap: 220,
+      childChunkSize: 340,
+      childChunkOverlap: 60,
+    };
+  }
+
+  return {
+    documentType: 'default',
+    chunkSize: DEFAULT_CHUNK_SIZE,
+    chunkOverlap: DEFAULT_CHUNK_OVERLAP,
+    parentChunkSize: DEFAULT_PARENT_CHUNK_SIZE,
+    parentChunkOverlap: DEFAULT_PARENT_CHUNK_OVERLAP,
+    childChunkSize: DEFAULT_CHILD_CHUNK_SIZE,
+    childChunkOverlap: DEFAULT_CHILD_CHUNK_OVERLAP,
+  };
 }
 
 /**

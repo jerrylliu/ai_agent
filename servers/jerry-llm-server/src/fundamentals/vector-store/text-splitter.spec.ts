@@ -11,6 +11,7 @@ import {
   markdownSplitter,
   isMarkdownContent,
   getSplitterByFileType,
+  getAdaptiveChunkingProfile,
 } from './text-splitter';
 
 describe('textSplitter', () => {
@@ -107,6 +108,31 @@ describe('textSplitter', () => {
 
     it('仅含一种 Markdown 特征不应识别', () => {
       expect(isMarkdownContent('hello world [link](url) end')).toBe(false);
+    });
+  });
+
+  describe('getAdaptiveChunkingProfile', () => {
+    it('Markdown 内容应使用 markdown 配置', () => {
+      const profile = getAdaptiveChunkingProfile({ fileType: '.md', content: '# 标题\n\n- 列表' });
+      expect(profile.documentType).toBe('markdown');
+      expect(profile.chunkSize).toBeGreaterThan(500);
+    });
+
+    it('代码文件应使用更小的 child chunk', () => {
+      const profile = getAdaptiveChunkingProfile({ fileType: '.ts', content: 'function main() { return true; }' });
+      expect(profile.documentType).toBe('code');
+      expect(profile.childChunkSize).toBeLessThan(300);
+    });
+
+    it('PDF 应使用更大的父块', () => {
+      const profile = getAdaptiveChunkingProfile({ mimeType: 'application/pdf', content: 'plain text' });
+      expect(profile.documentType).toBe('pdf');
+      expect(profile.parentChunkSize).toBeGreaterThan(2000);
+    });
+
+    it('未知类型应使用默认配置', () => {
+      const profile = getAdaptiveChunkingProfile({ fileType: '.unknown', content: 'plain text' });
+      expect(profile.documentType).toBe('default');
     });
   });
 

@@ -58,7 +58,10 @@ const runtimeMap = new Map<string, McpServerRuntime>();
 /** 是否完成初始化 */
 let initialized = false;
 
-/** 工具是否可用：至少一个 MCP Server 启动成功 */
+/** MCP 初始化流程是否已完成 */
+let initializationCompleted = false;
+
+/** 工具是否可用：至少一个 MCP Server 通过健康检查 */
 let mcpAvailable = false;
 
 // ==================== 配置解析 ====================
@@ -86,6 +89,35 @@ function parseMcpServersConfig(): McpServerConfig[] {
   }
 }
 
+function updateMcpAvailability(): void {
+  mcpAvailable = runtimeMap.size > 0;
+}
+
+async function removeRuntime(server: string, reason: string): Promise<void> {
+  const runtime = runtimeMap.get(server);
+  if (!runtime) return;
+
+  runtimeMap.delete(server);
+  updateMcpAvailability();
+
+  try {
+    await runtime.client.close();
+  } catch (e: any) {
+    logger.warn('mcp_proxy：移除 Server 时关闭客户端失败', {
+      module: 'Tool:McpProxy',
+      server,
+      error: e.message,
+    });
+  }
+
+  logger.warn('mcp_proxy：Server 已从运行时列表移除', {
+    module: 'Tool:McpProxy',
+    server,
+    reason,
+    activeServers: Array.from(runtimeMap.keys()).join(','),
+  });
+}
+
 // ==================== 初始化 ====================
 
 /**
@@ -102,6 +134,7 @@ export async function initMcpProxy(): Promise<void> {
   if (servers.length === 0) {
     logger.info('mcp_proxy：未配置任何 MCP Server，跳过初始化', { module: 'Tool:McpProxy' });
     mcpAvailable = false;
+    initializationCompleted = true;
     return;
   }
 
@@ -120,6 +153,7 @@ export async function initMcpProxy(): Promise<void> {
       error: e.message,
     });
     mcpAvailable = false;
+    initializationCompleted = true;
     return;
   }
 
@@ -136,7 +170,7 @@ export async function initMcpProxy(): Promise<void> {
       const client = new Client({ name: 'jerry-llm-server', version: '1.0.0' }, { capabilities: {} });
       await client.connect(transport);
 
-      // 拉取 tools/list 缓存
+      // 拉取 tools/list 作为健康检查：连接成功但无法列出工具时视为不可用
       const listResp = await client.listTools();
       const tools = (listResp?.tools || []).map((t: any) => ({
         name: t.name,
@@ -144,8 +178,18 @@ export async function initMcpProxy(): Promise<void> {
         inputSchema: t.inputSchema,
       }));
 
+      if (tools.length === 0) {
+        await client.close();
+        logger.warn('mcp_proxy：Server 未暴露任何工具，已跳过', {
+          module: 'Tool:McpProxy',
+          server: cfg.name,
+        });
+        continue;
+      }
+
       runtimeMap.set(cfg.name, { config: cfg, client, tools });
-      logger.info('mcp_proxy：Server 初始化成功', {
+      updateMcpAvailability();
+      logger.info('mcp_proxy：Server 健康检查通过，初始化成功', {
         module: 'Tool:McpProxy',
         server: cfg.name,
         toolsCount: tools.length,
@@ -161,7 +205,8 @@ export async function initMcpProxy(): Promise<void> {
     }
   }
 
-  mcpAvailable = runtimeMap.size > 0;
+  updateMcpAvailability();
+  initializationCompleted = true;
   logger.info('mcp_proxy：初始化完成', {
     module: 'Tool:McpProxy',
     activeServers: Array.from(runtimeMap.keys()).join(','),
@@ -183,9 +228,10 @@ export function validateMcpProxyConfig(): boolean {
 }
 
 export function isMcpProxyAvailable(): boolean {
-  // 注：mcpAvailable 在 initMcpProxy 完成后才会更新，
-  // 工具注册阶段返回的是配置存在性；HITL/SSE 等下游使用 isMcpProxyAvailable
-  return mcpAvailable || validateMcpProxyConfig();
+  if (!initializationCompleted) {
+    return validateMcpProxyConfig();
+  }
+  return mcpAvailable;
 }
 
 // ==================== 工具 Schema ====================
@@ -316,6 +362,7 @@ export async function executeMcpProxy(params: McpProxyParams): Promise<McpProxyR
       tool: params.tool,
       error: e.message,
     });
+    await removeRuntime(params.server, e.message || String(e));
     return { success: false, error: e.message || String(e) };
   }
 }
@@ -335,5 +382,6 @@ export async function shutdownMcpProxy(): Promise<void> {
   }
   runtimeMap.clear();
   initialized = false;
+  initializationCompleted = false;
   mcpAvailable = false;
 }

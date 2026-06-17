@@ -34,6 +34,7 @@ export {
   codeSplitter,
   markdownSplitter,
   getSplitterByFileType,
+  getAdaptiveChunkingProfile,
   isMarkdownContent,
   parentChildSplit,
   DEFAULT_CHUNK_SIZE,
@@ -46,6 +47,8 @@ export {
 
 export type {
   ParentChildChunk,
+  AdaptiveChunkingProfile,
+  AdaptiveDocumentType,
 } from './text-splitter.js';
 
 // ==================== BM25 索引 ====================

@@ -26,6 +26,7 @@ export const config = {
     username: process.env.DB_USERNAME || 'root',
     password: process.env.DB_PASSWORD || '123456',
     database: process.env.DB_DATABASE || 'cyberpunk',
+    synchronize: (process.env.TYPEORM_SYNCHRONIZE || 'false').toLowerCase() === 'true',
   },
 
   /** Ollama 服务地址 */

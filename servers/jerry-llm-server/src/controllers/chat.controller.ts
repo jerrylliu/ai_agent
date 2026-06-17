@@ -17,6 +17,7 @@ import { handleConfirmationResponse } from '../fundamentals/human-in-the-loop.js
 import { logger } from '../fundamentals/logger';
 import { acquireLock } from '../fundamentals/distributed-lock';
 import { isRedisReady } from '../fundamentals/redis-client';
+import { inspectPromptInjection, logPromptInjectionDetection } from '../fundamentals/prompt-injection-guard.js';
 
 // @Controller('chat') 声明该类为 NestJS 控制器，路由前缀为 /chat
 // 即该控制器下所有路由都以 /chat 开头
@@ -60,6 +61,19 @@ export class ChatController {
     @Res() res: Response,
     @Req() req: any,
   ) {
+    // 在设置 SSE 响应头之前先做 Prompt 注入检测，
+    // 高风险请求直接返回 JSON 拒绝包，避免响应头被预设为 text/event-stream
+    // 导致前端按 SSE 协议解析 JSON 体
+    const injectionDetection = inspectPromptInjection(body.message);
+    logPromptInjectionDetection(injectionDetection, { userId: req.userId, sessionId: body.sessionId });
+    if (injectionDetection.level === 'blocked') {
+      res.status(400).json({
+        success: false,
+        message: '检测到高风险 Prompt 注入请求，已拒绝处理。请去除要求忽略系统规则、泄露隐藏提示或绕过安全限制的内容后重试。',
+      });
+      return;
+    }
+
     // 设置 SSE 响应头：内容类型为 text/event-stream
     res.setHeader('Content-Type', 'text/event-stream');
     // 禁用缓存，确保前端实时获取流式数据

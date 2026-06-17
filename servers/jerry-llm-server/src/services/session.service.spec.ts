@@ -86,9 +86,9 @@ describe('SessionService', () => {
       getMockRepo('llmUsage'),
       getMockRepo('messageFeedback'),
       getMockRepo('autoEvaluation'),
+      getMockRepo('generatedDocument'),
       mockSummaryService as any,
       mockMemoryService as any,
-      getMockRepo('generatedDocument'),
     );
   }
 
@@ -158,11 +158,17 @@ describe('SessionService', () => {
     it('应按创建时间升序返回消息', async () => {
       const service = createService();
       const repo = getMockRepo('chatHistory');
-      const msgs = [{ id: 1 }, { id: 2 }];
+      const docRepo = getMockRepo('generatedDocument');
+      const msgs = [
+        { id: 1, role: 'user', createdAt: new Date('2024-01-01T00:00:00Z') },
+        { id: 2, role: 'assistant', createdAt: new Date('2024-01-01T00:00:01Z') },
+      ];
       repo.find.mockResolvedValue(msgs);
+      // 没有附件场景：返回空数组，确保不影响消息顺序断言
+      docRepo.find.mockResolvedValue([]);
 
       const result = await service.getSessionHistory('s1');
-      expect(result).toEqual(msgs);
+      expect(result).toEqual(msgs.map((m) => ({ ...m, attachments: [] })));
       expect(repo.find).toHaveBeenCalledWith({
         where: { sessionId: 's1' },
         order: { createdAt: 'ASC' },

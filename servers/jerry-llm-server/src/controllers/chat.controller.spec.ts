@@ -7,6 +7,9 @@
  * Mock 策略：mock 全部 5 个注入 Service + AppService（防止 ESM 链式加载崩溃）
  */
 
+// 在任何 import 之前注入测试用环境变量，避免 fundamentals/config.ts 启动校验失败
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+
 /* =====================================================================
  * Mock 所有链式依赖，防止 ESM 加载崩溃
  * ==================================================================*/
@@ -85,6 +88,17 @@ jest.mock('../services/tool-usage.service', () => ({
   ToolUsageService: class { getToolUsageStats = jest.fn().mockResolvedValue({}); },
 }));
 
+// GeneratedDocumentService（防止 ESM 链式加载到 fundamentals/config.ts）
+jest.mock('../services/generated-document.service', () => ({
+  GeneratedDocumentService: class {
+    save = jest.fn().mockResolvedValue({});
+    read = jest.fn().mockResolvedValue(null);
+    list = jest.fn().mockResolvedValue([]);
+    toggleFavorite = jest.fn().mockResolvedValue({});
+    delete = jest.fn().mockResolvedValue({});
+  },
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { ChatController } from './chat.controller';
 import { AppService } from '../app.service';
@@ -92,6 +106,7 @@ import { SessionService } from '../services/session.service';
 import { UsageService } from '../services/usage.service';
 import { EvaluationService } from '../services/evaluation.service';
 import { ToolUsageService } from '../services/tool-usage.service';
+import { GeneratedDocumentService } from '../services/generated-document.service';
 
 describe('ChatController', () => {
   let controller: ChatController;
@@ -110,6 +125,7 @@ describe('ChatController', () => {
         { provide: UsageService, useValue: new (UsageService as any)() },
         { provide: EvaluationService, useValue: new (EvaluationService as any)() },
         { provide: ToolUsageService, useValue: new (ToolUsageService as any)() },
+        { provide: GeneratedDocumentService, useValue: new (GeneratedDocumentService as any)() },
       ],
     }).compile();
 

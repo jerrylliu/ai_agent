@@ -17,7 +17,12 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "typeorm": "typeorm -d dist/typeorm-data-source.js",
+    "migration:generate": "pnpm build && pnpm typeorm migration:generate src/migrations/InitialSchema",
+    "migration:run": "pnpm build && pnpm typeorm migration:run",
+    "migration:revert": "pnpm build && pnpm typeorm migration:revert",
+    "migration:show": "pnpm build && pnpm typeorm migration:show"
   },
   "dependencies": {
     "@langchain/classic": "^1.0.29",

@@ -60,7 +60,14 @@ import { config } from './fundamentals/config.js';
       password: config.db.password,
       database: config.db.database,
       entities: [ChatHistory, Session, User, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage, GeneratedDocument],
-      synchronize: true,
+      // 不在 NestJS 启动时加载 migrations：
+      // 1. NestJS 运行在 ESM 模式，TypeORM 同步 require 加载 ESM 迁移文件会崩
+      //    （报错：Unexpected module status 0 / MigrationInterface 命名导出缺失）
+      // 2. 迁移统一通过 `pnpm migration:run` CLI 走 dist/typeorm-data-source.js 执行
+      // 因此这里 migrations 留空，且 migrationsRun 强制为 false
+      migrations: [],
+      synchronize: config.db.synchronize,
+      migrationsRun: false,
     }),
     TypeOrmModule.forFeature([ChatHistory, Session, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage, GeneratedDocument]),
     AuthModule,

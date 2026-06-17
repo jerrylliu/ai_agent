@@ -30,6 +30,7 @@ import { logger } from './logger';
 import { config } from './config';
 import { mindmapImageUrl } from './tools/multimodal-output';
 import { MultiLevelCache } from './multi-level-cache';
+import { buildPromptInjectionSafetyInstruction, inspectPromptInjection, UNTRUSTED_CONTEXT_INSTRUCTION } from './prompt-injection-guard.js';
 
 /**
  * ========================================================================
@@ -1062,6 +1063,10 @@ async function promptWithFunctionCalling(
   const supportsVision = modelInfo.supportsVision;
 
   let fcSystemPrompt = buildFCSystemPrompt();
+  const injectionDetection = inspectPromptInjection(promptText);
+  if (injectionDetection.level === 'suspicious') {
+    fcSystemPrompt += buildPromptInjectionSafetyInstruction(injectionDetection);
+  }
 
   // ==================== Agent Router：意图路由 ====================
   // 根据用户输入选择最合适的 Agent，决定 system prompt 增量和工具白名单
@@ -2216,7 +2221,7 @@ export const promptTemplate = async (
           ragContextCount = relevantResults.length;
           retrievedContext = relevantResults
             .map((r: any, i: number) => `【文档 ${i + 1}】\n${r.content}`)
-            .join('\n\n');
+            .join('\n\n') + UNTRUSTED_CONTEXT_INSTRUCTION;
           retrievalResults = relevantResults;
           logger.info('知识库检索完成', { module: 'PromptService', resultCount: relevantResults.length });
         } else {
@@ -2232,6 +2237,10 @@ export const promptTemplate = async (
 
   // ==================== 步骤2: 构建系统提示词 ====================
   let systemPrompt = SYSTEM_PROMPT;
+  const injectionDetection = inspectPromptInjection(promptText);
+  if (injectionDetection.level === 'suspicious') {
+    systemPrompt += buildPromptInjectionSafetyInstruction(injectionDetection);
+  }
 
   if (hasRetrievedContent) {
     const docList = retrievalResults
@@ -2254,7 +2263,7 @@ ${docList}
 1. 优先使用参考资料中的信息回答，回答时在括号内标注来源，格式为：（【文档 X】）
 2. 如果参考资料只覆盖问题的一部分，先列出资料中的信息，再说明"资料中未涉及以下方面：[缺失点]"
 3. 如果参考资料与用户问题完全无关，请回复"知识库中未找到相关信息，以下基于通用知识回答："，然后用自己的知识回答
-4. 当用户问知识库有多少文档时，请根据"知识库统计"信息回答，不要只数参考资料的条数`;
+4. 当用户问知识库有多少文档时，请根据"知识库统计"信息回答，不要只数参考资料的条数${UNTRUSTED_CONTEXT_INSTRUCTION}`;
   }
 
   // ==================== 步骤2.5: 注入对话摘要 ====================

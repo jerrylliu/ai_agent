@@ -31,6 +31,7 @@ import {
 import {
   getSplitterByFileType,
   isMarkdownContent,
+  getAdaptiveChunkingProfile,
   DEFAULT_CHUNK_SIZE,
   DEFAULT_CHUNK_OVERLAP,
   parentChildSplit,
@@ -89,20 +90,26 @@ export async function addDocuments(
     const text = texts[i];
     const meta = metadata[i] || {};
 
+    const fileType = meta.fileType || '';
+    const mimeType = meta.mimeType || '';
+    const isMD = isMarkdownContent(text);
+    const adaptiveProfile = getAdaptiveChunkingProfile({ fileType, mimeType, content: text });
+
     if (chunkingStrategy === 'parent-child') {
       // Parent-Child 切分
       const pcOptions = options?.parentChild;
       const pcResult = await parentChildSplit(text, {
-        parentChunkSize: pcOptions?.parentChunkSize,
-        parentChunkOverlap: pcOptions?.parentChunkOverlap,
-        childChunkSize: pcOptions?.childChunkSize,
-        childChunkOverlap: pcOptions?.childChunkOverlap,
+        parentChunkSize: pcOptions?.parentChunkSize ?? adaptiveProfile.parentChunkSize,
+        parentChunkOverlap: pcOptions?.parentChunkOverlap ?? adaptiveProfile.parentChunkOverlap,
+        childChunkSize: pcOptions?.childChunkSize ?? adaptiveProfile.childChunkSize,
+        childChunkOverlap: pcOptions?.childChunkOverlap ?? adaptiveProfile.childChunkOverlap,
       });
 
       logger.info('Parent-Child 切分文档', {
         module: 'VectorStore',
         docIndex: i,
         textLength: text.length,
+        documentType: adaptiveProfile.documentType,
         parentCount: pcResult.length,
         totalChildren: pcResult.reduce((sum, pc) => sum + pc.children.length, 0),
       });
@@ -129,15 +136,17 @@ export async function addDocuments(
       }
     } else {
       // 传统 flat 切分
-      const fileType = meta.fileType || '';
-      const isMD = isMarkdownContent(text);
-      const splitter = getSplitterByFileType(fileType, isMD);
+      const splitter = getSplitterByFileType(fileType, isMD, adaptiveProfile);
 
       logger.info('切分文档', {
         module: 'VectorStore',
         docIndex: i,
         textLength: text.length,
         fileType: fileType || '(无)',
+        mimeType: mimeType || '(无)',
+        documentType: adaptiveProfile.documentType,
+        chunkSize: adaptiveProfile.chunkSize,
+        chunkOverlap: adaptiveProfile.chunkOverlap,
         isMarkdown: isMD,
         splitterType: splitter.constructor.name,
       });
