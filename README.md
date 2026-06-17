@@ -1,4 +1,4 @@
-# Miaoma AI App
+# Aether MC AI App
 
 > AI 驱动的桌面助手应用 | Tauri 2 + React 19 + NestJS 11 + LangChain
 
@@ -6,7 +6,7 @@
 
 ## 项目简介
 
-Miaoma AI App 是一个基于大语言模型的智能桌面助手，提供对话交互、知识库管理、RAG 检索增强生成、文档生成与管理等能力。采用 pnpm Monorepo 架构，前后端分离。
+Aether MC AI App 是一个基于大语言模型的智能桌面助手，提供对话交互、知识库管理、RAG 检索增强生成、文档生成与管理等能力。采用 pnpm Monorepo 架构，前后端分离。
 
 | 模块 | 路径 | 技术栈 |
 |------|------|--------|
