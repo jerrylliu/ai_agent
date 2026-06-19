@@ -1,13 +1,55 @@
-import { HumanMessage, AIMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
-import type { Response } from 'express';
-import * as path from 'path';
-import * as fs from 'fs';
-import * as https from 'https';
+// ============================================================================
+// 文件作用：Prompt 服务的核心入口，负责把用户输入 → 路由 → 调 LLM → 处理工具调用
+//          → SSE 流式输出回客户端。是后端最重的一个模块（2200+ 行）。
+//
+// 引入资源说明（按下方 import 顺序）：
+//   1) @langchain/core/messages —— LangChain 提供的消息类型（角色封装）。
+//   2) express 的 Response 类型 —— SSE 写流时需要拿到原生 res 对象。
+//   3) Node.js 内置模块：path / fs / https / http —— 文件路径、文件系统、HTTP(S) 客户端。
+//   4) ./sse-writer —— 项目内 SSE 写流封装（统一 event 格式 + 心跳）。
+//   5) ./rag-service / ./vector-store —— 知识库检索（RAG 链路）。
+//   6) ./model-provider —— LLM 客户端工厂（含限流封装、能力查询）。
+//   7) ./tools 及其子模块 —— LangChain Tool 注册中心 + plan-execute 调度。
+//   8) ./router/agent-router —— Agent 智能路由（决定调哪类工具集）。
+//   9) ./logger / ./config —— Winston 日志 + 全局配置。
+//  10) ./multi-level-cache —— 多级缓存（L1 LRU + L2 Redis），用于跨轮资产缓存。
+//  11) ./prompt-injection-guard —— 提示词注入防护（用户输入安全审查）。
+// ============================================================================
 
+// 【LangChain 消息类型】使用「具名导入（named imports）」语法，从同一模块批量解构出 4 个类。
+// HumanMessage   —— 角色 user 的消息封装
+// AIMessage      —— 角色 assistant 的消息封装（可携带 tool_calls）
+// SystemMessage  —— 角色 system 的消息封装（系统级指令）
+// ToolMessage    —— 角色 tool 的消息封装（工具调用结果回填给 LLM）
+// 第三方包路径不带 .js 后缀，由 Node 的 package exports 解析。
+import { HumanMessage, AIMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
+
+// 【type-only 导入】`import type` 只拉取类型，不会出现在运行时产物中（被 TS 编译期擦除）。
+// Response 是 Express 的响应对象类型，仅用于 SSE 流式响应的参数标注。
+import type { Response } from 'express';
+
+// 【命名空间导入】`import * as X from 'pkg'` 将整个模块作为对象导入，访问 X.method() 形式。
+// 这里全部为 Node 内置模块（不需要安装）。
+import * as path from 'path';   // 处理跨平台文件路径拼接（path.join、path.resolve）
+import * as fs from 'fs';       // 同步/异步文件系统读写
+import * as https from 'https'; // HTTPS 请求客户端（用于下载远程资源）
+
+// 【相对路径导入】具名导入项目内部模块的若干工具函数。
+// 注意：本项目运行在 NestJS 11 ESM 模式下，相对路径理论上需要带 .js 后缀，
+//       但本文件历史上未带后缀（被 ts-node-dev 等工具兼容处理），保持现状。
+// sse-writer 提供 SSE 协议层的统一事件写入函数。
 import { sendToolStatus, startHeartbeat, stopHeartbeat, sendMetadata, sendSessionAction, sendContent, sendFileCard } from './sse-writer';
 
 /**
- * FC 模式降级到 RAG 模式时携带已获取的知识库结果
+ * 【自定义错误类】class 关键字 + extends Error 继承内置 Error。
+ * 用途：FC（Function Calling）模式中检索知识库后若需要降级到 RAG 模式，
+ *       通过抛出本错误把「已经检索到的知识库结果」一并带出来，
+ *       避免外层重复检索浪费一次向量查询。
+ *
+ * 语法点：
+ *   - constructor 中先 super(message) 触发 Error 父类初始化（必须先于 this 访问）
+ *   - this.name 重写错误名，便于日志识别
+ *   - 公开字段 knowledgeBaseResult 直接赋值（TS 严格模式要求声明类型）
  */
 class FCFallbackError extends Error {
   knowledgeBaseResult: string;
@@ -17,19 +59,53 @@ class FCFallbackError extends Error {
     this.knowledgeBaseResult = knowledgeBaseResult;
   }
 }
+
+// 【Node 内置模块】HTTP 客户端，与上方 https 配对使用（视目标 URL 协议选择）。
 import * as http from 'http';
 
+// 【RAG 链路】retrieveFromKnowledgeBase：执行向量召回 + 重排，返回拼接好的上下文文本。
 import { retrieveFromKnowledgeBase } from './rag-service';
+// 【向量库统计】getKnowledgeBaseStats：返回当前知识库文档数等元信息（用于路由决策）。
 import { getKnowledgeBaseStats } from './vector-store';
+// 【模型工厂】批量解构 6 个函数：
+//   createLLM            —— 创建普通 LLM 客户端实例
+//   createRateLimitedLLM —— 创建带限流封装的 LLM 实例（防止打爆上游 API）
+//   buildModelConfig     —— 根据模型 ID + 模式构建配置对象
+//   getCurrentModelId    —— 读取当前活跃模型 ID（环境变量或运行时切换）
+//   getModelInfo         —— 查询模型元信息（厂商、定价等）
+//   getModelCapabilities —— 查询模型能力（context length / 是否支持 FC / 是否多模态）
 import { createLLM, createRateLimitedLLM, buildModelConfig, getCurrentModelId, getModelInfo, getModelCapabilities } from './model-provider';
+// 【工具中心】LangChain Tool 注册管理：
+//   getToolSchemasForModel —— 拿到该模型可见的所有 tool JSON Schema（function calling 使用）
+//   executeTool            —— 根据 tool 名 + 参数执行具体工具实现
+//   hasTool                —— 校验某个 tool 名是否存在
+//   getAvailableToolNames  —— 列出所有已注册的工具名
 import { getToolSchemasForModel, executeTool, hasTool, getAvailableToolNames } from './tools';
+// 【Plan-and-Execute 调度】把多步任务拆为 plan，逐步执行：
+//   resolveDataBindings —— 解析步骤间数据绑定（${step1.output} 这类引用）
+//   getSessionPlan      —— 读取会话当前的 plan 对象
+//   storeStepOutput     —— 把某步骤产出存入会话上下文，供后续步骤引用
+//   findMatchingStep    —— 根据 tool 调用反查所属 plan step
 import { resolveDataBindings, getSessionPlan, storeStepOutput, findMatchingStep } from './tools/plan-execute';
+// 【智能路由】根据用户输入判断走哪条链路（普通 chat / RAG / Agent）：
+//   routeRequest             —— 给定 query，返回路由决策
+//   applyAgentToolWhitelist  —— 按 Agent 类型筛掉禁用的工具
 import { routeRequest, applyAgentToolWhitelist } from './router/agent-router';
+// 【搜索结果格式化】把搜索引擎原始 JSON 转成模型友好的 Markdown 摘要。
 import { formatSearchResultAsSummary } from './tools/search-web';
+// 【日志器 & 配置】项目级单例：
+//   logger 走 Winston + Loki，必须带 module 字段；
+//   config 是从环境变量收敛后的强类型配置对象。
 import { logger } from './logger';
 import { config } from './config';
+// 【多模态产出辅助】mindmapImageUrl：把 mermaid 源码转成可访问的图片 URL（懒渲染）。
 import { mindmapImageUrl } from './tools/multimodal-output';
+// 【泛型缓存类】MultiLevelCache<T>：T 为缓存值类型，支持 L1（内存 LRU）+ L2（Redis）。
 import { MultiLevelCache } from './multi-level-cache';
+// 【提示注入防护】这是本文件唯一带 .js 后缀的相对导入（符合 ESM 规范）：
+//   buildPromptInjectionSafetyInstruction —— 生成防注入的系统提示
+//   inspectPromptInjection                —— 检查输入是否包含可疑注入模式
+//   UNTRUSTED_CONTEXT_INSTRUCTION         —— 标准化的「不可信上下文」提示常量
 import { buildPromptInjectionSafetyInstruction, inspectPromptInjection, UNTRUSTED_CONTEXT_INSTRUCTION } from './prompt-injection-guard.js';
 
 /**
@@ -42,20 +118,40 @@ import { buildPromptInjectionSafetyInstruction, inspectPromptInjection, UNTRUSTE
  *   - L2：Redis（跨实例共享 + 重启不丢）
  *   - Redis 不可用时自动降级为纯 L1，与改造前行为一致
  *
- * TTL 1 小时：覆盖"生成 → 切走 → 回来要求发邮件"等较长间隔
+ * TTL（TTL = Time To Live,中文叫「生存时间 / 存活时间」） 1 小时：覆盖"生成 → 切走 → 回来要求发邮件"等较长间隔
+ * 业务效果：用户第 1 轮生成了图片，1 小时内回来说「发到我邮箱」，模型还能从缓存读到上轮 URL 直接用；超过 1 小时再回来，缓存已过期，模型会重新生成。
+ * - TTL 抖动（jitter） ：ttlJitterRatio: 0.1 —— 让每条 key 的实际 TTL 在 ±10% 范围内随机浮动。这是防止「缓存雪崩」（大量 key 同一秒过期，瞬间打爆数据库）的标准做法。
+ * - TTL 续期（touch） ： saveSessionAssets 里有 sessionAssetCache.touch(sessionId) —— 当本轮没有新资产时，只刷新过期时间不覆盖内容，避免被空数据替换。
  * （与 ChatGPT/Claude 主流对话连贯感时长一致）
  * 文档实体本身 TTL 是 7 天（DB），这里仅控制"提示注入"的持续时间。
  * ========================================================================
  */
 interface SessionAssetEntry {
+  // 【interface 语法】TS 接口，用于描述对象结构（运行时不存在，编译期擦除）。
+  // 【Array<T> 与 T[] 等价】这里用 Array<{...}> 是为了在内嵌对象类型时更可读。
+  // images：上一轮 generate_image 工具产出的图片列表（url + 描述文本 alt）。
   images: Array<{ url: string; alt: string }>;
+  // charts：上一轮 generate_chart 工具产出的图表（已渲染为图片 URL）。
+  // chartType?: 用 ? 声明可选属性（line/bar/pie 等）。
   charts: Array<{ imageUrl: string; chartType?: string }>;
+  // mindmaps：上一轮 create_mindmap 产出，imageUrl 由 mermaid 源码懒渲染得到。
   mindmaps: Array<{ imageUrl: string; title?: string }>;
+  // fileCards：上一轮 generate_document 产出的文档卡（PDF/Word/HTML 等）。
   fileCards: Array<{ fileUrl: string; filename: string; format: string }>;
 }
 
+// 【常量声明】const + 命名采用 UPPER_SNAKE_CASE 表示编译期常量。
+// 60 * 60 = 3600 秒，即 1 小时。让数字保留计算式比直接写 3600 更易读，
+// TS 编译会做常量折叠，无运行时开销。
 const ASSET_CACHE_TTL_SEC = 60 * 60; // 1 小时
 
+// 【泛型实例化】new MultiLevelCache<SessionAssetEntry>({...})
+//   <SessionAssetEntry> 显式指定泛型参数 T，使后续 cache.get/set 自带类型推断。
+//   构造参数为对象字面量（options pattern），含 4 个字段：
+//     namespace      —— Redis key 前缀，用于区分不同业务的缓存
+//     ttlSec         —— 缓存生存期（秒），到期自动失效
+//     l1MaxSize      —— L1 内存中最大条目数，溢出按 LRU 策略淘汰
+//     ttlJitterRatio —— TTL 抖动比例（±10%），避免大量 key 同时过期造成「缓存雪崩」
 const sessionAssetCache = new MultiLevelCache<SessionAssetEntry>({
   namespace: 'session-asset',
   ttlSec: ASSET_CACHE_TTL_SEC,
@@ -137,9 +233,9 @@ async function getSessionAssets(sessionId: string | undefined): Promise<string |
   if (entry.fileCards.length > 0) {
     parts.push(
       '文档（PDF/Word/HTML）：\n' +
-        entry.fileCards
-          .map((f, i) => `  ${i + 1}. filename: "${f.filename}"，format: ${f.format}，fileUrl: ${f.fileUrl}`)
-          .join('\n'),
+      entry.fileCards
+        .map((f, i) => `  ${i + 1}. filename: "${f.filename}"，format: ${f.format}，fileUrl: ${f.fileUrl}`)
+        .join('\n'),
     );
   }
   if (parts.length === 0) return null;
@@ -433,7 +529,11 @@ function isPossibleRawToolCallStart(text: string): boolean {
   return /^[<｜]/.test(text) || text.includes('<|') || text.includes('<｜');
 }
 
-// Token 估算：中文约 1.5 字符/token，英文约 4 字符/token
+/**
+ * 估算字符串占用的 token 数（粗略，用于历史裁剪和预算计算）。
+ * 经验值：中文每 1.5 字 ≈ 1 token；英文/数字/符号每 4 字符 ≈ 1 token。
+ * 真实计费请用厂商提供的 tokenizer，本函数仅用于上下文窗口预算（误差可接受）。
+ */
 function estimateTokens(text: string): number {
   const chineseChars = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
   const otherChars = text.length - chineseChars;
@@ -626,7 +726,13 @@ export interface UsageData {
   assistantMessage?: string;
 }
 
-// 从消息列表估算 input tokens
+/**
+ * 把 LangChain Message 数组的 input 估算为 token 数。
+ * 用于流式结束后回调 onUsageComplete 上报"输入 token 数"。
+ * - 字符串内容直接走 estimateTokens
+ * - 多模态数组内容（多模态消息）：text 部分按字符估，每张图片固定计 1000 tokens
+ *   （这是 OpenAI / Anthropic 公开的 tile-based 图片计费下限的近似值）
+ */
 function estimateTokensFromMessages(messages: Array<any>): number {
   let total = 0;
   for (const msg of messages) {
@@ -656,8 +762,22 @@ function estimateTokensFromMessages(messages: Array<any>): number {
 const SYSTEM_PROMPT = `你是一个全能助手`;
 
 /**
- * 根据当前注册的工具动态构建 FC 模式 System Prompt
- * 只包含已注册工具的描述和规则，避免本地小模型上下文浪费
+ * 根据当前注册的工具动态构建 FC 模式 System Prompt。
+ *
+ * 【为什么动态构建】
+ *   不同部署环境注册的工具集不同（如本地小模型可能只开 search/calculate，
+ *   云端大模型才开 generate_image / send_notification）。如果硬编码完整规则，
+ *   小模型会被无关工具描述污染上下文，浪费有限的 context 长度。
+ *
+ * 【构建步骤】
+ *   1) 读取 getAvailableToolNames()——从工具注册中心拿到当前已启用的工具名。
+ *   2) 在 toolDescriptions 字典里找到每个工具的中文描述，拼成 toolList 列表。
+ *   3) 拼通用规则（始终包含的 6 条："不调用工具的场景 / 重复调用 / 引用结果" 等）。
+ *   4) 按工具按需追加专属规则（只有该工具被注册时才追加）。
+ *   5) 最后追加兜底声明："不存在的工具不要编造、上下文截断时不要假设"等。
+ *
+ * 【返回】拼好的多行字符串，作为 SystemMessage 的 content。
+ * 【调用方】promptWithFunctionCalling 在每次请求开头都会调用一次（因工具集可能热更新）。
  */
 function buildFCSystemPrompt(): string {
   const availableTools = getAvailableToolNames();
@@ -927,7 +1047,7 @@ async function downloadImageAsBase64(imageUrl: string): Promise<string> {
  */
 async function processImageUrl(imageUrl: string): Promise<string> {
   if (imageUrl.startsWith(`${config.serverBaseUrl}/files/`) ||
-      imageUrl.startsWith(config.serverBaseUrl.replace('http://', 'https://') + '/files/')) {
+    imageUrl.startsWith(config.serverBaseUrl.replace('http://', 'https://') + '/files/')) {
     logger.info('检测到本地图片，开始下载', { module: 'PromptService', imageUrl });
     try {
       const base64DataUrl = await downloadImageAsBase64(imageUrl);
@@ -990,7 +1110,7 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
 
     // 检查是否是本地服务器的图片
     if (imageUrl.startsWith(`${config.serverBaseUrl}/files/`) ||
-        imageUrl.startsWith(config.serverBaseUrl.replace('http://', 'https://') + '/files/')) {
+      imageUrl.startsWith(config.serverBaseUrl.replace('http://', 'https://') + '/files/')) {
       try {
         // 下载图片并转换为 base64 格式
         logger.info('开始下载图片并转换为 base64', { module: 'PromptService' });
@@ -1045,6 +1165,47 @@ async function createUserMessage(promptText: string): Promise<HumanMessage> {
   });
 }
 
+/**
+ * ============================================================================
+ * Function Calling 模式的主调度函数（本文件最核心的方法，约 900 行）。
+ *
+ * 【作用】
+ *   当模型支持 Function Calling（如 OpenAI / DeepSeek / Qwen 等）时使用此路径。
+ *   它把"用户输入 → LLM 调工具 → 工具执行 → 结果回填 LLM → 流式输出"整个链路串起来，
+ *   并在中间穿插：意图检测、工具熔断、嘴炮防御、思考标签过滤、SSE 推流、token 计费等。
+ *
+ * 【参数说明】
+ *   - promptText        当前用户输入的文本（可能为空，例如纯图片消息）。
+ *   - images            随当前消息上传的图片 URL 列表（多模态模型才使用）。
+ *   - history           历史对话数组，每项 { role, content, images }。
+ *                       role 取值：'user' / 'assistant'。
+ *   - res               Express 原生 Response 对象。SSE 流式响应必须用它，
+ *                       不传则返回完整 AIMessage（非流式调用方使用）。
+ *   - sessionSummary    早期对话的压缩摘要（控制上下文 token 占用）。
+ *   - userMemories      跨会话累积的用户画像（口味、习惯、背景等长期记忆）。
+ *   - isCancelled       由调用方传入的取消信号判断函数，每个轮次都会检查。
+ *   - abortController   AbortController.signal 透传给底层 fetch / LLM SDK。
+ *   - userId / sessionId 用户与会话标识（计费、缓存键、计划匹配都用得到）。
+ *   - onUsageComplete   流式输出完成回调，传出 token 用量供 Service 写入 DB。
+ *   - imageModel        用户在前端选择的图片生成模型（透传给 generate_image 工具）。
+ *
+ * 【返回值】
+ *   - 当传入 res（流式模式）：直接通过 SSE 写回客户端，函数返回 undefined。
+ *   - 当不传 res（非流式模式）：返回 AIMessage（一次性结果）。
+ *   - 抛出 FCFallbackError：表示 FC 路径走不通，外层 promptTemplate 会捕获并降级到 RAG 模式。
+ *
+ * 【核心流程总览】
+ *   1) 构建 FC System Prompt（动态根据已注册工具 + Agent 路由 + 摘要 + 记忆 + 上一轮资产）。
+ *   2) 拼装历史消息 + 当前用户消息（含多模态图片）。
+ *   3) bindTools 绑定工具 schema 到 LLM 客户端，根据意图设置 tool_choice（防嘴炮·防线 1）。
+ *   4) 进入工具调用循环（最多 MAX_TOOL_ITERATIONS 次）：
+ *        a. 调 LLM 拿到响应，判断是否含 tool_calls。
+ *        b. 含工具调用 → 去重 / 熔断 / 数据绑定 / 并行执行 / 收集多媒体资产 → 回填 ToolMessage。
+ *        c. 不含工具调用 → 三道嘴炮防线（显式/隐式正则 + LLM-as-Judge）→ 通过则进入流式输出。
+ *   5) 流式输出阶段：先注入图片/思维导图/图表/文件卡，再 stream LLM 文字（带 think 过滤 + 图片去重）。
+ *   6) 异常路径：达到最大轮数 → 清空工具上下文，强制让模型用自然语言总结。
+ * ============================================================================
+ */
 async function promptWithFunctionCalling(
   promptText?: string,
   images?: string[],
@@ -1059,10 +1220,15 @@ async function promptWithFunctionCalling(
   onUsageComplete?: (usage: UsageData) => void,
   imageModel?: string,
 ) {
+  // 读取当前激活模型的元信息（厂商、是否支持多模态/FC、上下文长度等）
   const modelInfo = getModelInfo();
+  // supportsVision：是否支持图片输入。若 false 则丢弃所有上传图片，避免 LLM 报错
   const supportsVision = modelInfo.supportsVision;
 
+  // 1) 动态构建 FC 模式的系统提示词（按当前已注册工具列表）
   let fcSystemPrompt = buildFCSystemPrompt();
+  // 2) 检查用户输入是否疑似 prompt injection（如"忽略以上指令"等攻击模式）
+  //    suspicious 等级时，追加一段安全防护说明到系统提示词
   const injectionDetection = inspectPromptInjection(promptText);
   if (injectionDetection.level === 'suspicious') {
     fcSystemPrompt += buildPromptInjectionSafetyInstruction(injectionDetection);
@@ -2153,6 +2319,28 @@ async function promptWithFunctionCalling(
   }
 }
 
+/**
+ * ============================================================================
+ * 【对外导出主入口】把用户消息转换为最终回复（流式或一次性）。
+ *
+ * 这是整个 prompt 模块对 Service 层暴露的唯一入口（除少量辅助导出外）。
+ * Controller 收到 /chat 请求后，会经 Service 层组装 history / summary / memories
+ * 等上下文，然后调用本函数。
+ *
+ * 【两条主路径】
+ *   1) FC 模式：当前模型支持 Function Calling 时（modelInfo.supportsFunctionCalling===true），
+ *      调 promptWithFunctionCalling，让模型自主决定何时调工具。
+ *   2) RAG 注入模式：模型不支持 FC，或 FC 路径抛出 FCFallbackError 时降级至本路径。
+ *      策略是先用向量库检索拼上下文（RAG），再让模型基于上下文回答。
+ *
+ * 【降级复用】
+ *   FC 模式失败时，如果它已经在内部检索过知识库（fcError.knowledgeBaseResult），
+ *   会复用结果跳过 RAG 模式的重复检索，避免一次额外的向量查询开销。
+ *
+ * 【参数】与 promptWithFunctionCalling 完全一致，参考其 JSDoc。
+ * 【返回】与 promptWithFunctionCalling 一致：流式时直接写 res；非流式时返回 AIMessage。
+ * ============================================================================
+ */
 export const promptTemplate = async (
   promptText?: string,
   images?: string[],
@@ -2251,7 +2439,7 @@ export const promptTemplate = async (
     try {
       const stats = await getKnowledgeBaseStats();
       kbStatsInfo = `\n知识库统计：共 ${stats.documentCount} 个文档块`;
-    } catch {}
+    } catch { }
 
     systemPrompt = `你是一个问答助手。请仔细阅读以下参考资料，然后回答用户问题。
 ${kbStatsInfo}
@@ -2344,7 +2532,7 @@ ${docList}
   if (res) {
     // 流式调用
     logger.info('开始流式调用模型', { module: 'PromptService', modelId: getCurrentModelId() });
-    
+
     const llm = createRateLimitedLLM(undefined, 'streaming');
     const ragStartTime = Date.now();
 
