@@ -11,10 +11,38 @@
  * 文生图通过 DashScope API 调用万相模型。
  */
 
+import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
 import { launchBrowser } from '../web-crawler';
 import type { Browser } from 'puppeteer';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import { parseToolResultJson } from '../llm-json-parser';
+
+// ==================== 文生图 API 响应 schema ====================
+//
+// 兼容两套格式：
+//   - DashScope 原生：output.choices[].message.content[].image
+//   - OpenAI 兼容：data[].url / data[].b64_json
+// 用 looseObject + 全 optional：边界容错性最大化，业务层负责真实解析
+const ImageGenerationResponseSchema = z.looseObject({
+  output: z
+    .looseObject({
+      choices: z
+        .array(
+          z.looseObject({
+            message: z
+              .looseObject({
+                content: z.array(z.looseObject({})).optional(),
+              })
+              .optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+  data: z.union([z.array(z.looseObject({})), z.looseObject({})]).optional(),
+});
 
 // ==================== generate_chart ====================
 
@@ -48,52 +76,46 @@ export function getCachedChartOption(key: string): Record<string, any> | null {
   return entry.option;
 }
 
-export const generateChartSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'generate_chart',
-    description: '根据数据生成图表。支持折线图、柱状图、饼图、散点图、雷达图等。返回 ECharts 配置 JSON（前端渲染交互式图表）和 imageUrl 字段（图表静态 PNG 引用，可传给 send_notification.attachments 发邮件）。',
-    parameters: {
-      type: 'object',
-      properties: {
-        title: {
-          type: 'string',
-          description: '图表标题',
-        },
-        chartType: {
-          type: 'string',
-          description: '图表类型',
-          enum: ['line', 'bar', 'pie', 'scatter', 'radar', 'heatmap', 'funnel'],
-        },
-        echartsOption: {
-          type: 'object',
-          description: 'ECharts 完整配置 JSON（如果提供此参数，将忽略 title 和 chartType）',
-        },
-        data: {
-          type: 'object',
-          description: '图表数据，格式取决于图表类型。line/bar: { labels: string[], series: Array<{name: string, values: number[]}> }；pie: { items: Array<{name: string, value: number}> }',
-        },
-      },
-      required: ['chartType'],
-    },
-  },
-};
+// ==================== Zod Schema: generate_chart ====================
 
-export interface GenerateChartParams {
-  title?: string;
-  chartType: 'line' | 'bar' | 'pie' | 'scatter' | 'radar' | 'heatmap' | 'funnel';
-  echartsOption?: Record<string, any>;
-  data?: Record<string, any>;
-}
+export const generateChartParamsSchema = z.object({
+  title: z.string().optional().describe('图表标题'),
+  chartType: z
+    .enum(['line', 'bar', 'pie', 'scatter', 'radar', 'heatmap', 'funnel'])
+    .describe('图表类型'),
+  // 自由结构对象：ECharts option 字段过多，无法用 z.object 精确建模，passthrough 以保留所有字段
+  echartsOption: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe('ECharts 完整配置 JSON（如果提供此参数，将忽略 title 和 chartType）'),
+  data: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      '图表数据，格式取决于图表类型。line/bar: { labels: string[], series: Array<{name: string, values: number[]}> }；pie: { items: Array<{name: string, value: number}> }',
+    ),
+});
 
-export interface GenerateChartResult {
-  type: 'chart';
-  chartType: string;
-  echartsOption: Record<string, any>;
-  /** 图表静态 PNG 图片引用（内部协议 fc://chart/{key}），可直接传给 send_notification.attachments 发邮件 */
-  imageUrl: string;
-  message: string;
-}
+export type GenerateChartParams = z.infer<typeof generateChartParamsSchema>;
+
+export const generateChartSchema = buildToolJsonSchema(
+  'generate_chart',
+  '根据数据生成图表。支持折线图、柱状图、饼图、散点图、雷达图等。返回 ECharts 配置 JSON（前端渲染交互式图表）和 imageUrl 字段（图表静态 PNG 引用，可传给 send_notification.attachments 发邮件）。',
+  generateChartParamsSchema,
+);
+
+// ==================== Result Schema: generate_chart ====================
+
+export const generateChartResultSchema = z.looseObject({
+  type: z.literal('chart'),
+  chartType: z.string(),
+  echartsOption: z.record(z.string(), z.unknown()),
+  /** 图表静态 PNG 图片引用，可直接传给 send_notification.attachments 发邮件 */
+  imageUrl: z.string(),
+  message: z.string(),
+});
+
+export type GenerateChartResult = z.infer<typeof generateChartResultSchema>;
 
 /**
  * 根据简化的数据和图表类型构建 ECharts option
@@ -106,7 +128,11 @@ function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
 
   const title = params.title || '';
   const chartType = params.chartType;
-  const data = params.data;
+  // data 字段在 zod schema 中为自由结构（z.record(z.string(), z.unknown())），
+  // 业务侧按图表类型读取 data.labels / data.series / data.items 等具体字段，
+  // 这里统一断言为 any，保留历史逻辑形态
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const data = params.data as any;
 
   // 基础配置
   const option: Record<string, any> = {
@@ -350,8 +376,24 @@ async function chartPngDataUriOnce(
 }
 
 export async function executeGenerateChart(
-  params: GenerateChartParams,
+  rawParams: unknown,
 ): Promise<GenerateChartResult> {
+  const parsed = safeParseToolParams(generateChartParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [generate_chart] 参数校验失败', {
+      module: 'Tool:MultiModal',
+      error: parsed.error,
+    });
+    return {
+      type: 'chart',
+      chartType: (rawParams as { chartType?: string })?.chartType || 'line',
+      echartsOption: {},
+      imageUrl: '',
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data as GenerateChartParams;
+
   const echartsOption = buildEChartsOption(params);
   // 内部协议 URL：send_notification 收到后用 puppeteer 渲染 PNG 嵌入邮件
   const imageUrl = chartImageUrl(echartsOption);
@@ -385,65 +427,79 @@ function convertToDashScopeSize(size: string, _model: string): string {
   return '2K'; // 默认
 }
 
-export const generateImageSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'generate_image',
-    description: '根据文本描述生成图片。使用万相文生图模型，支持 wan2.7-image-pro（高质量）和 wan2.7-image（快速）两种模型。',
-    parameters: {
-      type: 'object',
-      properties: {
-        prompt: {
-          type: 'string',
-          description: '图片描述（中文或英文），越详细效果越好',
-        },
-        model: {
-          type: 'string',
-          description: '文生图模型选择：wan2.7-image-pro（高质量，细节丰富）或 wan2.7-image（快速生成）',
-          enum: ['wan2.7-image-pro', 'wan2.7-image'],
-          default: 'wan2.7-image',
-        },
-        size: {
-          type: 'string',
-          description: '图片尺寸，如 1024*1024、1920*1080 等，服务端会自动匹配最佳分辨率（1K/2K/4K）',
-          default: '1024*1024',
-        },
-        n: {
-          type: 'number',
-          description: '生成图片数量，默认1，最多4',
-          default: 1,
-          minimum: 1,
-          maximum: 4,
-        },
-      },
-      required: ['prompt'],
-    },
-  },
-};
+// ==================== Zod Schema: generate_image ====================
 
-export interface GenerateImageParams {
-  prompt: string;
-  model?: 'wan2.7-image-pro' | 'wan2.7-image';
-  size?: string;
-  n?: number;
-}
+export const generateImageParamsSchema = z.object({
+  prompt: z
+    .string()
+    .min(1)
+    .describe('图片描述（中文或英文），越详细效果越好'),
+  model: z
+    .enum(['wan2.7-image-pro', 'wan2.7-image'])
+    .default('wan2.7-image')
+    .describe(
+      '文生图模型选择：wan2.7-image-pro（高质量，细节丰富）或 wan2.7-image（快速生成）',
+    ),
+  size: z
+    .string()
+    .default('1024*1024')
+    .describe(
+      '图片尺寸，如 1024*1024、1920*1080 等，服务端会自动匹配最佳分辨率（1K/2K/4K）',
+    ),
+  n: z
+    .number()
+    .int()
+    .min(1)
+    .max(4)
+    .default(1)
+    .describe('生成图片数量，默认1，最多4'),
+});
 
-export interface GenerateImageResult {
-  type: 'image';
-  images: Array<{
-    url: string;
-    revisedPrompt?: string;
-  }>;
-  model: string;
-  message: string;
-}
+export type GenerateImageParams = z.infer<typeof generateImageParamsSchema>;
+
+export const generateImageSchema = buildToolJsonSchema(
+  'generate_image',
+  '根据文本描述生成图片。使用万相文生图模型，支持 wan2.7-image-pro（高质量）和 wan2.7-image（快速）两种模型。',
+  generateImageParamsSchema,
+);
+
+// ==================== Result Schema: generate_image ====================
+
+export const generateImageResultSchema = z.looseObject({
+  type: z.literal('image'),
+  images: z.array(
+    z.looseObject({
+      url: z.string(),
+      revisedPrompt: z.string().optional(),
+    }),
+  ),
+  model: z.string(),
+  message: z.string(),
+});
+
+export type GenerateImageResult = z.infer<typeof generateImageResultSchema>;
 
 export async function executeGenerateImage(
-  params: GenerateImageParams,
+  rawParams: unknown,
 ): Promise<GenerateImageResult> {
-  const model = params.model || 'wan2.7-image';
-  const size = params.size || '1024*1024';
-  const n = Math.min(Math.max(params.n || 1, 1), 4);
+  const parsed = safeParseToolParams(generateImageParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [generate_image] 参数校验失败', {
+      module: 'Tool:MultiModal',
+      error: parsed.error,
+    });
+    return {
+      type: 'image',
+      images: [],
+      model: 'wan2.7-image',
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
+
+  const model = params.model;
+  const size = params.size;
+  const n = params.n;
 
   const apiKey = config.dashscopeApiKey;
   if (!apiKey) {
@@ -513,7 +569,25 @@ export async function executeGenerateImage(
       };
     }
 
-    const responseData = await response.json();
+    const responseText = await response.text();
+    const parsed = parseToolResultJson(responseText, ImageGenerationResponseSchema, {
+      module: 'Tool:MultiModal',
+      api: 'image-generation',
+      model,
+    });
+    if (!parsed.success) {
+      logger.error('FC工具 [generate_image] 响应结构异常', {
+        module: 'Tool:MultiModal',
+        reason: parsed.reason,
+      });
+      return {
+        type: 'image',
+        images: [],
+        model,
+        message: `文生图 API 响应结构异常: ${parsed.reason}`,
+      };
+    }
+    const responseData = parsed.data;
 
     // 解析返回的图片 URL
     // DashScope 原生格式：output.choices[].message.content[].image
@@ -521,8 +595,8 @@ export async function executeGenerateImage(
 
     const choices = responseData.output?.choices || [];
     for (const choice of choices) {
-      const contents = choice.message?.content || [];
-      for (const item of contents) {
+      const contents = (choice.message as any)?.content || [];
+      for (const item of contents as any[]) {
         if (item.image) {
           images.push({ url: item.image });
         } else if (item.type === 'image' && (item.image || item.url)) {
@@ -535,7 +609,7 @@ export async function executeGenerateImage(
     if (images.length === 0) {
       const dataList = responseData.data || [];
       const items = Array.isArray(dataList) ? dataList : [dataList];
-      for (const item of items) {
+      for (const item of items as any[]) {
         if (item.url) {
           images.push({
             url: item.url,
@@ -580,41 +654,38 @@ export async function executeGenerateImage(
 
 // ==================== create_mindmap ====================
 
-export const createMindmapSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'create_mindmap',
-    description: '生成思维导图。返回 Mermaid 语法的思维导图定义（前端渲染交互式图表）和 imageUrl 字段（思维导图静态 PNG 引用，可传给 send_notification.attachments 发邮件）。适用于整理知识结构、梳理逻辑关系等场景。',
-    parameters: {
-      type: 'object',
-      properties: {
-        title: {
-          type: 'string',
-          description: '思维导图的中心主题',
-        },
-        content: {
-          type: 'string',
-          description: '思维导图内容，使用 Mermaid mindmap 语法。格式示例：\nroot((中心主题))\n  分支1\n    子分支1-1\n    子分支1-2\n  分支2\n    子分支2-1',
-        },
-      },
-      required: ['title', 'content'],
-    },
-  },
-};
+// ==================== Zod Schema: create_mindmap ====================
 
-export interface CreateMindmapParams {
-  title: string;
-  content: string;
-}
+export const createMindmapParamsSchema = z.object({
+  title: z.string().min(1).describe('思维导图的中心主题'),
+  content: z
+    .string()
+    .min(1)
+    .describe(
+      '思维导图内容，使用 Mermaid mindmap 语法。格式示例：\nroot((中心主题))\n  分支1\n    子分支1-1\n    子分支1-2\n  分支2\n    子分支2-1',
+    ),
+});
 
-export interface CreateMindmapResult {
-  type: 'mindmap';
-  title: string;
-  mermaidCode: string;
-  /** 思维导图静态 PNG 图片引用（内部协议 fc://mindmap/{key}），可直接传给 send_notification.attachments 发邮件 */
-  imageUrl: string;
-  message: string;
-}
+export type CreateMindmapParams = z.infer<typeof createMindmapParamsSchema>;
+
+export const createMindmapSchema = buildToolJsonSchema(
+  'create_mindmap',
+  '生成思维导图。返回 Mermaid 语法的思维导图定义（前端渲染交互式图表）和 imageUrl 字段（思维导图静态 PNG 引用，可传给 send_notification.attachments 发邮件）。适用于整理知识结构、梳理逻辑关系等场景。',
+  createMindmapParamsSchema,
+);
+
+// ==================== Result Schema: create_mindmap ====================
+
+export const createMindmapResultSchema = z.looseObject({
+  type: z.literal('mindmap'),
+  title: z.string(),
+  mermaidCode: z.string(),
+  /** 思维导图静态 PNG 图片引用，可直接传给 send_notification.attachments 发邮件 */
+  imageUrl: z.string(),
+  message: z.string(),
+});
+
+export type CreateMindmapResult = z.infer<typeof createMindmapResultSchema>;
 
 /** 将 Mermaid 代码转为内部协议 imageUrl，send_notification 收到后用 puppeteer 渲染 PNG */
 const MINDMAP_URL_PREFIX = 'fc://mindmap/';
@@ -767,8 +838,24 @@ export function mindmapToImageUrl(mermaidCode: string): string {
 }
 
 export async function executeCreateMindmap(
-  params: CreateMindmapParams,
+  rawParams: unknown,
 ): Promise<CreateMindmapResult> {
+  const parsed = safeParseToolParams(createMindmapParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [create_mindmap] 参数校验失败', {
+      module: 'Tool:MultiModal',
+      error: parsed.error,
+    });
+    return {
+      type: 'mindmap',
+      title: (rawParams as { title?: string })?.title || '',
+      mermaidCode: '',
+      imageUrl: '',
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
+
   let mermaidCode = params.content.trim();
 
   // 如果内容不以 mindmap 开头，自动包装

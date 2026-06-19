@@ -23,10 +23,12 @@
  */
 
 import nodemailer from 'nodemailer';
+import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
 import { isChartImageUrl, parseChartImageUrl, chartPngDataUri, isMindmapImageUrl, parseMindmapImageUrl, mindmapPngDataUri } from './multimodal-output';
 import { isDocumentUrl, getCachedDocument } from './generate-document';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
 // ==================== 配置常量 ====================
 
@@ -83,86 +85,70 @@ export function isSendNotificationAvailable(): boolean {
 
 // ==================== 工具 Schema ====================
 
-export const sendNotificationSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'send_notification',
-    description:
-      '发送通知到飞书/邮件/Webhook（钉钉、企业微信群机器人）。当用户要求"通知""提醒""把结果发给某人""任务完成后告诉我"等场景时使用。也可作为工作流末尾步骤，把搜索/分析结果主动推送出去。',
-    parameters: {
-      type: 'object',
-      properties: {
-        channel: {
-          type: 'string',
-          description: '通知通道：feishu（飞书消息）、email（邮件）、webhook（HTTP POST，钉钉/企微等）',
-          enum: ['feishu', 'email', 'webhook'],
-        },
-        title: {
-          type: 'string',
-          description: '通知标题（邮件主题、卡片标题）',
-        },
-        content: {
-          type: 'string',
-          description: '通知正文，支持 Markdown 文本。webhook 通道会原样作为 text 字段发送',
-        },
-        recipients: {
-          type: 'array',
-          items: { type: 'string' },
-          description:
-            '接收人列表：feishu 通道传 open_id/user_id/email；email 通道传邮箱地址；webhook 通道忽略此参数',
-        },
-        webhookUrl: {
-          type: 'string',
-          description: 'Webhook 地址，仅 channel=webhook 时必填，必须是 https 开头的外网地址',
-        },
-        attachments: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              filename: {
-                type: 'string',
-                description: '附件文件名（含扩展名，如 report.pdf、star-sky.png、readme.md）。扩展名决定 MIME 类型',
-              },
-              url: {
-                type: 'string',
-                description: '附件文件的 URL。接受：generate_image 返回的 images[].url、generate_chart 返回的 imageUrl、create_mindmap 返回的 imageUrl，或任意 http/https URL / base64 data URI',
-              },
-              content: {
-                type: 'string',
-                description: 'Base64 编码的文件内容（如无 url 可用此字段），支持任意文件类型',
-              },
-              cid: {
-                type: 'string',
-                description: 'Content-ID。图片文件设置此值后可嵌入正文，非图片文件忽略',
-              },
-            },
-          },
-          description:
-            '附件列表。图片（png/jpg/gif/webp）自动内嵌到邮件正文；PDF/Word/Markdown/txt 等非图片文件作为传统附件附在邮件中。当 generate_chart/create_mindmap/generate_image 返回图片URL时，直接填入此字段即可把图表/思维导图/图片嵌入邮件',
-        },
-      },
-      required: ['channel', 'title', 'content'],
-    },
-  },
-};
+// 单个附件 schema：filename 必填，url / content / cid 均可选
+const sendNotificationAttachmentSchema = z.object({
+  filename: z
+    .string()
+    .min(1)
+    .describe(
+      '附件文件名（含扩展名，如 report.pdf、star-sky.png、readme.md）。扩展名决定 MIME 类型',
+    ),
+  url: z
+    .string()
+    .optional()
+    .describe(
+      '附件文件的 URL。接受：generate_image 返回的 images[].url、generate_chart 返回的 imageUrl、create_mindmap 返回的 imageUrl，或任意 http/https URL / base64 data URI',
+    ),
+  content: z
+    .string()
+    .optional()
+    .describe('Base64 编码的文件内容（如无 url 可用此字段），支持任意文件类型'),
+  cid: z
+    .string()
+    .optional()
+    .describe('Content-ID。图片文件设置此值后可嵌入正文，非图片文件忽略'),
+});
+
+export const sendNotificationParamsSchema = z.object({
+  channel: z
+    .enum(['feishu', 'email', 'webhook'])
+    .describe(
+      '通知通道：feishu（飞书消息）、email（邮件）、webhook（HTTP POST，钉钉/企微等）',
+    ),
+  title: z.string().min(1).describe('通知标题（邮件主题、卡片标题）'),
+  content: z
+    .string()
+    .min(1)
+    .describe('通知正文，支持 Markdown 文本。webhook 通道会原样作为 text 字段发送'),
+  recipients: z
+    .array(z.string())
+    .optional()
+    .describe(
+      '接收人列表：feishu 通道传 open_id/user_id/email；email 通道传邮箱地址；webhook 通道忽略此参数',
+    ),
+  webhookUrl: z
+    .string()
+    .optional()
+    .describe(
+      'Webhook 地址，仅 channel=webhook 时必填，必须是 https 开头的外网地址',
+    ),
+  attachments: z
+    .array(sendNotificationAttachmentSchema)
+    .optional()
+    .describe(
+      '附件列表。图片（png/jpg/gif/webp）自动内嵌到邮件正文；PDF/Word/Markdown/txt 等非图片文件作为传统附件附在邮件中。当 generate_chart/create_mindmap/generate_image 返回图片URL时，直接填入此字段即可把图表/思维导图/图片嵌入邮件',
+    ),
+});
+
+export type SendNotificationParams = z.infer<typeof sendNotificationParamsSchema>;
+
+export const sendNotificationSchema = buildToolJsonSchema(
+  'send_notification',
+  '发送通知到飞书/邮件/Webhook（钉钉、企业微信群机器人）。当用户要求"通知""提醒""把结果发给某人""任务完成后告诉我"等场景时使用。也可作为工作流末尾步骤，把搜索/分析结果主动推送出去。',
+  sendNotificationParamsSchema,
+);
 
 // ==================== 类型定义 ====================
-
-export interface SendNotificationParams {
-  channel: 'feishu' | 'email' | 'webhook';
-  title: string;
-  content: string;
-  recipients?: string[];
-  webhookUrl?: string;
-  /** 附件：图片会自动内嵌到邮件正文（email 通道），飞书/webhook 暂不支持附件 */
-  attachments?: Array<{
-    filename: string;
-    url?: string;
-    content?: string;
-    cid?: string;
-  }>;
-}
 
 export interface SendNotificationResult {
   success: boolean;
@@ -720,7 +706,22 @@ async function sendWebhook(params: SendNotificationParams): Promise<SendNotifica
  * 工具主执行函数
  * 根据 channel 路由到具体的实现，并统一记录日志
  */
-export async function executeSendNotification(params: SendNotificationParams): Promise<SendNotificationResult> {
+export async function executeSendNotification(rawParams: unknown): Promise<SendNotificationResult> {
+  const parsed = safeParseToolParams(sendNotificationParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('send_notification：参数校验失败', {
+      module: 'Tool:SendNotification',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      channel: (rawParams as { channel?: string })?.channel || 'unknown',
+      delivered: 0,
+      errors: [`参数校验失败: ${parsed.error}`],
+    };
+  }
+  const params = parsed.data;
+
   logger.info('send_notification：开始发送', {
     module: 'Tool:SendNotification',
     channel: params.channel,

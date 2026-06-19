@@ -17,9 +17,24 @@
  */
 
 import { WebSocket } from 'ws';
+import { z } from 'zod';
 import { SpeechService } from '../services/speech.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { logger } from '../fundamentals/logger.js';
+import { parseToolResultJson } from '../fundamentals/llm-json-parser.js';
+
+// ==================== WS 入站文本帧 schema ====================
+//
+// 当前支持的控制命令仅 type=stop；用 discriminatedUnion 方便后续扩展
+// （新增命令时往 union 里加一项即可，未识别 type 会被自动拒绝）
+
+const SpeechWsStopFrameSchema = z.object({
+  type: z.literal('stop'),
+});
+
+const SpeechWsInboundFrameSchema = z.discriminatedUnion('type', [
+  SpeechWsStopFrameSchema,
+]);
 
 /** 解析 WS 握手查询参数中的 token */
 function extractParamsFromUrl(url: string | undefined): { token: string | null } {
@@ -117,14 +132,22 @@ export function createSpeechWsHandler(
             logger.warn(`ASR 中转耗时过高 userId=${userId}: ${relayMs.toFixed(2)}ms (帧大小=${data.length}B)`, { module: 'SpeechGateway' });
           }
         } else {
-          // 文本帧：控制命令
-          try {
-            const msg = JSON.parse(data.toString('utf-8'));
-            if (msg.type === 'stop') {
-              speechService.finishStreaming(userId);
-            }
-          } catch {
-            logger.warn('无效的 WS 控制帧');
+          // 文本帧：控制命令，先用 zod 校验形状再分发
+          const parsed = parseToolResultJson(
+            data.toString('utf-8'),
+            SpeechWsInboundFrameSchema,
+            { module: 'SpeechGateway', userId },
+          );
+          if (!parsed.success) {
+            logger.warn('无效的 WS 控制帧', {
+              module: 'SpeechGateway',
+              userId,
+              reason: parsed.reason,
+            });
+            return;
+          }
+          if (parsed.data.type === 'stop') {
+            speechService.finishStreaming(userId);
           }
         }
       });

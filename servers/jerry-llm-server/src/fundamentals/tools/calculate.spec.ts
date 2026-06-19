@@ -54,12 +54,15 @@ describe('calculate 工具', () => {
 
     it('表达式为空时应返回错误', async () => {
       const r = await executeCalculate({ expression: '' });
-      expect(r.error).toBe('表达式不能为空');
+      // zod 报错信息会带字段路径前缀，这里用 toContain 兼容新旧
+      expect(r.error).toContain('表达式不能为空');
     });
 
     it('expression 为 undefined 时应返回错误', async () => {
       const r = await executeCalculate({ expression: undefined as any });
-      expect(r.error).toBe('表达式不能为空');
+      // zod 4 对 undefined 报 invalid_type，错误消息体现"必填/类型错误"语义
+      expect(r.error).toBeDefined();
+      expect(r.error).toMatch(/expression/);
     });
 
     it('应拦截 require 关键字', async () => {

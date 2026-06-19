@@ -1,5 +1,24 @@
 import TurndownService from 'turndown';
+import { z } from 'zod';
 import { logger } from './logger';
+import { parseToolResultJson } from './llm-json-parser';
+
+// ==================== 飞书 OpenAPI 通用响应 schema ====================
+//
+// 飞书所有 OpenAPI 响应统一为 { code, msg, data?, ... }，code === 0 表示成功
+// 用 looseObject 透传 data 等业务字段（每个端点的 data 形状各异，调用方按需解构）
+
+const FeishuTenantAccessTokenResponseSchema = z.looseObject({
+  code: z.number(),
+  msg: z.string().optional(),
+  tenant_access_token: z.string().optional(),
+  expire: z.number().optional(),
+});
+
+const FeishuOpenApiResponseSchema = z.looseObject({
+  code: z.number(),
+  msg: z.string().optional(),
+});
 
 const turndown = new TurndownService({
   headingStyle: 'atx',
@@ -76,10 +95,21 @@ async function getTenantAccessToken(appId: string, appSecret: string, apiBase: s
       signal: abortController.signal,
     });
 
-    const data = await response.json();
+    const responseText = await response.text();
+    const parsed = parseToolResultJson(responseText, FeishuTenantAccessTokenResponseSchema, {
+      module: 'FeishuConnector',
+      api: 'tenant_access_token',
+    });
+    if (!parsed.success) {
+      throw new Error(`飞书 tenant_access_token 响应结构异常: ${parsed.reason}`);
+    }
+    const data = parsed.data;
 
     if (data.code !== 0) {
       throw new Error(`飞书获取 tenant_access_token 失败: ${data.msg}`);
+    }
+    if (!data.tenant_access_token || typeof data.expire !== 'number') {
+      throw new Error('飞书 tenant_access_token 响应缺少必要字段');
     }
 
     tokenCacheMap.set(cacheKey, {
@@ -132,7 +162,15 @@ async function feishuFetch(path: string, token: string, apiBase: string, method:
       throw new Error(`飞书 API 返回非 JSON 响应 (HTTP ${response.status}): ${text.substring(0, 100)}`);
     }
 
-    const data = await response.json();
+    const responseText = await response.text();
+    const parsed = parseToolResultJson(responseText, FeishuOpenApiResponseSchema, {
+      module: 'FeishuConnector',
+      path,
+    });
+    if (!parsed.success) {
+      throw new Error(`飞书 API 响应结构异常 (${path}): ${parsed.reason}`);
+    }
+    const data = parsed.data;
 
     if (data.code !== 0) {
       throw new Error(`飞书 API 错误 (${data.code}): ${data.msg}`);

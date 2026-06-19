@@ -24,6 +24,8 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { getDeepseekApiKey } from './model-provider';
 import { logger } from './logger';
 import { config } from './config';
+import { z } from 'zod';
+import { parseLlmJson } from './llm-json-parser';
 
 // ==================== 配置常量 ====================
 
@@ -148,6 +150,25 @@ interface MergeAction {
   reason: string;
 }
 
+// ==================== zod schema ====================
+
+const ExtractedMemorySchema = z.object({
+  content: z.string(),
+  category: z.string(),
+  importance: z.number(),
+});
+
+const ExtractedMemoryArraySchema = z.array(ExtractedMemorySchema);
+
+const MergeActionSchema = z.object({
+  newMemory: z.string(),
+  action: z.enum(['duplicate', 'update', 'new']),
+  existingMemoryIndex: z.number(),
+  reason: z.string(),
+});
+
+const MergeActionArraySchema = z.array(MergeActionSchema);
+
 // ==================== 核心函数 ====================
 
 /**
@@ -196,8 +217,11 @@ export async function extractMemories(
       ? result.content
       : JSON.stringify(result.content);
 
-    // 解析 JSON 结果
-    const memories = parseJsonResponse<ExtractedMemory[]>(content, []);
+    // 解析 JSON 结果（zod 校验，失败降级为空数组）
+    const parsed = parseLlmJson(content, ExtractedMemoryArraySchema, {
+      module: 'MemoryExtractor:Extract',
+    });
+    const memories = parsed.success ? parsed.data : [];
 
     logger.info('提取到用户记忆', { module: 'MemoryExtractor', memoryCount: memories.length });
     return memories;
@@ -264,7 +288,10 @@ export async function mergeMemories(
       ? result.content
       : JSON.stringify(result.content);
 
-    return parseJsonResponse<MergeAction[]>(content, []);
+    const mergeParsed = parseLlmJson(content, MergeActionArraySchema, {
+      module: 'MemoryExtractor:Merge',
+    });
+    return mergeParsed.success ? mergeParsed.data : [];
   } catch (error: any) {
     logger.error('记忆合并失败，降级为简单去重', { module: 'MemoryExtractor', error: error.message });
     return newMemories
@@ -279,25 +306,9 @@ export async function mergeMemories(
 }
 
 // ==================== 工具函数 ====================
-
-/**
- * 安全解析 LLM 返回的 JSON
- * 处理可能的 markdown 代码块包裹
- */
-function parseJsonResponse<T>(text: string, fallback: T): T {
-  try {
-    // 去除可能的 markdown 代码块包裹
-    let cleaned = text.trim();
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-    }
-
-    return JSON.parse(cleaned);
-  } catch {
-    logger.warn('JSON 解析失败', { module: 'MemoryExtractor', rawContent: text.substring(0, 200) });
-    return fallback;
-  }
-}
+//
+// 历史的 parseJsonResponse(...) 已被 ../llm-json-parser.ts 的 parseLlmJson 取代，
+// 不再需要本文件级 helper。
 
 // 导出常量
 export { MEMORY_EXTRACTION_INTERVAL };

@@ -289,16 +289,17 @@ describe('result-reranker', () => {
     it('DashScope 返回有效分数时应正确重排', async () => {
       mockFetch.mockResolvedValue({
         ok: true,
-        json: async () => ({
-          output: {
-            results: [
-              { index: 1, relevance_score: 0.95 },
-              { index: 0, relevance_score: 0.3 },
-            ],
-          },
-          usage: { total_tokens: 100 },
-          request_id: 'test-req-1',
-        }),
+        text: async () =>
+          JSON.stringify({
+            output: {
+              results: [
+                { index: 1, relevance_score: 0.95 },
+                { index: 0, relevance_score: 0.3 },
+              ],
+            },
+            usage: { total_tokens: 100 },
+            request_id: 'test-req-1',
+          }),
       });
 
       const results = [

@@ -9,38 +9,50 @@
  * 所有增强策略均可通过参数独立开关，降级时自动回退到原始混合检索。
  */
 
+import { z } from 'zod';
 import { hybridSearchKnowledgeBase } from '../vector-store';
 import { rewriteQuery, type RewrittenQuery } from '../vector-store/query-rewriter';
 import { multiHopSearch, type MultiHopResult } from '../vector-store/multi-hop-search';
 import { rerankResults, type RerankedResult } from '../vector-store/result-reranker';
 import { logger } from '../logger';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
-export const searchKnowledgeBaseSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'search_knowledge_base',
-    description: '搜索知识库中与查询相关的文档内容。当用户的问题可能涉及已上传的文档、知识库中的信息时，使用此工具进行精确搜索。不要对与知识库无关的通用问题使用此工具。',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: '搜索查询语句，应该是一个精确的、能匹配知识库内容的问题或关键词',
-        },
-        top_k: {
-          type: 'number',
-          description: '返回的最相关文档数量，默认3',
-          default: 3,
-        },
-        document_id: {
-          type: 'number',
-          description: '限定搜索的文档ID，不传则搜索所有文档',
-        },
-      },
-      required: ['query'],
-    },
-  },
-};
+// ==================== Zod Schema（仅暴露给 LLM 的字段）====================
+
+/**
+ * 注意：`_options` 是服务端内部使用的扩展配置，**不能**暴露给 LLM，
+ * 因此不在此 schema 中声明。executor 会单独从原始 params 中提取 _options。
+ */
+export const searchKnowledgeBaseParamsSchema = z.object({
+  query: z
+    .string()
+    .min(1)
+    .describe('搜索查询语句，应该是一个精确的、能匹配知识库内容的问题或关键词'),
+  top_k: z
+    .number()
+    .int()
+    .positive()
+    .default(3)
+    .describe('返回的最相关文档数量，默认3'),
+  document_id: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('限定搜索的文档ID，不传则搜索所有文档'),
+});
+
+export type SearchKnowledgeBaseLLMParams = z.infer<typeof searchKnowledgeBaseParamsSchema>;
+
+// ==================== OpenAI Function Calling Schema ====================
+
+export const searchKnowledgeBaseSchema = buildToolJsonSchema(
+  'search_knowledge_base',
+  '搜索知识库中与查询相关的文档内容。当用户的问题可能涉及已上传的文档、知识库中的信息时，使用此工具进行精确搜索。不要对与知识库无关的通用问题使用此工具。',
+  searchKnowledgeBaseParamsSchema,
+);
+
+// ==================== Runtime 类型（含内部 _options）====================
 
 export interface SearchKnowledgeBaseParams {
   query: string;
@@ -100,30 +112,24 @@ export interface SearchKnowledgeBaseResult {
 }
 
 export async function executeSearchKnowledgeBase(
-  params: SearchKnowledgeBaseParams,
+  params: unknown,
   context?: { originalQuery?: string },
 ): Promise<SearchKnowledgeBaseResult> {
   const totalStartTime = Date.now();
   const timings: NonNullable<SearchKnowledgeBaseResult['meta']>['timings'] = { total: 0 };
 
-  logger.info('FC工具 [search_knowledge_base] 开始执行（增强版）', {
-    module: 'Tool:SearchKnowledgeBase',
-    rawParams: JSON.stringify(params),
-    query: params.query,
-    top_k: params.top_k,
-    document_id: params.document_id,
-    options: params._options,
-  });
-
-  if (!params.query || !params.query.trim()) {
-    logger.warn('FC工具 [search_knowledge_base] 参数校验失败：query 为空', {
+  // 1. 用 zod 校验 LLM 暴露字段（query / top_k / document_id）
+  const parsed = safeParseToolParams(searchKnowledgeBaseParamsSchema, params);
+  if (!parsed.success) {
+    logger.warn('FC工具 [search_knowledge_base] 参数校验失败', {
       module: 'Tool:SearchKnowledgeBase',
-      params: JSON.stringify(params),
+      error: parsed.error,
+      rawParams: JSON.stringify(params),
     });
     return {
       results: [],
       total: 0,
-      query: params.query || '',
+      query: (params as { query?: string })?.query || '',
       meta: {
         queryRewritten: false,
         reranked: false,
@@ -132,15 +138,30 @@ export async function executeSearchKnowledgeBase(
     };
   }
 
-  const topK = params.top_k || 3;
-  const opts = params._options || {};
+  // 2. 单独从原始 params 中提取内部 _options（zod schema 中不声明，避免被
+  //    OpenAI Function Calling Schema 暴露给 LLM）
+  const opts: SearchEnhancementOptions =
+    (params as { _options?: SearchEnhancementOptions })?._options ?? {};
+
+  const query = parsed.data.query;
+  const topK = parsed.data.top_k;
+  const documentId = parsed.data.document_id;
+
+  logger.info('FC工具 [search_knowledge_base] 开始执行（增强版）', {
+    module: 'Tool:SearchKnowledgeBase',
+    query,
+    top_k: topK,
+    document_id: documentId,
+    options: opts,
+  });
+
   const enableQueryRewrite = opts.enableQueryRewrite ?? true;
   const enableMultiHop = opts.enableMultiHop ?? true;
   const enableRerank = opts.enableRerank ?? true;
   const filter: Record<string, string> = {};
 
-  if (params.document_id) {
-    filter.documentId = String(params.document_id);
+  if (documentId) {
+    filter.documentId = String(documentId);
   }
 
   // ==================== 阶段 1：查询改写 ====================
@@ -148,7 +169,7 @@ export async function executeSearchKnowledgeBase(
   if (enableQueryRewrite) {
     const rewriteStart = Date.now();
     try {
-      rewrittenQuery = await rewriteQuery(params.query, {
+      rewrittenQuery = await rewriteQuery(query, {
         enabled: true,
         modelId: opts.modelId,
       });
@@ -156,7 +177,7 @@ export async function executeSearchKnowledgeBase(
 
       logger.info('FC工具 [search_knowledge_base] 查询改写完成', {
         module: 'Tool:SearchKnowledgeBase',
-        originalQuery: params.query.substring(0, 100),
+        originalQuery: query.substring(0, 100),
         mainQuery: rewrittenQuery.mainQuery.substring(0, 100),
         subQueryCount: rewrittenQuery.subQueries.length,
         wasRewritten: rewrittenQuery.wasRewritten,
@@ -175,13 +196,13 @@ export async function executeSearchKnowledgeBase(
   let searchResult: MultiHopResult;
   const searchStart = Date.now();
 
-  // 缓存 key 用用户原始输入（context.originalQuery），而非 LLM 生成的工具参数（params.query）
-  // 因为 LLM 每次生成的 params.query 可能有微小差异（如多一个空格），导致缓存 key 不一致
-  const cacheKeyOverride = context?.originalQuery || params.query;
+  // 缓存 key 用用户原始输入（context.originalQuery），而非 LLM 生成的工具参数（query）
+  // 因为 LLM 每次生成的 query 可能有微小差异（如多一个空格），导致缓存 key 不一致
+  const cacheKeyOverride = context?.originalQuery || query;
 
   logger.info('FC工具 [search_knowledge_base] 进入检索阶段', {
     module: 'Tool:SearchKnowledgeBase',
-    originalQuery: params.query.substring(0, 100),
+    originalQuery: query.substring(0, 100),
     rewrittenMainQuery: rewrittenQuery?.mainQuery?.substring(0, 100),
     enableMultiHop,
     cacheKeyOverride: cacheKeyOverride.substring(0, 100),
@@ -191,7 +212,7 @@ export async function executeSearchKnowledgeBase(
   try {
     if (enableMultiHop) {
       searchResult = await multiHopSearch(
-        params.query,
+        query,
         rewrittenQuery,
         topK,
         {
@@ -206,9 +227,9 @@ export async function executeSearchKnowledgeBase(
       // 单跳：直接用改写后的查询检索
       // 传入 cacheKeyOverride = 用户原始输入，确保同一用户输入命中缓存
       // （改写后的查询每次可能不同，导致缓存 key 不一致）
-      const query = rewrittenQuery?.mainQuery ?? params.query;
+      const effectiveQuery = rewrittenQuery?.mainQuery ?? query;
       const rawResults = await hybridSearchKnowledgeBase(
-        query,
+        effectiveQuery,
         topK,
         0.7,
         0.3,
@@ -218,7 +239,7 @@ export async function executeSearchKnowledgeBase(
       searchResult = {
         results: rawResults.map(r => ({ ...r, hop: 1 })),
         hopsExecuted: 1,
-        hopDetails: [{ hop: 1, query, resultCount: rawResults.length }],
+        hopDetails: [{ hop: 1, query: effectiveQuery, resultCount: rawResults.length }],
       };
 
       // 子查询也检索
@@ -259,7 +280,7 @@ export async function executeSearchKnowledgeBase(
 
     logger.error('FC工具 [search_knowledge_base] 检索失败', {
       module: 'Tool:SearchKnowledgeBase',
-      query: params.query,
+      query,
       duration,
       error: searchError.message,
       errorStack: searchError.stack?.substring(0, 500),
@@ -275,7 +296,7 @@ export async function executeSearchKnowledgeBase(
     const rerankStart = Date.now();
     try {
       rerankedResults = await rerankResults(
-        params.query,
+        query,
         searchResult.results,
         {
           enabled: true,
@@ -344,7 +365,7 @@ export async function executeSearchKnowledgeBase(
   const finalResult: SearchKnowledgeBaseResult = {
     results: mappedResults,
     total: mappedResults.length,
-    query: params.query,
+    query,
     meta: {
       queryRewritten: rewrittenQuery?.wasRewritten ?? false,
       rewrittenQuery: rewrittenQuery?.wasRewritten ? rewrittenQuery.mainQuery : undefined,
@@ -356,7 +377,7 @@ export async function executeSearchKnowledgeBase(
 
   logger.info('FC工具 [search_knowledge_base] 执行完成（增强版）', {
     module: 'Tool:SearchKnowledgeBase',
-    query: params.query,
+    query,
     totalResults: finalResult.total,
     duration: totalDuration,
     meta: finalResult.meta,

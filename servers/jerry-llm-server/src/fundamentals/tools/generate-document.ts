@@ -15,6 +15,7 @@
  *   3. send-notification.ts 识别 fc://document/{key}，调 service.read 拿 buffer 作附件
  */
 
+import { z } from 'zod';
 import { logger } from '../logger';
 import {
   markdownToHtml,
@@ -23,6 +24,7 @@ import {
   getDocumentMimeType,
   ensureExtension,
 } from '../document-generator';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
 // ==================== Service 注入 ====================
 
@@ -80,61 +82,57 @@ export async function getCachedDocument(
 
 // ==================== 工具 Schema ====================
 
-export const generateDocumentSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'generate_document',
-    description:
-      '把 Markdown 内容生成为 PDF / Word(docx) / HTML 文件，返回 fileUrl 字段（内部协议引用）。当用户要求"生成 PDF/Word/HTML 文档/报告/手册"等场景时使用。返回的 fileUrl 可直接填入 send_notification.attachments[].url 作为邮件附件发送。',
-    parameters: {
-      type: 'object',
-      properties: {
-        title: {
-          type: 'string',
-          description: '文档标题（也用于文件名，会自动追加扩展名）',
-        },
-        content: {
-          type: 'string',
-          description: '文档正文内容，必须是 Markdown 格式。支持标题(#)、列表、粗体(**xx**)、代码块(```)、引用(>)、表格等。',
-        },
-        format: {
-          type: 'string',
-          enum: ['pdf', 'docx', 'html'],
-          description: '输出格式：pdf（适合打印分发）、docx（Word，适合二次编辑）、html（适合网页查看）',
-        },
-      },
-      required: ['title', 'content', 'format'],
-    },
-  },
-};
+export const generateDocumentParamsSchema = z.object({
+  title: z
+    .string()
+    .min(1)
+    .describe('文档标题（也用于文件名，会自动追加扩展名）'),
+  content: z
+    .string()
+    .min(1)
+    .describe(
+      '文档正文内容，必须是 Markdown 格式。支持标题(#)、列表、粗体(**xx**)、代码块(```)、引用(>)、表格等。',
+    ),
+  format: z
+    .enum(['pdf', 'docx', 'html'])
+    .describe(
+      '输出格式：pdf（适合打印分发）、docx（Word，适合二次编辑）、html（适合网页查看）',
+    ),
+});
+
+export type GenerateDocumentParams = z.infer<typeof generateDocumentParamsSchema>;
+
+export const generateDocumentSchema = buildToolJsonSchema(
+  'generate_document',
+  '把 Markdown 内容生成为 PDF / Word(docx) / HTML 文件，返回 fileUrl 字段（内部协议引用）。当用户要求"生成 PDF/Word/HTML 文档/报告/手册"等场景时使用。返回的 fileUrl 可直接填入 send_notification.attachments[].url 作为邮件附件发送。',
+  generateDocumentParamsSchema,
+);
 
 // ==================== 类型定义 ====================
 
-export interface GenerateDocumentParams {
-  title: string;
-  content: string;
-  format: 'pdf' | 'docx' | 'html';
-}
+// ==================== Result Schema ====================
 
-export interface GenerateDocumentResult {
-  success: boolean;
+export const generateDocumentResultSchema = z.looseObject({
+  success: z.boolean(),
   /** 类型标记：前端识别为文件卡片 */
-  type?: 'document';
+  type: z.literal('document').optional(),
   /** 内部协议 URL：fc://document/{key}，可传给 send_notification.attachments[].url */
-  fileUrl?: string;
+  fileUrl: z.string().optional(),
   /** HTTP 下载链接：前端 FileCard 用 */
-  downloadUrl?: string;
+  downloadUrl: z.string().optional(),
   /** HTTP 预览链接：前端 FilePreview 用 */
-  previewUrl?: string;
+  previewUrl: z.string().optional(),
   /** 文档 key（前端透传给后续操作时用） */
-  key?: string;
-  filename?: string;
-  format?: string;
-  sizeBytes?: number;
+  key: z.string().optional(),
+  filename: z.string().optional(),
+  format: z.string().optional(),
+  sizeBytes: z.number().optional(),
   /** 过期时间戳（毫秒） */
-  expiresAt?: number;
-  message: string;
-}
+  expiresAt: z.number().optional(),
+  message: z.string(),
+});
+
+export type GenerateDocumentResult = z.infer<typeof generateDocumentResultSchema>;
 
 interface ToolContext {
   userId?: string;
@@ -144,24 +142,27 @@ interface ToolContext {
 // ==================== 执行器 ====================
 
 export async function executeGenerateDocument(
-  params: GenerateDocumentParams,
+  rawParams: unknown,
   context?: ToolContext,
 ): Promise<GenerateDocumentResult> {
   if (!documentStorageService) {
     return { success: false, message: '文档服务未初始化' };
   }
 
-  const { title, content, format } = params;
+  // zod 校验：title / content 非空、format 限定 pdf|docx|html
+  const parsed = safeParseToolParams(generateDocumentParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [generate_document] 参数校验失败', {
+      module: 'Tool:GenerateDocument',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      message: `参数校验失败：${parsed.error}`,
+    };
+  }
 
-  if (!title || !title.trim()) {
-    return { success: false, message: 'title 不能为空' };
-  }
-  if (!content || !content.trim()) {
-    return { success: false, message: 'content 不能为空' };
-  }
-  if (!['pdf', 'docx', 'html'].includes(format)) {
-    return { success: false, message: `不支持的格式：${format}，仅支持 pdf / docx / html` };
-  }
+  const { title, content, format } = parsed.data;
 
   const startedAt = Date.now();
   try {

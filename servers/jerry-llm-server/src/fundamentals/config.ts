@@ -1,201 +1,324 @@
 /**
  * 服务端统一配置
- * 所有配置项从环境变量读取，提供默认值用于本地开发
- * 必需配置项（JWT_SECRET）未设置时将抛出错误，拒绝启动
+ *
+ * 通过 zod 在启动阶段对所有环境变量做集中校验：
+ * - 必需项缺失 / 类型错误时立即抛出，拒绝启动（fail-fast）
+ * - 字符串到 number / boolean 的转换在 schema 内统一处理（z.coerce）
+ * - 对外导出的 `config` 形状与原版本严格保持一致，所有调用点（含 getter
+ *   语义如 chromaHost / chromaPort / corsOrigins / queryDb.allowedTables）
+ *   均向后兼容，避免上游业务代码受影响
+ *
+ * 设计要点：
+ * 1. 仅顶层与一级命名空间（db / redis / volcAsr / rateLimit / queryDb /
+ *    document / notify）有意义，不做更深层嵌套，避免读侧调用变复杂
+ * 2. 派生字段（chromaHost / chromaPort / corsOrigins / allowedTables）通过
+ *    在解析后用 getter 注入，保留惰性求值与原行为一致
+ * 3. 校验失败时输出哪一项不合规，便于运维定位
  */
 
-/** 启动前校验必需配置 */
-function requireEnv(name: string, value: string | undefined): string {
-  if (!value) {
-    throw new Error(`❌ 环境变量 ${name} 未设置，服务无法启动。请在 .env 文件中配置 ${name}。`);
-  }
-  return value;
+import { z } from 'zod';
+
+// ==================== 工具：字符串 → boolean ====================
+
+/**
+ * 把 'true' / 'false' / undefined 解析成布尔值
+ * z.coerce.boolean() 默认会把 'false' 也当成 truthy，因此显式实现
+ */
+const zBoolFromString = (defaultValue: boolean) =>
+  z
+    .union([z.string(), z.boolean(), z.undefined()])
+    .transform((v) => {
+      if (typeof v === 'boolean') return v;
+      if (v == null || v === '') return defaultValue;
+      return v.toLowerCase() === 'true';
+    });
+
+// ==================== 一级 Schema ====================
+
+const DbSchema = z.object({
+  host: z.string().min(1).default('127.0.0.1'),
+  port: z.coerce.number().int().positive().default(3306),
+  username: z.string().min(1).default('root'),
+  password: z.string().default('123456'),
+  database: z.string().min(1).default('cyberpunk'),
+  synchronize: zBoolFromString(false),
+});
+
+const NotifySchema = z.object({
+  feishuAppId: z.string().default(''),
+  feishuAppSecret: z.string().default(''),
+  feishuDomain: z.string().default(''),
+  smtpHost: z.string().default(''),
+  smtpPort: z.coerce.number().int().positive().default(465),
+  smtpUser: z.string().default(''),
+  smtpPass: z.string().default(''),
+  smtpFrom: z.string().default(''),
+  /** MCP Server 配置：JSON 数组字符串，原样存放，由消费侧解析 */
+  mcpServers: z.string().default(''),
+});
+
+const QueryDbSchema = z.object({
+  host: z.string().default(''),
+  port: z.coerce.number().int().positive().default(3306),
+  user: z.string().default(''),
+  password: z.string().default(''),
+  database: z.string().default(''),
+  /** 表名白名单原始字符串，对外通过 allowedTables getter 暴露数组形态 */
+  allowedTablesRaw: z.string().default(''),
+});
+
+const DocumentSchema = z.object({
+  storageDir: z.string().min(1).default('./tmp/documents'),
+  ttlDays: z.coerce.number().positive().default(7),
+  idleDays: z.coerce.number().positive().default(3),
+  cleanupIntervalMin: z.coerce.number().int().positive().default(60),
+  maxDocSizeMB: z.coerce.number().int().positive().default(20),
+  pdfFormat: z.string().min(1).default('A4'),
+});
+
+const RedisSchema = z.object({
+  enabled: zBoolFromString(false),
+  host: z.string().min(1).default('127.0.0.1'),
+  port: z.coerce.number().int().positive().default(6379),
+  password: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : undefined)),
+  db: z.coerce.number().int().min(0).max(15).default(0),
+  keyPrefix: z.string().default('jerry:'),
+  commandTimeoutMs: z.coerce.number().int().positive().default(300),
+});
+
+const VolcAsrSchema = z.object({
+  appId: z.string().default(''),
+  accessToken: z.string().default(''),
+  resourceId: z.string().default('volc.seedasr.sauc.duration'),
+  wsUrl: z.string().default('wss://openspeech.bytedance.com/api/v3/sauc/bigmodel'),
+  httpUrl: z.string().default('https://openspeech.bytedance.com/api/v1/auc'),
+});
+
+const RateLimitSchema = z.object({
+  chatPerMin: z.coerce.number().int().min(0).default(30),
+  failOpen: zBoolFromString(true),
+});
+
+// ==================== 顶层 Schema ====================
+
+const RootSchema = z.object({
+  port: z.coerce.number().int().positive().default(3000),
+  /** JWT 必需，缺失时 fail-fast */
+  jwtSecret: z.string().min(1, 'JWT_SECRET 未设置，服务无法启动'),
+
+  ollamaBaseUrl: z.string().min(1).default('http://localhost:11434'),
+  chromaUrl: z.string().min(1).default('http://localhost:8000'),
+  serverBaseUrl: z.string().min(1).default('http://localhost:3000'),
+  deepseekBaseUrl: z.string().min(1).default('https://api.deepseek.com'),
+  zhipuBaseUrl: z.string().min(1).default('https://open.bigmodel.cn/api/paas/v4'),
+  dashscopeBaseUrl: z.string().min(1).default('https://dashscope.aliyuncs.com'),
+  dashscopeApiKey: z.string().default(''),
+
+  logLevel: z.string().default('info'),
+
+  searchApiUrl: z.string().default(''),
+  searchApiKey: z.string().default(''),
+  qweatherApiKey: z.string().default(''),
+  qweatherApiBase: z.string().min(1).default('https://devapi.qweather.com'),
+
+  lokiHost: z.string().default(''),
+
+  /** CORS 来源原始字符串，对外通过 corsOrigins getter 暴露数组 */
+  corsOriginsRaw: z.string().default('http://localhost:5173,http://localhost:3000'),
+
+  db: DbSchema,
+  notify: NotifySchema,
+  queryDb: QueryDbSchema,
+  document: DocumentSchema,
+  redis: RedisSchema,
+  volcAsr: VolcAsrSchema,
+  rateLimit: RateLimitSchema,
+});
+
+// ==================== 解析 process.env ====================
+
+/**
+ * 把扁平的 process.env 映射成 RootSchema 期望的层级对象
+ * 这里只做"路径映射 + 透传"，所有类型转换交给 zod 完成
+ */
+function buildRawConfig() {
+  const env = process.env;
+  return {
+    port: env.PORT,
+    jwtSecret: env.JWT_SECRET,
+
+    ollamaBaseUrl: env.OLLAMA_BASE_URL,
+    chromaUrl: env.CHROMA_URL,
+    serverBaseUrl: env.SERVER_BASE_URL,
+    deepseekBaseUrl: env.DEEPSEEK_BASE_URL,
+    zhipuBaseUrl: env.ZHIPU_BASE_URL,
+    dashscopeBaseUrl: env.DASHSCOPE_BASE_URL,
+    dashscopeApiKey: env.DASHSCOPE_API_KEY,
+
+    logLevel: env.LOG_LEVEL,
+
+    searchApiUrl: env.SEARCH_API_URL,
+    searchApiKey: env.SEARCH_API_KEY,
+    qweatherApiKey: env.QWEATHER_API_KEY,
+    qweatherApiBase: env.QWEATHER_API_BASE,
+
+    lokiHost: env.LOKI_HOST,
+
+    corsOriginsRaw: env.CORS_ORIGINS,
+
+    db: {
+      host: env.DB_HOST,
+      port: env.DB_PORT,
+      username: env.DB_USERNAME,
+      password: env.DB_PASSWORD,
+      database: env.DB_DATABASE,
+      synchronize: env.TYPEORM_SYNCHRONIZE,
+    },
+    notify: {
+      feishuAppId: env.NOTIFY_FEISHU_APP_ID,
+      feishuAppSecret: env.NOTIFY_FEISHU_APP_SECRET,
+      feishuDomain: env.NOTIFY_FEISHU_DOMAIN,
+      smtpHost: env.NOTIFY_SMTP_HOST,
+      smtpPort: env.NOTIFY_SMTP_PORT,
+      smtpUser: env.NOTIFY_SMTP_USER,
+      smtpPass: env.NOTIFY_SMTP_PASS,
+      smtpFrom: env.NOTIFY_SMTP_FROM,
+      mcpServers: env.NOTIFY_MCP_SERVERS,
+    },
+    queryDb: {
+      host: env.NOTIFY_DB_HOST,
+      port: env.NOTIFY_DB_PORT,
+      user: env.NOTIFY_DB_USER,
+      password: env.NOTIFY_DB_PASSWORD,
+      database: env.NOTIFY_DB_DATABASE,
+      allowedTablesRaw: env.NOTIFY_DB_ALLOWED_TABLES,
+    },
+    document: {
+      storageDir: env.DOCUMENT_STORAGE_DIR,
+      ttlDays: env.DOCUMENT_TTL_DAYS,
+      idleDays: env.DOCUMENT_IDLE_DAYS,
+      cleanupIntervalMin: env.DOCUMENT_CLEANUP_INTERVAL_MIN,
+      maxDocSizeMB: env.DOCUMENT_MAX_SIZE_MB,
+      pdfFormat: env.DOCUMENT_PDF_FORMAT,
+    },
+    redis: {
+      enabled: env.REDIS_ENABLED,
+      host: env.REDIS_HOST,
+      port: env.REDIS_PORT,
+      password: env.REDIS_PASSWORD,
+      db: env.REDIS_DB,
+      keyPrefix: env.REDIS_KEY_PREFIX,
+      commandTimeoutMs: env.REDIS_COMMAND_TIMEOUT_MS,
+    },
+    volcAsr: {
+      appId: env.VOLC_ASR_APP_ID,
+      accessToken: env.VOLC_ASR_ACCESS_TOKEN,
+      resourceId: env.VOLC_ASR_RESOURCE_ID,
+      wsUrl: env.VOLC_ASR_WS_URL,
+      httpUrl: env.VOLC_ASR_HTTP_URL,
+    },
+    rateLimit: {
+      chatPerMin: env.RATE_LIMIT_CHAT_PER_MIN,
+      failOpen: env.RATE_LIMIT_FAIL_OPEN,
+    },
+  };
 }
 
+/**
+ * 启动时解析；失败立即抛错并打印每一个不合规字段
+ */
+function parseConfig() {
+  const result = RootSchema.safeParse(buildRawConfig());
+  if (!result.success) {
+    const detail = result.error.issues
+      .map((i) => `  - ${i.path.join('.')}: ${i.message}`)
+      .join('\n');
+    throw new Error(`❌ 环境变量校验失败，服务拒绝启动：\n${detail}`);
+  }
+  return result.data;
+}
+
+const parsed = parseConfig();
+
+// ==================== 派生字段 ====================
+
+function parseList(raw: string): string[] {
+  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function safeUrlPart<T>(url: string, fn: (u: URL) => T, fallback: T): T {
+  try {
+    return fn(new URL(url));
+  } catch {
+    return fallback;
+  }
+}
+
+// ==================== 对外导出 ====================
+
+/**
+ * 注意：保留与历史版本一致的扁平 + 一级命名空间形状
+ * 派生字段（chromaHost / chromaPort / corsOrigins / queryDb.allowedTables）
+ * 维持 getter 语义，惰性求值，行为对调用方透明
+ */
 export const config = {
-  /** 服务端口 */
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: parsed.port,
+  jwtSecret: parsed.jwtSecret,
 
-  /** JWT 密钥（必需，未设置时拒绝启动） */
-  jwtSecret: requireEnv('JWT_SECRET', process.env.JWT_SECRET),
+  db: parsed.db,
 
-  /** 数据库配置 */
-  db: {
-    host: process.env.DB_HOST || '127.0.0.1',
-    port: parseInt(process.env.DB_PORT || '3306', 10),
-    username: process.env.DB_USERNAME || 'root',
-    password: process.env.DB_PASSWORD || '123456',
-    database: process.env.DB_DATABASE || 'cyberpunk',
-    synchronize: (process.env.TYPEORM_SYNCHRONIZE || 'false').toLowerCase() === 'true',
-  },
-
-  /** Ollama 服务地址 */
-  ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-
-  /** ChromaDB 服务地址 */
-  chromaUrl: process.env.CHROMA_URL || 'http://localhost:8000',
-
-  /** ChromaDB 主机（从 CHROMA_URL 解析） */
+  ollamaBaseUrl: parsed.ollamaBaseUrl,
+  chromaUrl: parsed.chromaUrl,
   get chromaHost() {
-    try { return new URL(this.chromaUrl).hostname; } catch { return 'localhost'; }
+    return safeUrlPart(this.chromaUrl, (u) => u.hostname, 'localhost');
   },
-
-  /** ChromaDB 端口（从 CHROMA_URL 解析） */
   get chromaPort() {
-    try { return parseInt(new URL(this.chromaUrl).port || '8000', 10); } catch { return 8000; }
+    return safeUrlPart(
+      this.chromaUrl,
+      (u) => parseInt(u.port || '8000', 10),
+      8000,
+    );
   },
 
-  /** 服务基础 URL（用于生成文件访问地址） */
-  serverBaseUrl: process.env.SERVER_BASE_URL || 'http://localhost:3000',
+  serverBaseUrl: parsed.serverBaseUrl,
+  deepseekBaseUrl: parsed.deepseekBaseUrl,
+  zhipuBaseUrl: parsed.zhipuBaseUrl,
+  dashscopeBaseUrl: parsed.dashscopeBaseUrl,
+  dashscopeApiKey: parsed.dashscopeApiKey,
 
-  /** DeepSeek API 基础 URL */
-  deepseekBaseUrl: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
+  logLevel: parsed.logLevel,
 
-  /** 智谱 API 基础 URL */
-  zhipuBaseUrl: process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4',
+  searchApiUrl: parsed.searchApiUrl,
+  searchApiKey: parsed.searchApiKey,
+  qweatherApiKey: parsed.qweatherApiKey,
+  qweatherApiBase: parsed.qweatherApiBase,
 
-  /** DashScope API 基础 URL（用于 qwen3-vl-rerank 等） */
-  dashscopeBaseUrl: process.env.DASHSCOPE_BASE_URL || 'https://dashscope.aliyuncs.com',
+  lokiHost: parsed.lokiHost,
 
-  /** DashScope API Key（用于 Reranker 等服务） */
-  dashscopeApiKey: process.env.DASHSCOPE_API_KEY || '',
-
-  /** 日志级别 */
-  logLevel: process.env.LOG_LEVEL || 'info',
-
-  /** 搜索 API 地址（可选，未配置时联网搜索不可用） */
-  searchApiUrl: process.env.SEARCH_API_URL || '',
-
-  /** 搜索 API 密钥（可选，未配置时联网搜索不可用） */
-  searchApiKey: process.env.SEARCH_API_KEY || '',
-
-  /** 和风天气 API 密钥（可选，未配置时天气查询不可用） */
-  qweatherApiKey: process.env.QWEATHER_API_KEY || '',
-
-  /** 和风天气 API 地址 */
-  qweatherApiBase: process.env.QWEATHER_API_BASE || 'https://devapi.qweather.com',
-
-  /** Loki 日志服务地址（可选，未配置则不输出到 Loki） */
-  lokiHost: process.env.LOKI_HOST || '',
-
-  /** CORS 允许的来源列表（逗号分隔，默认仅允许 localhost） */
   get corsOrigins(): string[] {
-    const raw = process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:3000';
-    return raw.split(',').map(s => s.trim()).filter(Boolean);
+    return parseList(parsed.corsOriginsRaw);
   },
 
-  /**
-   * send_notification / mcp_proxy 工具相关配置
-   * 这些配置项均为可选，未配置时对应通道/工具会被自动跳过
-   */
-  notify: {
-    /** 飞书消息：独立的 AppID（与知识库同步用的飞书可分离） */
-    feishuAppId: process.env.NOTIFY_FEISHU_APP_ID || '',
-    feishuAppSecret: process.env.NOTIFY_FEISHU_APP_SECRET || '',
-    /** 飞书域名，海外版填 larksuite.com */
-    feishuDomain: process.env.NOTIFY_FEISHU_DOMAIN || '',
-    /** SMTP 邮件 */
-    smtpHost: process.env.NOTIFY_SMTP_HOST || '',
-    smtpPort: parseInt(process.env.NOTIFY_SMTP_PORT || '465', 10),
-    smtpUser: process.env.NOTIFY_SMTP_USER || '',
-    smtpPass: process.env.NOTIFY_SMTP_PASS || '',
-    /** 发件人地址，未设置则使用 smtpUser */
-    smtpFrom: process.env.NOTIFY_SMTP_FROM || '',
-    /** MCP Server 配置：JSON 数组字符串，例如 '[{"name":"fs","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]}]' */
-    mcpServers: process.env.NOTIFY_MCP_SERVERS || '',
-  },
+  notify: parsed.notify,
 
-  /**
-   * query_database 工具：外部业务库连接配置
-   * 与主业务库（DB_*）完全隔离；强烈建议使用只读账号
-   */
   queryDb: {
-    host: process.env.NOTIFY_DB_HOST || '',
-    port: parseInt(process.env.NOTIFY_DB_PORT || '3306', 10),
-    user: process.env.NOTIFY_DB_USER || '',
-    password: process.env.NOTIFY_DB_PASSWORD || '',
-    database: process.env.NOTIFY_DB_DATABASE || '',
-    /** 表名白名单：逗号分隔；为空时允许查询所有表（不推荐） */
+    host: parsed.queryDb.host,
+    port: parsed.queryDb.port,
+    user: parsed.queryDb.user,
+    password: parsed.queryDb.password,
+    database: parsed.queryDb.database,
     get allowedTables(): string[] {
-      const raw = process.env.NOTIFY_DB_ALLOWED_TABLES || '';
-      return raw.split(',').map(s => s.trim()).filter(Boolean);
+      return parseList(parsed.queryDb.allowedTablesRaw);
     },
   },
 
-  /**
-   * generate_document 工具：AI 生成 PDF / Word / HTML 文档
-   */
-  document: {
-    /** 生成文档的存储目录（落盘根目录） */
-    storageDir: process.env.DOCUMENT_STORAGE_DIR || './tmp/documents',
-    /** 硬过期天数：从生成时间起，超过此天数自动删除 */
-    ttlDays: parseFloat(process.env.DOCUMENT_TTL_DAYS || '7'),
-    /** 闲置天数：超过此天数未访问自动删除 */
-    idleDays: parseFloat(process.env.DOCUMENT_IDLE_DAYS || '3'),
-    /** 后台清理任务间隔（分钟） */
-    cleanupIntervalMin: parseInt(process.env.DOCUMENT_CLEANUP_INTERVAL_MIN || '60', 10),
-    /** 单个文档最大尺寸（MB），超过会拒绝生成 */
-    maxDocSizeMB: parseInt(process.env.DOCUMENT_MAX_SIZE_MB || '20', 10),
-    /** 默认 PDF 纸张尺寸 */
-    pdfFormat: process.env.DOCUMENT_PDF_FORMAT || 'A4',
-  },
-
-  /**
-   * Redis 配置 —— 多级缓存 L2 / 限流 / 分布式锁的共享存储
-   *
-   * 设计要点：
-   * 1. enabled 默认 false，便于桌面端 / 个人开发机零依赖运行
-   * 2. 任何 Redis 操作失败都必须降级到内存方案，不能影响主业务
-   * 3. commandTimeout 必须够小（默认 300ms），避免 Redis 抖动拖垮 LLM 推理链路
-   * 4. keyPrefix 由 ioredis 自动追加，业务代码内拼 key 时无需重复带前缀
-   */
-  redis: {
-    /** 总开关：false / 未配置时全部走内存降级 */
-    enabled: (process.env.REDIS_ENABLED || '').toLowerCase() === 'true',
-    host: process.env.REDIS_HOST || '127.0.0.1',
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
-    /** AUTH 密码；生产环境强制要求 */
-    password: process.env.REDIS_PASSWORD || undefined,
-    /** 库编号 0-15，不同业务建议分库 */
-    db: parseInt(process.env.REDIS_DB || '0', 10),
-    /** 全局 Key 前缀，业务代码内拼 key 时无需重复 */
-    keyPrefix: process.env.REDIS_KEY_PREFIX || 'jerry:',
-    /** 单条命令超时（ms），防止 Redis 抖动阻塞主流程 */
-    commandTimeoutMs: parseInt(process.env.REDIS_COMMAND_TIMEOUT_MS || '300', 10),
-  },
-
-  /**
-   * 火山引擎 ASR（语音识别）配置
-   * 未配置时语音识别功能不可用，不影响其他功能
-   * 使用 V3 大模型流式语音识别 API
-   */
-  volcAsr: {
-    /** 应用 ID（对应 X-Api-App-Key） */
-    appId: process.env.VOLC_ASR_APP_ID || '',
-    /** API Key / Access Token（对应 X-Api-Access-Key） */
-    accessToken: process.env.VOLC_ASR_ACCESS_TOKEN || '',
-    /** V3 资源 ID（对应 X-Api-Resource-Id） */
-    resourceId: process.env.VOLC_ASR_RESOURCE_ID || 'volc.seedasr.sauc.duration',
-    /** 流式 ASR WebSocket 地址（V3 大模型） */
-    wsUrl: process.env.VOLC_ASR_WS_URL || 'wss://openspeech.bytedance.com/api/v3/sauc/bigmodel',
-    /** 录音文件识别 HTTP 地址 */
-    httpUrl: process.env.VOLC_ASR_HTTP_URL || 'https://openspeech.bytedance.com/api/v1/auc',
-  },
-
-  /**
-   * 限流（Rate Limit）配置 —— 基于 Redis 的滑动窗口实现
-   *
-   * 默认 30 次/分钟，主要用于防止 AI 对话接口被恶意刷取（每次请求都会调用 LLM，
-   * 直接消耗 Token 与算力，必须有兜底保护）。
-   */
-  rateLimit: {
-    /** 单用户每分钟最多多少次 AI 对话请求；0 = 不限流 */
-    chatPerMin: parseInt(process.env.RATE_LIMIT_CHAT_PER_MIN || '30', 10),
-    /**
-     * Redis 不可用时的兜底策略：
-     * - true（fail-open）：直接放行，避免限流组件故障导致全员被拒，体验优先
-     * - false（fail-close）：拒绝请求，安全优先（适合金融等强合规场景）
-     */
-    failOpen: (process.env.RATE_LIMIT_FAIL_OPEN || 'true').toLowerCase() === 'true',
-  },
+  document: parsed.document,
+  redis: parsed.redis,
+  volcAsr: parsed.volcAsr,
+  rateLimit: parsed.rateLimit,
 } as const;
+
+export type AppConfig = typeof config;

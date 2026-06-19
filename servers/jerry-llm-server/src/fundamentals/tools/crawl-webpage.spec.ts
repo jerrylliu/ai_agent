@@ -38,13 +38,15 @@ describe('crawl_webpage 工具', () => {
 
     it('URL 为空时应返回错误', async () => {
       const r = await executeCrawlWebpage({ url: '' });
-      expect(r.error).toBe('URL 不能为空');
+      // zod 拦截，错误信息带字段路径前缀
+      expect(r.error).toMatch(/url/i);
       expect(r.content).toBe('');
     });
 
     it('URL 为空白时应返回错误', async () => {
       const r = await executeCrawlWebpage({ url: '   ' });
-      expect(r.error).toBe('URL 不能为空');
+      // zod .url() 校验会拒绝非 HTTP/HTTPS 字符串
+      expect(r.error).toMatch(/url/i);
     });
 
     it('应委托 crawlWebsite 并返回结果', async () => {

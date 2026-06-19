@@ -8,10 +8,12 @@
  * - compare_documents: 对比两个文档差异
  */
 
+import { z } from 'zod';
 import { logger } from '../logger';
 import { createLLM, buildModelConfig } from '../model-provider';
 import { HumanMessage } from '@langchain/core/messages';
 import * as Diff from 'diff';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
 // ==================== DocumentService 注入 ====================
 
@@ -28,43 +30,26 @@ export function initDocumentTools(service: any): void {
 
 // ==================== create_document ====================
 
-export const createDocumentSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'create_document',
-    description: '在知识库中创建新文档。当用户需要新建文档、记录笔记、保存信息时使用此工具。',
-    parameters: {
-      type: 'object',
-      properties: {
-        title: {
-          type: 'string',
-          description: '文档标题',
-        },
-        content: {
-          type: 'string',
-          description: '文档内容（纯文本或 Markdown 格式）',
-        },
-        description: {
-          type: 'string',
-          description: '文档描述（可选）',
-        },
-        tags: {
-          type: 'array',
-          description: '文档标签列表（可选）',
-          items: { type: 'string' },
-        },
-      },
-      required: ['title', 'content'],
-    },
-  },
-};
+export const createDocumentParamsSchema = z.object({
+  title: z.string().min(1).describe('文档标题'),
+  content: z
+    .string()
+    .min(1)
+    .describe('文档内容（纯文本或 Markdown 格式）'),
+  description: z.string().optional().describe('文档描述（可选）'),
+  tags: z
+    .array(z.string())
+    .optional()
+    .describe('文档标签列表（可选）'),
+});
 
-export interface CreateDocumentParams {
-  title: string;
-  content: string;
-  description?: string;
-  tags?: string[];
-}
+export type CreateDocumentParams = z.infer<typeof createDocumentParamsSchema>;
+
+export const createDocumentSchema = buildToolJsonSchema(
+  'create_document',
+  '在知识库中创建新文档。当用户需要新建文档、记录笔记、保存信息时使用此工具。',
+  createDocumentParamsSchema,
+);
 
 export interface CreateDocumentResult {
   success: boolean;
@@ -74,8 +59,22 @@ export interface CreateDocumentResult {
 }
 
 export async function executeCreateDocument(
-  params: CreateDocumentParams,
+  rawParams: unknown,
 ): Promise<CreateDocumentResult> {
+  const parsed = safeParseToolParams(createDocumentParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [create_document] 参数校验失败', {
+      module: 'Tool:DocumentOps',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      title: (rawParams as { title?: string })?.title || '',
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
+
   if (!documentService) {
     return {
       success: false,
@@ -132,37 +131,22 @@ export async function executeCreateDocument(
 
 // ==================== update_document ====================
 
-export const updateDocumentSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'update_document',
-    description: '更新知识库中已有文档的内容。通过上传新版本更新文档，保留历史版本。',
-    parameters: {
-      type: 'object',
-      properties: {
-        documentId: {
-          type: 'number',
-          description: '要更新的文档ID',
-        },
-        content: {
-          type: 'string',
-          description: '新的文档内容（纯文本或 Markdown 格式）',
-        },
-        title: {
-          type: 'string',
-          description: '新标题（可选，不传则保持原标题）',
-        },
-      },
-      required: ['documentId', 'content'],
-    },
-  },
-};
+export const updateDocumentParamsSchema = z.object({
+  documentId: z.number().int().positive().describe('要更新的文档ID'),
+  content: z
+    .string()
+    .min(1)
+    .describe('新的文档内容（纯文本或 Markdown 格式）'),
+  title: z.string().optional().describe('新标题（可选，不传则保持原标题）'),
+});
 
-export interface UpdateDocumentParams {
-  documentId: number;
-  content: string;
-  title?: string;
-}
+export type UpdateDocumentParams = z.infer<typeof updateDocumentParamsSchema>;
+
+export const updateDocumentSchema = buildToolJsonSchema(
+  'update_document',
+  '更新知识库中已有文档的内容。通过上传新版本更新文档，保留历史版本。',
+  updateDocumentParamsSchema,
+);
 
 export interface UpdateDocumentResult {
   success: boolean;
@@ -172,8 +156,22 @@ export interface UpdateDocumentResult {
 }
 
 export async function executeUpdateDocument(
-  params: UpdateDocumentParams,
+  rawParams: unknown,
 ): Promise<UpdateDocumentResult> {
+  const parsed = safeParseToolParams(updateDocumentParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [update_document] 参数校验失败', {
+      module: 'Tool:DocumentOps',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      documentId: (rawParams as { documentId?: number })?.documentId ?? 0,
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
+
   if (!documentService) {
     return {
       success: false,
@@ -233,33 +231,25 @@ export async function executeUpdateDocument(
 
 // ==================== summarize_document ====================
 
-export const summarizeDocumentSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'summarize_document',
-    description: '对指定文档生成摘要。当用户需要快速了解文档核心内容时使用此工具。',
-    parameters: {
-      type: 'object',
-      properties: {
-        documentId: {
-          type: 'number',
-          description: '要生成摘要的文档ID',
-        },
-        maxLength: {
-          type: 'number',
-          description: '摘要最大长度（字数），默认200',
-          default: 200,
-        },
-      },
-      required: ['documentId'],
-    },
-  },
-};
+export const summarizeDocumentParamsSchema = z.object({
+  documentId: z.number().int().positive().describe('要生成摘要的文档ID'),
+  maxLength: z
+    .number()
+    .int()
+    .positive()
+    .default(200)
+    .describe('摘要最大长度（字数），默认200'),
+});
 
-export interface SummarizeDocumentParams {
-  documentId: number;
-  maxLength?: number;
-}
+export type SummarizeDocumentParams = z.infer<
+  typeof summarizeDocumentParamsSchema
+>;
+
+export const summarizeDocumentSchema = buildToolJsonSchema(
+  'summarize_document',
+  '对指定文档生成摘要。当用户需要快速了解文档核心内容时使用此工具。',
+  summarizeDocumentParamsSchema,
+);
 
 export interface SummarizeDocumentResult {
   success: boolean;
@@ -270,8 +260,22 @@ export interface SummarizeDocumentResult {
 }
 
 export async function executeSummarizeDocument(
-  params: SummarizeDocumentParams,
+  rawParams: unknown,
 ): Promise<SummarizeDocumentResult> {
+  const parsed = safeParseToolParams(summarizeDocumentParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [summarize_document] 参数校验失败', {
+      module: 'Tool:DocumentOps',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      documentId: (rawParams as { documentId?: number })?.documentId ?? 0,
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
+
   if (!documentService) {
     return {
       success: false,
@@ -315,7 +319,7 @@ export async function executeSummarizeDocument(
     }
 
     const content = fileBuffer.toString('utf-8');
-    const maxLen = params.maxLength || 200;
+    const maxLen = params.maxLength;
 
     // 使用 LLM 生成摘要
     const llm = createLLM(buildModelConfig('deepseek:deepseek-v4-flash'));
@@ -363,32 +367,20 @@ ${content.substring(0, 6000)}
 
 // ==================== compare_documents ====================
 
-export const compareDocumentsSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'compare_documents',
-    description: '对比两个文档的差异。当用户需要比较两份文档的不同之处时使用此工具。',
-    parameters: {
-      type: 'object',
-      properties: {
-        documentId1: {
-          type: 'number',
-          description: '第一个文档的ID',
-        },
-        documentId2: {
-          type: 'number',
-          description: '第二个文档的ID',
-        },
-      },
-      required: ['documentId1', 'documentId2'],
-    },
-  },
-};
+export const compareDocumentsParamsSchema = z.object({
+  documentId1: z.number().int().positive().describe('第一个文档的ID'),
+  documentId2: z.number().int().positive().describe('第二个文档的ID'),
+});
 
-export interface CompareDocumentsParams {
-  documentId1: number;
-  documentId2: number;
-}
+export type CompareDocumentsParams = z.infer<
+  typeof compareDocumentsParamsSchema
+>;
+
+export const compareDocumentsSchema = buildToolJsonSchema(
+  'compare_documents',
+  '对比两个文档的差异。当用户需要比较两份文档的不同之处时使用此工具。',
+  compareDocumentsParamsSchema,
+);
 
 export interface CompareDocumentsResult {
   success: boolean;
@@ -400,8 +392,21 @@ export interface CompareDocumentsResult {
 }
 
 export async function executeCompareDocuments(
-  params: CompareDocumentsParams,
+  rawParams: unknown,
 ): Promise<CompareDocumentsResult> {
+  const parsed = safeParseToolParams(compareDocumentsParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [compare_documents] 参数校验失败', {
+      module: 'Tool:DocumentOps',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
+
   if (!documentService) {
     return {
       success: false,

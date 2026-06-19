@@ -98,6 +98,15 @@ import { formatSearchResultAsSummary } from './tools/search-web';
 //   config 是从环境变量收敛后的强类型配置对象。
 import { logger } from './logger';
 import { config } from './config';
+import { z } from 'zod';
+import { parseLlmJson, parseToolResultJson } from './llm-json-parser';
+import { searchWebResultSchema } from './tools/search-web';
+import {
+  generateImageResultSchema,
+  createMindmapResultSchema,
+  generateChartResultSchema,
+} from './tools/multimodal-output';
+import { generateDocumentResultSchema } from './tools/generate-document';
 // 【多模态产出辅助】mindmapImageUrl：把 mermaid 源码转成可访问的图片 URL（懒渲染）。
 import { mindmapImageUrl } from './tools/multimodal-output';
 // 【泛型缓存类】MultiLevelCache<T>：T 为缓存值类型，支持 L1（内存 LRU）+ L2（Redis）。
@@ -385,19 +394,21 @@ AI 回复：
       ? (judgeResp as any).content
       : JSON.stringify((judgeResp as any).content);
 
-    // 提取 JSON（兼容模型返回 ```json...``` 包裹的情况）
-    const jsonMatch = judgeText.match(/\{[\s\S]*?"is_mouth_cannon"[\s\S]*?\}/);
-    if (!jsonMatch) {
-      logger.warn('LLM-as-Judge：无法解析输出 JSON，fail-open', {
-        module: 'PromptService',
-        judgePreview: judgeText.slice(0, 200),
-      });
-      return { isMouthCannon: false, reason: '判断器输出无法解析' };
+    // zod schema 校验 LLM 输出，替代裸 JSON.parse
+    const judgeSchema = z.object({
+      is_mouth_cannon: z.boolean(),
+      reason: z.string().optional(),
+    });
+    const parsed = parseLlmJson(judgeText, judgeSchema, {
+      module: 'PromptService:MouthCannonJudge',
+    });
+    if (!parsed.success) {
+      // fail-open：判断失败不阻塞主回复
+      return { isMouthCannon: false, reason: `判断器输出无法解析: ${parsed.reason}` };
     }
-    const parsed = JSON.parse(jsonMatch[0]);
     return {
-      isMouthCannon: parsed.is_mouth_cannon === true,
-      reason: typeof parsed.reason === 'string' ? parsed.reason : '未提供理由',
+      isMouthCannon: parsed.data.is_mouth_cannon === true,
+      reason: parsed.data.reason || '未提供理由',
     };
   } catch (err: any) {
     // 失败时 fail-open，让原回复正常返回（避免误杀）
@@ -547,79 +558,92 @@ function estimateTokens(text: string): number {
  */
 function formatToolResult(toolName: string, content: string, modelId: string): string {
   if (toolName === 'search_web') {
-    try {
-      const parsed = JSON.parse(content);
-      const caps = getModelCapabilities(modelId);
-      const isSmallContext = caps.contextLength < 8192;
-      const maxResults = isSmallContext ? 3 : 5;
-      return formatSearchResultAsSummary(parsed, maxResults);
-    } catch {
-      // JSON 解析失败，返回原始内容
+    const parsed = parseToolResultJson(content, searchWebResultSchema, {
+      module: 'PromptService:formatToolResult',
+      toolName,
+    });
+    if (!parsed.success) {
       return content;
     }
+    const caps = getModelCapabilities(modelId);
+    const isSmallContext = caps.contextLength < 8192;
+    const maxResults = isSmallContext ? 3 : 5;
+    return formatSearchResultAsSummary(parsed.data, maxResults);
   }
 
   if (toolName === 'generate_image') {
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed.type === 'image' && parsed.images && parsed.images.length > 0) {
-        // 图片已在流式输出前由服务端注入，LLM 只需用文字描述结果
-        const imageCount = parsed.images.length;
-        // 保留图片 URL，LLM 可传给 send_notification.attachments
-        const imageUrlLines = parsed.images
-          .map((img: any, i: number) => `图片${imageCount > 1 ? ` ${i + 1}` : ''} URL：${img.url}`)
-          .join('\n');
-        return `图片生成成功！共生成 ${imageCount} 张图片，实际使用模型：${parsed.model || '未知'}。\n${imageUrlLines}\n\n请用文字描述图片内容，并告知用户实际使用的模型名称。如果用户要求发邮件，把上面的图片 URL 传给 send_notification 的 attachments 字段即可。重要：图片已自动展示给用户，不要在回答中再输出任何 ![...](...) 格式的图片 Markdown，只需文字描述即可。`;
-      }
-      return parsed.message || content;
-    } catch {
+    const parsed = parseToolResultJson(content, generateImageResultSchema, {
+      module: 'PromptService:formatToolResult',
+      toolName,
+    });
+    if (!parsed.success) {
       return content;
     }
+    const data = parsed.data;
+    if (data.type === 'image' && data.images && data.images.length > 0) {
+      // 图片已在流式输出前由服务端注入，LLM 只需用文字描述结果
+      const imageCount = data.images.length;
+      // 保留图片 URL，LLM 可传给 send_notification.attachments
+      const imageUrlLines = data.images
+        .map((img, i: number) => `图片${imageCount > 1 ? ` ${i + 1}` : ''} URL：${img.url}`)
+        .join('\n');
+      return `图片生成成功！共生成 ${imageCount} 张图片，实际使用模型：${data.model || '未知'}。\n${imageUrlLines}\n\n请用文字描述图片内容，并告知用户实际使用的模型名称。如果用户要求发邮件，把上面的图片 URL 传给 send_notification 的 attachments 字段即可。重要：图片已自动展示给用户，不要在回答中再输出任何 ![...](...) 格式的图片 Markdown，只需文字描述即可。`;
+    }
+    return data.message || content;
   }
 
   if (toolName === 'create_mindmap') {
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed.type === 'mindmap' && parsed.mermaidCode) {
-        // 把 imageUrl 放在最前面，LLM 必须看到并传给 send_notification.attachments
-        const imageUrlLine = parsed.imageUrl
-          ? `**静态图片链接**（传给 send_notification.attachments 用）：${parsed.imageUrl}\n\n`
-          : '';
-        return `思维导图生成成功！${imageUrlLine}思维导图已自动展示给用户，请用文字简要描述内容即可，不要再输出任何 \`\`\`mermaid 代码块（前端会自动渲染）。如果用户要求发邮件，把 imageUrl 传给 send_notification.attachments 字段。`;
-      }
-      return parsed.message || content;
-    } catch {
+    const parsed = parseToolResultJson(content, createMindmapResultSchema, {
+      module: 'PromptService:formatToolResult',
+      toolName,
+    });
+    if (!parsed.success) {
       return content;
     }
+    const data = parsed.data;
+    if (data.type === 'mindmap' && data.mermaidCode) {
+      // 把 imageUrl 放在最前面，LLM 必须看到并传给 send_notification.attachments
+      const imageUrlLine = data.imageUrl
+        ? `**静态图片链接**（传给 send_notification.attachments 用）：${data.imageUrl}\n\n`
+        : '';
+      return `思维导图生成成功！${imageUrlLine}思维导图已自动展示给用户，请用文字简要描述内容即可，不要再输出任何 \`\`\`mermaid 代码块（前端会自动渲染）。如果用户要求发邮件，把 imageUrl 传给 send_notification.attachments 字段。`;
+    }
+    return data.message || content;
   }
 
   if (toolName === 'generate_chart') {
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed.type === 'chart' && parsed.echartsOption) {
-        // 把 imageUrl 放在最前面，LLM 必须看到并传给 send_notification.attachments
-        const imageUrlLine = parsed.imageUrl
-          ? `**静态图片链接**（传给 send_notification.attachments 用）：${parsed.imageUrl}\n\n`
-          : '';
-        return `图表生成成功！${parsed.chartType ? `类型：${parsed.chartType}。` : ''}${imageUrlLine}图表已自动以交互式形式展示给用户，请用文字简要描述图表内容即可，不要再输出任何 \`\`\`echarts 代码块（前端会自动渲染）。如果用户要求发邮件，把 imageUrl 传给 send_notification.attachments 字段。`;
-      }
-      return parsed.message || content;
-    } catch {
+    const parsed = parseToolResultJson(content, generateChartResultSchema, {
+      module: 'PromptService:formatToolResult',
+      toolName,
+    });
+    if (!parsed.success) {
       return content;
     }
+    const data = parsed.data;
+    if (data.type === 'chart' && data.echartsOption) {
+      // 把 imageUrl 放在最前面，LLM 必须看到并传给 send_notification.attachments
+      const imageUrlLine = data.imageUrl
+        ? `**静态图片链接**（传给 send_notification.attachments 用）：${data.imageUrl}\n\n`
+        : '';
+      return `图表生成成功！${data.chartType ? `类型：${data.chartType}。` : ''}${imageUrlLine}图表已自动以交互式形式展示给用户，请用文字简要描述图表内容即可，不要再输出任何 \`\`\`echarts 代码块（前端会自动渲染）。如果用户要求发邮件，把 imageUrl 传给 send_notification.attachments 字段。`;
+    }
+    return data.message || content;
   }
 
   if (toolName === 'generate_document') {
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed.success && parsed.type === 'document') {
-        // fileUrl 必须保留：用户要求邮件发送时，LLM 需要把它填入 send_notification.attachments
-        return `文档"${parsed.filename}"（${parsed.format?.toUpperCase()}，${(parsed.sizeBytes / 1024).toFixed(1)} KB）已生成成功。\n**fileUrl**（发邮件用）：${parsed.fileUrl}\n\n文件卡片已自动展示给用户，包含下载和预览按钮，请用一两句话简要说明文档内容即可，不要再列出文档结构或重复描述章节。如果用户要求发邮件，把上面的 fileUrl 传给 send_notification.attachments[].url 字段。`;
-      }
-      return parsed.message || content;
-    } catch {
+    const parsed = parseToolResultJson(content, generateDocumentResultSchema, {
+      module: 'PromptService:formatToolResult',
+      toolName,
+    });
+    if (!parsed.success) {
       return content;
     }
+    const data = parsed.data;
+    if (data.success && data.type === 'document') {
+      // fileUrl 必须保留：用户要求邮件发送时，LLM 需要把它填入 send_notification.attachments
+      return `文档"${data.filename}"（${data.format?.toUpperCase()}，${((data.sizeBytes ?? 0) / 1024).toFixed(1)} KB）已生成成功。\n**fileUrl**（发邮件用）：${data.fileUrl}\n\n文件卡片已自动展示给用户，包含下载和预览按钮，请用一两句话简要说明文档内容即可，不要再列出文档结构或重复描述章节。如果用户要求发邮件，把上面的 fileUrl 传给 send_notification.attachments[].url 字段。`;
+    }
+    return data.message || content;
   }
 
   // 其他工具保持原始内容

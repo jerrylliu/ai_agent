@@ -17,7 +17,9 @@
  * 5. 全部完成后计划自动标记为 completed
  */
 
+import { z } from 'zod';
 import { logger } from '../logger';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
 // 内存中的计划存储（按会话隔离）
 const plans = new Map<string, Plan>();
@@ -171,51 +173,33 @@ export function findMatchingStep(sessionId: string, toolName: string): PlanStep 
 
 // ==================== create_plan ====================
 
-export const createPlanSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'create_plan',
-    description: '为复杂任务创建执行计划。当任务需要多个步骤、涉及多个工具调用、或用户明确要求分步执行时，先创建计划再逐步执行。支持步骤间数据绑定：通过 inputMapping 可引用前序步骤的输出作为当前步骤的输入。简单问题不需要创建计划，直接回答即可。',
-    parameters: {
-      type: 'object',
-      properties: {
-        goal: {
-          type: 'string',
-          description: '任务的最终目标描述',
-        },
-        steps: {
-          type: 'array',
-          description: '执行步骤列表，按顺序排列',
-          items: {
-            type: 'object',
-            properties: {
-              description: {
-                type: 'string',
-                description: '步骤描述',
-              },
-              toolName: {
-                type: 'string',
-                description: '该步骤需要使用的工具名称',
-              },
-              inputMapping: {
-                type: 'object',
-                description: '数据绑定映射。key 为当前工具的参数名，value 为引用表达式如 "$step1.output" 或 "$step1.output.data"。当某个参数需要从前序步骤的输出获取时使用。',
-                additionalProperties: { type: 'string' },
-              },
-            },
-            required: ['description'],
-          },
-        },
-      },
-      required: ['goal', 'steps'],
-    },
-  },
-};
+// 单个步骤的 zod schema：嵌套对象，inputMapping 为 string -> string 的字典
+const createPlanStepSchema = z.object({
+  description: z.string().min(1).describe('步骤描述'),
+  toolName: z.string().optional().describe('该步骤需要使用的工具名称'),
+  inputMapping: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      '数据绑定映射。key 为当前工具的参数名，value 为引用表达式如 "$step1.output" 或 "$step1.output.data"。当某个参数需要从前序步骤的输出获取时使用。',
+    ),
+});
 
-export interface CreatePlanParams {
-  goal: string;
-  steps: Array<{ description: string; toolName?: string; inputMapping?: Record<string, string> }>;
-}
+export const createPlanParamsSchema = z.object({
+  goal: z.string().min(1).describe('任务的最终目标描述'),
+  steps: z
+    .array(createPlanStepSchema)
+    .min(1)
+    .describe('执行步骤列表，按顺序排列'),
+});
+
+export type CreatePlanParams = z.infer<typeof createPlanParamsSchema>;
+
+export const createPlanSchema = buildToolJsonSchema(
+  'create_plan',
+  '为复杂任务创建执行计划。当任务需要多个步骤、涉及多个工具调用、或用户明确要求分步执行时，先创建计划再逐步执行。支持步骤间数据绑定：通过 inputMapping 可引用前序步骤的输出作为当前步骤的输入。简单问题不需要创建计划，直接回答即可。',
+  createPlanParamsSchema,
+);
 
 export interface CreatePlanResult {
   planId: string;
@@ -226,10 +210,26 @@ export interface CreatePlanResult {
 }
 
 export async function executeCreatePlan(
-  params: CreatePlanParams,
+  rawParams: unknown,
   context?: { sessionId?: string },
 ): Promise<CreatePlanResult> {
   const sessionId = context?.sessionId || 'default';
+
+  const parsed = safeParseToolParams(createPlanParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [create_plan] 参数校验失败', {
+      module: 'Tool:PlanExecute',
+      error: parsed.error,
+    });
+    return {
+      planId: sessionId,
+      goal: (rawParams as { goal?: string })?.goal || '',
+      totalSteps: 0,
+      steps: [],
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
 
   const steps: PlanStep[] = params.steps.map((s, i) => ({
     id: i + 1,
@@ -273,42 +273,23 @@ export async function executeCreatePlan(
 
 // ==================== update_plan_step ====================
 
-export const updatePlanStepSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'update_plan_step',
-    description: '更新执行计划中某个步骤的状态。完成一个步骤后调用此工具标记为已完成，失败则标记为失败。可附带输出数据，供后续步骤通过数据绑定引用。',
-    parameters: {
-      type: 'object',
-      properties: {
-        stepId: {
-          type: 'number',
-          description: '步骤编号（从1开始）',
-        },
-        status: {
-          type: 'string',
-          description: '步骤的新状态',
-          enum: ['completed', 'failed', 'skipped'],
-        },
-        result: {
-          type: 'string',
-          description: '步骤执行结果的简要描述',
-        },
-        output: {
-          description: '步骤的结构化输出数据，供后续步骤通过 $stepN.output.xxx 引用',
-        },
-      },
-      required: ['stepId', 'status'],
-    },
-  },
-};
+export const updatePlanStepParamsSchema = z.object({
+  stepId: z.number().int().positive().describe('步骤编号（从1开始）'),
+  status: z
+    .enum(['completed', 'failed', 'skipped'])
+    .describe('步骤的新状态'),
+  result: z.string().optional().describe('步骤执行结果的简要描述'),
+  // output 是自由结构，前序步骤可能输出任意 JSON
+  output: z.unknown().optional().describe('步骤的结构化输出数据，供后续步骤通过 $stepN.output.xxx 引用'),
+});
 
-export interface UpdatePlanStepParams {
-  stepId: number;
-  status: 'completed' | 'failed' | 'skipped';
-  result?: string;
-  output?: any;
-}
+export type UpdatePlanStepParams = z.infer<typeof updatePlanStepParamsSchema>;
+
+export const updatePlanStepSchema = buildToolJsonSchema(
+  'update_plan_step',
+  '更新执行计划中某个步骤的状态。完成一个步骤后调用此工具标记为已完成，失败则标记为失败。可附带输出数据，供后续步骤通过数据绑定引用。',
+  updatePlanStepParamsSchema,
+);
 
 export interface UpdatePlanStepResult {
   stepId: number;
@@ -321,10 +302,28 @@ export interface UpdatePlanStepResult {
 }
 
 export async function executeUpdatePlanStep(
-  params: UpdatePlanStepParams,
+  rawParams: unknown,
   context?: { sessionId?: string },
 ): Promise<UpdatePlanStepResult> {
   const sessionId = context?.sessionId || 'default';
+
+  const parsed = safeParseToolParams(updatePlanStepParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [update_plan_step] 参数校验失败', {
+      module: 'Tool:PlanExecute',
+      error: parsed.error,
+    });
+    return {
+      stepId: (rawParams as { stepId?: number })?.stepId ?? 0,
+      status: (rawParams as { status?: string })?.status ?? 'failed',
+      planStatus: 'invalid_params',
+      completedSteps: 0,
+      totalSteps: 0,
+      message: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
+
   const plan = plans.get(sessionId);
 
   if (!plan) {
@@ -401,17 +400,16 @@ export async function executeUpdatePlanStep(
 
 // ==================== get_plan ====================
 
-export const getPlanSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'get_plan',
-    description: '查看当前会话的执行计划及各步骤状态。用于在执行过程中回顾计划进度，查看各步骤的输出数据。',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-  },
-};
+// get_plan 无入参，但仍用 zod 显式表达，方便统一接入 buildToolJsonSchema
+export const getPlanParamsSchema = z.object({});
+
+export type GetPlanParams = z.infer<typeof getPlanParamsSchema>;
+
+export const getPlanSchema = buildToolJsonSchema(
+  'get_plan',
+  '查看当前会话的执行计划及各步骤状态。用于在执行过程中回顾计划进度，查看各步骤的输出数据。',
+  getPlanParamsSchema,
+);
 
 export interface GetPlanResult {
   goal: string;

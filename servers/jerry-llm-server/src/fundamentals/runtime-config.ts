@@ -7,9 +7,31 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { z } from 'zod';
 import { logger } from './logger.js';
 
 // ==================== 配置结构 ====================
+
+// 运行时配置的 zod schema：所有字段可选（partial），加载时与默认值深合并
+const RuntimeConfigCacheSchema = z.object({
+  maxEntries: z.number().int().nonnegative().optional(),
+  maxItemSizeKB: z.number().int().nonnegative().optional(),
+  defaultTTLMinutes: z.number().int().nonnegative().optional(),
+});
+
+const RuntimeConfigRateLimiterSchema = z.object({
+  fastPoolMax: z.number().int().nonnegative().optional(),
+  streamingPoolMax: z.number().int().nonnegative().optional(),
+  tokenWaitTimeout: z.number().int().nonnegative().optional(),
+});
+
+const RuntimeConfigPartialSchema = z
+  .object({
+    cache: RuntimeConfigCacheSchema.optional(),
+    rateLimiter: RuntimeConfigRateLimiterSchema.optional(),
+  })
+  // 文件中可能含未来扩展字段，loose 模式静默忽略
+  .loose();
 
 export interface RuntimeConfig {
   cache: {
@@ -55,7 +77,30 @@ export function loadRuntimeConfig(): RuntimeConfig {
     }
 
     const raw = readFileSync(CONFIG_FILE, 'utf-8');
-    const saved = JSON.parse(raw) as Partial<RuntimeConfig>;
+
+    let savedRaw: unknown;
+    try {
+      savedRaw = JSON.parse(raw);
+    } catch (e) {
+      logger.warn('运行时配置文件 JSON 解析失败，使用默认配置', {
+        module: 'RuntimeConfig',
+        error: (e as Error).message,
+      });
+      return { ...DEFAULT_RUNTIME_CONFIG };
+    }
+
+    const validated = RuntimeConfigPartialSchema.safeParse(savedRaw);
+    if (!validated.success) {
+      const issues = validated.error.issues
+        .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
+        .join('; ');
+      logger.warn('运行时配置文件结构不符合预期，使用默认配置', {
+        module: 'RuntimeConfig',
+        issues,
+      });
+      return { ...DEFAULT_RUNTIME_CONFIG };
+    }
+    const saved = validated.data;
 
     // 深度合并：默认值 + 文件中的值
     const config: RuntimeConfig = {

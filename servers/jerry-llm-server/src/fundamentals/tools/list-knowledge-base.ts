@@ -6,31 +6,31 @@
  * 让 LLM 能准确回答知识库内容概览类问题。
  */
 
+import { z } from 'zod';
 import { logger } from '../logger';
 import { getAllDocuments } from '../vector-store/index.js';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
-export const listKnowledgeBaseSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'list_knowledge_base',
-    description: '列出知识库中的所有文档概览。当用户询问知识库有什么内容、包含哪些文档、有哪些资料时使用此工具，而不是用搜索工具。搜索工具用于查找具体内容，本工具用于列出文档清单。',
-    parameters: {
-      type: 'object',
-      properties: {
-        detail_level: {
-          type: 'string',
-          enum: ['brief', 'detailed'],
-          description: '概览详细程度：brief=仅文档名和类型，detailed=包含内容摘要',
-        },
-      },
-      required: [],
-    },
-  },
-};
+// ==================== Zod Schema ====================
 
-export interface ListKnowledgeBaseParams {
-  detail_level?: 'brief' | 'detailed';
-}
+export const listKnowledgeBaseParamsSchema = z.object({
+  detail_level: z
+    .enum(['brief', 'detailed'])
+    .default('brief')
+    .describe('概览详细程度：brief=仅文档名和类型，detailed=包含内容摘要'),
+});
+
+export type ListKnowledgeBaseParams = z.infer<typeof listKnowledgeBaseParamsSchema>;
+
+// ==================== OpenAI Function Calling Schema ====================
+
+export const listKnowledgeBaseSchema = buildToolJsonSchema(
+  'list_knowledge_base',
+  '列出知识库中的所有文档概览。当用户询问知识库有什么内容、包含哪些文档、有哪些资料时使用此工具，而不是用搜索工具。搜索工具用于查找具体内容，本工具用于列出文档清单。',
+  listKnowledgeBaseParamsSchema,
+);
+
+// ==================== Result 类型 ====================
 
 export interface ListKnowledgeBaseResult {
   documents: Array<{
@@ -51,9 +51,20 @@ export interface ListKnowledgeBaseResult {
  * 按 source 字段分组，统计每个文档的块数。
  */
 export async function executeListKnowledgeBase(
-  params: ListKnowledgeBaseParams,
+  params: unknown,
 ): Promise<ListKnowledgeBaseResult> {
-  const detailLevel = params.detail_level ?? 'brief';
+  // zod 校验：失败时按"宽松"策略走默认值，保持原行为不抛错
+  const parsed = safeParseToolParams(listKnowledgeBaseParamsSchema, params ?? {});
+  const detailLevel: 'brief' | 'detailed' = parsed.success
+    ? parsed.data.detail_level
+    : 'brief';
+
+  if (!parsed.success) {
+    logger.warn('FC工具 [list_knowledge_base] 参数校验失败，已降级到默认 brief', {
+      module: 'Tool:ListKnowledgeBase',
+      error: parsed.error,
+    });
+  }
 
   logger.info('FC工具 [list_knowledge_base] 开始执行', {
     module: 'Tool:ListKnowledgeBase',

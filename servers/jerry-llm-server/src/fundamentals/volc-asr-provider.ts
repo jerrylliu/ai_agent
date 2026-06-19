@@ -22,8 +22,43 @@
 import WebSocket from 'ws';
 import zlib from 'zlib';
 import { randomUUID } from 'crypto';
+import { z } from 'zod';
 import { config } from './config.js';
 import { logger } from './logger.js';
+import { parseToolResultJson } from './llm-json-parser.js';
+
+// ==================== 火山 ASR HTTP 响应 schema ====================
+//
+// /submit 与 /query 端点字段子集不同，分别校验：
+// - submit 关注 code/message/id
+// - query 关注 code/message/result.text/result.data
+// 用 looseObject 透传未来扩展字段
+
+const VolcAsrSubmitResponseSchema = z.looseObject({
+  code: z.number().optional(),
+  message: z.string().optional(),
+  id: z.string().optional(),
+});
+
+const VolcAsrQueryResponseSchema = z.looseObject({
+  code: z.number().optional(),
+  message: z.string().optional(),
+  result: z
+    .looseObject({
+      text: z.string().optional(),
+      data: z
+        .array(
+          z.looseObject({
+            text: z.string().optional(),
+            start_time: z.number().optional(),
+            end_time: z.number().optional(),
+            confidence: z.number().optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+});
 
 // ==================== 二进制协议常量 ====================
 
@@ -556,7 +591,16 @@ export async function submitFileTranscribe(
     body,
   });
 
-  const data = await resp.json() as any;
+  const respText = await resp.text();
+  const parsed = parseToolResultJson(respText, VolcAsrSubmitResponseSchema, {
+    module: 'VolcAsrProvider',
+    api: 'submit',
+    reqid,
+  });
+  if (!parsed.success) {
+    throw new Error(`提交转写任务响应结构异常: ${parsed.reason}`);
+  }
+  const data = parsed.data;
   if (data.code !== 0) {
     throw new Error(`提交转写任务失败: ${data.message}`);
   }
@@ -589,11 +633,21 @@ export async function queryFileTranscribe(taskId: string, uid: string = 'system'
     body,
   });
 
-  const data = await resp.json() as any;
+  const respText = await resp.text();
+  const parsed = parseToolResultJson(respText, VolcAsrQueryResponseSchema, {
+    module: 'VolcAsrProvider',
+    api: 'query',
+    reqid,
+    taskId,
+  });
+  if (!parsed.success) {
+    return { taskId, status: 'failed', message: `查询转写响应结构异常: ${parsed.reason}` };
+  }
+  const data = parsed.data;
 
   if (data.code === 0) {
     const text = data.result?.text || data.result?.data?.[0]?.text || '';
-    const segments = (data.result?.data || []).map((s: any) => ({
+    const segments = (data.result?.data || []).map((s) => ({
       start: s.start_time ?? 0,
       end: s.end_time ?? 0,
       text: s.text ?? '',

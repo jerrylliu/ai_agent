@@ -1,10 +1,24 @@
+import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import { parseToolResultJson } from '../llm-json-parser';
+
+// ==================== 联网搜索 API 响应 schema ====================
+//
+// 搜索 API（自部署 SearXNG 兼容服务）：响应字段较多且各 engine 字段差异大，
+// 用 looseObject 仅校验最关键的"search_result 必须是数组（或缺失）"，
+// 其余完全透传给 extractResultsFromResponse 内部处理。
+const SearchApiResponseSchema = z.looseObject({
+  created: z.number().optional(),
+  request_id: z.string().optional(),
+  search_intent: z.array(z.looseObject({})).optional(),
+  search_result: z.array(z.looseObject({})).optional(),
+});
 
 const SEARCH_API_URL = config.searchApiUrl;
 const SEARCH_API_KEY = config.searchApiKey;
 
-const VALID_ENGINES = ['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'] as const;
 const SEARCH_API_TIMEOUT_MS = 15000;
 
 let searchWebAvailable = false;
@@ -44,62 +58,66 @@ function maskUrl(url: string): string {
   }
 }
 
-export const searchWebSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'search_web',
-    description: '联网搜索实时信息。当用户的问题涉及最新新闻、实时数据、当前事件或本地知识库中没有的实时信息时，使用此工具进行网络搜索。不要对知识库中已有的静态内容使用此工具。注意：查询天气信息时请使用 get_weather 工具，不要使用此工具。',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: '搜索查询语句，应该是一个精确的、能获取相关结果的搜索词',
-        },
-        engine: {
-          type: 'string',
-          description: '搜索引擎选择：search_std（标准搜索，通用场景速度快）、search_pro（专业搜索，深度搜索结果更全面）、search_pro_sogou（搜狗专业搜索，中文内容更优）、search_pro_quark（夸克专业搜索，国内内容覆盖好）',
-          enum: ['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'],
-          default: 'search_std',
-        },
-        max_results: {
-          type: 'number',
-          description: '返回的最大搜索结果数量，默认5',
-          default: 5,
-          minimum: 1,
-          maximum: 20,
-        },
-        recency_filter: {
-          type: 'string',
-          description: '搜索结果的时间范围过滤：oneDay（一天内）、oneWeek（一周内）、oneMonth（一个月内）、oneYear（一年内）、noLimit（不限，默认）。当用户问"今天""最近""最新"等时效性问题时，应设置对应的时间范围',
-          enum: ['oneDay', 'oneWeek', 'oneMonth', 'oneYear', 'noLimit'],
-          default: 'noLimit',
-        },
-      },
-      required: ['query'],
-    },
-  },
-};
+// ==================== Zod Schema ====================
 
-export interface SearchWebParams {
-  query: string;
-  engine?: 'search_std' | 'search_pro' | 'search_pro_sogou' | 'search_pro_quark';
-  max_results?: number;
-  recency_filter?: 'oneDay' | 'oneWeek' | 'oneMonth' | 'oneYear' | 'noLimit';
-}
+export const searchWebParamsSchema = z.object({
+  query: z
+    .string()
+    .min(1)
+    .describe('搜索查询语句，应该是一个精确的、能获取相关结果的搜索词'),
+  engine: z
+    .enum(['search_std', 'search_pro', 'search_pro_sogou', 'search_pro_quark'])
+    .default('search_std')
+    .describe(
+      '搜索引擎选择：search_std（标准搜索，通用场景速度快）、search_pro（专业搜索，深度搜索结果更全面）、search_pro_sogou（搜狗专业搜索，中文内容更优）、search_pro_quark（夸克专业搜索，国内内容覆盖好）',
+    ),
+  max_results: z
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .default(5)
+    .describe('返回的最大搜索结果数量，默认5'),
+  recency_filter: z
+    .enum(['oneDay', 'oneWeek', 'oneMonth', 'oneYear', 'noLimit'])
+    .default('noLimit')
+    .describe(
+      '搜索结果的时间范围过滤：oneDay（一天内）、oneWeek（一周内）、oneMonth（一个月内）、oneYear（一年内）、noLimit（不限，默认）。当用户问"今天""最近""最新"等时效性问题时，应设置对应的时间范围',
+    ),
+});
 
-export interface SearchWebResult {
-  results: Array<{
-    title: string;
-    url: string;
-    snippet: string;
-    source: string;
-  }>;
-  total: number;
-  query: string;
-  engine: string;
-  error?: string;
-}
+export type SearchWebParams = z.infer<typeof searchWebParamsSchema>;
+
+// ==================== OpenAI Function Calling Schema ====================
+
+export const searchWebSchema = buildToolJsonSchema(
+  'search_web',
+  '联网搜索实时信息。当用户的问题涉及最新新闻、实时数据、当前事件或本地知识库中没有的实时信息时，使用此工具进行网络搜索。不要对知识库中已有的静态内容使用此工具。注意：查询天气信息时请使用 get_weather 工具，不要使用此工具。',
+  searchWebParamsSchema,
+);
+
+// ==================== Result Schema ====================
+
+/**
+ * search_web 工具的返回结构 schema
+ * 用 looseObject：保留 Tool 内部可能扩展的额外字段，避免 prompt.ts reparse 时被剥离
+ */
+export const searchWebResultSchema = z.looseObject({
+  results: z.array(
+    z.looseObject({
+      title: z.string(),
+      url: z.string(),
+      snippet: z.string(),
+      source: z.string(),
+    }),
+  ),
+  total: z.number(),
+  query: z.string(),
+  engine: z.string(),
+  error: z.string().optional(),
+});
+
+export type SearchWebResult = z.infer<typeof searchWebResultSchema>;
 
 /**
  * 将搜索结果格式化为结构化摘要，供模型直接理解
@@ -171,7 +189,7 @@ function extractResultsFromResponse(responseData: any, maxResults: number, engin
 }
 
 export async function executeSearchWeb(
-  params: SearchWebParams,
+  rawParams: unknown,
 ): Promise<SearchWebResult> {
   const startTime = Date.now();
 
@@ -182,44 +200,41 @@ export async function executeSearchWeb(
     return {
       results: [],
       total: 0,
-      query: params.query || '',
-      engine: params.engine || 'search_std',
+      query: (rawParams as { query?: string })?.query || '',
+      engine: (rawParams as { engine?: string })?.engine || 'search_std',
       error: '联网搜索功能未配置，请检查 SEARCH_API_URL 和 SEARCH_API_KEY 环境变量',
     };
   }
 
-  let engine = params.engine || 'search_std';
-  if (!VALID_ENGINES.includes(engine as any)) {
-    logger.warn('FC工具 [search_web] engine 参数无效，回退为默认值', {
+  // zod 校验：query 必填、enum / default / min / max 一并校验
+  const parsed = safeParseToolParams(searchWebParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [search_web] 参数校验失败', {
       module: 'Tool:SearchWeb',
-      invalidEngine: engine,
-      fallbackEngine: 'search_std',
-    });
-    engine = 'search_std';
-  }
-
-  const maxResults = Math.min(Math.max(params.max_results || 5, 1), 20);
-
-  logger.info('FC工具 [search_web] 开始执行', {
-    module: 'Tool:SearchWeb',
-    rawParams: JSON.stringify(params),
-    query: params.query,
-    engine,
-    maxResults,
-    recencyFilter: params.recency_filter || 'noLimit',
-  });
-
-  if (!params.query || !params.query.trim()) {
-    logger.warn('FC工具 [search_web] 参数校验失败：query 为空', {
-      module: 'Tool:SearchWeb',
+      error: parsed.error,
     });
     return {
       results: [],
       total: 0,
-      query: params.query || '',
-      engine,
+      query: (rawParams as { query?: string })?.query || '',
+      engine: 'search_std',
+      error: `参数校验失败: ${parsed.error}`,
     };
   }
+
+  // 用解析后的 params 替换原 params 引用，下游业务逻辑保持原样
+  const params = parsed.data;
+  // engine 已被 zod 校验为合法 enum 值，这里去掉历史回退分支
+  const engine = params.engine;
+  const maxResults = params.max_results;
+
+  logger.info('FC工具 [search_web] 开始执行', {
+    module: 'Tool:SearchWeb',
+    query: params.query,
+    engine,
+    maxResults,
+    recencyFilter: params.recency_filter,
+  });
 
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => abortController.abort(), SEARCH_API_TIMEOUT_MS);
@@ -231,7 +246,7 @@ export async function executeSearchWeb(
       count: maxResults,
     };
 
-    const recencyFilter = params.recency_filter || 'noLimit';
+    const recencyFilter = params.recency_filter;
     if (recencyFilter !== 'noLimit') {
       requestBody.search_recency_filter = recencyFilter;
     }
@@ -277,7 +292,26 @@ export async function executeSearchWeb(
       };
     }
 
-    const responseData = await response.json();
+    const responseText = await response.text();
+    const parsed = parseToolResultJson(responseText, SearchApiResponseSchema, {
+      module: 'Tool:SearchWeb',
+      api: 'search',
+      query: params.query,
+    });
+    if (!parsed.success) {
+      logger.error('FC工具 [search_web] 响应结构异常', {
+        module: 'Tool:SearchWeb',
+        reason: parsed.reason,
+      });
+      return {
+        results: [],
+        total: 0,
+        query: params.query,
+        engine,
+        error: `搜索 API 响应结构异常: ${parsed.reason}`,
+      };
+    }
+    const responseData = parsed.data;
     const duration = Date.now() - startTime;
 
     const apiCreatedTimestamp = responseData.created;
@@ -286,7 +320,7 @@ export async function executeSearchWeb(
       : null;
 
     const searchIntent = responseData.search_intent
-      ? responseData.search_intent.map((intent: any) => ({
+      ? (responseData.search_intent as any[]).map((intent: any) => ({
           query: intent.query,
           keywords: intent.keywords,
           intent: intent.intent,
@@ -295,7 +329,7 @@ export async function executeSearchWeb(
 
     const rawResultCount = responseData.search_result?.length || 0;
     const resultPublishDates = responseData.search_result
-      ? responseData.search_result.map((item: any) => ({
+      ? (responseData.search_result as any[]).map((item: any) => ({
           title: (item.title || '').substring(0, 40),
           publishDate: item.publish_date || null,
           media: item.media || null,

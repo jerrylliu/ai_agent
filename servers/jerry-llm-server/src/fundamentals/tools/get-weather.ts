@@ -1,5 +1,84 @@
+import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import { parseToolResultJson } from '../llm-json-parser';
+
+// ==================== 和风天气 API 响应 schema ====================
+//
+// 仅做"边界兜底"——和风天气 API 字段完整性与正确性由其官方保证，
+// 这里只校验业务关键字段（code/location/now），其余用 looseObject 透传。
+
+const QWeatherCityLookupSchema = z.looseObject({
+  code: z.string(),
+  location: z
+    .array(
+      z.looseObject({
+        id: z.string(),
+        name: z.string(),
+      }),
+    )
+    .optional(),
+});
+
+const QWeatherNowSchema = z.looseObject({
+  code: z.string(),
+  updateTime: z.string().optional(),
+  now: z
+    .looseObject({
+      temp: z.string(),
+      feelsLike: z.string(),
+      text: z.string(),
+      windDir: z.string(),
+      windScale: z.string(),
+      humidity: z.string(),
+      precip: z.string(),
+      pressure: z.string(),
+      vis: z.string(),
+      cloud: z.string().optional(),
+      dew: z.string().optional(),
+    })
+    .optional(),
+});
+
+const QWeather7dSchema = z.looseObject({
+  code: z.string(),
+  updateTime: z.string().optional(),
+  daily: z
+    .array(
+      z.looseObject({
+        fxDate: z.string(),
+        tempMax: z.string(),
+        tempMin: z.string(),
+        textDay: z.string(),
+        textNight: z.string(),
+        windDirDay: z.string(),
+        windScaleDay: z.string(),
+        humidity: z.string(),
+        precip: z.string(),
+        uvIndex: z.string(),
+      }),
+    )
+    .optional(),
+});
+
+const QWeatherHourlySchema = z.looseObject({
+  code: z.string(),
+  updateTime: z.string().optional(),
+  hourly: z
+    .array(
+      z.looseObject({
+        fxTime: z.string(),
+        temp: z.string(),
+        text: z.string(),
+        windDir: z.string(),
+        windScale: z.string(),
+        humidity: z.string(),
+        precip: z.string(),
+      }),
+    )
+    .optional(),
+});
 
 const QWEATHER_API_KEY = config.qweatherApiKey;
 const _rawApiBase = config.qweatherApiBase;
@@ -73,34 +152,30 @@ async function resolveApiBase(): Promise<string> {
   return resolvedApiBase;
 }
 
-export const getWeatherSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'get_weather',
-    description: '查询指定城市的实时天气、天气预报信息。当用户询问天气、气温、温度、湿度、风力、下雨、晴天、阴天、空气质量等任何与天气相关的问题时，必须使用此工具，不要使用 search_web。支持实时天气、7天预报、24小时逐小时预报。',
-    parameters: {
-      type: 'object',
-      properties: {
-        city: {
-          type: 'string',
-          description: '城市名称，如"北京"、"上海"、"广州"，或城市ID（如"101010100"）',
-        },
-        type: {
-          type: 'string',
-          description: '查询类型：now（实时天气，默认）、daily（未来7天预报）、hourly（未来24小时逐小时预报）',
-          enum: ['now', 'daily', 'hourly'],
-          default: 'now',
-        },
-      },
-      required: ['city'],
-    },
-  },
-};
+// ==================== Zod Schema ====================
 
-export interface GetWeatherParams {
-  city: string;
-  type?: 'now' | 'daily' | 'hourly';
-}
+export const getWeatherParamsSchema = z.object({
+  city: z
+    .string()
+    .min(1)
+    .describe('城市名称，如"北京"、"上海"、"广州"，或城市ID（如"101010100"）'),
+  type: z
+    .enum(['now', 'daily', 'hourly'])
+    .default('now')
+    .describe(
+      '查询类型：now（实时天气，默认）、daily（未来7天预报）、hourly（未来24小时逐小时预报）',
+    ),
+});
+
+export type GetWeatherParams = z.infer<typeof getWeatherParamsSchema>;
+
+// ==================== OpenAI Function Calling Schema ====================
+
+export const getWeatherSchema = buildToolJsonSchema(
+  'get_weather',
+  '查询指定城市的实时天气、天气预报信息。当用户询问天气、气温、温度、湿度、风力、下雨、晴天、阴天、空气质量等任何与天气相关的问题时，必须使用此工具，不要使用 search_web。支持实时天气、7天预报、24小时逐小时预报。',
+  getWeatherParamsSchema,
+);
 
 export interface WeatherNow {
   city: string;
@@ -205,7 +280,16 @@ async function lookupCityId(cityName: string): Promise<string> {
       throw new Error(`API返回空响应，HTTP状态码: ${response.status}`);
     }
 
-    const data = JSON.parse(responseText);
+    const parsed = parseToolResultJson(responseText, QWeatherCityLookupSchema, {
+      module: 'Tool:GetWeather',
+      api: 'city-lookup',
+      cityName,
+    });
+    if (!parsed.success) {
+      // 边界兜底失败：和风返回了非预期结构，按"未找到"处理
+      return '';
+    }
+    const data = parsed.data;
 
     if (data.code === '200' && data.location && data.location.length > 0) {
       const location = data.location[0];
@@ -265,13 +349,24 @@ async function fetchWeatherNow(cityId: string, cityName: string): Promise<Weathe
       throw new Error(`API返回空响应，HTTP状态码: ${response.status}`);
     }
 
-    const data = JSON.parse(responseText);
+    const parsed = parseToolResultJson(responseText, QWeatherNowSchema, {
+      module: 'Tool:GetWeather',
+      api: 'now',
+      cityId,
+    });
+    if (!parsed.success) {
+      throw new Error(`和风天气 /v7/weather/now 响应不符合预期结构: ${parsed.reason}`);
+    }
+    const data = parsed.data;
 
     if (data.code !== '200') {
       throw new Error(`和风天气API返回错误码: ${data.code}，响应: ${JSON.stringify(data).substring(0, 300)}`);
     }
 
     const now = data.now;
+    if (!now) {
+      throw new Error('和风天气 /v7/weather/now 缺少 now 字段');
+    }
     return {
       city: cityName,
       temp: now.temp,
@@ -283,9 +378,9 @@ async function fetchWeatherNow(cityId: string, cityName: string): Promise<Weathe
       precip: now.precip,
       pressure: now.pressure,
       vis: now.vis,
-      cloud: now.cloud,
-      dew: now.dew,
-      updateTime: data.updateTime,
+      cloud: now.cloud ?? '',
+      dew: now.dew ?? '',
+      updateTime: data.updateTime ?? '',
     };
   } finally {
     clearTimeout(timeoutId);
@@ -307,15 +402,29 @@ async function fetchWeatherDaily(cityId: string, cityName: string): Promise<Weat
       headers['X-QW-Api-Key'] = QWEATHER_API_KEY;
     }
     const response = await fetch(url, { signal: abortController.signal, headers });
-    const data = await response.json();
+    const responseText = await response.text();
+
+    const parsed = parseToolResultJson(responseText, QWeather7dSchema, {
+      module: 'Tool:GetWeather',
+      api: '7d',
+      cityId,
+    });
+    if (!parsed.success) {
+      throw new Error(`和风天气 /v7/weather/7d 响应不符合预期结构: ${parsed.reason}`);
+    }
+    const data = parsed.data;
 
     if (data.code !== '200') {
       throw new Error(`和风天气API返回错误码: ${data.code}`);
     }
 
+    if (!data.daily) {
+      throw new Error('和风天气 /v7/weather/7d 缺少 daily 字段');
+    }
+
     return {
       city: cityName,
-      forecasts: data.daily.map((d: any) => ({
+      forecasts: data.daily.map((d) => ({
         fxDate: d.fxDate,
         tempMax: d.tempMax,
         tempMin: d.tempMin,
@@ -327,7 +436,7 @@ async function fetchWeatherDaily(cityId: string, cityName: string): Promise<Weat
         precip: d.precip,
         uvIndex: d.uvIndex,
       })),
-      updateTime: data.updateTime,
+      updateTime: data.updateTime ?? '',
     };
   } finally {
     clearTimeout(timeoutId);
@@ -349,15 +458,29 @@ async function fetchWeatherHourly(cityId: string, cityName: string): Promise<Wea
       headers['X-QW-Api-Key'] = QWEATHER_API_KEY;
     }
     const response = await fetch(url, { signal: abortController.signal, headers });
-    const data = await response.json();
+    const responseText = await response.text();
+
+    const parsed = parseToolResultJson(responseText, QWeatherHourlySchema, {
+      module: 'Tool:GetWeather',
+      api: '24h',
+      cityId,
+    });
+    if (!parsed.success) {
+      throw new Error(`和风天气 /v7/weather/24h 响应不符合预期结构: ${parsed.reason}`);
+    }
+    const data = parsed.data;
 
     if (data.code !== '200') {
       throw new Error(`和风天气API返回错误码: ${data.code}`);
     }
 
+    if (!data.hourly) {
+      throw new Error('和风天气 /v7/weather/24h 缺少 hourly 字段');
+    }
+
     return {
       city: cityName,
-      forecasts: data.hourly.map((h: any) => ({
+      forecasts: data.hourly.map((h) => ({
         fxTime: h.fxTime,
         temp: h.temp,
         text: h.text,
@@ -366,7 +489,7 @@ async function fetchWeatherHourly(cityId: string, cityName: string): Promise<Wea
         humidity: h.humidity,
         precip: h.precip,
       })),
-      updateTime: data.updateTime,
+      updateTime: data.updateTime ?? '',
     };
   } finally {
     clearTimeout(timeoutId);
@@ -374,7 +497,7 @@ async function fetchWeatherHourly(cityId: string, cityName: string): Promise<Wea
 }
 
 export async function executeGetWeather(
-  params: GetWeatherParams,
+  params: unknown,
 ): Promise<GetWeatherResult> {
   const startTime = Date.now();
 
@@ -385,36 +508,40 @@ export async function executeGetWeather(
     return {
       type: 'error',
       error: '天气查询功能未配置，请检查 QWEATHER_API_KEY 环境变量',
-      city: params.city || '',
+      city: (params as { city?: string })?.city || '',
     };
   }
 
-  if (!params.city || !params.city.trim()) {
-    logger.warn('FC工具 [get_weather] 参数校验失败：city 为空', {
+  // zod 校验：city 必填、type 限定枚举
+  const parsed = safeParseToolParams(getWeatherParamsSchema, params);
+  if (!parsed.success) {
+    logger.warn('FC工具 [get_weather] 参数校验失败', {
       module: 'Tool:GetWeather',
+      error: parsed.error,
     });
     return {
       type: 'error',
-      error: '城市名称不能为空',
-      city: '',
+      error: `参数校验失败: ${parsed.error}`,
+      city: (params as { city?: string })?.city || '',
     };
   }
 
-  const queryType = params.type || 'now';
+  const city = parsed.data.city.trim();
+  const queryType = parsed.data.type;
 
   logger.info('FC工具 [get_weather] 开始执行', {
     module: 'Tool:GetWeather',
-    city: params.city,
+    city,
     type: queryType,
   });
 
   try {
-    const cityId = await lookupCityId(params.city.trim());
+    const cityId = await lookupCityId(city);
     if (!cityId) {
       return {
         type: 'error',
-        error: `未找到城市"${params.city}"，请检查城市名称是否正确`,
-        city: params.city,
+        error: `未找到城市"${city}"，请检查城市名称是否正确`,
+        city,
       };
     }
 
@@ -422,22 +549,22 @@ export async function executeGetWeather(
 
     switch (queryType) {
       case 'daily':
-        const dailyData = await fetchWeatherDaily(cityId, params.city);
+        const dailyData = await fetchWeatherDaily(cityId, city);
         result = { type: 'daily', data: dailyData };
         break;
       case 'hourly':
-        const hourlyData = await fetchWeatherHourly(cityId, params.city);
+        const hourlyData = await fetchWeatherHourly(cityId, city);
         result = { type: 'hourly', data: hourlyData };
         break;
       default:
-        const nowData = await fetchWeatherNow(cityId, params.city);
+        const nowData = await fetchWeatherNow(cityId, city);
         result = { type: 'now', data: nowData };
     }
 
     const duration = Date.now() - startTime;
     logger.info('FC工具 [get_weather] 执行完成', {
       module: 'Tool:GetWeather',
-      city: params.city,
+      city,
       type: queryType,
       duration,
     });
@@ -447,7 +574,7 @@ export async function executeGetWeather(
     const duration = Date.now() - startTime;
     logger.error('FC工具 [get_weather] 执行失败', {
       module: 'Tool:GetWeather',
-      city: params.city,
+      city,
       type: queryType,
       duration,
       error: error.message,
@@ -456,7 +583,7 @@ export async function executeGetWeather(
     return {
       type: 'error',
       error: `天气查询失败: ${error.message}`,
-      city: params.city,
+      city,
     };
   }
 }

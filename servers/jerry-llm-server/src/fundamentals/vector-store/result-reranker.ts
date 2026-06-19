@@ -13,6 +13,8 @@ import { logger } from '../logger.js';
 import { createRateLimitedLLM, buildModelConfig } from '../model-provider.js';
 import { HumanMessage } from '@langchain/core/messages';
 import { config } from '../config.js';
+import { z } from 'zod';
+import { parseLlmJson, parseToolResultJson } from '../llm-json-parser.js';
 
 export interface RerankableResult {
   content: string;
@@ -170,6 +172,28 @@ interface DashScopeRerankResponse {
   message?: string;
 }
 
+// ==================== DashScope Rerank API 响应 schema ====================
+//
+// 用 looseObject + 全 optional：仅校验形状，业务字段（results / code）由调用方判断
+const DashScopeRerankResponseSchema = z.looseObject({
+  output: z
+    .looseObject({
+      results: z
+        .array(
+          z.looseObject({
+            index: z.number(),
+            relevance_score: z.number(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+  usage: z.looseObject({ total_tokens: z.number() }).optional(),
+  request_id: z.string().optional(),
+  code: z.string().optional(),
+  message: z.string().optional(),
+});
+
 /**
  * DashScope Reranker：调用 qwen3-vl-rerank 线上 API
  *
@@ -228,7 +252,15 @@ async function dashscopeRerank(
     throw new Error(`DashScope Rerank API 请求失败 (${response.status}): ${errorText}`);
   }
 
-  const data: DashScopeRerankResponse = await response.json();
+  const responseText = await response.text();
+  const parsed = parseToolResultJson(responseText, DashScopeRerankResponseSchema, {
+    module: 'ResultReranker',
+    api: 'dashscope-rerank',
+  });
+  if (!parsed.success) {
+    throw new Error(`DashScope Rerank API 响应结构异常: ${parsed.reason}`);
+  }
+  const data = parsed.data;
 
   if (data.code) {
     throw new Error(`DashScope Rerank API 错误: [${data.code}] ${data.message}`);
@@ -409,48 +441,36 @@ function extractTerms(text: string): Set<string> {
 
 /**
  * 解析 LLM 返回的重排分数
+ *
+ * 用 zod 校验代替裸 JSON.parse；解析失败一律降级为均分 0.5（保持原行为）。
  */
+const RerankScoreItemSchema = z.object({
+  index: z.number(),
+  score: z.number(),
+});
+const RerankResponseSchema = z.array(RerankScoreItemSchema);
+
 function parseRerankResponse(content: string, expectedCount: number): number[] {
-  try {
-    let jsonStr = content.trim();
+  const fallback = () => new Array(expectedCount).fill(0.5);
 
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-
-    const bracketStart = jsonStr.indexOf('[');
-    const bracketEnd = jsonStr.lastIndexOf(']');
-    if (bracketStart >= 0 && bracketEnd > bracketStart) {
-      jsonStr = jsonStr.substring(bracketStart, bracketEnd + 1);
-    }
-
-    const parsed = JSON.parse(jsonStr);
-
-    if (!Array.isArray(parsed)) {
-      return new Array(expectedCount).fill(0.5);
-    }
-
-    // 构建 index -> score 映射
-    const scoreMap = new Map<number, number>();
-    for (const item of parsed) {
-      if (typeof item.index === 'number' && typeof item.score === 'number') {
-        scoreMap.set(item.index, Math.max(0, Math.min(1, item.score)));
-      }
-    }
-
-    // 按顺序返回分数，缺失的给默认 0.5
-    const scores: number[] = [];
-    for (let i = 0; i < expectedCount; i++) {
-      scores.push(scoreMap.get(i) ?? 0.5);
-    }
-
-    return scores;
-  } catch {
-    logger.debug('重排分数 JSON 解析失败，使用默认分数', {
-      module: 'ResultReranker',
-      content: content.substring(0, 200),
-    });
-    return new Array(expectedCount).fill(0.5);
+  const result = parseLlmJson(content, RerankResponseSchema, {
+    module: 'ResultReranker',
+    expectedCount,
+  });
+  if (!result.success) {
+    return fallback();
   }
+
+  // 构建 index -> score 映射
+  const scoreMap = new Map<number, number>();
+  for (const item of result.data) {
+    scoreMap.set(item.index, Math.max(0, Math.min(1, item.score)));
+  }
+
+  // 按顺序返回分数，缺失的给默认 0.5
+  const scores: number[] = [];
+  for (let i = 0; i < expectedCount; i++) {
+    scores.push(scoreMap.get(i) ?? 0.5);
+  }
+  return scores;
 }

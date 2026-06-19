@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { logger } from '../logger';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
 // ==================== Zod Schema ====================
 
@@ -18,7 +19,13 @@ const ManageSessionActionSchema = z.enum([
   'list_tags',
 ]);
 
-const ManageSessionParamsSchema = z.object({
+/**
+ * manage_session 工具入参 schema
+ * 同一份 zod schema 同时作为：
+ * 1. 运行时入参校验（executeManageSession 内 safeParseToolParams）
+ * 2. OpenAI Function Calling Schema 来源（buildToolJsonSchema 转换）
+ */
+export const manageSessionParamsSchema = z.object({
   action: ManageSessionActionSchema.describe(
     '要执行的操作：list=列出会话, create=新建会话, delete=删除会话, rename=重命名, pin=置顶, unpin=取消置顶, switch=切换到某会话, search=搜索会话, add_tag=添加标签, remove_tag=移除标签, set_category=设置分类, list_tags=列出所有标签',
   ),
@@ -46,74 +53,16 @@ const ManageSessionParamsSchema = z.object({
 
 // ==================== FC Tool Schema ====================
 
-export const manageSessionSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'manage_session',
-    description:
-      '管理用户的会话（对话），包括创建、删除、重命名、置顶/取消置顶、切换、查询列表等操作。当用户想用自然语言操作界面上的会话功能时使用此工具。',
-    parameters: {
-      type: 'object',
-      properties: {
-        action: {
-          type: 'string',
-          enum: [
-            'list',
-            'create',
-            'delete',
-            'rename',
-            'pin',
-            'unpin',
-            'switch',
-            'search',
-            'add_tag',
-            'remove_tag',
-            'set_category',
-            'list_tags',
-          ],
-          description:
-            '要执行的操作：list=列出会话, create=新建会话, delete=删除会话, rename=重命名, pin=置顶, unpin=取消置顶, switch=切换到某会话, search=搜索会话, add_tag=添加标签, remove_tag=移除标签, set_category=设置分类, list_tags=列出所有标签',
-        },
-        session_id: {
-          type: 'string',
-          description:
-            '目标会话ID（delete/rename/pin/unpin/switch/add_tag/remove_tag/set_category 时必填）',
-        },
-        title: {
-          type: 'string',
-          description:
-            '会话标题（create 时为新会话标题，rename 时为新标题）',
-        },
-        keyword: {
-          type: 'string',
-          description: '搜索关键词（search 时使用，按标题模糊匹配）',
-        },
-        tag: {
-          type: 'string',
-          description: '标签名称（add_tag/remove_tag 时使用）',
-        },
-        category: {
-          type: 'string',
-          description: '分类名称（set_category 时使用）',
-        },
-      },
-      required: ['action'],
-    },
-  },
-};
+export const manageSessionSchema = buildToolJsonSchema(
+  'manage_session',
+  '管理用户的会话（对话），包括创建、删除、重命名、置顶/取消置顶、切换、查询列表等操作。当用户想用自然语言操作界面上的会话功能时使用此工具。',
+  manageSessionParamsSchema,
+);
 
 // ==================== Types ====================
 
 export type ManageSessionAction = z.infer<typeof ManageSessionActionSchema>;
-
-export interface ManageSessionParams {
-  action: ManageSessionAction;
-  session_id?: string;
-  title?: string;
-  keyword?: string;
-  tag?: string;
-  category?: string;
-}
+export type ManageSessionParams = z.infer<typeof manageSessionParamsSchema>;
 
 export interface ManageSessionResult {
   success: boolean;
@@ -142,7 +91,7 @@ export function initManageSession(sessionService: any): void {
 // ==================== Executor ====================
 
 export async function executeManageSession(
-  params: ManageSessionParams,
+  params: unknown,
   context?: { userId?: string },
 ): Promise<ManageSessionResult> {
   const startTime = Date.now();
@@ -150,28 +99,24 @@ export async function executeManageSession(
 
   logger.info('FC工具 [manage_session] 开始执行', {
     module: 'Tool:ManageSession',
-    action: params.action,
     userId,
     rawParams: JSON.stringify(params),
   });
 
-  // Zod 校验
-  const parseResult = ManageSessionParamsSchema.safeParse(params);
-  if (!parseResult.success) {
-    const errorMsg = parseResult.error.issues
-      .map((i) => `${i.path.join('.')}: ${i.message}`)
-      .join('; ');
+  // 用统一的 zod 校验入口
+  const parsed = safeParseToolParams(manageSessionParamsSchema, params);
+  if (!parsed.success) {
     logger.warn('FC工具 [manage_session] 参数校验失败', {
       module: 'Tool:ManageSession',
-      errors: errorMsg,
+      error: parsed.error,
     });
     return {
       success: false,
-      message: `参数校验失败: ${errorMsg}`,
+      message: `参数校验失败: ${parsed.error}`,
     };
   }
 
-  const validated = parseResult.data;
+  const validated = parsed.data;
 
   if (!sessionServiceInstance) {
     logger.error('FC工具 [manage_session] SessionService 未初始化', {

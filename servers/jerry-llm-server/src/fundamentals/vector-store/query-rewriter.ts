@@ -12,6 +12,8 @@
 import { logger } from '../logger.js';
 import { createRateLimitedLLM, buildModelConfig } from '../model-provider.js';
 import { HumanMessage } from '@langchain/core/messages';
+import { z } from 'zod';
+import { parseLlmJson } from '../llm-json-parser.js';
 
 export interface RewrittenQuery {
   /** 改写后的主查询 */
@@ -131,59 +133,45 @@ export async function rewriteQuery(
 
 /**
  * 解析 LLM 返回的改写结果
+ *
+ * 用 zod 替代裸 JSON.parse；解析失败回退到原始查询（保留原行为）。
  */
+const RewriteResponseSchema = z.object({
+  main_query: z.string().optional(),
+  sub_queries: z.array(z.string()).optional(),
+  keywords: z.array(z.string()).optional(),
+});
+
 function parseRewriteResponse(content: string, originalQuery: string): RewrittenQuery {
-  try {
-    // 尝试提取 JSON（LLM 可能包裹在 markdown 代码块中）
-    let jsonStr = content.trim();
+  const fallback = (): RewrittenQuery => ({
+    mainQuery: originalQuery,
+    subQueries: [],
+    keywords: extractKeywordsSimple(originalQuery),
+    wasRewritten: false,
+  });
 
-    // 去除 markdown 代码块标记
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-
-    // 尝试找到 JSON 对象的边界
-    const braceStart = jsonStr.indexOf('{');
-    const braceEnd = jsonStr.lastIndexOf('}');
-    if (braceStart >= 0 && braceEnd > braceStart) {
-      jsonStr = jsonStr.substring(braceStart, braceEnd + 1);
-    }
-
-    const parsed = JSON.parse(jsonStr);
-
-    const mainQuery = typeof parsed.main_query === 'string' && parsed.main_query.trim()
-      ? parsed.main_query.trim()
-      : originalQuery;
-
-    const subQueries = Array.isArray(parsed.sub_queries)
-      ? parsed.sub_queries.filter((q: any) => typeof q === 'string' && q.trim())
-      : [];
-
-    const keywords = Array.isArray(parsed.keywords)
-      ? parsed.keywords.filter((k: any) => typeof k === 'string' && k.trim())
-      : [];
-
-    return {
-      mainQuery,
-      subQueries,
-      keywords,
-      wasRewritten: mainQuery !== originalQuery,
-    };
-  } catch {
-    // JSON 解析失败，回退
-    logger.debug('查询改写 JSON 解析失败，回退到原始查询', {
-      module: 'QueryRewriter',
-      content: content.substring(0, 200),
-    });
-
-    return {
-      mainQuery: originalQuery,
-      subQueries: [],
-      keywords: extractKeywordsSimple(originalQuery),
-      wasRewritten: false,
-    };
+  const result = parseLlmJson(content, RewriteResponseSchema, {
+    module: 'QueryRewriter',
+    originalQueryPreview: originalQuery.substring(0, 100),
+  });
+  if (!result.success) {
+    return fallback();
   }
+
+  const { main_query, sub_queries, keywords } = result.data;
+
+  const mainQuery =
+    main_query && main_query.trim() ? main_query.trim() : originalQuery;
+
+  const subQueries = (sub_queries || []).filter((q) => q && q.trim());
+  const keywordList = (keywords || []).filter((k) => k && k.trim());
+
+  return {
+    mainQuery,
+    subQueries,
+    keywords: keywordList,
+    wasRewritten: mainQuery !== originalQuery,
+  };
 }
 
 /**

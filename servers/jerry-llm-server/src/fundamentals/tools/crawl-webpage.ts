@@ -7,36 +7,36 @@
  * 复用 web-crawler.ts 的 crawlWebsite 函数，限制为单页抓取。
  */
 
+import { z } from 'zod';
 import { crawlWebsite, type CrawlResult } from '../web-crawler';
 import { logger } from '../logger';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
-export const crawlWebpageSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'crawl_webpage',
-    description: '抓取指定网页的完整内容。当搜索结果中的摘要信息不够详细，需要获取网页全文时使用此工具。返回网页的标题和正文（Markdown 格式）。注意：此工具较慢，仅在需要深度阅读网页内容时使用。',
-    parameters: {
-      type: 'object',
-      properties: {
-        url: {
-          type: 'string',
-          description: '要抓取的网页 URL',
-        },
-        enable_js_rendering: {
-          type: 'boolean',
-          description: '是否启用 JS 渲染（用于动态加载内容的页面），默认 false',
-          default: false,
-        },
-      },
-      required: ['url'],
-    },
-  },
-};
+// ==================== Zod Schema ====================
 
-export interface CrawlWebpageParams {
-  url: string;
-  enable_js_rendering?: boolean;
-}
+export const crawlWebpageParamsSchema = z.object({
+  url: z
+    .string()
+    .min(1)
+    .url('url 必须是合法的 HTTP/HTTPS 地址')
+    .describe('要抓取的网页 URL'),
+  enable_js_rendering: z
+    .boolean()
+    .default(false)
+    .describe('是否启用 JS 渲染（用于动态加载内容的页面），默认 false'),
+});
+
+export type CrawlWebpageParams = z.infer<typeof crawlWebpageParamsSchema>;
+
+// ==================== OpenAI Function Calling Schema ====================
+
+export const crawlWebpageSchema = buildToolJsonSchema(
+  'crawl_webpage',
+  '抓取指定网页的完整内容。当搜索结果中的摘要信息不够详细，需要获取网页全文时使用此工具。返回网页的标题和正文（Markdown 格式）。注意：此工具较慢，仅在需要深度阅读网页内容时使用。',
+  crawlWebpageParamsSchema,
+);
+
+// ==================== Result 类型 ====================
 
 export interface CrawlWebpageResult {
   url: string;
@@ -47,32 +47,40 @@ export interface CrawlWebpageResult {
 }
 
 export async function executeCrawlWebpage(
-  params: CrawlWebpageParams,
+  rawParams: unknown,
 ): Promise<CrawlWebpageResult> {
   const startTime = Date.now();
+
+  // zod 校验：url 必填且为合法 URL，enable_js_rendering 默认 false
+  const parsed = safeParseToolParams(crawlWebpageParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [crawl_webpage] 参数校验失败', {
+      module: 'Tool:CrawlWebpage',
+      error: parsed.error,
+    });
+    return {
+      url: (rawParams as { url?: string })?.url || '',
+      title: '',
+      content: '',
+      contentLength: 0,
+      error: `参数校验失败: ${parsed.error}`,
+    };
+  }
+
+  const params = parsed.data;
 
   logger.info('FC工具 [crawl_webpage] 开始执行', {
     module: 'Tool:CrawlWebpage',
     url: params.url,
     enableJsRendering: params.enable_js_rendering,
   });
-
-  if (!params.url || !params.url.trim()) {
-    return {
-      url: params.url || '',
-      title: '',
-      content: '',
-      contentLength: 0,
-      error: 'URL 不能为空',
-    };
-  }
-
+  
   try {
     const result: CrawlResult = await crawlWebsite({
       startUrl: params.url,
       maxDepth: 0, // 只抓取当前页面，不跟随链接
       maxPages: 1,
-      enableJsRendering: params.enable_js_rendering || false,
+      enableJsRendering: params.enable_js_rendering,
     });
 
     const duration = Date.now() - startTime;

@@ -21,8 +21,10 @@
 
 import { Parser } from 'node-sql-parser';
 import mysql from 'mysql2/promise';
+import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 
 // ==================== 配置 / 单例 ====================
 
@@ -79,35 +81,28 @@ export function isQueryDatabaseAvailable(): boolean {
 
 // ==================== 工具 Schema ====================
 
-export const queryDatabaseSchema = {
-  type: 'function' as const,
-  function: {
-    name: 'query_database',
-    description:
-      '查询外部业务数据库，输入 SQL 查询语句（仅支持 SELECT），返回结果集。当用户询问业务数据（订单、销售、用户、统计等）时使用。结果可后续传给 generate_chart 进行可视化。',
-    parameters: {
-      type: 'object',
-      properties: {
-        sql: {
-          type: 'string',
-          description: '要执行的 SQL 语句，必须是 SELECT 查询。会经过语法树校验，禁止任何写入操作。',
-        },
-        purpose: {
-          type: 'string',
-          description: '本次查询的业务目的，用于日志和确认弹窗展示，例如"统计上个月销售额"',
-        },
-      },
-      required: ['sql'],
-    },
-  },
-};
+export const queryDatabaseParamsSchema = z.object({
+  sql: z
+    .string()
+    .min(1)
+    .describe(
+      '要执行的 SQL 语句，必须是 SELECT 查询。会经过语法树校验，禁止任何写入操作。',
+    ),
+  purpose: z
+    .string()
+    .optional()
+    .describe('本次查询的业务目的，用于日志和确认弹窗展示，例如"统计上个月销售额"'),
+});
+
+export type QueryDatabaseParams = z.infer<typeof queryDatabaseParamsSchema>;
+
+export const queryDatabaseSchema = buildToolJsonSchema(
+  'query_database',
+  '查询外部业务数据库，输入 SQL 查询语句（仅支持 SELECT），返回结果集。当用户询问业务数据（订单、销售、用户、统计等）时使用。结果可后续传给 generate_chart 进行可视化。',
+  queryDatabaseParamsSchema,
+);
 
 // ==================== 类型定义 ====================
-
-export interface QueryDatabaseParams {
-  sql: string;
-  purpose?: string;
-}
 
 export interface QueryDatabaseResult {
   success: boolean;
@@ -251,8 +246,27 @@ function getPool(): mysql.Pool {
  *   3. 用预编译方式执行（防注入）+ 超时控制
  *   4. 截断超大结果集
  */
-export async function executeQueryDatabase(params: QueryDatabaseParams): Promise<QueryDatabaseResult> {
+export async function executeQueryDatabase(rawParams: unknown): Promise<QueryDatabaseResult> {
   const startedAt = Date.now();
+
+  const parsed = safeParseToolParams(queryDatabaseParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('query_database：参数校验失败', {
+      module: 'Tool:QueryDatabase',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      truncated: false,
+      executedSql: (rawParams as { sql?: string })?.sql || '',
+      durationMs: Date.now() - startedAt,
+      error: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
 
   if (!dbAvailable) {
     return {

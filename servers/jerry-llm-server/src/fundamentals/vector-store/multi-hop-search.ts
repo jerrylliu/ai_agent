@@ -17,6 +17,8 @@ import { createRateLimitedLLM, buildModelConfig } from '../model-provider.js';
 import { HumanMessage } from '@langchain/core/messages';
 import { hybridSearchKnowledgeBase } from './vector-search.js';
 import type { RewrittenQuery } from './query-rewriter.js';
+import { z } from 'zod';
+import { parseLlmJson } from '../llm-json-parser.js';
 
 export interface MultiHopResult {
   /** 合并去重后的最终结果 */
@@ -315,35 +317,26 @@ async function generateFollowUpQueries(
 
 /**
  * 解析 LLM 返回的追问判断
+ *
+ * 用 zod 替代裸 JSON.parse；解析失败一律视为"不需要追问"（保留原行为）。
  */
+const FollowUpResponseSchema = z.object({
+  need_follow_up: z.boolean().optional(),
+  follow_up_queries: z.array(z.string()).optional(),
+});
+
 function parseFollowUpResponse(content: string): { needFollowUp: boolean; queries: string[] } {
-  try {
-    let jsonStr = content.trim();
-
-    const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-
-    const braceStart = jsonStr.indexOf('{');
-    const braceEnd = jsonStr.lastIndexOf('}');
-    if (braceStart >= 0 && braceEnd > braceStart) {
-      jsonStr = jsonStr.substring(braceStart, braceEnd + 1);
-    }
-
-    const parsed = JSON.parse(jsonStr);
-
-    const needFollowUp = !!parsed.need_follow_up;
-    const queries = Array.isArray(parsed.follow_up_queries)
-      ? parsed.follow_up_queries.filter((q: any) => typeof q === 'string' && q.trim()).slice(0, 3)
-      : [];
-
-    return { needFollowUp, queries };
-  } catch {
-    logger.debug('追问判断 JSON 解析失败', {
-      module: 'MultiHopSearch',
-      content: content.substring(0, 200),
-    });
+  const result = parseLlmJson(content, FollowUpResponseSchema, {
+    module: 'MultiHopSearch',
+  });
+  if (!result.success) {
     return { needFollowUp: false, queries: [] };
   }
+
+  const needFollowUp = !!result.data.need_follow_up;
+  const queries = (result.data.follow_up_queries || [])
+    .filter((q) => q && q.trim())
+    .slice(0, 3);
+
+  return { needFollowUp, queries };
 }

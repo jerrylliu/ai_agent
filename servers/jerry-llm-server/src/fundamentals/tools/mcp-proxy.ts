@@ -24,8 +24,10 @@
  *   适合个人项目快速落地。
  */
 
+import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
+import { safeParseToolParams } from './_helpers';
 
 // ==================== 类型定义 ====================
 
@@ -67,26 +69,57 @@ let mcpAvailable = false;
 // ==================== 配置解析 ====================
 
 /**
+ * NOTIFY_MCP_SERVERS 环境变量的 zod schema
+ *
+ * 用 looseObject + 数组：每个 server 至少要有 name + command，args/env 可选
+ */
+const McpServerEntrySchema = z.looseObject({
+  name: z.string().min(1),
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+});
+
+const McpServersConfigSchema = z.array(McpServerEntrySchema);
+
+/**
  * 解析 NOTIFY_MCP_SERVERS 环境变量，必须是合法 JSON 数组
  * 失败时返回空数组，不抛异常（避免启动崩溃）
  */
 function parseMcpServersConfig(): McpServerConfig[] {
   const raw = config.notify.mcpServers;
   if (!raw || !raw.trim()) return [];
+
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      logger.warn('mcp_proxy：NOTIFY_MCP_SERVERS 必须是数组', { module: 'Tool:McpProxy' });
-      return [];
-    }
-    return parsed.filter((s) => s && s.name && s.command);
-  } catch (e: any) {
+    parsed = JSON.parse(raw);
+  } catch (e) {
     logger.error('mcp_proxy：NOTIFY_MCP_SERVERS JSON 解析失败', {
       module: 'Tool:McpProxy',
-      error: e.message,
+      error: (e as Error).message,
     });
     return [];
   }
+
+  const result = McpServersConfigSchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
+      .join('; ');
+    logger.warn('mcp_proxy：NOTIFY_MCP_SERVERS 结构不符合预期', {
+      module: 'Tool:McpProxy',
+      issues,
+    });
+    return [];
+  }
+
+  // schema 已经保证 name/command 不为空，args/env 可选；强转为内部类型
+  return result.data.map((entry) => ({
+    name: entry.name,
+    command: entry.command,
+    args: entry.args ?? [],
+    env: entry.env,
+  }));
 }
 
 function updateMcpAvailability(): void {
@@ -283,11 +316,28 @@ ${toolList}
 
 // ==================== 类型 ====================
 
-export interface McpProxyParams {
-  server: string;
-  tool: string;
-  arguments?: Record<string, any>;
-}
+/**
+ * mcp_proxy 入口形状的 zod schema
+ *
+ * 注意：这里只做"形状兜底校验"——
+ *   - server / tool 的具体可选值由运行时 runtimeMap 决定，无法在静态 schema 中枚举
+ *   - arguments 是任意 JSON 对象，由具体 MCP Tool 的 inputSchema 决定，本工具不做内部校验
+ * 因此该 schema 不传递给 LLM（FC schema 仍由 buildMcpProxySchema() 动态生成），
+ * 仅在 executor 入口防御 LLM 漏传字段或类型错误的情况。
+ */
+export const mcpProxyParamsSchema = z.object({
+  server: z
+    .string()
+    .min(1)
+    .describe('MCP Server 名称，必须是已配置的 server 之一'),
+  tool: z.string().min(1).describe('MCP Server 暴露的工具名'),
+  arguments: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe('传给 MCP 工具的参数对象，结构由具体工具的 inputSchema 决定'),
+});
+
+export type McpProxyParams = z.infer<typeof mcpProxyParamsSchema>;
 
 export interface McpProxyResult {
   success: boolean;
@@ -307,7 +357,22 @@ export interface McpProxyResult {
  *   3. 调用 client.callTool() 转发参数
  *   4. 包装返回值
  */
-export async function executeMcpProxy(params: McpProxyParams): Promise<McpProxyResult> {
+export async function executeMcpProxy(rawParams: unknown): Promise<McpProxyResult> {
+  // 入口兜底：校验入参形状（server/tool 必填、arguments 必须为对象）
+  // 不校验 server / tool 的具体值，因为这些是动态注册的，由 runtimeMap 在下方做检查
+  const parsed = safeParseToolParams(mcpProxyParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('mcp_proxy：入口参数形状校验失败', {
+      module: 'Tool:McpProxy',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      error: `参数校验失败: ${parsed.error}`,
+    };
+  }
+  const params = parsed.data;
+
   // 兜底：未初始化时尝试懒加载（避免 onModuleInit 顺序问题）
   if (!initialized) {
     await initMcpProxy();
