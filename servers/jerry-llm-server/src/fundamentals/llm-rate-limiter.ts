@@ -127,6 +127,14 @@ class TokenBucket {
   }
 
   /**
+   * 退还令牌（用于请求被 abort 时回收）
+   * 不会超过桶容量
+   */
+  refund(): void {
+    this.tokens = Math.min(this.tokens + 1, this.capacity);
+  }
+
+  /**
    * 等待直到获取令牌
    * @param timeoutMs 最大等待时间（毫秒）
    */
@@ -298,15 +306,30 @@ export class LLMRateLimiter {
       return result;
     } catch (error: any) {
       const execMs = Date.now() - execStart;
-      logger.warn('限流执行异常', {
-        module: 'LLMRateLimiter',
-        provider,
-        pool,
-        callerTag: tag,
-        execMs,
-        status: 'error',
-        error: error.message,
-      });
+      const isAbort = error.name === 'AbortError' || error.message === 'This operation was aborted';
+
+      if (isAbort) {
+        // abort 是正常行为（用户继续打字触发新请求），退还令牌避免耗尽
+        bucket?.refund();
+        logger.debug('限流执行被取消', {
+          module: 'LLMRateLimiter',
+          provider,
+          pool,
+          callerTag: tag,
+          execMs,
+          status: 'aborted',
+        });
+      } else {
+        logger.warn('限流执行异常', {
+          module: 'LLMRateLimiter',
+          provider,
+          pool,
+          callerTag: tag,
+          execMs,
+          status: 'error',
+          error: error.message,
+        });
+      }
       throw error;
     } finally {
       semaphore.release(callerId);

@@ -102,6 +102,18 @@ const RateLimitSchema = z.object({
   failOpen: zBoolFromString(true),
 });
 
+// MinerU 在线 API 配置（PDF 精准解析，支持图片/代码块/表格/公式）
+// 采用文件上传方式，无需内网穿透，本地文件直接上传给 MinerU
+// 未配置 Token 时自动降级到本地 pdfjs-dist
+const MineruSchema = z.object({
+  enabled: zBoolFromString(false),
+  apiToken: z.string().default(''),
+  // API 超时（毫秒），大文件解析较慢
+  timeoutMs: z.coerce.number().int().positive().default(120000),
+  // 模型版本：pipeline（默认）/ vlm（推荐，效果更好）/ MinerU-HTML
+  modelVersion: z.string().default('vlm'),
+});
+
 // ==================== 顶层 Schema ====================
 
 const RootSchema = z.object({
@@ -136,6 +148,7 @@ const RootSchema = z.object({
   redis: RedisSchema,
   volcAsr: VolcAsrSchema,
   rateLimit: RateLimitSchema,
+  mineru: MineruSchema,
 });
 
 // ==================== 解析 process.env ====================
@@ -223,6 +236,12 @@ function buildRawConfig() {
     rateLimit: {
       chatPerMin: env.RATE_LIMIT_CHAT_PER_MIN,
       failOpen: env.RATE_LIMIT_FAIL_OPEN,
+    },
+    mineru: {
+      enabled: env.MINERU_ENABLED,
+      apiToken: env.MINERU_API_TOKEN,
+      timeoutMs: env.MINERU_TIMEOUT_MS,
+      modelVersion: env.MINERU_MODEL_VERSION,
     },
   };
 }
@@ -319,6 +338,7 @@ export const config = {
   redis: parsed.redis,
   volcAsr: parsed.volcAsr,
   rateLimit: parsed.rateLimit,
+  mineru: parsed.mineru,
 } as const;
 
 export type AppConfig = typeof config;

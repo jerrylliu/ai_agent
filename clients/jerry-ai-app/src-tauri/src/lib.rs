@@ -18,7 +18,12 @@ pub fn run() {
             main_window.create_overlay_titlebar().unwrap();
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::greet, commands::chat, commands::test])
+        .invoke_handler(tauri::generate_handler![
+            commands::greet,
+            commands::chat,
+            commands::test,
+            commands::open_editor_window,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

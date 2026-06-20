@@ -148,13 +148,20 @@ export class ChatController {
   /**
    * POST /chat/history
    * 保存一条聊天记录（用户消息或 AI 回复）
+   * 用户消息可携带 documentCards（文档卡片元信息数组）
    */
   @Post('history') // 映射 POST 请求到 /chat/history
   async saveChatHistory(
-    @Body() body: { sessionId: string; role: string; content: string },
+    @Body() body: { sessionId: string; role: string; content: string; documentCards?: unknown[] },
     @Req() req: any,
   ) {
-    return this.sessionService.saveChatHistory(body.sessionId, body.role, body.content, req.userId);
+    return this.sessionService.saveChatHistory(
+      body.sessionId,
+      body.role,
+      body.content,
+      req.userId,
+      body.documentCards,
+    );
   }
 
   /**

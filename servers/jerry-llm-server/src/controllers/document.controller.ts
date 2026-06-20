@@ -77,6 +77,44 @@ export class DocumentController {
   }
 
   /**
+   * POST /documents/save-draft
+   * 编辑器草稿保存：按文件名匹配创建文档或新增版本
+   *
+   * 用于聊天输入框上传的文件（上传时仅解析不入库，保存时才走版本管理）。
+   * Body: { fileName: string, contentJson: object, contentText: string }
+   */
+  @Post('save-draft')
+  async saveDraft(
+    @Body() body: { fileName: string; contentJson: unknown; contentText: string },
+  ) {
+    try {
+      if (!body.fileName) {
+        throw new HttpException('文件名不能为空', 400);
+      }
+      if (body.contentJson === undefined || body.contentJson === null) {
+        throw new HttpException('contentJson 不能为空', 400);
+      }
+
+      const result = await this.documentService.saveByFilename(
+        body.fileName,
+        body.contentJson,
+        body.contentText ?? '',
+      );
+
+      return {
+        success: true,
+        message: result.isNew ? '文档创建成功' : '已新增版本',
+        document: result.document,
+        version: result.version ? serializeVersion(result.version) : null,
+        isNew: result.isNew,
+      };
+    } catch (error: any) {
+      logger.error('草稿保存失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
    * GET /documents
    * 列出所有文档
    */
@@ -88,6 +126,24 @@ export class DocumentController {
     } catch (error: any) {
       logger.error('获取文档列表失败', { module: 'DocumentController', error: error.message });
       throw new HttpException(error.message, 500);
+    }
+  }
+
+  /**
+   * GET /documents/by-title?title=xxx
+   * 按标题查找文档（用于编辑器草稿模式按文件名匹配已有文档）
+   */
+  @Get('by-title')
+  async findByTitle(@Query('title') title: string) {
+    try {
+      if (!title) {
+        throw new HttpException('title 不能为空', 400);
+      }
+      const document = await this.documentService.findByTitle(title);
+      return { success: true, document };
+    } catch (error: any) {
+      logger.error('按标题查找文档失败', { module: 'DocumentController', title, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
     }
   }
 
@@ -251,6 +307,29 @@ export class DocumentController {
   }
 
   /**
+   * POST /documents/:id/versions/:versionId/publish
+   * 发布版本到知识库（向量化 + 激活）
+   *
+   * 用户在编辑器中编辑文档后，手动触发将编辑后的内容入向量库。
+   * - DRAFT 版本：向量化 → 激活（DRAFT → ACTIVE）
+   * - ACTIVE 版本：删除旧向量 → 重新向量化（重新发布）
+   */
+  @Post(':id/versions/:versionId/publish')
+  async publishToVectorStore(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Body('operator') operator?: string,
+  ) {
+    try {
+      const version = await this.documentService.publishToVectorStore(versionId, operator || 'anonymous');
+      return { success: true, version: serializeVersion(version) };
+    } catch (error: any) {
+      logger.error('发布到知识库失败', { module: 'DocumentController', versionId, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
    * GET /documents/:id/versions
    * 列出某文档的所有版本
    */
@@ -336,6 +415,33 @@ export class DocumentController {
   }
 
   /**
+   * GET /documents/:id/versions/:versionId/export?format=md|txt|docx
+   * 导出指定版本内容到指定格式（包含编辑后的最新内容）
+   */
+  @Get(':id/versions/:versionId/export')
+  async exportVersion(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Query('format') format: 'md' | 'txt' | 'docx',
+    @Res() res: Response,
+  ) {
+    try {
+      if (!['md', 'txt', 'docx'].includes(format)) {
+        return res.status(400).json({ success: false, message: 'format 仅支持 md / txt / docx' });
+      }
+
+      const result = await this.documentService.exportVersion(versionId, format);
+      res.setHeader('Content-Type', result.mimeType);
+      const encodedName = encodeURIComponent(result.fileName);
+      res.setHeader('Content-Disposition', `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`);
+      res.send(result.buffer);
+    } catch (error: any) {
+      logger.error('导出版本失败', { module: 'DocumentController', versionId, format, error: error.message });
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  /**
    * PATCH /documents/:id/versions/:versionId
    * 修改版本状态
    */
@@ -351,6 +457,63 @@ export class DocumentController {
       return { success: true, version: serializeVersion(version) };
     } catch (error: any) {
       logger.error('修改版本状态失败', { module: 'DocumentController', versionId, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * GET /documents/:id
+   * 获取文档元信息（标题、描述、标签等，不含编辑器内容）
+   */
+  @Get(':id')
+  async getDocument(@Param('id', ParseIntPipe) id: number) {
+    try {
+      return await this.documentService.getDocument(id);
+    } catch (error: any) {
+      logger.error('获取文档详情失败', { module: 'DocumentController', documentId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * GET /documents/:id/content
+   * 获取富文本编辑器内容（Tiptap JSON）
+   */
+  @Get(':id/content')
+  async getDocumentContent(@Param('id', ParseIntPipe) id: number) {
+    try {
+      const content = await this.documentService.getDocumentContent(id);
+      return { success: true, ...content };
+    } catch (error: any) {
+      logger.error('获取文档内容失败', { module: 'DocumentController', documentId: id, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * PUT /documents/:id/content
+   * 保存富文本编辑器内容
+   * Body: { contentJson: object, contentText: string }
+   */
+  @Put(':id/content')
+  async saveDocumentContent(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { contentJson: unknown; contentText?: string },
+  ) {
+    try {
+      if (body.contentJson === undefined || body.contentJson === null) {
+        throw new HttpException('contentJson 不能为空', 400);
+      }
+      const document = await this.documentService.saveDocumentContent(id, {
+        contentJson: body.contentJson,
+        contentText: body.contentText ?? '',
+      });
+      return {
+        success: true,
+        contentUpdatedAt: document.contentUpdatedAt,
+      };
+    } catch (error: any) {
+      logger.error('保存文档内容失败', { module: 'DocumentController', documentId: id, error: error.message });
       throw new HttpException(error.message, error.status || 500);
     }
   }

@@ -130,19 +130,20 @@
 
 /* ==================== 赛博朋克模式颜色定义 ==================== */
 /* 风格：#1F111E 深紫黑底色 + #5FF6FF 霓虹青高亮 + 发光效果，营造未来科技感 */
+/* 文字色仅使用霓虹色系，禁止任何白色/淡紫白/灰色 */
 .cyberpunk {
   --background: #1F111E;                             /* 页面背景：深紫黑色 #1F111E */
-  --foreground: #E8E0F0;                             /* 主文字：淡紫白色 */
+  --foreground: #5FF6FF;                             /* 主文字：霓虹青色 #5FF6FF */
   --card: #1F111E;                                   /* 卡片背景：与主背景一致 #1F111E */
-  --card-foreground: #E8E0F0;                        /* 卡片文字：淡紫白色 */
+  --card-foreground: #5FF6FF;                        /* 卡片文字：霓虹青色 #5FF6FF */
   --popover: #1F111E;                                /* 弹出层背景：与主背景一致 #1F111E */
-  --popover-foreground: #E8E0F0;                     /* 弹出层文字：淡紫白色 */
+  --popover-foreground: #5FF6FF;                     /* 弹出层文字：霓虹青色 #5FF6FF */
   --primary: #5FF6FF;                                /* 主色调：霓虹青色 #5FF6FF（按钮、品牌色） */
   --primary-foreground: #000000;                     /* 主色调文字：黑色（按钮文字） */
   --secondary: #3A1F3E;                              /* 次要背景：暗紫色（次要按钮、标签） */
-  --secondary-foreground: #C8B8D8;                   /* 次要文字：淡紫色 */
+  --secondary-foreground: #FFFF7A;                   /* 次要文字：霓虹黄色 #FFFF7A */
   --muted: #2A1A2E;                                  /* 弱化背景：暗紫灰色（禁用项、占位区域） */
-  --muted-foreground: #8A7A9A;                       /* 弱化文字：暗紫色（辅助说明文字） */
+  --muted-foreground: #5FF6FF99;                     /* 弱化文字：霓虹青半透明（辅助说明文字） */
   --accent: #3A1F3E;                                 /* 强调背景：暗紫色（悬停、选中高亮） */
   --accent-foreground: #5FF6FF;                      /* 强调文字：霓虹青色 */
   --destructive: #FF4466;                            /* 危险色：霓虹红色（删除、错误提示） */
@@ -155,7 +156,7 @@
   --chart-4: #8A2BE2;                                /* 图表色4：电光蓝紫色 */
   --chart-5: #FF6B35;                                /* 图表色5：霓虹橙红色 */
   --sidebar: #1F111E;                                /* 侧边栏背景：与主背景一致 #1F111E */
-  --sidebar-foreground: #E8E0F0;                     /* 侧边栏文字：淡紫白色 */
+  --sidebar-foreground: #5FF6FF;                     /* 侧边栏文字：霓虹青色 #5FF6FF */
   --sidebar-primary: #5FF6FF;                        /* 侧边栏主色调：霓虹青色 */
   --sidebar-primary-foreground: #1F111E;             /* 侧边栏主色调文字：深紫黑色 */
   --sidebar-accent: #3A1F3E;                         /* 侧边栏强调背景：暗紫色（菜单悬停） */
@@ -194,6 +195,77 @@ button.decorum-tb-btn {
   --cyberpunk-glow-sm: 0 0 5px #5FF6FF66, 0 0 10px #5FF6FF33;
   --cyberpunk-glow-md: 0 0 8px #5FF6FF88, 0 0 16px #5FF6FF44, 0 0 24px #5FF6FF22;
   --cyberpunk-glow-lg: 0 0 10px #5FF6FFAA, 0 0 20px #5FF6FF66, 0 0 40px #5FF6FF44, 0 0 60px #5FF6FF22;
+}
+
+/* ========================================================================
+   赛博朋克模式：全局文字颜色兜底覆盖
+   统一把 Tailwind dark: 变体及纯色类产生的白色/灰色文字映射到霓虹色系
+   不加 !important —— 后续 cyberpunk-xxx 专属规则（同特异性但顺序在后）可自然覆盖
+   ======================================================================== */
+
+/* dark:text-white → 霓虹青 */
+.cyberpunk .dark\:text-white {
+  color: #5FF6FF;
+}
+
+/* dark:text-gray-200 / 300 → 霓虹青（主级文字） */
+.cyberpunk .dark\:text-gray-200,
+.cyberpunk .dark\:text-gray-300 {
+  color: #5FF6FF;
+}
+
+/* dark:text-gray-400 / 500 / 600 → 霓虹青半透明（辅助文字） */
+.cyberpunk .dark\:text-gray-400,
+.cyberpunk .dark\:text-gray-500,
+.cyberpunk .dark\:text-gray-600 {
+  color: #5FF6FF99;
+}
+
+/* dark:hover:text-gray-200 → 霓虹黄（悬停高亮） */
+.cyberpunk .dark\:hover\:text-gray-200:hover {
+  color: #FFFF7A;
+}
+
+/* 纯 text-white（按钮上的）→ 黑色（与 primary-foreground 一致，保证彩色背景上可读） */
+.cyberpunk button.text-white,
+.cyberpunk button .text-white {
+  color: #000000;
+}
+
+/* 纯 text-white（非按钮元素）→ 霓虹青 */
+.cyberpunk .text-white:not(button):not(button *) {
+  color: #5FF6FF;
+}
+
+/* 非 dark 变体的灰色文字兜底（部分元素只有 text-gray-* 没有 dark: 配对） */
+.cyberpunk .text-gray-400,
+.cyberpunk .text-gray-500,
+.cyberpunk .text-gray-600 {
+  color: #5FF6FF99;
+}
+
+.cyberpunk .text-gray-700,
+.cyberpunk .text-gray-900 {
+  color: #5FF6FF;
+}
+
+/* hover 状态的灰色 → 霓虹黄 */
+.cyberpunk .hover\:text-gray-700:hover,
+.cyberpunk .hover\:text-gray-200:hover {
+  color: #FFFF7A;
+}
+
+/* ---------- 背景色兜底 ---------- */
+/* dark:bg-slate-600 / 700 / 800 → 暗紫色（与赛博朋克 --muted 一致） */
+.cyberpunk .dark\:bg-slate-600,
+.cyberpunk .dark\:bg-slate-700,
+.cyberpunk .dark\:bg-slate-800 {
+  background-color: #2A1A2E;
+}
+
+/* 纯 bg-white（无 dark: 配对）→ 暗紫色 */
+.cyberpunk .bg-white:not(button) {
+  background-color: #2A1A2E;
 }
 
 /* ---------- cyberpunk-btn-glow：主按钮发光效果 ---------- */
@@ -338,6 +410,16 @@ button.decorum-tb-btn {
   background-color: #00ffaa;
 }
 
+/* 赛博朋克模式下：菜单项默认文字 #1F111E（深紫黑），悬停时背景与文字互换 */
+.cyberpunk .cyberpunk-plus-menu-item {
+  color: #1F111E !important;
+  background-color: #00ffaa !important;
+}
+.cyberpunk .cyberpunk-plus-menu-item:hover {
+  color: #00ffaa !important;
+  background-color: #1F111E !important;
+}
+
 /* ---------- cyberpunk-history：对话历史模块（#5FF6FF） ---------- */
 .cyberpunk .cyberpunk-history svg,
 .cyberpunk .cyberpunk-history .lucide {
@@ -454,6 +536,34 @@ button.decorum-tb-btn {
   color: #000000 !important;
 }
 
+/* ---------- cyberpunk-parse：文档解析进度条样式 ---------- */
+/* 沿用 cyberpunk-unauth 的 #ff5247 颜色 + 发光 */
+
+/* 进度条文字 */
+.cyberpunk .cyberpunk-parse-text {
+  color: #ff5247;
+  text-shadow: 0 0 4px #ff524766, 0 0 8px #ff524733;
+}
+
+/* spinner 图标 */
+.cyberpunk .cyberpunk-parse-spinner {
+  color: #ff5247 !important;
+  filter: drop-shadow(0 0 4px #ff524766);
+}
+
+/* 进度条轨道（未到达区域）：#1F111E 背景 + #ff5247 边框 + 发光 */
+.cyberpunk .cyberpunk-parse-track {
+  background-color: #1F111E !important;
+  border: 1px solid #ff5247;
+  box-shadow: 0 0 4px #ff524766, 0 0 8px #ff524733;
+}
+
+/* 进度条填充（到达区域）：#ff5247 颜色 + 发光 */
+.cyberpunk .cyberpunk-parse-fill {
+  background-color: #ff5247 !important;
+  box-shadow: 0 0 4px #ff524766, 0 0 8px #ff524733;
+}
+
 /* ---------- 模型列表项选中状态（赛博朋克主题） ---------- */
 /* 选中状态背景：#5FF6FF 高透明度，边框发光 */
 .cyberpunk .dark\:bg-blue-900\/30 {
@@ -489,10 +599,6 @@ button.decorum-tb-btn {
 
 .cyberpunk .hover\:bg-gray-50:hover,
 .cyberpunk .hover\:bg-gray-100:hover {
-  background-color: #2A1A2E;
-}
-
-.cyberpunk .dark\:bg-slate-700 {
   background-color: #2A1A2E;
 }
 
@@ -774,6 +880,175 @@ button.decorum-tb-btn {
   color: #5FF6FF !important;
   border: 1px solid #5FF6FF33;
   text-shadow: 0 0 3px #5FF6FF44;
+}
+
+/* ========================================================================
+   赛博朋克模式：文档编辑器样式区
+   覆盖 DocumentEditorPage / EditorToolbar / DocumentEditor 三个组件
+   ======================================================================== */
+
+/* ---------- 页面整体 + 顶部栏 ---------- */
+
+/* 顶部栏底边发光 */
+.cyberpunk .cyberpunk-editor-header {
+  border-bottom-color: #5FF6FF44;
+}
+
+/* 标题：霓虹青 + 发光 */
+.cyberpunk .cyberpunk-editor-title {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+/* 状态文字：青色半透明 */
+.cyberpunk .cyberpunk-editor-status {
+  color: #5FF6FFCC;
+}
+
+/* 保存成功的勾选图标保持青色发光（覆盖 text-green-500） */
+.cyberpunk .cyberpunk-editor-status svg {
+  color: #5FF6FF !important;
+  filter: drop-shadow(0 0 3px #5FF6FF66);
+}
+
+/* ---------- 工具栏 ---------- */
+
+/* 工具栏背景 + 底边发光 */
+.cyberpunk .cyberpunk-editor-toolbar {
+  background-color: #2A1A2E !important;
+  border-bottom-color: #5FF6FF33;
+  box-shadow: 0 1px 4px #5FF6FF11;
+}
+
+/* 工具栏分割线：青色半透明 + 微发光 */
+.cyberpunk .cyberpunk-editor-divider {
+  background-color: #5FF6FF44 !important;
+  box-shadow: 0 0 3px #5FF6FF44;
+}
+
+/* 工具栏按钮 active 状态：青色背景 + 发光（覆盖 bg-accent） */
+.cyberpunk .cyberpunk-editor-toolbar button[data-variant="ghost"].bg-accent {
+  background-color: #5FF6FF22 !important;
+  box-shadow: 0 0 6px #5FF6FF44, 0 0 12px #5FF6FF22;
+}
+
+.cyberpunk .cyberpunk-editor-toolbar button[data-variant="ghost"].bg-accent svg {
+  color: #5FF6FF;
+  filter: drop-shadow(0 0 3px #5FF6FF88);
+}
+
+/* ---------- 编辑器内容区（ProseMirror） ---------- */
+
+/* 编辑器容器背景 */
+.cyberpunk .cyberpunk-editor-container {
+  background-color: #1F111E;
+}
+
+/* 正文文字：与用户聊天卡片一致（霓虹绿 #00ffaa + 发光） */
+.cyberpunk .cyberpunk-editor-content .ProseMirror {
+  color: rgb(0, 255, 170);
+  text-shadow: 0 0 5px #00ffaa, 0 0 8px #00ffaa33;
+}
+
+/* 标题：霓虹青 + 发光 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror h1 {
+  color: #5FF6FF;
+  text-shadow: 0 0 4px #5FF6FF66, 0 0 8px #5FF6FF33;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror h2 {
+  color: #5FF6FF;
+  text-shadow: 0 0 3px #5FF6FF55, 0 0 6px #5FF6FF22;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror h3 {
+  color: #5FF6FFCC;
+  text-shadow: 0 0 3px #5FF6FF44;
+}
+
+/* 加粗文字：霓虹青 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror strong {
+  color: #5FF6FF;
+}
+
+/* 链接：霓虹黄 + 发光 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror a {
+  color: #FFFF7A;
+  text-shadow: 0 0 3px #FFFF7A66, 0 0 6px #FFFF7A33;
+  text-decoration-color: #FFFF7A66;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror a:hover {
+  text-shadow: 0 0 5px #FFFF7AAA, 0 0 10px #FFFF7A66;
+}
+
+/* 行内代码：青色文字 + 暗紫底 + 青色边框 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror code {
+  color: #5FF6FF;
+  background-color: #3A1F3E;
+  border: 1px solid #5FF6FF33;
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+  text-shadow: 0 0 3px #5FF6FF44;
+}
+
+/* 代码块：深紫底 + 青色边框发光 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror pre {
+  background-color: #2A1A2E;
+  border: 1px solid #5FF6FF44;
+  border-radius: 6px;
+  box-shadow: 0 0 6px #5FF6FF22, inset 0 0 12px #5FF6FF08;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror pre code {
+  color: #5FF6FF;
+  background-color: transparent;
+  border: none;
+  text-shadow: 0 0 3px #5FF6FF44;
+}
+
+/* 引用块：青色左边框 + 暗紫底 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror blockquote {
+  border-left-color: #5FF6FF;
+  border-left-width: 3px;
+  background-color: #2A1A2E;
+  box-shadow: -2px 0 6px #5FF6FF22;
+  color: #FFFF7ACC;
+}
+
+/* 无序/有序列表标记：霓虹青 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror ul li::marker,
+.cyberpunk .cyberpunk-editor-content .ProseMirror ol li::marker {
+  color: #5FF6FF;
+  text-shadow: 0 0 3px #5FF6FF44;
+}
+
+/* 任务列表复选框：青色 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror ul[data-type="taskList"] li label {
+  border-color: #5FF6FF66;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror ul[data-type="taskList"] li label input[type="checkbox"]:checked {
+  background-color: #5FF6FF;
+}
+
+/* 分割线 <hr>：青色渐变 + 发光 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror hr {
+  border: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #5FF6FF66, transparent);
+  box-shadow: 0 0 4px #5FF6FF44;
+}
+
+/* 占位符：青色半透明 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror .is-editor-empty:first-child::before {
+  color: #5FF6FF66 !important;
+  text-shadow: 0 0 3px #5FF6FF22;
+}
+
+/* 选中文本：青色半透明背景 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror ::selection {
+  background-color: #5FF6FF33;
 }
 
 /* ==================== 全局基础样式 ==================== */

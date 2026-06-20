@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   FileText, Upload, Trash2,
   Clock, RefreshCw, X, AlertTriangle, Play, XCircle,
+  Pencil,
 } from 'lucide-react';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Button } from '../ui/button';
@@ -19,8 +20,9 @@ import {
   deleteDocument,
   rollbackVersion,
   deleteVersion,
-  activateVersion,
   archiveVersion,
+  publishToVectorStore,
+  exportVersion,
   getDocumentAuditLogs,
   getPendingVectorOps,
   retrySingleVectorOp,
@@ -34,6 +36,7 @@ import {
 import { DocumentUploadDialog } from './DocumentUploadDialog';
 import { VersionTimeline } from './VersionTimeline';
 import { VersionDiff } from './VersionDiff';
+import { openEditorWindow } from '../../lib/window';
 
 interface DocumentManagerProps {
   onClose?: () => void;
@@ -54,6 +57,7 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
   const [activeTab, setActiveTab] = useState('versions');
   const [pendingOps, setPendingOps] = useState<PendingVectorOpItem[]>([]);
   const [retrying, setRetrying] = useState<number | null>(null);
+  const [publishingVersionId, setPublishingVersionId] = useState<number | null>(null);
 
   // 确认弹窗状态
   const [deleteDocConfirmOpen, setDeleteDocConfirmOpen] = useState(false);
@@ -191,17 +195,6 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
     }
   };
 
-  const handleActivateVersion = async (versionId: number) => {
-    if (!selectedDocId) return;
-    try {
-      await activateVersion(selectedDocId, versionId);
-      showFeedback(true, '版本已激活');
-      loadVersions(selectedDocId);
-    } catch (err: any) {
-      showFeedback(false, err.message || '激活失败');
-    }
-  };
-
   const handleArchiveVersion = async (versionId: number) => {
     if (!selectedDocId) return;
     try {
@@ -210,6 +203,58 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
       loadVersions(selectedDocId);
     } catch (err: any) {
       showFeedback(false, err.message || '归档失败');
+    }
+  };
+
+  /** 发布版本到知识库（向量化 + 激活） */
+  const handlePublishVersion = async (versionId: number) => {
+    if (!selectedDocId) return;
+    setPublishingVersionId(versionId);
+    try {
+      await publishToVectorStore(selectedDocId, versionId);
+      showFeedback(true, '已发布到知识库');
+      loadVersions(selectedDocId);
+      onRefreshKnowledgeBase?.();
+    } catch (err: any) {
+      showFeedback(false, err.message || '发布失败');
+    } finally {
+      setPublishingVersionId(null);
+    }
+  };
+
+  /** 导出版本到 md/txt/docx 格式并下载（跨环境兼容） */
+  const handleExportVersion = async (versionId: number, format: 'md' | 'txt' | 'docx') => {
+    if (!selectedDocId) return;
+    try {
+      const blob = await exportVersion(selectedDocId, versionId, format);
+      const fileName = `v${versionId}.${format}`;
+
+      // Tauri 环境：用系统保存对话框
+      if (!!(window as any).__TAURI_INTERNALS__) {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const { writeFile } = await import('@tauri-apps/plugin-fs');
+        const filePath = await save({
+          defaultPath: fileName,
+          filters: [{ name: format.toUpperCase(), extensions: [format] }],
+        });
+        if (!filePath) return;
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        await writeFile(filePath, buf);
+        return;
+      }
+
+      // 浏览器环境：URL.createObjectURL + a.click()
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 60 * 1000);
+    } catch (err: any) {
+      showFeedback(false, err.message || '导出失败');
     }
   };
 
@@ -366,6 +411,18 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
                     variant="ghost"
                     size="icon-xs"
                     className="ml-1 shrink-0"
+                    title="在编辑器中打开"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void openEditorWindow(doc.id, doc.title);
+                    }}
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="ml-1 shrink-0"
                     onClick={(e) => { e.stopPropagation(); handleDeleteDocument(doc.id); }}
                   >
                     <Trash2 className="h-3 w-3 text-destructive" />
@@ -414,11 +471,14 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
                 <TabsContent value="versions">
                   <VersionTimeline
                     versions={versions}
+                    documentId={selectedDocId}
                     onRollback={handleRollback}
                     onDelete={handleDeleteVersion}
-                    onActivate={handleActivateVersion}
                     onArchive={handleArchiveVersion}
                     onDiff={handleDiff}
+                    onPublish={handlePublishVersion}
+                    publishingVersionId={publishingVersionId}
+                    onExport={handleExportVersion}
                   />
                 </TabsContent>
 

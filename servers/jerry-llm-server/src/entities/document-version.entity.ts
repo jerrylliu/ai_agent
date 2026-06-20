@@ -47,7 +47,7 @@ export class DocumentVersion {
   parsingStatus: ParsingStatus;
 
   @Column({ type: 'text', nullable: true })
-  errorMessage: string;
+  errorMessage: string | null;
 
   @Column({ default: 0 })
   chunkCount: number;

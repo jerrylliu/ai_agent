@@ -12,6 +12,8 @@ export interface ChatHistoryItem {
   role: 'user' | 'assistant';
   content: string;
   images?: string[];
+  /** 用户消息携带的文档卡片（聊天上传文档时附加） */
+  documentCards?: unknown[];
 }
 
 export interface ChatHistoryRecord extends ChatHistoryItem {
@@ -382,6 +384,45 @@ export async function uploadFile(file: File): Promise<UploadResponse> {
     body: formData,
   });
   return handleResponse<UploadResponse>(response);
+}
+
+/** 文档提取响应（POST /upload/extract） */
+export interface ExtractDocumentResponse {
+  /** 提取的纯文本 */
+  text: string;
+  /** 转换为 Tiptap JSONContent 格式，可直接喂给编辑器 */
+  contentJson: unknown;
+  /** 原始文件名 */
+  fileName: string;
+  /** 文件大小（字节） */
+  sizeBytes: number;
+  /** 文件下载 URL */
+  fileUrl: string;
+  /** 是否被截断（超过 5 万字符） */
+  truncated: boolean;
+  /** 截断阈值 */
+  maxChars: number;
+  /** 文档原始总字符数（截断前） */
+  totalChars?: number;
+  /** 后端创建的文档记录 ID（已废弃：输入框上传不再入库，此字段恒为 undefined） */
+  documentId?: number;
+}
+
+/**
+ * 上传文档并提取纯文本内容
+ * 与 uploadFile 的区别：这个接口会解析文档内容，让 AI 能真正读到
+ *
+ * @param file 要提取的文档文件（docx/pdf/xlsx/txt/md 等）
+ * @returns 提取结果，包含 text / contentJson / fileUrl 等
+ */
+export async function extractDocument(file: File): Promise<ExtractDocumentResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/upload/extract`, {
+    method: 'POST',
+    body: formData,
+  });
+  return handleResponse<ExtractDocumentResponse>(response);
 }
 
 /**
@@ -1034,6 +1075,99 @@ export async function getDocument(id: number): Promise<DocumentItem> {
   return handleResponse<DocumentItem>(response);
 }
 
+/** 按标题查找文档（用于编辑器草稿模式按文件名匹配已有文档） */
+export async function getDocumentByTitle(title: string): Promise<DocumentItem | null> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/by-title?title=${encodeURIComponent(title)}`, {
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse<{ success: boolean; document: DocumentItem | null }>(response);
+  return data.document ?? null;
+}
+
+/** 富文本编辑器内容响应 */
+export interface DocumentContentResponse {
+  success: boolean;
+  contentJson: unknown | null;
+  contentText: string | null;
+  contentUpdatedAt: string | null;
+}
+
+/** 获取文档的富文本编辑器内容 */
+export async function getDocumentContent(id: number): Promise<DocumentContentResponse> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}/content`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<DocumentContentResponse>(response);
+}
+
+/** 保存文档的富文本编辑器内容 */
+export async function saveDocumentContent(
+  id: number,
+  payload: { contentJson: unknown; contentText: string },
+): Promise<{ success: boolean; contentUpdatedAt: string | null }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}/content`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<{ success: boolean; contentUpdatedAt: string | null }>(response);
+}
+
+/**
+ * 草稿保存：按文件名匹配创建文档或新增版本
+ *
+ * 用于聊天输入框上传的文件：上传时仅解析不入库，
+ * 用户在编辑器中编辑保存时调用此接口，按文件名决定是新建文档还是新增版本。
+ *
+ * @param fileName 原始文件名（用于匹配已有文档）
+ * @param contentJson Tiptap JSONContent 编辑器内容
+ * @param contentText 纯文本内容（用于 RAG 分块）
+ * @returns 创建/更新的文档和版本信息
+ */
+export async function saveDocumentDraft(
+  fileName: string,
+  contentJson: unknown,
+  contentText: string,
+): Promise<{
+  success: boolean;
+  message: string;
+  document: DocumentItem;
+  version: DocumentVersionItem | null;
+  isNew: boolean;
+}> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/save-draft`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: JSON.stringify({ fileName, contentJson, contentText }),
+  });
+  return handleResponse<{
+    success: boolean;
+    message: string;
+    document: DocumentItem;
+    version: DocumentVersionItem | null;
+    isNew: boolean;
+  }>(response);
+}
+
+/**
+ * 发布文档版本到知识库（向量化 + 激活）
+ * - DRAFT 版本：向量化 → 激活
+ * - ACTIVE 版本：删除旧向量 → 重新向量化（重新发布）
+ */
+export async function publishToVectorStore(
+  documentId: number,
+  versionId: number,
+): Promise<{ success: boolean; version: DocumentVersionItem }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}/publish`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    },
+  );
+  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(response);
+}
+
 /** 上传文档（新建或新增版本） */
 export async function uploadDocument(
   file: File,
@@ -1060,6 +1194,22 @@ export async function getDocumentVersions(documentId: number): Promise<DocumentV
   });
   const data = await handleResponse<{ success: boolean; versions: DocumentVersionItem[] }>(response);
   return data.versions ?? [];
+}
+
+/** 导出指定版本内容到 md/txt/docx 格式，返回 Blob */
+export async function exportVersion(
+  documentId: number,
+  versionId: number,
+  format: 'md' | 'txt' | 'docx',
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}/export?format=${format}`,
+    { headers: getAuthHeaders() },
+  );
+  if (!response.ok) {
+    throw new Error(`导出失败：${response.status}`);
+  }
+  return response.blob();
 }
 
 /** 激活版本 */
@@ -1546,6 +1696,139 @@ export async function updateCacheConfig(config: Partial<CacheConfig>): Promise<{
     body: JSON.stringify(config),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+// ============================================
+// AI 写作补全 API（编辑器幽灵补全 / 续写 / 改写）
+// ============================================
+
+/** 补全模式 */
+export type CompletionMode = 'autocomplete' | 'continue' | 'rewrite';
+
+/**
+ * 请求 AI 写作补全（SSE 流式）
+ *
+ * 复用 sse-parser 解析 SSE 帧，通过 onDelta 回调实时推送文本片段。
+ *
+ * @param payload.mode      补全模式
+ * @param payload.context   光标前文本或选中文本
+ * @param payload.instruction 改写指令（仅 rewrite）
+ * @param onDelta           每收到一个文本片段的回调
+ * @param signal            AbortSignal，用于取消
+ */
+export async function requestCompletionStream(
+  payload: { mode: CompletionMode; context: string; instruction?: string },
+  onDelta: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/ai/completion`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`AI 补全请求失败 (HTTP ${response.status})`);
+  }
+
+  const stream = response.body!.pipeThrough(new TextDecoderStream());
+  const reader = stream.getReader();
+  let buffer = '';
+
+  // 监听 abort 信号：主动 cancel reader 中断流读取
+  // 仅靠 fetch signal 无法中断已开始的流式读取，必须手动 cancel
+  const onAbort = () => {
+    reader.cancel().catch(() => {});
+  };
+  signal?.addEventListener('abort', onAbort);
+
+  // 超时保护：12 秒无数据视为连接 hang，自动中断
+  // 后端心跳间隔 5 秒，正常情况每 5 秒内有数据；12 秒 = 2 个心跳周期 + 余量
+  // 防止 SSE 流异常时 reader.read() 永远不返回，导致 finally 不执行、状态卡死
+  const IDLE_TIMEOUT_MS = 12000;
+  const readWithIdleTimeout = (): Promise<ReadableStreamDefaultReader<string>['read'] extends Promise<infer R> ? R : never> => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('AI 补全超时（30秒无响应）')), IDLE_TIMEOUT_MS);
+    });
+    return Promise.race([
+      reader.read().then(result => {
+        clearTimeout(timeoutId);
+        return result;
+      }),
+      timeout,
+    ]) as any;
+  };
+
+  try {
+    while (true) {
+      // 保险：abort 后即使 reader.read() 没立即 reject 也主动跳出
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      const { done, value } = await readWithIdleTimeout();
+      if (done) break;
+
+      buffer += value;
+      const { events, remainingBuffer } = parseSSEFrames(buffer);
+      buffer = remainingBuffer;
+
+      for (const event of events) {
+        if (event.eventType === 'content') {
+          try {
+            const text = JSON.parse(event.eventData);
+            onDelta(text);
+          } catch {
+            onDelta(event.eventData);
+          }
+        } else if (event.eventType === 'error') {
+          try {
+            const data = JSON.parse(event.eventData);
+            throw new Error(data.message || 'AI 补全出错');
+          } catch (e) {
+            if (e instanceof Error && e.message !== 'Unexpected') throw e;
+            throw new Error('AI 补全出错');
+          }
+        }
+        // done / heartbeat 事件忽略
+      }
+    }
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+    reader.releaseLock();
+  }
+}
+
+/**
+ * 请求 AI 补全（非流式，一次性返回完整结果）
+ *
+ * 用于自动补全场景：短文本、abort 100% 可靠、无流式 hang 风险
+ *
+ * @param payload.mode      补全模式
+ * @param payload.context   光标前文本或选中文本
+ * @param payload.instruction 改写指令（仅 rewrite）
+ * @param signal            AbortSignal，用于取消
+ * @returns 补全文本
+ */
+export async function requestCompletion(
+  payload: { mode: CompletionMode; context: string; instruction?: string },
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await fetch(`${API_BASE_URL}/ai/complete`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`AI 补全请求失败 (HTTP ${response.status})`);
+  }
+
+  const data = await response.json();
+  if (!data.success) {
+    throw new Error(data.message || 'AI 补全失败');
+  }
+  return data.suggestion || '';
 }
 
 /** 清空缓存 */

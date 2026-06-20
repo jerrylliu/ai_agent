@@ -23,8 +23,29 @@ import {
   deleteDocumentFiles,
   readVersionFile,
 } from '../fundamentals/file-storage';
-import { parseDocument } from '../fundamentals/document-parser';
+import { parseDocument, getMimeType } from '../fundamentals/document-parser';
 import { addDocuments, removeDocumentVersion, updateVersionVectorStatus, reindexVersion, resetVectorStore, isVectorStoreMemoryMode } from '../fundamentals/vector-store';
+import { markdownToDocx } from '../fundamentals/document-generator';
+
+/**
+ * 把纯文本转换为 Tiptap JSONContent 格式
+ * 按行拆分为 paragraph 节点（空行也保留）
+ * 与前端 extractDocument 接口的转换逻辑保持一致
+ */
+function textToTiptapJson(text: string): unknown {
+  // 与 upload.controller 的段落拆分逻辑保持一致：
+  // 按空行分段（\n{2,}），每段一个 paragraph 节点
+  const paragraphs = text
+    .split(/\n{2,}/)
+    .map(p => p.trim())
+    .filter(p => p.length > 0)
+    .slice(0, 500); // 最多 500 段，防止恶意大文档
+  const content = paragraphs.map(p => ({
+    type: 'paragraph',
+    content: [{ type: 'text', text: p }],
+  }));
+  return { type: 'doc', content };
+}
 
 @Injectable()
 export class DocumentService {
@@ -49,6 +70,14 @@ export class DocumentService {
     return this.documentRepo.find({
       order: { updatedAt: 'DESC' },
     });
+  }
+
+  /**
+   * 按标题查找文档（用于编辑器草稿模式按文件名匹配已有文档）
+   * @returns 找到返回 Document，未找到返回 null
+   */
+  async findByTitle(title: string): Promise<Document | null> {
+    return this.documentRepo.findOne({ where: { title } });
   }
 
   /**
@@ -96,6 +125,429 @@ export class DocumentService {
     const doc = await this.documentRepo.findOne({ where: { id } });
     if (!doc) throw new NotFoundException(`文档 ${id} 不存在`);
     return doc;
+  }
+
+  /**
+   * 获取富文本编辑器内容
+   * 返回 contentJson 反序列化后的对象；若文档尚未有编辑器内容则返回 null
+   */
+  async getDocumentContent(id: number): Promise<{
+    contentJson: unknown | null;
+    contentText: string | null;
+    contentUpdatedAt: Date | null;
+  }> {
+    const doc = await this.getDocument(id);
+    let contentJson: unknown | null = null;
+    if (doc.contentJson) {
+      try {
+        contentJson = JSON.parse(doc.contentJson);
+      } catch (err: any) {
+        logger.warn('文档 contentJson 解析失败，返回 null', {
+          module: 'DocumentService',
+          documentId: id,
+          error: err.message,
+        });
+      }
+    }
+    return {
+      contentJson,
+      contentText: doc.contentText,
+      contentUpdatedAt: doc.contentUpdatedAt,
+    };
+  }
+
+  /**
+   * 从已解析的内容创建文档 + version 1（供 /upload/extract 调用）
+   *
+   * 与 uploadDocument 的区别：
+   *   - 不重复解析文档（parsedText 已由调用方解析好）
+   *   - 不校验文件类型（/upload/extract 已接受该文件）
+   *   - 复用版本管理逻辑：创建 document + version 1 + 审计日志
+   */
+  async createDocumentFromUpload(
+    file: { buffer: Buffer; originalname: string; size: number; mimetype: string },
+    parsedText: string,
+    options: { title?: string; operator?: string },
+  ): Promise<{ document: Document; version: DocumentVersion }> {
+    const operator = options.operator || 'anonymous';
+
+    // 校验文件大小（不校验类型，与 /upload/extract 行为一致）
+    const sizeCheck = validateFileSize(file.size);
+    if (!sizeCheck.valid) throw new BadRequestException(sizeCheck.message);
+
+    return this.dataSource.transaction(async (manager) => {
+      // 1. 创建文档记录
+      let document = manager.create(Document, {
+        title: options.title || file.originalname.replace(/\.[^/.]+$/, ''),
+        tags: [],
+      });
+      document = await manager.save(document);
+
+      // 2. 保存版本文件
+      const versionNumber = 1;
+      const fileInfo = saveVersionFile(document.id, versionNumber, file.buffer, file.originalname);
+
+      // 3. 写入 contentJson / contentText（用已解析的全文，不截断）
+      if (parsedText) {
+        const contentJson = textToTiptapJson(parsedText);
+        document.contentJson = JSON.stringify(contentJson);
+        document.contentText = parsedText;
+        document.contentUpdatedAt = new Date();
+        document = await manager.save(document);
+      }
+
+      // 4. 创建版本记录
+      const version = manager.create(DocumentVersion, {
+        documentId: document.id,
+        versionNumber,
+        fileUrl: fileInfo.fileUrl,
+        fileSize: String(fileInfo.fileSize),
+        fileType: fileInfo.fileType,
+        checksum: fileInfo.checksum,
+        status: VersionStatus.DRAFT,
+        parsingStatus: ParsingStatus.PENDING,
+        uploadedBy: operator,
+      });
+      const savedVersion = await manager.save(version);
+
+      // 5. 审计日志
+      const auditLog = manager.create(DocumentAuditLog, {
+        documentId: document.id,
+        versionId: savedVersion.id,
+        action: AuditAction.UPLOAD,
+        operator,
+        detail: `上传版本 v${versionNumber} (${file.originalname})`,
+      });
+      await manager.save(auditLog);
+
+      logger.info('文档从上传解析创建', {
+        module: 'DocumentService',
+        documentId: document.id,
+        versionNumber,
+        charCount: parsedText.length,
+        operator,
+      });
+
+      return { document, version: savedVersion };
+    });
+  }
+
+  /**
+   * 从编辑器内容创建新版本（编辑器保存时调用）
+   *
+   * 将 contentText 保存为 .txt 版本文件，创建版本记录 + 审计日志。
+   * 不自动入向量库（用户需手动点"发布到知识库"）。
+   */
+  async createVersionFromContent(
+    documentId: number,
+    contentText: string,
+    operator: string = 'anonymous',
+  ): Promise<DocumentVersion | null> {
+    const doc = await this.getDocument(documentId);
+
+    return this.dataSource.transaction(async (manager) => {
+      // 计算新版本号
+      const maxVersion = await manager.findOne(DocumentVersion, {
+        where: { documentId: doc.id },
+        order: { versionNumber: 'DESC' },
+      });
+      const versionNumber = (maxVersion?.versionNumber || 0) + 1;
+
+      // 将 contentText 保存为版本文件
+      const buffer = Buffer.from(contentText, 'utf-8');
+      const fileInfo = saveVersionFile(doc.id, versionNumber, buffer, `edited-v${versionNumber}.txt`);
+
+      // 创建版本记录
+      const version = manager.create(DocumentVersion, {
+        documentId: doc.id,
+        versionNumber,
+        fileUrl: fileInfo.fileUrl,
+        fileSize: String(fileInfo.fileSize),
+        fileType: 'txt',
+        checksum: fileInfo.checksum,
+        status: VersionStatus.DRAFT,
+        parsingStatus: ParsingStatus.PENDING,
+        uploadedBy: operator,
+      });
+      const savedVersion = await manager.save(version);
+
+      // 审计日志
+      const auditLog = manager.create(DocumentAuditLog, {
+        documentId: doc.id,
+        versionId: savedVersion.id,
+        action: AuditAction.UPLOAD,
+        operator,
+        detail: `编辑器保存 v${versionNumber}`,
+      });
+      await manager.save(auditLog);
+
+      logger.info('编辑器保存创建新版本', {
+        module: 'DocumentService',
+        documentId: doc.id,
+        versionNumber,
+        charCount: contentText.length,
+        operator,
+      });
+
+      return savedVersion;
+    });
+  }
+
+  /**
+   * 保存富文本编辑器内容
+   * 入参 contentJson 必须是合法 JSON 可序列化对象；contentText 由调用方负责提取
+   * 仅当内容真正变化时更新 contentUpdatedAt（用 JSON.stringify 比对）
+   * 内容变化时同时创建新版本记录（走版本管理逻辑）
+   */
+  async saveDocumentContent(
+    id: number,
+    payload: { contentJson: unknown; contentText: string },
+  ): Promise<Document> {
+    const doc = await this.getDocument(id);
+    const nextJson = JSON.stringify(payload.contentJson);
+    const changed = doc.contentJson !== nextJson;
+    doc.contentJson = nextJson;
+    doc.contentText = payload.contentText ?? '';
+    if (changed) {
+      doc.contentUpdatedAt = new Date();
+    }
+    const saved = await this.documentRepo.save(doc);
+    logger.info('保存编辑器内容', {
+      module: 'DocumentService',
+      documentId: id,
+      changed,
+      bytes: nextJson.length,
+    });
+
+    // 内容变化时创建新版本（走版本管理逻辑）
+    if (changed) {
+      try {
+        await this.createVersionFromContent(id, payload.contentText ?? '');
+      } catch (err) {
+        // 版本创建失败不阻塞保存（contentJson 已写入，用户内容不会丢失）
+        logger.warn('编辑器保存时创建版本失败，内容已保存', {
+          module: 'DocumentService',
+          documentId: id,
+          error: (err as Error).message,
+        });
+      }
+    }
+
+    return saved;
+  }
+
+  /**
+   * 按文件名保存文档（编辑器草稿保存时调用）
+   *
+   * 按 title（文件名去扩展名）匹配已有文档：
+   * - 找到 → 更新内容 + 创建新版本（复用 saveDocumentContent 的变更检测逻辑）
+   * - 未找到 → 新建文档 + v1
+   *
+   * 用于聊天输入框上传的文件：上传时仅解析不入库，
+   * 用户在编辑器中编辑保存后才创建文档记录，走版本管理逻辑。
+   */
+  async saveByFilename(
+    fileName: string,
+    contentJson: unknown,
+    contentText: string,
+    operator: string = 'anonymous',
+  ): Promise<{ document: Document; version: DocumentVersion | null; isNew: boolean }> {
+    // 文件名去扩展名作为 title
+    const title = fileName.replace(/\.[^/.]+$/, '');
+
+    // 按 title 查找已有文档
+    const existing = await this.documentRepo.findOne({ where: { title } });
+
+    if (existing) {
+      // 已有文档 → 复用 saveDocumentContent（内容变了才建新版本）
+      await this.saveDocumentContent(existing.id, { contentJson, contentText });
+
+      // 重新查询获取更新后的元信息（contentUpdatedAt 等）
+      const updated = await this.documentRepo.findOne({ where: { id: existing.id } });
+
+      // 获取最新版本（可能是刚创建的新版本，也可能是未变化时的旧版本）
+      const latestVersion = await this.versionRepo.findOne({
+        where: { documentId: existing.id },
+        order: { versionNumber: 'DESC' },
+      });
+
+      logger.info('草稿保存匹配到已有文档，已更新内容', {
+        module: 'DocumentService',
+        documentId: existing.id,
+        title,
+        operator,
+      });
+
+      return { document: updated ?? existing, version: latestVersion, isNew: false };
+    }
+
+    // 新建文档 + v1
+    return this.dataSource.transaction(async (manager) => {
+      let document = manager.create(Document, {
+        title,
+        tags: [],
+      });
+      document = await manager.save(document);
+
+      // 写入 contentJson / contentText
+      document.contentJson = JSON.stringify(contentJson);
+      document.contentText = contentText;
+      document.contentUpdatedAt = new Date();
+      document = await manager.save(document);
+
+      // 创建 v1（编辑器内容保存为 .txt 版本文件）
+      const versionNumber = 1;
+      const buffer = Buffer.from(contentText, 'utf-8');
+      const fileInfo = saveVersionFile(document.id, versionNumber, buffer, `${title}-v1.txt`);
+
+      const version = manager.create(DocumentVersion, {
+        documentId: document.id,
+        versionNumber,
+        fileUrl: fileInfo.fileUrl,
+        fileSize: String(fileInfo.fileSize),
+        fileType: 'txt',
+        checksum: fileInfo.checksum,
+        status: VersionStatus.DRAFT,
+        parsingStatus: ParsingStatus.PENDING,
+        uploadedBy: operator,
+      });
+      const savedVersion = await manager.save(version);
+
+      // 审计日志
+      const auditLog = manager.create(DocumentAuditLog, {
+        documentId: document.id,
+        versionId: savedVersion.id,
+        action: AuditAction.UPLOAD,
+        operator,
+        detail: `编辑器保存创建文档 v1 (${fileName})`,
+      });
+      await manager.save(auditLog);
+
+      logger.info('草稿保存创建新文档', {
+        module: 'DocumentService',
+        documentId: document.id,
+        title,
+        operator,
+      });
+
+      return { document, version: savedVersion, isNew: true };
+    });
+  }
+
+  /**
+   * 发布文档到知识库（向量化 + 激活）
+   *
+   * 核心流程：
+   * 1. 读取 document.contentText（用户编辑后的最终文本）
+   * 2. contentText 为空时兜底解析原文件
+   * 3. 重新发布（ACTIVE）时先删除旧向量
+   * 4. 分块 → 入向量库
+   * 5. DRAFT → activateVersion；ACTIVE → 仅更新向量
+   *
+   * 并发控制：通过 parsingStatus=PARSING 做版本级锁，
+   * 正在处理的版本会拒绝重复触发。
+   */
+  async publishToVectorStore(versionId: number, operator: string = 'anonymous'): Promise<DocumentVersion> {
+    const version = await this.versionRepo.findOne({ where: { id: versionId } });
+    if (!version) throw new NotFoundException(`版本 ${versionId} 不存在`);
+
+    // 并发锁：正在处理中的版本拒绝重复触发
+    if (version.parsingStatus === ParsingStatus.PARSING) {
+      throw new BadRequestException('该版本正在处理中，请稍后再试');
+    }
+
+    // ARCHIVED 状态不能发布
+    if (version.status === VersionStatus.ARCHIVED) {
+      throw new BadRequestException('归档版本不能发布，请使用回滚功能');
+    }
+
+    const isRepublish = version.status === VersionStatus.ACTIVE;
+
+    // 设置处理中状态（并发锁）
+    await this.versionRepo.update(versionId, { parsingStatus: ParsingStatus.PARSING, errorMessage: null });
+
+    try {
+      // 读取编辑后的 contentText
+      const doc = await this.getDocument(version.documentId);
+      let textContent = doc.contentText;
+
+      // contentText 为空时兜底解析原文件
+      if (!textContent || textContent.trim().length === 0) {
+        logger.warn('contentText 为空，回退到解析原文件', { module: 'DocumentService', versionId });
+        // parseDocument 接受文件路径而非 buffer，用 getAbsoluteTempPath 获取可读路径
+        const tempInfo = this.getAbsoluteTempPath(version.fileUrl, version.fileType);
+        try {
+          const mimeType = this.getMimeTypeByExt(version.fileType);
+          textContent = await parseDocument(tempInfo.filePath, mimeType);
+        } finally {
+          if (tempInfo.isTemp) this.cleanupTempFile(tempInfo.filePath);
+        }
+      }
+
+      if (!textContent || textContent.trim().length === 0) {
+        throw new Error('文档内容为空，无法发布到知识库');
+      }
+
+      logger.info('开始向量化入库', { module: 'DocumentService', versionId, documentId: version.documentId, textLength: textContent.length, isRepublish });
+
+      // 重新发布时先删除旧向量
+      if (isRepublish) {
+        try {
+          await removeDocumentVersion(versionId);
+          logger.info('重新发布：已删除旧向量', { module: 'DocumentService', versionId });
+        } catch (err: any) {
+          logger.warn('重新发布：删除旧向量失败，继续入库', { module: 'DocumentService', versionId, error: err.message });
+        }
+      }
+
+      // 向量化入库
+      const metadata = {
+        documentId: String(version.documentId),
+        versionId: String(versionId),
+        versionStatus: VersionStatus.ACTIVE,
+        source: version.fileUrl,
+        fileType: version.fileType,
+      };
+
+      const chunkCount = await addDocuments([textContent], [metadata], {
+        chunkingStrategy: 'parent-child',
+      });
+
+      await this.versionRepo.update(versionId, {
+        parsingStatus: ParsingStatus.SUCCESS,
+        chunkCount,
+      });
+
+      // DRAFT → 需要激活（会自动归档旧 active）；ACTIVE → 已经是 active，无需再激活
+      if (!isRepublish) {
+        await this.activateVersion(versionId, operator);
+      }
+
+      // 审计日志
+      const log = this.auditLogRepo.create({
+        documentId: version.documentId,
+        versionId,
+        action: AuditAction.ACTIVATE,
+        operator,
+        detail: isRepublish
+          ? `重新发布到知识库（${chunkCount} 个分块）`
+          : `发布到知识库（${chunkCount} 个分块）`,
+      });
+      await this.auditLogRepo.save(log);
+
+      logger.info('发布到知识库成功', { module: 'DocumentService', versionId, documentId: version.documentId, chunkCount, isRepublish });
+
+      const result = await this.versionRepo.findOne({ where: { id: versionId } });
+      if (!result) throw new Error('版本记录更新后查询失败');
+      return result;
+    } catch (error: any) {
+      await this.versionRepo.update(versionId, {
+        parsingStatus: ParsingStatus.FAILED,
+        errorMessage: error.message,
+      });
+      logger.error('发布到知识库失败', { module: 'DocumentService', versionId, error: error.message, stack: error.stack });
+      throw error;
+    }
   }
 
   /**
@@ -208,6 +660,46 @@ export class DocumentService {
       // 4. 保存文件
       const fileInfo = saveVersionFile(document.id, versionNumber, file.buffer, file.originalname);
 
+      // 4.5. 同步解析文档纯文本，写入 contentJson / contentText 供编辑器加载
+      // 失败不阻塞上传流程（仅打日志），保证向量化和审计仍能完成
+      try {
+        // parseDocument 接受文件路径而非 buffer，需先写到临时文件
+        const tempDir = path.join(__dirname, '..', '..', 'uploads', 'temp');
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+        const tempFilePath = path.join(tempDir, `parse-${document.id}-${versionNumber}-${Date.now()}${path.extname(file.originalname)}`);
+        fs.writeFileSync(tempFilePath, file.buffer);
+
+        const fullText = await parseDocument(tempFilePath, file.mimetype || getMimeType(file.originalname));
+
+        // 用完立即删除临时文件
+        try { fs.unlinkSync(tempFilePath); } catch { /* 忽略删除失败 */ }
+
+        if (fullText) {
+          // 不截断：存储全文供向量库分块索引
+          // 向量库的 addDocuments 会用 RecursiveCharacterTextSplitter 自动分块
+          // 截断会导致 RAG 检索丢失后半部分内容
+          const contentJson = textToTiptapJson(fullText);
+
+          document.contentJson = JSON.stringify(contentJson);
+          document.contentText = fullText;
+          document.contentUpdatedAt = new Date();
+          document = await manager.save(document);
+
+          logger.info('文档内容已解析并写入 contentJson', {
+            module: 'DocumentService',
+            documentId: document.id,
+            charCount: fullText.length,
+          });
+        }
+      } catch (err) {
+        logger.warn('解析文档为编辑器内容失败，跳过 contentJson 写入', {
+          module: 'DocumentService',
+          documentId: document.id,
+          fileName: file.originalname,
+          error: String(err),
+        });
+      }
+
       // 5. 创建版本记录
       const version = manager.create(DocumentVersion, {
         documentId: document.id,
@@ -232,112 +724,15 @@ export class DocumentService {
       });
       await manager.save(auditLog);
 
-      // 8. 异步解析和向量化
-      this.processVersionAsync(savedVersion.id, document.id).catch((err) => {
-        logger.error('异步解析向量化失败', { module: 'DocumentService', versionId: savedVersion.id, error: String(err) });
-      });
+      // 8. 不自动入向量库
+      // 改造后：上传只解析内容写入 contentJson/contentText，版本保持 DRAFT
+      // 用户需在编辑器中编辑后，手动点【发布到知识库】才入向量库
+      // 这样用户有机会修改 OCR 错误、调整格式后再让 RAG 检索到正确内容
 
-      logger.info('文档上传完成', { module: 'DocumentService', documentId: document.id, versionNumber, operator });
+      logger.info('文档上传完成（未入向量库，等待用户发布）', { module: 'DocumentService', documentId: document.id, versionNumber, operator });
 
       return { document, version: savedVersion };
     });
-  }
-
-  /**
-   * 异步处理版本：解析 → 切分 → 向量化 → 激活
-   */
-  private async processVersionAsync(versionId: number, documentId: number): Promise<void> {
-    logger.info('开始异步处理版本', { module: 'DocumentService', versionId, documentId });
-    let tempFilePath: string | null = null;
-    try {
-      await this.versionRepo.update(versionId, { parsingStatus: ParsingStatus.PARSING });
-      logger.info('版本解析状态已更新为 parsing', { module: 'DocumentService', versionId });
-
-      const version = await this.versionRepo.findOne({ where: { id: versionId } });
-      if (!version) {
-        logger.error('版本记录不存在，终止处理', { module: 'DocumentService', versionId });
-        return;
-      }
-
-      const fileBuffer = readVersionFile(version.fileUrl);
-      if (!fileBuffer) {
-        logger.error('文件不存在或无法读取', { module: 'DocumentService', versionId, fileUrl: version.fileUrl });
-        await this.versionRepo.update(versionId, {
-          parsingStatus: ParsingStatus.FAILED,
-          errorMessage: '文件不存在或无法读取',
-        });
-        return;
-      }
-      logger.info('文件读取成功', { module: 'DocumentService', versionId, fileUrl: version.fileUrl, fileSize: fileBuffer.length });
-
-      const ext = version.fileType;
-      const mimeType = this.getMimeTypeByExt(ext);
-      logger.info('开始解析文档', { module: 'DocumentService', versionId, fileType: ext, mimeType });
-      const tempInfo = this.getAbsoluteTempPath(version.fileUrl, ext);
-      tempFilePath = tempInfo.filePath;
-      const textContent = await parseDocument(tempInfo.filePath, mimeType);
-
-      if (!textContent || textContent.trim().length === 0) {
-        logger.error('文档内容为空或无法提取文本', { module: 'DocumentService', versionId, textLength: textContent?.length || 0 });
-        await this.versionRepo.update(versionId, {
-          parsingStatus: ParsingStatus.FAILED,
-          errorMessage: '文档内容为空或无法提取文本',
-        });
-        return;
-      }
-      logger.info('文档解析完成', { module: 'DocumentService', versionId, textLength: textContent.length });
-
-      const metadata = {
-        documentId: String(documentId),
-        versionId: String(versionId),
-        versionStatus: VersionStatus.ACTIVE,
-        source: version.fileUrl,
-        fileType: version.fileType,
-        mimeType,  // 传给自适应 Chunking 做二次判断，避免扩展名格式不一致时降级为 default
-      };
-      logger.info('开始向量化入库', { module: 'DocumentService', versionId, documentId });
-
-      try {
-        const chunkCount = await addDocuments([textContent], [metadata], {
-          chunkingStrategy: 'parent-child',
-        });
-        logger.info('向量化入库完成', { module: 'DocumentService', versionId, documentId, chunkCount });
-
-        await this.versionRepo.update(versionId, {
-          parsingStatus: ParsingStatus.SUCCESS,
-          chunkCount,
-        });
-
-        logger.info('开始自动激活版本', { module: 'DocumentService', versionId });
-        await this.activateVersion(versionId, version.uploadedBy || 'system');
-      } catch (vectorError: any) {
-        logger.error('向量化入库失败，已加入重试队列', { module: 'DocumentService', versionId, error: vectorError.message });
-        await this.enqueueVectorOp(versionId, VectorOpType.REINDEX, {
-          textContent,
-          versionStatus: VersionStatus.ACTIVE,
-          documentId,
-        });
-        await this.versionRepo.update(versionId, {
-          parsingStatus: ParsingStatus.FAILED,
-          errorMessage: `向量化入库失败，已加入重试队列: ${vectorError.message}`,
-        });
-      }
-
-      logger.info('版本解析向量化完成', { module: 'DocumentService', versionId, documentId });
-    } catch (error: any) {
-      if (error.message?.includes('已加入重试队列')) {
-        return;
-      }
-      await this.versionRepo.update(versionId, {
-        parsingStatus: ParsingStatus.FAILED,
-        errorMessage: error.message,
-      });
-      logger.error('版本处理失败', { module: 'DocumentService', versionId, error: error.message, stack: error.stack });
-    } finally {
-      if (tempFilePath) {
-        this.cleanupTempFile(tempFilePath);
-      }
-    }
   }
 
   /**
@@ -586,6 +981,45 @@ export class DocumentService {
     };
   }
 
+  /**
+   * 导出指定版本内容到指定格式
+   * 支持格式：md / txt / docx
+   * - md/txt：直接返回解析后的文本
+   * - docx：用 markdownToDocx 生成（纯文本按段落处理）
+   */
+  async exportVersion(
+    versionId: number,
+    format: 'md' | 'txt' | 'docx',
+  ): Promise<{ buffer: Buffer; fileName: string; mimeType: string }> {
+    const version = await this.versionRepo.findOne({ where: { id: versionId } });
+    if (!version) throw new NotFoundException(`版本 ${versionId} 不存在`);
+
+    // 获取文档标题用于命名
+    const document = await this.documentRepo.findOne({ where: { id: version.documentId } });
+    const baseName = (document?.title || `v${version.versionNumber}`).replace(/[<>:"/\\|?*]/g, '_');
+
+    // 解析版本文本（已 normalize）
+    const text = await this.parseVersionText(version);
+
+    if (format === 'docx') {
+      // 纯文本按段落用空行分隔，转成 markdown 再生成 docx
+      const markdown = text.split('\n').filter(l => l.trim()).join('\n\n');
+      const buffer = await markdownToDocx(markdown, { title: document?.title });
+      return {
+        buffer,
+        fileName: `${baseName}.docx`,
+        mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      };
+    }
+
+    // md / txt：直接返回文本
+    return {
+      buffer: Buffer.from(text, 'utf-8'),
+      fileName: `${baseName}.${format}`,
+      mimeType: format === 'md' ? 'text/markdown' : 'text/plain',
+    };
+  }
+
   // ==================== 批量操作 ====================
 
   /**
@@ -745,6 +1179,10 @@ export class DocumentService {
 
   /**
    * 解析版本文件为纯文本
+   *
+   * 注意：不同来源的版本文件格式不同（uploadDocument 保存原始 pdf/docx，
+   * createVersionFromContent 保存编辑器 txt），解析后的换行/段落格式可能不一致。
+   * 这里做 normalize 统一格式，保证 diffVersions 的行级对比准确。
    */
   private async parseVersionText(version: DocumentVersion): Promise<string> {
     const fileBuffer = readVersionFile(version.fileUrl);
@@ -753,23 +1191,35 @@ export class DocumentService {
     const ext = version.fileType;
     const mimeType = this.getMimeTypeByExt(ext);
 
+    let text: string;
+
     // 对于文本类文件直接读取
     if (['txt', 'md', 'csv', 'json', 'html'].includes(ext)) {
-      return fileBuffer.toString('utf-8');
-    }
-
-    // 对于二进制文件（pdf、docx 等），使用 document-parser 解析
-    const tempInfo = this.getAbsoluteTempPath(version.fileUrl, ext);
-    try {
-      return await parseDocument(tempInfo.filePath, mimeType);
-    } catch (error: any) {
-      logger.error('解析版本文件失败', { module: 'DocumentService', versionId: version.id, error: error.message });
-      return `[解析失败: ${error.message}]`;
-    } finally {
-      if (tempInfo.isTemp) {
-        this.cleanupTempFile(tempInfo.filePath);
+      text = fileBuffer.toString('utf-8');
+    } else {
+      // 对于二进制文件（pdf、docx 等），使用 document-parser 解析
+      const tempInfo = this.getAbsoluteTempPath(version.fileUrl, ext);
+      try {
+        text = await parseDocument(tempInfo.filePath, mimeType);
+      } catch (error: any) {
+        logger.error('解析版本文件失败', { module: 'DocumentService', versionId: version.id, error: error.message });
+        return `[解析失败: ${error.message}]`;
+      } finally {
+        if (tempInfo.isTemp) {
+          this.cleanupTempFile(tempInfo.filePath);
+        }
       }
     }
+
+    // normalize：统一换行符、去除连续空行和行首尾空格
+    // 解决原始文件解析文本与编辑器 txt 文本格式不一致导致 diff 全标红的问题
+    return text
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .join('\n');
   }
 
   // ==================== 数据一致性保障 ====================

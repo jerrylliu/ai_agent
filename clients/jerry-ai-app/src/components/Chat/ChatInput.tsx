@@ -1,8 +1,9 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { Send, X, Plus, Image, FileText, ImageIcon, Mic, MicOff, Loader2, CloudOff } from "lucide-react";
 import { Button } from "../ui/button";
 import { useSettingsStore } from "../../stores/settings-store";
 import { useSpeechRecognition, type RecordingStatus } from "../../hooks/useSpeechRecognition";
+import type { PendingDocument } from "../../hooks/useChat";
 
 interface ChatInputProps {
   inputValue: string;
@@ -14,7 +15,15 @@ interface ChatInputProps {
   pendingImages: string[];
   onClearPendingImages: () => void;
   onRemovePendingImage: (index: number) => void;
+  /** 待发送文档列表 */
+  pendingDocuments: PendingDocument[];
+  /** 清空所有待发送文档 */
+  onClearPendingDocuments: () => void;
+  /** 移除单个待发送文档 */
+  onRemovePendingDocument: (id: string) => void;
   onSendFile: (file: File) => void;
+  /** 正在解析的文档（非 null 时显示进度条） */
+  parsingFile: { fileName: string } | null;
   supportsVision: boolean;
   /** 底部紧凑模式：更小的 textarea 和 padding */
   compact?: boolean;
@@ -134,13 +143,44 @@ const ChatInput: React.FC<ChatInputProps> = ({
   pendingImages,
   onClearPendingImages,
   onRemovePendingImage,
+  pendingDocuments,
+  onClearPendingDocuments,
+  onRemovePendingDocument,
   onSendFile,
+  parsingFile,
   supportsVision,
   compact = false,
 }) => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showPlusMenu, setShowPlusMenu] = useState(false);
+
+  // 文档解析进度条：模拟百分比 + 实时计时
+  // MinerU 是异步轮询的，无法拿到真实进度，用递减增长模拟（封顶 90%，完成后跳 100%）
+  const [parseProgress, setParseProgress] = useState(0);
+  const [parseElapsed, setParseElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!parsingFile) {
+      setParseProgress(0);
+      setParseElapsed(0);
+      return;
+    }
+    // 开始解析，初始 5%
+    setParseProgress(5);
+    setParseElapsed(0);
+
+    const timer = setInterval(() => {
+      setParseElapsed(prev => prev + 1);
+      setParseProgress(prev => {
+        if (prev >= 90) return prev; // 封顶 90%，等实际完成
+        // 递减增长：越接近 90% 越慢
+        return Math.min(90, prev + Math.max(1, (90 - prev) * 0.08));
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [parsingFile]);
 
   // 用 ref 保持最新 inputValue / onInputChange，避免 useEffect 因父组件 inline 函数频繁重跑
   const inputValueRef = useRef(inputValue);
@@ -199,6 +239,25 @@ const ChatInput: React.FC<ChatInputProps> = ({
 
   return (
     <>
+      {/* 文档解析进度提示 */}
+      {parsingFile && (
+        <div className="mb-3 p-3 bg-gray-50 dark:bg-slate-700/50 rounded-xl">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cyberpunk-parse-text">
+              <Loader2 className="h-4 w-4 animate-spin text-primary cyberpunk-parse-spinner" />
+              <span>正在解析文档 {parsingFile.fileName}...</span>
+            </div>
+            <span className="text-xs text-gray-400">已用 {parseElapsed}s</span>
+          </div>
+          <div className="h-1.5 bg-gray-200 dark:bg-slate-600 rounded-full overflow-hidden cyberpunk-parse-track">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-300 cyberpunk-parse-fill"
+              style={{ width: `${parseProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* 待发送图片预览区 */}
       {pendingImages.length > 0 && (
         <div className="mb-3 p-3 bg-gray-50 dark:bg-slate-700/50 rounded-xl">
@@ -232,6 +291,61 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 </button>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* 待发送文档预览区 */}
+      {pendingDocuments.length > 0 && (
+        <div className="mb-3 p-3 bg-gray-50 dark:bg-slate-700/50 rounded-xl max-h-[40vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-gray-600 dark:text-gray-300">
+              待发送文档 ({pendingDocuments.length})
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onClearPendingDocuments}
+              className="h-6 text-xs text-gray-500 hover:text-red-500"
+            >
+              <X className="h-3 w-3 mr-1" />
+              清除全部
+            </Button>
+          </div>
+          <div className="flex flex-col gap-2">
+            {pendingDocuments.map((doc) => {
+              const sizeText = doc.sizeBytes < 1024
+                ? `${doc.sizeBytes} B`
+                : doc.sizeBytes < 1024 * 1024
+                  ? `${(doc.sizeBytes / 1024).toFixed(1)} KB`
+                  : `${(doc.sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+              return (
+                <div
+                  key={doc.id}
+                  className="relative group flex items-center gap-2 px-3 py-2 bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-600 rounded-lg"
+                >
+                  <FileText className="h-4 w-4 text-primary shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium truncate text-gray-900 dark:text-gray-100">
+                      {doc.fileName}
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                      <span>{sizeText}</span>
+                      {doc.text && <span>· {doc.text.length} 字</span>}
+                      {doc.truncated && <span className="text-amber-500">· 已截取前 5 万字（原文共 {doc.totalChars ?? '未知'} 字）</span>}
+                      {!doc.text && <span className="text-amber-500">· 仅链接（解析失败）</span>}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => onRemovePendingDocument(doc.id)}
+                    className="shrink-0 bg-red-500 text-white rounded-full h-5 w-5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="移除"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -303,8 +417,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                 <div className="absolute left-0 bottom-full mb-2 z-20 bg-white dark:bg-slate-800 rounded-xl border border-gray-200 dark:border-slate-600 shadow-xl py-1 min-w-[140px] cyberpunk-plus-menu">
                   {/* 上传图片 */}
                   <label
-                    className={`flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 cursor-pointer ${!supportsVision ? 'opacity-40 pointer-events-none' : ''}`}
-                    onClick={() => setShowPlusMenu(false)}
+                    className={`cyberpunk-plus-menu-item mx-1 rounded-lg flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 cursor-pointer ${!supportsVision ? 'opacity-40 pointer-events-none' : ''}`}
                   >
                     <Image className="h-4 w-4" />
                     <span>上传图片</span>
@@ -316,6 +429,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
                       disabled={!supportsVision}
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
+                        // 先关菜单后处理文件，确保用户有视觉反馈
+                        setShowPlusMenu(false);
                         if (file) onSendFile(file);
                         e.target.value = '';
                       }}
@@ -323,8 +438,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
                   </label>
                   {/* 上传文档 */}
                   <label
-                    className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 cursor-pointer"
-                    onClick={() => setShowPlusMenu(false)}
+                    className="cyberpunk-plus-menu-item mx-1 rounded-lg flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-slate-700 cursor-pointer"
                   >
                     <FileText className="h-4 w-4" />
                     <span>上传文档</span>
@@ -334,6 +448,8 @@ const ChatInput: React.FC<ChatInputProps> = ({
                       className="hidden"
                       onChange={(e) => {
                         const file = e.target.files?.[0];
+                        // 先关菜单后处理文件，确保用户有视觉反馈
+                        setShowPlusMenu(false);
                         if (file) onSendFile(file);
                         e.target.value = '';
                       }}
@@ -366,7 +482,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             ) : (
               <Button
                 onClick={onSend}
-                disabled={!inputValue.trim() && pendingImages.length === 0}
+                disabled={!inputValue.trim() && pendingImages.length === 0 && pendingDocuments.length === 0}
                 className="rounded-full bg-primary hover:bg-primary/90 text-white h-8 w-8 p-0 transition-all duration-200 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed cyberpunk-send-btn"
               >
                 <Send className="h-4 w-4" />

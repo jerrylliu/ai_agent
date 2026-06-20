@@ -34,13 +34,23 @@ export class SessionService {
   ) {}
 
   // 保存对话记录
-  async saveChatHistory(sessionId: string, role: string, content: string, userId: string = 'default') {
+  async saveChatHistory(
+    sessionId: string,
+    role: string,
+    content: string,
+    userId: string = 'default',
+    documentCards?: unknown[],
+  ) {
     logger.debug('保存聊天记录', { module: 'SessionService', sessionId, role, contentLength: content.length });
     const chatHistory = this.chatHistoryRepository.create({
       userId,
       sessionId,
       role,
       content,
+      // documentCards 以 JSON 字符串形式持久化，仅 user 消息携带
+      documentCards: documentCards && documentCards.length > 0
+        ? JSON.stringify(documentCards)
+        : null,
     });
     const savedHistory = await this.chatHistoryRepository.save(chatHistory);
 
@@ -90,11 +100,20 @@ export class SessionService {
     });
 
     if (docs.length === 0) {
-      return messages.map((m) => ({ ...m, attachments: [] as any[] }));
+      return messages.map((m) => ({
+        ...m,
+        attachments: [] as any[],
+        // documentCards 从 JSON 字符串反序列化为对象
+        documentCards: m.documentCards ? JSON.parse(m.documentCards) : undefined,
+      }));
     }
 
     // 把每个 doc 关联到最近一条早于（或等于）其 createdAt 的 assistant 消息
-    const enriched = messages.map((m) => ({ ...m, attachments: [] as any[] }));
+    const enriched = messages.map((m) => ({
+      ...m,
+      attachments: [] as any[],
+      documentCards: m.documentCards ? JSON.parse(m.documentCards) : undefined,
+    }));
     const assistantIdxList = enriched
       .map((m, idx) => ({ idx, role: m.role, createdAt: new Date(m.createdAt as any) }))
       .filter((x) => x.role === 'assistant');

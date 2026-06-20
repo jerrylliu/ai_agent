@@ -11,6 +11,7 @@ import { DocumentController } from './controllers/document.controller.js';
 import { KnowledgeSourceController } from './controllers/knowledge-source.controller.js';
 import { RedisDashboardController } from './controllers/redis-dashboard.controller.js';
 import { SpeechController } from './controllers/speech.controller.js';
+import { AiWritingController } from './controllers/ai-writing.controller.js';
 import { SpeechService } from './services/speech.service.js';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ChatHistory } from './entities/chat-history.entity.js';
@@ -72,7 +73,7 @@ import { config } from './fundamentals/config.js';
     TypeOrmModule.forFeature([ChatHistory, Session, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage, GeneratedDocument]),
     AuthModule,
   ],
-  controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController, DocumentController, KnowledgeSourceController, RedisDashboardController, SpeechController],
+  controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController, DocumentController, KnowledgeSourceController, RedisDashboardController, SpeechController, AiWritingController],
   providers: [AppService, SessionService, SummaryService, MemoryService, UsageService, EvaluationService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService, ToolUsageService, GeneratedDocumentService, GeneratedDocumentSchedulerService, SpeechService],
 })
 export class AppModule implements OnModuleInit {

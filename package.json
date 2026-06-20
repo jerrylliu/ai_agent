@@ -8,5 +8,13 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "@tiptap/extension-placeholder": "^3.27.1",
+    "@tiptap/extension-task-item": "^3.27.1",
+    "@tiptap/extension-task-list": "^3.27.1",
+    "@tiptap/pm": "^3.27.1",
+    "@tiptap/react": "^3.27.1",
+    "@tiptap/starter-kit": "^3.27.1"
+  }
 }

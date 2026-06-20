@@ -341,6 +341,32 @@ function detectToolIntent(userMessage: string): ToolIntentDetection {
 }
 
 /**
+ * 判断用户消息是否是"实质性问题"（需要查询知识库的候选）。
+ *
+ * 用于决定是否强制调用 search_knowledge_base：
+ * - 问候/闲聊（"你好""谢谢"）→ 不强制，直接回答
+ * - 纯指令（"生成图片""画图表"）→ 不强制，已有 detectToolIntent 处理
+ * - 实质性问题（"武器室规范是什么""怎么申请""3.2.4条说了什么"）→ 强制查知识库
+ *
+ * 判断标准：消息长度足够（>=4字）且不是纯问候/感谢/确认。
+ */
+function isSubstantiveQuery(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 4) return false;
+
+  // 纯问候/感谢/确认/闲聊 → 不需要查知识库
+  const greetingPatterns = [
+    /^(你好|您好|hi|hello|hey|嗨|哈喽|早上好|下午好|晚上好)[\s!！.。?？]*$/i,
+    /^(谢谢|感谢|多谢|thx|thanks|thank you)[\s!！.。]*$/i,
+    /^(好的|明白|了解|收到|ok|okay|好|嗯|哦)[\s!！.。]*$/i,
+    /^(再见|拜拜|bye|goodbye)[\s!！.。]*$/i,
+  ];
+  if (greetingPatterns.some(p => p.test(trimmed))) return false;
+
+  return true;
+}
+
+/**
  * LLM-as-Judge：用一个轻量 LLM 调用判断 AI 输出是否是"嘴炮"
  * （即口头答应了工具调用但没真的调用）
  *
@@ -847,14 +873,19 @@ ${toolList}
 1. 当你能够直接回答问题（如通用知识、闲聊、简单的加减乘除等）时，不需要调用任何工具
 2. 调用工具时，构造精确的查询语句，以提高搜索结果的相关性
 3. 基于工具返回的结果回答用户问题，在回答中标注信息来源
-4. 如果工具返回的结果与用户问题无关，请说明并基于自身知识回答
+4. 如果工具返回的结果与用户问题无关：
+   - 对于通用知识问题（如"什么是光合作用"），可以说明后基于自身知识回答
+   - 对于涉及用户文档/知识库的问题（如用户提到"文档""规范""规定"等），必须明确告知"知识库中未找到相关内容"，严禁基于自身知识编造文档中不存在的内容
 5. 每个工具在一次对话中最多调用一次，不要对同一个工具重复调用相同的参数
 6. 收到工具返回结果后，必须直接基于结果生成最终回答，不要再调用其他工具`;
 
   // 按工具追加专属规则
   if (availableTools.includes('search_knowledge_base')) {
     prompt += `\n\n知识库搜索规则：
-- 当用户的问题可能涉及已上传的文档、知识库中的信息时，优先调用 search_knowledge_base`;
+- 当用户的问题可能涉及已上传的文档、知识库中的信息时，优先调用 search_knowledge_base
+- 如果 search_knowledge_base 返回空结果或结果与问题无关，必须如实告知用户"知识库中未找到相关内容"
+- 严禁在知识库没有相关内容时，凭自身知识编造文档中的具体条款、规范、数据等内容
+- 可以建议用户：检查文档是否已发布到知识库，或换一种关键词重新提问`;
   }
 
   if (availableTools.includes('search_web')) {
@@ -1411,6 +1442,23 @@ async function promptWithFunctionCalling(
       modelId: getCurrentModelId(),
     });
   }
+
+  // ==================== 知识库强制调用：防止 LLM 跳过知识库直接编造 ====================
+  // 问题：LLM 经常把涉及用户文档的问题（如"武器室规范是什么"）判定为"通用知识"，
+  //       不调 search_knowledge_base 就直接用训练数据回答 → 幻觉。
+  // 方案：当 search_knowledge_base 可用且用户消息是实质问题时，强制首轮调用它。
+  //       LLM 必须先查知识库，拿到结果后再回答——有结果就基于结果，没结果就说"未找到"。
+  if (toolChoiceParam === 'auto' && caps.supportsFC && caps.supportsToolChoice && filteredToolSchemas.length > 0) {
+    const hasKBTool = filteredToolSchemas.some(s => s?.function?.name === 'search_knowledge_base');
+    if (hasKBTool && isSubstantiveQuery(promptText || '')) {
+      toolChoiceParam = { type: 'function', function: { name: 'search_knowledge_base' } };
+      logger.info('FC模式：强制首轮调用 search_knowledge_base（防止跳过知识库编造）', {
+        module: 'PromptService',
+        reason: '用户消息是实质性问题，且知识库工具可用',
+      });
+    }
+  }
+
   // FC 能力弱的模型对 tool_choice 参数支持不佳，不传该参数
   // bindTools 失败时静默降级到 RAG 模式
   // 注意：tool_choice='required' 或锁定具体工具，仅应在"首轮模型调用"生效，
@@ -2474,8 +2522,14 @@ ${docList}
 回答规则：
 1. 优先使用参考资料中的信息回答，回答时在括号内标注来源，格式为：（【文档 X】）
 2. 如果参考资料只覆盖问题的一部分，先列出资料中的信息，再说明"资料中未涉及以下方面：[缺失点]"
-3. 如果参考资料与用户问题完全无关，请回复"知识库中未找到相关信息，以下基于通用知识回答："，然后用自己的知识回答
+3. 如果参考资料与用户问题完全无关：
+   - 对于通用知识问题（如"什么是光合作用"），可以回复"知识库中未找到相关信息，以下基于通用知识回答："后用自己的知识回答
+   - 对于涉及用户文档/知识库的问题（如用户提到"文档""规范""规定"等），必须回复"知识库中未找到相关内容，请检查文档是否已发布到知识库"，严禁凭自身知识编造文档中的具体条款、规范、数据等内容
 4. 当用户问知识库有多少文档时，请根据"知识库统计"信息回答，不要只数参考资料的条数${UNTRUSTED_CONTEXT_INSTRUCTION}`;
+  } else {
+    // 知识库未检索到任何内容时的 fallback 提示
+    // 防止 AI 在用户询问文档内容时凭空编造
+    systemPrompt += `\n\n注意：已搜索知识库但未找到与用户问题相关的内容。如果用户的问题涉及具体文档、规范、规定等（如提到"文档""规范""条款"等），必须如实告知"知识库中未找到相关内容，请检查文档是否已发布到知识库"，严禁凭自身知识编造文档中的具体条款、规范、数据等内容。`;
   }
 
   // ==================== 步骤2.5: 注入对话摘要 ====================

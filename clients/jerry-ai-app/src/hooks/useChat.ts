@@ -14,6 +14,7 @@ import {
   deleteMessage as deleteMessageApi,
   uploadFile,
   uploadToKnowledgeBase,
+  extractDocument,
   getKnowledgeBaseStatus,
   getModelInfo,
   switchModel as switchModelApi,
@@ -25,6 +26,31 @@ import { generateId, generateSessionId } from '../lib/utils';
 import { ERROR_MESSAGE } from '../lib/constants';
 import { Session, Message, HistoryItem } from '../types/session';
 
+/**
+ * 待发送文档：上传后未实际发出的文档
+ * 输入框上方显示预览卡片，用户可移除或点【发送】触发实际发送
+ */
+export interface PendingDocument {
+  /** 唯一 ID（用于列表 key 和移除） */
+  id: string;
+  /** 文件名 */
+  fileName: string;
+  /** 文件大小（字节） */
+  sizeBytes: number;
+  /** 提取出的纯文本（用于发送给 AI） */
+  text: string;
+  /** Tiptap JSONContent（用于"在编辑器中打开"） */
+  contentJson: unknown;
+  /** 文件下载 URL */
+  fileUrl: string;
+  /** 是否被截断 */
+  truncated: boolean;
+  /** 文档原始总字符数（截断前） */
+  totalChars?: number;
+  /** 后端文档记录 ID */
+  documentId?: number;
+}
+
 export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, onConfirmationRequest?: (event: ConfirmationRequestEvent) => void) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => generateSessionId());
@@ -33,6 +59,17 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
   const [isTyping, setIsTyping] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [pendingImages, setPendingImages] = useState<string[]>([]);
+  /**
+   * 待发送的文档列表
+   * 用户上传文档后先放进这里，输入框上方显示预览卡片
+   * 用户点【发送】按钮时才把内容拼接到消息里实际发出
+   */
+  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([]);
+  /**
+   * 正在解析的文档信息（用于显示进度条）
+   * 非图片文档上传解析期间设为 { fileName }，解析完成后置 null
+   */
+  const [parsingFile, setParsingFile] = useState<{ fileName: string } | null>(null);
   const [knowledgeBaseStatus, setKnowledgeBaseStatus] = useState<{
     status: 'ready' | 'empty' | 'error' | 'unknown';
     message: string;
@@ -219,6 +256,8 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
           role: msg.role as 'user' | 'assistant',
           timestamp: new Date(msg.createdAt),
           attachments: Array.isArray(msg.attachments) ? msg.attachments : [],
+          // 还原持久化的文档卡片（后端以 JSON 字符串存储，已由 service 反序列化为数组）
+          documentCards: Array.isArray(msg.documentCards) ? msg.documentCards : undefined,
         }));
         setMessages(formattedMessages);
         messagesCacheRef.current.set(sessionId, formattedMessages);
@@ -294,8 +333,8 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
     }
   };
 
-  const sendMessage = async (userInput: string, images: string[] = []) => {
-    if (!userInput.trim() && images.length === 0) return;
+  const sendMessage = async (userInput: string, images: string[] = [], documents: PendingDocument[] = []) => {
+    if (!userInput.trim() && images.length === 0 && documents.length === 0) return;
 
     // 发消息即标记该会话有内容
     markSessionHasContent(currentSessionId);
@@ -311,17 +350,54 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
       return;
     }
 
+    // 拼装"发给 AI"的内容：用户输入文字 + 文档全文（含截断标记）
+    // 这部分是 AI 实际看到的，包括所有文档原文
+    let aiInputContent = userInput.trim();
+    if (documents.length > 0) {
+      const docSections = documents.map(doc => {
+        const truncationNote = doc.truncated
+          ? `\n[注：文档过长，原文共 ${doc.totalChars ?? '?'} 字符，已截取前 ${doc.text.length} 字符。如需回答后半部分内容，请将文档上传到文档管理并发布到知识库]`
+          : '';
+        if (doc.text) {
+          return `【文档：${doc.fileName}】\n${doc.text}${truncationNote}`;
+        }
+        return `【文档：${doc.fileName}】(${doc.fileUrl})`;
+      });
+      aiInputContent = aiInputContent
+        ? `${aiInputContent}\n\n${docSections.join('\n\n')}`
+        : docSections.join('\n\n');
+    }
+
+    // "展示给用户"的内容：只放用户输入的文字（不含文档全文）
+    // 文档以卡片形式渲染在气泡里，不污染聊天界面
+    const displayContent = userInput.trim();
+
     const userMessage: Message = {
       id: generateId(),
-      content: userInput,
+      content: displayContent,
       images: images.length > 0 ? images : undefined,
       role: 'user',
       timestamp: new Date(),
+      // 把所有文档的轻量元信息附加到消息上，供 ChatBubble 渲染卡片
+      documentCards: documents.length > 0
+        ? documents.map(d => ({
+            id: d.id,
+            fileName: d.fileName,
+            sizeBytes: d.sizeBytes,
+            charCount: d.text.length,
+            truncated: d.truncated,
+            totalChars: d.totalChars,
+            fileUrl: d.fileUrl,
+            contentJson: d.contentJson,
+            documentId: d.documentId,
+          }))
+        : undefined,
     };
 
     setMessages(prev => [...prev, userMessage]);
     setIsTyping(true);
     setPendingImages([]);
+    setPendingDocuments([]);
 
     // 创建 AbortController 用于取消请求
     const abortController = new AbortController();
@@ -331,8 +407,10 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
       const savedUserMsg = await saveChatHistory({
         sessionId: currentSessionId,
         role: 'user',
-        content: userInput,
+        content: displayContent,
         images,
+        // 文档卡片随消息一起持久化，重启后仍可显示
+        documentCards: userMessage.documentCards,
       });
 
       // 用数据库返回的 ID 更新前端消息 ID，确保删除时能匹配
@@ -373,7 +451,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
       setMessages(prev => [...prev, tempAssistantMessage]);
 
       // 处理流式响应（传入图片和 signal）
-      const aiResponse = await getAIResponse(userInput, images, chatHistory, currentSessionId, abortController.signal, {
+      const aiResponse = await getAIResponse(aiInputContent, images, chatHistory, currentSessionId, abortController.signal, {
         memoryEnabled: appSettings?.memoryEnabled ?? true,
         summaryEnabled: appSettings?.summaryEnabled ?? true,
         injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
@@ -507,108 +585,46 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
    */
   const sendFile = async (file: File) => {
     try {
-      const uploadResult = await uploadFile(file);
-
+      // 图片仍走原 uploadFile 接口（只需 URL），加到 pendingImages
       if (file.type.startsWith('image/')) {
+        const uploadResult = await uploadFile(file);
         setPendingImages(prev => [...prev, uploadResult.url]);
-      } else {
-        const fileMessage: Message = {
+        return;
+      }
+
+      // 非图片文档：走 extractDocument 提取内容，加到 pendingDocuments
+      // 用户点【发送】时才实际拼接到消息里发送给 AI
+      setParsingFile({ fileName: file.name });
+      try {
+        const result = await extractDocument(file);
+        const pending: PendingDocument = {
           id: generateId(),
-          content: `[${file.name}](${uploadResult.url})`,
-          role: 'user',
-          timestamp: new Date(),
+          fileName: result.fileName,
+          sizeBytes: result.sizeBytes,
+          text: result.text,
+          contentJson: result.contentJson,
+          fileUrl: result.fileUrl,
+          truncated: result.truncated,
+          totalChars: result.totalChars,
+          documentId: result.documentId,
         };
-        setMessages(prev => [...prev, fileMessage]);
-        setIsTyping(true);
-
-        // 创建 AbortController 用于取消请求
-        const abortController = new AbortController();
-        abortControllerRef.current = abortController;
-
-        try {
-          const chatHistory = messages;
-          const assistantMessageId = generateId();
-          const tempAssistantMessage: Message = {
-            id: assistantMessageId,
-            content: '',
-            role: 'assistant',
-            timestamp: new Date(),
-            attachments: [],
-          };
-          setMessages(prev => [...prev, tempAssistantMessage]);
-
-          const aiResponse = await getAIResponse(fileMessage.content, [], chatHistory, currentSessionId, abortController.signal, {
-            memoryEnabled: appSettings?.memoryEnabled ?? true,
-            summaryEnabled: appSettings?.summaryEnabled ?? true,
-            injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
-            onToolStatus: (event) => {
-              setToolStatuses(prev => {
-                const idx = prev.findIndex(e => e.toolName === event.toolName);
-                if (idx >= 0) {
-                  const updated = [...prev];
-                  updated[idx] = event;
-                  return updated;
-                }
-                return [...prev, event];
-              });
-            },
-            onConfirmationRequest: onConfirmationRequest || undefined,
-            onFileCard: (event) => {
-              setMessages(prev => prev.map(msg =>
-                msg.id === assistantMessageId
-                  ? {
-                      ...msg,
-                      attachments: [
-                        ...(msg.attachments || []),
-                        {
-                          key: event.key,
-                          filename: event.filename,
-                          format: event.format,
-                          sizeBytes: event.sizeBytes,
-                          downloadUrl: event.downloadUrl,
-                          previewUrl: event.previewUrl,
-                          expiresAt: event.expiresAt,
-                          favorited: event.favorited,
-                        },
-                      ],
-                    }
-                  : msg
-              ));
-            },
-          });
-          const reader = aiResponse.stream.getReader();
-          let fullResponse = '';
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            fullResponse += value;
-            setMessages(prev => prev.map(msg =>
-              msg.id === assistantMessageId ? { ...msg, content: fullResponse } : msg
-            ));
-          }
-
-          const savedAssistantMsg = await saveChatHistory({
-            sessionId: currentSessionId,
-            role: 'assistant',
-            content: fullResponse,
-          });
-
-          if (savedAssistantMsg?.id) {
-            setMessages(prev => prev.map(msg =>
-              msg.id === assistantMessageId ? { ...msg, id: savedAssistantMsg.id.toString() } : msg
-            ));
-          }
-        } catch (error: any) {
-          if (error.name === 'AbortError') {
-            console.log('🛑 用户停止了生成');
-          } else {
-            console.error('处理文件消息失败:', error);
-          }
-        } finally {
-          setIsTyping(false);
-          abortControllerRef.current = null;
-        }
+        setPendingDocuments(prev => [...prev, pending]);
+      } catch (err) {
+        // 提取失败：用旧逻辑兜底（上传得到 URL，加到 pendingDocuments 仅作链接用）
+        console.warn('文档内容提取失败，作为链接附件附加', err);
+        const uploadResult = await uploadFile(file);
+        const pending: PendingDocument = {
+          id: generateId(),
+          fileName: file.name,
+          sizeBytes: file.size,
+          text: '',
+          contentJson: null,
+          fileUrl: uploadResult.url,
+          truncated: false,
+        };
+        setPendingDocuments(prev => [...prev, pending]);
+      } finally {
+        setParsingFile(null);
       }
     } catch (error) {
       console.error('上传文件失败:', error);
@@ -628,6 +644,14 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
 
   const removePendingImage = (index: number) => {
     setPendingImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const clearPendingDocuments = () => {
+    setPendingDocuments([]);
+  };
+
+  const removePendingDocument = (id: string) => {
+    setPendingDocuments(prev => prev.filter(d => d.id !== id));
   };
 
   const stopGeneration = () => {
@@ -857,11 +881,15 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
     messagesEndRef,
     knowledgeBaseStatus,
     pendingImages,
+    pendingDocuments,
+    parsingFile,
     sessionHasContent,
     sendMessage,
     sendFile,
     clearPendingImages,
     removePendingImage,
+    clearPendingDocuments,
+    removePendingDocument,
     stopGeneration,
     uploadToKnowledgeBase: uploadToKnowledgeBaseFromChat,
     checkKnowledgeBaseStatus,

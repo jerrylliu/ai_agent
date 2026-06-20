@@ -186,12 +186,22 @@ describe('ChatController', () => {
    * 聊天记录
    * ==================================================================*/
   describe('saveChatHistory', () => {
-    it('应委托 SessionService.saveChatHistory', async () => {
+    it('应委托 SessionService.saveChatHistory（无 documentCards）', async () => {
       await controller.saveChatHistory(
         { sessionId: 's1', role: 'user', content: 'hi' },
         { userId: 'u1' },
       );
-      expect(sessionService.saveChatHistory).toHaveBeenCalledWith('s1', 'user', 'hi', 'u1');
+      // 第五个参数 documentCards 未传时为 undefined
+      expect(sessionService.saveChatHistory).toHaveBeenCalledWith('s1', 'user', 'hi', 'u1', undefined);
+    });
+
+    it('应把 documentCards 透传给 SessionService', async () => {
+      const cards = [{ id: 'c1', fileName: 'test.docx', sizeBytes: 1024 }];
+      await controller.saveChatHistory(
+        { sessionId: 's2', role: 'user', content: 'hello', documentCards: cards },
+        { userId: 'u2' },
+      );
+      expect(sessionService.saveChatHistory).toHaveBeenCalledWith('s2', 'user', 'hello', 'u2', cards);
     });
   });
 

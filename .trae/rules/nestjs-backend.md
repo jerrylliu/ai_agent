@@ -17,8 +17,9 @@
 | 缓存 | Redis | - | ioredis，可选启用 |
 | LLM | LangChain | 1.x | @langchain/classic, @langchain/langgraph |
 | 日志 | Winston | 3.x | nest-winston + Loki |
-| 校验 | class-validator | 0.15.x | DTO 装饰器 |
+| 校验（DTO） | class-validator | 0.15.x | 现有 Controller DTO 主线 |
 | 转换 | class-transformer | 0.5.x | 配合 class-validator |
+| 校验（zod） | zod | 4.x | 配置 / Tools / structured output / 新接口 |
 | 认证 | JWT | - | jsonwebtoken + bcryptjs |
 | 实时通信 | WebSocket | - | ws 库，见 speech.gateway |
 | 任务调度 | @nestjs/schedule | 6.x | cron/interval 定时任务 |
@@ -146,6 +147,47 @@ export class PromptDto {
 - 全局 `ValidationPipe` 已启用 `whitelist: true`（剥离未声明的属性）和 `transform: true`（自动类型转换）。
 - **禁止**在 Controller 中手动写 `if (typeof body.message !== 'string')` 这样的类型检查，应让 DTO 校验处理。
 
+### 4.3 zod 与 class-validator 的边界
+本项目同时存在两套校验体系，**按场景分工**，不要混用：
+
+| 场景 | 推荐方案 | 说明 |
+|------|----------|------|
+| 现有 Controller DTO（已用 class-validator） | 保持 class-validator | 不做存量改造，避免双轨 |
+| 新增 Controller / 复杂表单 | 优先 zod + `ZodValidationPipe` | 类型推导更强，schema 可复用 |
+| 环境变量 / `config.ts` | **必须** zod | 启动 fail-fast，见 `fundamentals/config.ts` |
+| LangChain / MCP Tool 入参 | **必须** zod | 直接被 LLM function calling 消费 |
+| LLM 结构化输出（`withStructuredOutput`） | **必须** zod | 防止 LLM 返回非法 JSON 击穿业务 |
+| WebSocket / SSE 出站事件 | 推荐 zod | 跨端共享 schema，前后端约定一致 |
+| TypeORM Entity | **不要**用 zod 重写 | Entity 已有装饰器强类型，重复定义反而拖累 |
+
+### 4.4 ZodValidationPipe 使用规范
+统一使用 [`fundamentals/zod-validation.pipe.ts`](file:///e:/miaoma-ai-app/servers/jerry-llm-server/src/fundamentals/zod-validation.pipe.ts) 提供的 `ZodValidationPipe`：
+
+```typescript
+import { z } from 'zod';
+import { ZodValidationPipe } from '../fundamentals/zod-validation.pipe.js';
+
+const CreatePostSchema = z.object({
+  title: z.string().min(1).max(120),
+  tags: z.array(z.string()).default([]),
+});
+type CreatePostDto = z.infer<typeof CreatePostSchema>;
+
+@Post()
+create(
+  @Body(new ZodValidationPipe(CreatePostSchema, { label: 'CreatePost' }))
+  body: CreatePostDto,
+) {
+  return this.svc.create(body);
+}
+```
+
+约束：
+- **禁止**为同一接口同时挂载 class-validator DTO 与 zod schema。
+- 类型必须用 `z.infer<typeof Schema>` 推导，不得另写 interface 重复声明。
+- schema 对象常量命名以 `Schema` 结尾（如 `CreatePostSchema`），便于检索。
+- 校验失败统一抛 `BadRequestException`，错误结构详见 Pipe 文件 JSDoc，不要在 Controller 里手动 `safeParse` + 抛错。
+
 ---
 
 ## 5. TypeORM 使用规范
@@ -193,16 +235,24 @@ export class PromptDto {
 - 所有 LangChain Tool 放在 `fundamentals/tools/` 目录下。
 - 每个 Tool 必须有对应的 `.spec.ts` 测试文件。
 - Tool 必须包含异常处理，不得让 LangChain 调用崩溃传播到上层。
+- **入参必须用 zod 定义并加 `.describe()`**：每个字段的 `.describe()` 文案会作为 LLM function calling 的字段描述，直接影响调用准确率，必填且写中文。
+- 当前历史 Tool 同时维护着手写的 OpenAI Function JSON Schema 与 zod schema（如 `manage-session.ts`），新 Tool 应**只维护 zod schema**，由公共转换层产出 JSON Schema，避免双轨漂移。
 
-### 7.2 Vector Store 规范
+### 7.2 LLM 结构化输出（structured output）
+- **禁止**对 LLM 返回值直接 `JSON.parse`，必须经过 zod 校验。
+- 推荐 `model.withStructuredOutput(zodSchema)`：让 LangChain 走 function calling / json mode，自动重试与失败兜底。
+- 兜底策略：解析失败时降级为可观察的错误事件（写日志 + SSE 错误事件），**不得**静默 `try/catch` 后返回空对象。
+
+### 7.3 Vector Store 规范
 - 向量存储操作集中在 `fundamentals/vector-store/`。
 - 嵌入和搜索操作必须处理空结果、超时等边界情况。
 - BM25 + 向量检索的混合搜索通过 `multi-hop-search.ts` 实现。
 
-### 7.3 SSE 流式响应
+### 7.4 SSE 流式响应
 - 使用 `fundamentals/sse-writer.ts` 封装 SSE 写入。
 - SSE 事件格式：`data: ${JSON.stringify(event)}\n\n`。
 - 流结束标记：`data: [DONE]\n\n`。
+- 推荐为出站事件定义 `z.discriminatedUnion('type', [...])`，并在 `sse-writer` 出口处 `parse`，防止前端拿到结构异常的事件。
 
 ---
 
@@ -261,7 +311,8 @@ export class PromptDto {
 |------|------|------|
 | HTTP 框架 | `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express` | ^11.x |
 | ORM | `@nestjs/typeorm`, `typeorm`, `mysql2` | 0.3.x |
-| 校验 | `class-validator`, `class-transformer` | 0.15.x / 0.5.x |
+| 校验（DTO） | `class-validator`, `class-transformer` | 0.15.x / 0.5.x |
+| 校验（schema） | `zod` | ^4.4.x |
 | 日志 | `nest-winston`, `winston`, `winston-loki` | - |
 | 认证 | `jsonwebtoken`, `bcryptjs` | - |
 | 缓存 | `ioredis` | ^5.x |
@@ -274,3 +325,24 @@ export class PromptDto {
 | 邮件 | `nodemailer` | - |
 
 **AI 生成代码时，绝对不能引入上述列表之外的依赖**（除非用户明确要求安装新包）。
+
+---
+
+## 12. Zod 使用总则（统一索引）
+
+zod 在本项目的落地分布如下，新代码必须按此分工执行，已存在的实现不要回退：
+
+| 模块 | 当前状态 | 强制要求 |
+|------|----------|----------|
+| [`fundamentals/config.ts`](file:///e:/miaoma-ai-app/servers/jerry-llm-server/src/fundamentals/config.ts) | 已 zod 化，启动 fail-fast | 新增配置项必须加入对应 zod schema 字段，不得绕过 |
+| [`fundamentals/zod-validation.pipe.ts`](file:///e:/miaoma-ai-app/servers/jerry-llm-server/src/fundamentals/zod-validation.pipe.ts) | 已提供统一 Pipe | 新 Controller 走 zod 时必须使用此 Pipe |
+| `fundamentals/tools/*` | 部分用 zod、部分手写 JSON Schema | 新 Tool 仅用 zod；存量改造单独立项 |
+| `fundamentals/router/*`、`fundamentals/workflow/*` | 部分裸 `JSON.parse` | 新代码必须 `withStructuredOutput(zodSchema)` |
+| `gateways/*`、`fundamentals/sse-writer.ts` | 多为裸对象 | 新事件类型推荐 `z.discriminatedUnion` 并在出口 parse |
+| TypeORM `entities/*` | 装饰器强类型 | **不要**叠加 zod |
+
+最佳实践：
+- schema 与类型同源：`type Foo = z.infer<typeof FooSchema>`，禁止重复 interface。
+- schema 文件命名：与消费方同级，命名 `xxx.schema.ts`，或在同文件内 `// ==================== Zod Schema ====================` 区块。
+- 字段必须带 `.describe('中文说明')`：用于 LLM tools / OpenAPI 文档生成。
+- 不要 catch zod 错误后吞掉：`safeParse` 失败一律走结构化日志 + 抛业务异常。

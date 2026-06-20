@@ -28,6 +28,20 @@ export function useTheme() {
     localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
+  // 跨窗口同步：当其他窗口（如主窗口）修改了主题，当前窗口（如独立编辑器窗口）
+  // 通过 storage 事件收到通知并更新自身状态，实现实时切换
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== THEME_KEY) return;
+      const next = e.newValue;
+      if (next === 'light' || next === 'dark' || next === 'cyberpunk') {
+        setThemeState(next);
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   const setTheme = (mode: ThemeMode) => {
     setThemeState(mode);
   };

@@ -152,11 +152,15 @@ const ChatAgent: React.FC = () => {
     messagesEndRef,
     knowledgeBaseStatus,
     pendingImages,
+    pendingDocuments,
+    parsingFile,
     sessionHasContent,
     sendMessage,
     sendFile,
     clearPendingImages,
     removePendingImage,
+    clearPendingDocuments,
+    removePendingDocument,
     stopGeneration,
     checkKnowledgeBaseStatus,
     updateMessage,
@@ -276,10 +280,10 @@ const ChatAgent: React.FC = () => {
   };
 
   const handleSend = async () => {
-    if (!inputValue.trim() && pendingImages.length === 0) return;
+    if (!inputValue.trim() && pendingImages.length === 0 && pendingDocuments.length === 0) return;
     const userInput = inputValue;
     setInputValue("");
-    await sendMessage(userInput, pendingImages);
+    await sendMessage(userInput, pendingImages, pendingDocuments);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -464,10 +468,13 @@ const ChatAgent: React.FC = () => {
 
             {/* 标题 + 输入框：同一个绝对定位容器，一起从居中移动到底部 */}
             <div
-              className="absolute left-1/2 max-w-[750px] transition-[top,width] duration-500 ease-in-out pointer-events-none"
+              className="absolute left-1/2 max-w-[750px] transition-[top,bottom,width] duration-500 ease-in-out pointer-events-none"
               style={{
                 width: inputMode === 'center' ? '80%' : '95%',
-                top: inputMode === 'center' ? '43%' : 'calc(100% - 180px)',
+                // 底部模式：用 bottom 吸附，让容器随预览区高度自适应向上撑开
+                // 居中模式：保持 top 50% 居中显示
+                top: inputMode === 'center' ? '43%' : 'auto',
+                bottom: inputMode === 'center' ? 'auto' : '16px',
                 transform: inputMode === 'center' ? 'translate(-50%, -50%)' : 'translate(-50%, 0)',
               }}
             >
@@ -491,7 +498,11 @@ const ChatAgent: React.FC = () => {
                   pendingImages={pendingImages}
                   onClearPendingImages={clearPendingImages}
                   onRemovePendingImage={removePendingImage}
+                  pendingDocuments={pendingDocuments}
+                  onClearPendingDocuments={clearPendingDocuments}
+                  onRemovePendingDocument={removePendingDocument}
                   onSendFile={sendFile}
+                  parsingFile={parsingFile}
                   supportsVision={supportsVision}
                   compact={inputMode === 'bottom'}
                 />
