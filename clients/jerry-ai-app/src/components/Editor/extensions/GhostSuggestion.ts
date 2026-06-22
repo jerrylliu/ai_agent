@@ -48,16 +48,20 @@ interface EditorRuntime {
   acceptSuppress: boolean;
   /** 持续性抑制（工具栏续写期间，setContinuing 控制） */
   continuing: boolean;
+  /** 运行时启用/禁用开关（由 setEnabled 控制，初始值来自 options.enabled） */
+  enabled: boolean;
   /** 请求序号，每次 fetchSuggestion 递增，用于丢弃过期响应 */
   seq: number;
 }
 
 const runtimeMap = new WeakMap<EditorView, EditorRuntime>();
+/** 保存每个 view 对应的 decorationsEnabled 更新函数 */
+const enabledSetterMap = new WeakMap<EditorView, (enabled: boolean) => void>();
 
 function getRuntime(view: EditorView): EditorRuntime {
   let rt = runtimeMap.get(view);
   if (!rt) {
-    rt = { debounceTimer: null, abortController: null, acceptSuppress: false, continuing: false, seq: 0 };
+    rt = { debounceTimer: null, abortController: null, acceptSuppress: false, continuing: false, enabled: true, seq: 0 };
     runtimeMap.set(view, rt);
   }
   return rt;
@@ -76,6 +80,33 @@ export function setContinuing(view: EditorView, value: boolean): void {
       clearTimeout(rt.debounceTimer);
       rt.debounceTimer = null;
     }
+  }
+}
+
+/**
+ * 供外部调用：运行时启用/禁用幽灵补全
+ * 禁用时立即清除幽灵文字、中断请求，后续不再触发新的补全
+ */
+export function setEnabled(view: EditorView, value: boolean): void {
+  const rt = getRuntime(view);
+  rt.enabled = value;
+  // 同步更新闭包内的 decorationsEnabled，让 decorations 立即返回空
+  const setter = enabledSetterMap.get(view);
+  if (setter) setter(value);
+  if (!value) {
+    if (rt.abortController) {
+      rt.abortController.abort();
+      rt.abortController = null;
+    }
+    if (rt.debounceTimer) {
+      clearTimeout(rt.debounceTimer);
+      rt.debounceTimer = null;
+    }
+    // 清除当前幽灵文字显示
+    clearSuggestionDisplay(view);
+    // 强制触发一次空 transaction 让 ProseMirror 重新计算 decorations
+    // decorationsEnabled 已变 false，重算时会立即返回空 DecorationSet
+    view.dispatch(view.state.tr.setMeta(ghostPluginKey, emptyState()));
   }
 }
 
@@ -123,6 +154,8 @@ function fetchSuggestion(view: EditorView): void {
     if (currentSeq !== rt.seq) return;
     // 光标已移动 → 丢弃
     if (view.state.selection.from !== currentFrom) return;
+    // 运行时已禁用（用户在设置中关闭了自动补全）→ 丢弃
+    if (!rt.enabled) return;
 
     if (suggestion && suggestion.trim()) {
       const { state, dispatch } = view;
@@ -211,6 +244,9 @@ export const GhostSuggestion = Extension.create<GhostSuggestionOptions>({
 
   addProseMirrorPlugins() {
     const options = this.options;
+    // 闭包内的运行时 enabled 镜像，供 decorations(state) 和 apply 检查
+    // 由 setEnabled 通过 enabledSetterMap 更新
+    let decorationsEnabled = options.enabled;
 
     return [
       new Plugin<GhostState>({
@@ -220,6 +256,9 @@ export const GhostSuggestion = Extension.create<GhostSuggestionOptions>({
           apply(tr, oldState) {
             const meta = tr.getMeta(ghostPluginKey);
             if (meta !== undefined) return meta as GhostState;
+
+            // 运行时已禁用 → 始终返回空状态
+            if (!decorationsEnabled) return emptyState();
 
             // 文档变化时清除补全（apply 阶段无法访问 runtime 的 suppressed，
             // 但通过 setMeta 已经处理了清除逻辑，这里只需对用户打字触发的
@@ -233,7 +272,8 @@ export const GhostSuggestion = Extension.create<GhostSuggestionOptions>({
         },
         props: {
           handleKeyDown(view, event) {
-            if (!options.enabled) return false;
+            const rt = getRuntime(view);
+            if (!rt.enabled) return false;
 
             const state = ghostPluginKey.getState(view.state);
             const hasSuggestion = !!state?.suggestion;
@@ -255,7 +295,8 @@ export const GhostSuggestion = Extension.create<GhostSuggestionOptions>({
             return false;
           },
           decorations(state) {
-            if (!options.enabled) return DecorationSet.empty;
+            // 运行时禁用时立即返回空（不依赖 view dispatch 触发重算）
+            if (!decorationsEnabled) return DecorationSet.empty;
 
             const pluginState = ghostPluginKey.getState(state);
             if (!pluginState || !pluginState.suggestion) return DecorationSet.empty;
@@ -279,10 +320,19 @@ export const GhostSuggestion = Extension.create<GhostSuggestionOptions>({
           },
         },
         view(editorView: EditorView) {
+          // 初始化运行时 enabled 标记（与 options.enabled 同步）
+          const rt = getRuntime(editorView);
+          rt.enabled = options.enabled;
+          // 注册 decorationsEnabled 更新函数，供 setEnabled 调用
+          enabledSetterMap.set(editorView, (enabled: boolean) => {
+            decorationsEnabled = enabled;
+          });
           return {
             update(view: EditorView, prevState: EditorState) {
-              if (!options.enabled) return;
               const rt = getRuntime(view);
+
+              // 运行时禁用（用户在设置中关闭了自动补全）→ 完全跳过
+              if (!rt.enabled) return;
 
               // 持续性抑制（工具栏续写中）→ 完全跳过
               if (rt.continuing) return;

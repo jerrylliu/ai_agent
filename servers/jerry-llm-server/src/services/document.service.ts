@@ -501,13 +501,27 @@ export class DocumentService {
       }
 
       // 向量化入库
+      // 从 fileUrl 提取纯文件名作为 source，并写入 documentTitle 供前端展示
+      const rawFileName = version.fileUrl
+        ? version.fileUrl.split(/[\\/]/).pop() || version.fileUrl
+        : doc.title;
       const metadata = {
         documentId: String(version.documentId),
+        documentTitle: doc.title,
         versionId: String(versionId),
         versionStatus: VersionStatus.ACTIVE,
-        source: version.fileUrl,
+        source: rawFileName,
         fileType: version.fileType,
       };
+
+      logger.info('向量化入库 metadata', {
+        module: 'DocumentService',
+        versionId,
+        documentId: version.documentId,
+        documentTitle: doc.title,
+        source: rawFileName,
+        textLength: textContent.length,
+      });
 
       const chunkCount = await addDocuments([textContent], [metadata], {
         chunkingStrategy: 'parent-child',
@@ -1331,12 +1345,14 @@ export class DocumentService {
               // DRAFT 版本重试时直接以 ACTIVE 状态入库，避免再次依赖 updateVersionVectorStatus
               // ARCHIVED 版本保持原状态（用户手动归档的，不应自动激活）
               const vectorStatus = version.status === VersionStatus.DRAFT ? VersionStatus.ACTIVE : version.status;
+              // 查文档标题用于 metadata
+              const docInfo = await this.getDocument(version.documentId).catch(() => null);
               const chunkCount = await reindexVersion(
                 op.versionId,
                 version.documentId,
                 textContent,
                 vectorStatus,
-                { source: version.fileUrl, fileType: version.fileType, mimeType: this.getMimeTypeByExt(version.fileType) },
+                { source: version.fileUrl, fileType: version.fileType, mimeType: this.getMimeTypeByExt(version.fileType), documentTitle: docInfo?.title },
               );
               await this.versionRepo.update(op.versionId, {
                 parsingStatus: ParsingStatus.SUCCESS,
@@ -1436,12 +1452,14 @@ export class DocumentService {
               textContent = await this.parseVersionText(version);
             }
             const currentStatus = version.status;
+            // 查文档标题用于 metadata
+            const docInfo = await this.getDocument(version.documentId).catch(() => null);
             const chunkCount = await reindexVersion(
               op.versionId,
               version.documentId,
               textContent,
               currentStatus,
-              { source: version.fileUrl, fileType: version.fileType, mimeType: this.getMimeTypeByExt(version.fileType) },
+              { source: version.fileUrl, fileType: version.fileType, mimeType: this.getMimeTypeByExt(version.fileType), documentTitle: docInfo?.title },
             );
             await this.versionRepo.update(op.versionId, {
               parsingStatus: ParsingStatus.SUCCESS,

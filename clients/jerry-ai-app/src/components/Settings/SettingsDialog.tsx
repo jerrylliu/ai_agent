@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { X, Moon, Sun, Zap, Brain, FileText, MessageSquare, Database, Gauge, Trash2, RefreshCw } from 'lucide-react';
+import { X, Moon, Sun, Zap, Brain, FileText, MessageSquare, Database, Gauge, Trash2, RefreshCw, PenLine } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
 import { Input } from '../ui/input';
@@ -211,6 +211,28 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 checked={settings.injectMemoryOnNewSession}
                 onCheckedChange={(v) => handleSettingChange('injectMemoryOnNewSession', v)}
                 disabled={!settings.memoryEnabled}
+              />
+            </div>
+          </div>
+
+          {/* 分隔线 */}
+          <div className="border-t border-border" />
+
+          {/* 编辑器设置 */}
+          <div className="space-y-4">
+            <h3 className="text-sm font-medium text-foreground cyberpunk-ms-text">编辑器</h3>
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <PenLine className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <p className="text-sm text-foreground cyberpunk-ms-text">AI 自动补全</p>
+                  <p className="text-xs text-muted-foreground cyberpunk-ms-subtext">编辑器中输入停顿后自动生成幽灵补全文字（关闭可节省 token）</p>
+                </div>
+              </div>
+              <Switch
+                checked={settings.autoCompleteEnabled}
+                onCheckedChange={(v) => handleSettingChange('autoCompleteEnabled', v)}
               />
             </div>
           </div>

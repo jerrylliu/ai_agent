@@ -810,11 +810,15 @@ export async function getKnowledgeBaseStatus(): Promise<{
  * 搜索知识库
  * @param query 搜索查询
  * @param topK 返回结果数量（默认3）
+ * @param filter 元数据过滤条件（如 { documentId: "42" } 只搜当前文档）
+ * @param signal AbortSignal，用于中断请求
  * @returns 搜索结果
  */
 export async function searchKnowledgeBase(
   query: string,
-  topK: number = 3
+  topK: number = 3,
+  filter?: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<{
   success: boolean;
   query: string;
@@ -828,7 +832,8 @@ export async function searchKnowledgeBase(
   const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SEARCH, {
     method: 'POST',
     headers: getAuthHeaders(),
-    body: JSON.stringify({ query, topK }),
+    body: JSON.stringify({ query, topK, filter }),
+    signal,
   });
 
   return handleResponse<{

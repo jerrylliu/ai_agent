@@ -1051,6 +1051,102 @@ button.decorum-tb-btn {
   background-color: #5FF6FF33;
 }
 
+/* ==================== Callout 提示块样式 ==================== */
+/* 常规模式（非 cyberpunk） */
+.callout-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border-left: 4px solid;
+  margin: 0.75rem 0;
+}
+
+.callout-block .callout-icon {
+  font-size: 1rem;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+
+.callout-block .callout-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.callout-block .callout-content > :first-child {
+  margin-top: 0;
+}
+
+.callout-block .callout-content > :last-child {
+  margin-bottom: 0;
+}
+
+/* 类型配色 */
+.callout-info {
+  border-left-color: #3b82f6;
+  background-color: #3b82f61a;
+}
+
+.callout-success {
+  border-left-color: #22c55e;
+  background-color: #22c55e1a;
+}
+
+.callout-warning {
+  border-left-color: #f59e0b;
+  background-color: #f59e0b1a;
+}
+
+.callout-error {
+  border-left-color: #ef4444;
+  background-color: #ef44441a;
+}
+
+/* 暗色模式微调 */
+.dark .callout-info {
+  background-color: #3b82f62a;
+}
+.dark .callout-success {
+  background-color: #22c55e2a;
+}
+.dark .callout-warning {
+  background-color: #f59e0b2a;
+}
+.dark .callout-error {
+  background-color: #ef44442a;
+}
+
+/* Cyberpunk 模式：霓虹边框 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror .callout-block {
+  border-radius: 4px;
+  backdrop-filter: blur(2px);
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror .callout-info {
+  border-left-color: #5FF6FF;
+  background-color: #5FF6FF15;
+  box-shadow: 0 0 6px #5FF6FF22;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror .callout-success {
+  border-left-color: #00ff88;
+  background-color: #00ff8815;
+  box-shadow: 0 0 6px #00ff8822;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror .callout-warning {
+  border-left-color: #ffaa00;
+  background-color: #ffaa0015;
+  box-shadow: 0 0 6px #ffaa0022;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror .callout-error {
+  border-left-color: #ff3366;
+  background-color: #ff336615;
+  box-shadow: 0 0 6px #ff336622;
+}
+
 /* ==================== 全局基础样式 ==================== */
 @layer base {
   * {

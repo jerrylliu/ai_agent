@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Bold, Italic, Strikethrough, Code,
   Heading1, Heading2, Heading3,
@@ -21,11 +22,13 @@ import {
   Undo2, Redo2,
   Sparkles, Square,
   CheckCircle2, AlertCircle,
+  MessageSquareWarning, Info, CheckCircle, AlertTriangle, XCircle,
 } from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import { Button } from '@/components/ui/button';
 import { requestCompletionStream } from '@/lib/api';
 import { setContinuing as setGhostContinuing } from './extensions/GhostSuggestion';
+import { CALLOUT_TYPES, type CalloutType, insertCallout } from './extensions/CalloutExtension';
 import { cn } from '@/utils/index';
 
 export interface EditorToolbarProps {
@@ -63,12 +66,26 @@ function Divider() {
   return <span className="mx-1 h-5 w-px bg-border cyberpunk-editor-divider" aria-hidden />;
 }
 
+/** Callout 类型的图标 / 标签 / 颜色映射 */
+const CALLOUT_ICON_MAP: Record<CalloutType, { icon: typeof Info; label: string; color: string }> = {
+  info: { icon: Info, label: '信息', color: 'text-blue-500' },
+  success: { icon: CheckCircle, label: '成功', color: 'text-green-500' },
+  warning: { icon: AlertTriangle, label: '警告', color: 'text-amber-500' },
+  error: { icon: XCircle, label: '错误', color: 'text-red-500' },
+};
+
 export function EditorToolbar({ editor, className }: EditorToolbarProps) {
   // 用一个 tick 触发重渲染，避免 isActive 状态滞后
   // Tiptap 的 selectionUpdate / transaction 事件需要订阅才能感知
   const [, setTick] = useState(0);
   const [continuing, setContinuing] = useState(false);
   const continueAbortRef = useRef<AbortController | null>(null);
+  // Callout 下拉菜单
+  const [calloutOpen, setCalloutOpen] = useState(false);
+  const calloutContainerRef = useRef<HTMLDivElement | null>(null);
+  const calloutBtnRef = useRef<HTMLButtonElement | null>(null);
+  const calloutMenuRef = useRef<HTMLDivElement | null>(null);
+  const [calloutPos, setCalloutPos] = useState<{ top: number; left: number } | null>(null);
 
   // 内联 toast 状态（不依赖全局 toast store，确保编辑器独立窗口也能显示）
   const [toast, setToast] = useState<{ show: boolean; success: boolean; message: string }>({
@@ -164,6 +181,39 @@ export function EditorToolbar({ editor, className }: EditorToolbarProps) {
       editor.off('transaction', onUpdate);
     };
   }, [editor]);
+
+  // Callout 下拉打开时，监听 scroll/resize 更新菜单位置（Portal fixed 定位不跟随按钮）
+  useEffect(() => {
+    if (!calloutOpen || !calloutBtnRef.current) return;
+    const updatePos = () => {
+      if (!calloutBtnRef.current) return;
+      const rect = calloutBtnRef.current.getBoundingClientRect();
+      setCalloutPos({ top: rect.bottom + 4, left: rect.left });
+    };
+    window.addEventListener('scroll', updatePos, true);
+    window.addEventListener('resize', updatePos);
+    return () => {
+      window.removeEventListener('scroll', updatePos, true);
+      window.removeEventListener('resize', updatePos);
+    };
+  }, [calloutOpen]);
+
+  // Callout 下拉外部点击关闭
+  // 注意：下拉菜单通过 Portal 渲染到 document.body，不在 calloutContainerRef 内部
+  // 所以需要同时检查 calloutContainerRef（按钮）和 calloutMenuRef（Portal 菜单）
+  useEffect(() => {
+    if (!calloutOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const inContainer = calloutContainerRef.current?.contains(target);
+      const inMenu = calloutMenuRef.current?.contains(target);
+      if (!inContainer && !inMenu) {
+        setCalloutOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [calloutOpen]);
 
   if (!editor) {
     return (
@@ -303,6 +353,59 @@ export function EditorToolbar({ editor, className }: EditorToolbarProps) {
       >
         <Minus className="h-4 w-4" />
       </ToolButton>
+
+      <Divider />
+
+      {/* Callout 提示块 */}
+      <div ref={calloutContainerRef} className="relative shrink-0">
+        <Button
+          ref={calloutBtnRef}
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => {
+            if (!calloutOpen && calloutBtnRef.current) {
+              const rect = calloutBtnRef.current.getBoundingClientRect();
+              setCalloutPos({ top: rect.bottom + 4, left: rect.left });
+            }
+            setCalloutOpen(v => !v);
+          }}
+          title="提示块"
+          className={cn(
+            'shrink-0',
+            editor.isActive('callout') && 'bg-accent text-accent-foreground',
+          )}
+        >
+          <MessageSquareWarning className="h-4 w-4" />
+        </Button>
+        {calloutOpen && calloutPos && createPortal(
+          <div
+            ref={calloutMenuRef}
+            style={{ position: 'fixed', top: calloutPos.top, left: calloutPos.left }}
+            className="z-50 w-32 rounded-lg border border-border bg-popover p-1 shadow-lg"
+          >
+            {CALLOUT_TYPES.map((type) => {
+              const config = CALLOUT_ICON_MAP[type];
+              const Icon = config.icon;
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent transition-colors"
+                  onClick={() => {
+                    console.log('[EditorToolbar] 插入 Callout', { type });
+                    insertCallout(editor, type);
+                    setCalloutOpen(false);
+                  }}
+                >
+                  <Icon className={cn('h-3.5 w-3.5', config.color)} />
+                  <span>{config.label}</span>
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
+      </div>
 
       <Divider />
 

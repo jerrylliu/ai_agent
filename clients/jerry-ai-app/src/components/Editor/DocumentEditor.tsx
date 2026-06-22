@@ -19,7 +19,9 @@ import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
-import { GhostSuggestion } from './extensions/GhostSuggestion';
+import { GhostSuggestion, setEnabled as setGhostEnabled } from './extensions/GhostSuggestion';
+import { CalloutExtension } from './extensions/CalloutExtension';
+import { useSettingsStore } from '@/stores/settings-store';
 import { cn } from '@/utils/index';
 
 export interface DocumentEditorProps {
@@ -53,6 +55,9 @@ export function DocumentEditor({
   onReady,
   className,
 }: DocumentEditorProps) {
+  // 读取自动补全开关设置（响应式：设置变化时自动同步到编辑器）
+  const autoCompleteEnabled = useSettingsStore((s) => s.autoCompleteEnabled);
+
   const editor = useEditor({
     immediatelyRender: false,
     editable: !readOnly,
@@ -69,10 +74,12 @@ export function DocumentEditor({
       TaskItem.configure({
         nested: true,
       }),
-      // AI 幽灵补全（只读模式下禁用）
+      // AI 幽灵补全（只读模式下禁用；运行时开关由 useEffect + setGhostEnabled 控制）
       GhostSuggestion.configure({
         enabled: !readOnly,
       }),
+      // Callout 提示块节点
+      CalloutExtension,
     ],
     content: value ?? EMPTY_DOC,
     onUpdate: ({ editor: e }) => {
@@ -98,6 +105,13 @@ export function DocumentEditor({
     if (!editor) return;
     editor.setEditable(!readOnly);
   }, [editor, readOnly]);
+
+  // 自动补全开关变化时，运行时同步启用/禁用幽灵补全
+  // （不重建编辑器，通过 setEnabled 直接控制 ProseMirror 插件行为）
+  useEffect(() => {
+    if (!editor) return;
+    setGhostEnabled(editor.view, !readOnly && autoCompleteEnabled);
+  }, [editor, readOnly, autoCompleteEnabled]);
 
   // 把 editor 实例向上传递（用于工具栏）
   useEffect(() => {

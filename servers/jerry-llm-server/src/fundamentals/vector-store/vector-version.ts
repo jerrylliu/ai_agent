@@ -422,7 +422,7 @@ export async function reindexVersion(
   documentId: number,
   textContent: string,
   versionStatus: string,
-  fileInfo: { source: string; fileType: string; mimeType?: string },
+  fileInfo: { source: string; fileType: string; mimeType?: string; documentTitle?: string },
 ): Promise<number> {
   logger.info('开始重新向量化版本', { module: 'VectorStore', versionId, documentId, versionStatus, textLength: textContent.length });
 
@@ -430,17 +430,28 @@ export async function reindexVersion(
   await removeDocumentVersion(versionId);
 
   // 2. 重新向量化入库
+  // 从 fileUrl 提取纯文件名作为 source，并写入 documentTitle 供前端展示
+  const rawFileName = fileInfo.source
+    ? fileInfo.source.split(/[\\/]/).pop() || fileInfo.source
+    : (fileInfo.documentTitle || 'unknown');
   const metadata = {
     documentId: String(documentId),
+    documentTitle: fileInfo.documentTitle || rawFileName,
     versionId: String(versionId),
     versionStatus,
-    source: fileInfo.source,
+    source: rawFileName,
     fileType: fileInfo.fileType,
     // 传给自适应 Chunking，避免扩展名格式不一致时降级为 default
     mimeType: fileInfo.mimeType || '',
   };
 
-  logger.info('开始重新添加向量', { module: 'VectorStore', versionId, documentId });
+  logger.info('重新向量化入库 metadata', {
+    module: 'VectorStore',
+    versionId,
+    documentId,
+    documentTitle: metadata.documentTitle,
+    source: metadata.source,
+  });
   const chunkCount = await addDocuments([textContent], [metadata], {
     chunkingStrategy: 'parent-child',
   });

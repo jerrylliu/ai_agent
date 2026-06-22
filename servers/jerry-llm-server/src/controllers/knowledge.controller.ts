@@ -93,28 +93,196 @@ export class KnowledgeController {
 
   /**
    * POST /knowledge/search
-   * 纯向量搜索知识库
+   * 增强搜索知识库（查询改写 → 多跳混合搜索 → Rerank）
+   *
+   * 复用聊天 RAG 管线的核心模块，让面板搜索准确度与聊天一致：
+   * 1. 查询改写（rewriteQuery）：LLM 提取关键词 + 拆子查询，解决长查询语义稀释
+   * 2. 多跳混合搜索（multiHopSearch）：第1跳用改写查询搜，LLM 看结果判断是否追问，
+   *    需要则生成新查询再搜第2跳，合并去重。与聊天管线完全一致，有"纠错机制"
+   * 3. Rerank（rerankResults）：DashScope reranker 精排候选结果
+   *
+   * 每个阶段都有降级：改写失败用原始查询、多跳失败降级单次搜索、rerank 失败用 RRF 顺序
    */
   @Post('search')
   async searchKnowledgeBase(
     @Body() body: { query: string; topK?: number; filter?: Record<string, any> },
   ) {
+    const startTime = Date.now();
     try {
-      const { retrieveFromKnowledgeBase } = await import('../fundamentals/rag-service.js');
       const { query, topK = 3, filter } = body;
       if (!query) {
         return { success: false, message: '请提供搜索查询内容' };
       }
-      const result = await retrieveFromKnowledgeBase(query, topK, filter);
+
+      logger.info('知识库搜索开始（增强管线：改写→混合搜索→rerank）', {
+        module: 'KnowledgeController',
+        query: query.substring(0, 100),
+        topK,
+        filter,
+      });
+
+      // ==================== 阶段1：查询改写 ====================
+      const { rewriteQuery } = await import('../fundamentals/vector-store/query-rewriter.js');
+      let rewritten: {
+        mainQuery: string;
+        subQueries: string[];
+        keywords: string[];
+        wasRewritten: boolean;
+      };
+      try {
+        rewritten = await rewriteQuery(query);
+        logger.info('查询改写阶段完成', {
+          module: 'KnowledgeController',
+          wasRewritten: rewritten.wasRewritten,
+          mainQuery: rewritten.mainQuery.substring(0, 100),
+          subQueryCount: rewritten.subQueries.length,
+        });
+      } catch (error: any) {
+        logger.warn('查询改写阶段异常，降级为原始查询', {
+          module: 'KnowledgeController',
+          error: error.message,
+        });
+        rewritten = { mainQuery: query, subQueries: [], keywords: [], wasRewritten: false };
+      }
+
+      // ==================== 阶段2：多跳混合搜索（与聊天管线一致） ====================
+      // 复用 multiHopSearch：第1跳用改写查询搜，LLM 看结果判断是否需要追问，
+      // 若需要则生成新查询再搜第2跳，合并去重所有跳的结果。
+      // 这是聊天管线准确度高的核心原因：有"纠错机制"，第1跳搜偏了能补救。
+      const { multiHopSearch } = await import(
+        '../fundamentals/vector-store/multi-hop-search.js'
+      );
+      // 每跳多取候选给 rerank 精排，topK*4 至少 20
+      const hopTopK = Math.max(topK * 4, 20);
+      let multiHopResult: {
+        results: Array<{
+          content: string;
+          metadata: any;
+          score: number;
+          sources: string[];
+          hop: number;
+        }>;
+        hopsExecuted: number;
+        hopDetails: Array<{ hop: number; query: string; resultCount: number }>;
+      };
+      try {
+        multiHopResult = await multiHopSearch(query, rewritten, hopTopK, {
+          maxHops: 2,
+          enabled: true,
+          filter,
+        });
+        logger.info('多跳搜索阶段完成', {
+          module: 'KnowledgeController',
+          hopsExecuted: multiHopResult.hopsExecuted,
+          hopDetails: multiHopResult.hopDetails.map((h) => ({
+            hop: h.hop,
+            query: h.query.substring(0, 80),
+            resultCount: h.resultCount,
+          })),
+          totalCandidates: multiHopResult.results.length,
+        });
+      } catch (error: any) {
+        logger.warn('多跳搜索阶段异常，降级为单次混合搜索', {
+          module: 'KnowledgeController',
+          error: error.message,
+        });
+        // 降级：直接用改写后的主查询做单次混合搜索
+        const { hybridRetrieveFromKnowledgeBase } = await import(
+          '../fundamentals/rag-service.js'
+        );
+        const fallback = await hybridRetrieveFromKnowledgeBase(
+          rewritten.mainQuery,
+          hopTopK,
+          0.7,
+          0.3,
+          filter,
+        );
+        multiHopResult = {
+          results: fallback.results.map((r) => ({ ...r, hop: 1 })),
+          hopsExecuted: 1,
+          hopDetails: [
+            { hop: 1, query: rewritten.mainQuery, resultCount: fallback.results.length },
+          ],
+        };
+        logger.info('降级单次混合搜索完成', {
+          module: 'KnowledgeController',
+          candidateCount: multiHopResult.results.length,
+        });
+      }
+
+      const candidates = multiHopResult.results;
+
+      // 无候选结果，直接返回空
+      if (candidates.length === 0) {
+        logger.info('知识库搜索无结果', {
+          module: 'KnowledgeController',
+          durationMs: Date.now() - startTime,
+        });
+        return { success: true, query, results: [], context: '', hasResults: false };
+      }
+
+      // 候选数保护：DashScope rerank 最多 100 条，超出截断
+      const rerankCandidates = candidates.slice(0, 100);
+
+      // ==================== 阶段3：Rerank 精排 ====================
+      const { rerankResults } = await import(
+        '../fundamentals/vector-store/result-reranker.js'
+      );
+      let finalResults: Array<{
+        content: string;
+        metadata: any;
+        score: number;
+        sources: string[];
+      }>;
+      try {
+        const reranked = await rerankResults(query, rerankCandidates, {
+          strategy: 'dashscope',
+        });
+        finalResults = reranked.slice(0, topK).map((r) => ({
+          content: r.content,
+          metadata: r.metadata,
+          score: r.score,
+          sources: (r as any).sources || [],
+        }));
+        logger.info('Rerank 阶段完成', {
+          module: 'KnowledgeController',
+          candidateCount: rerankCandidates.length,
+          finalCount: finalResults.length,
+          topRerankScore: reranked[0]?.rerankScore?.toFixed(3) ?? 'N/A',
+        });
+      } catch (error: any) {
+        logger.warn('Rerank 阶段异常，降级为 RRF 顺序', {
+          module: 'KnowledgeController',
+          error: error.message,
+        });
+        finalResults = rerankCandidates.slice(0, topK);
+      }
+
+      const context = finalResults
+        .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
+        .join('\n\n');
+
+      logger.info('知识库搜索完成（增强管线）', {
+        module: 'KnowledgeController',
+        durationMs: Date.now() - startTime,
+        resultCount: finalResults.length,
+        wasRewritten: rewritten.wasRewritten,
+      });
+
       return {
         success: true,
-        query: result.query,
-        results: result.results,
-        context: result.context,
-        hasResults: result.hasResults,
+        query,
+        results: finalResults,
+        context,
+        hasResults: finalResults.length > 0,
       };
     } catch (error: any) {
-      logger.error('搜索知识库失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('知识库搜索失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+        stack: error.stack,
+        durationMs: Date.now() - startTime,
+      });
       return { success: false, message: `搜索失败: ${error.message}` };
     }
   }

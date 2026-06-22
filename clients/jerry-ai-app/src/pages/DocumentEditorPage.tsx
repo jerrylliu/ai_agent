@@ -17,10 +17,15 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Save, Loader2, CheckCircle2, UploadCloud } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, CheckCircle2, UploadCloud, BookOpen, Sparkles, PanelRightClose } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DocumentEditor, type Editor, type JSONContent } from '@/components/Editor/DocumentEditor';
 import { EditorToolbar } from '@/components/Editor/EditorToolbar';
+import { SelectionToolbar } from '@/components/Editor/SelectionToolbar';
+import { KnowledgePanel } from '@/components/Editor/panels/KnowledgePanel';
+import { AIWritingPanel } from '@/components/Editor/panels/AIWritingPanel';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { cn } from '@/utils/index';
 import {
   getDocument,
   getDocumentContent,
@@ -31,7 +36,7 @@ import {
   publishToVectorStore,
   type DocumentItem,
 } from '@/lib/api';
-import { consumeTransientContent, isStandaloneWindow } from '@/lib/window';
+import { consumeTransientContent } from '@/lib/window';
 
 export interface DocumentEditorPageProps {
   /** 要编辑的文档 ID；不传则进入草稿模式 */
@@ -67,8 +72,20 @@ export default function DocumentEditorPage({
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
   const editorRef = useRef<Editor | null>(null);
 
+  /** 右侧面板：是否展开 + 当前 Tab */
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<'knowledge' | 'aiwriting'>('knowledge');
+
   /** 当前文档 ID（草稿保存后更新，后续保存走已有文档逻辑） */
   const [currentDocId, setCurrentDocId] = useState<number | undefined>(documentId);
+
+  // 同步 documentId prop → currentDocId state
+  // useState 只在首次挂载取初始值，切换文档时 prop 变化不会自动更新 state
+  // 不同步会导致 KnowledgePanel 的 filter 用旧 documentId，搜出旧文档的内容
+  useEffect(() => {
+    setCurrentDocId(documentId);
+    console.log('[DocumentEditorPage] documentId 变化，同步 currentDocId', { old: currentDocId, new: documentId });
+  }, [documentId]);
 
   // 标题展示
   const title = useMemo(() => {
@@ -351,6 +368,40 @@ export default function DocumentEditorPage({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* 右侧面板切换按钮
+              点击逻辑：
+              - 面板已关闭 → 打开并切换到对应 Tab
+              - 面板已打开且当前 Tab 相同 → 关闭面板
+              - 面板已打开但当前 Tab 不同 → 切换到对应 Tab（保持打开） */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              const isSameTab = rightPanelOpen && rightPanelTab === 'knowledge';
+              console.log('[DocumentEditorPage] 切换知识库面板', { willOpen: !isSameTab });
+              setRightPanelTab('knowledge');
+              setRightPanelOpen(!isSameTab);
+            }}
+            title="知识库面板"
+            className={cn('shrink-0', rightPanelOpen && rightPanelTab === 'knowledge' && 'bg-accent text-accent-foreground')}
+          >
+            <BookOpen className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              const isSameTab = rightPanelOpen && rightPanelTab === 'aiwriting';
+              console.log('[DocumentEditorPage] 切换 AI 写作面板', { willOpen: !isSameTab });
+              setRightPanelTab('aiwriting');
+              setRightPanelOpen(!isSameTab);
+            }}
+            title="AI 写作面板"
+            className={cn('shrink-0', rightPanelOpen && rightPanelTab === 'aiwriting' && 'bg-accent text-accent-foreground')}
+          >
+            <Sparkles className="h-4 w-4" />
+          </Button>
+
           <Button
             variant="default"
             size="sm"
@@ -391,26 +442,84 @@ export default function DocumentEditorPage({
         </div>
       )}
 
-      {/* 工具栏 */}
-      {!loading && <EditorToolbar editor={editorInstance} />}
+      {/* 选中文字浮动工具栏（润色/翻译/改写）— 浮动定位，不受面板布局影响 */}
+      {!loading && <SelectionToolbar editor={editorInstance} />}
 
-      {/* 编辑区 */}
+      {/* 主内容区：编辑器 + 右侧面板（知识库 / AI 写作） */}
       <main className="flex-1 min-h-0 overflow-hidden">
         {loading ? (
           <div className="flex items-center justify-center h-full text-muted-foreground gap-2">
             <Loader2 className="h-4 w-4 animate-spin" />
             正在加载文档...
           </div>
+        ) : rightPanelOpen ? (
+           <div className="flex h-full">
+             {/* 左侧：工具栏 + 编辑器 */}
+             <div className="flex-1 min-w-0 flex flex-col">
+               <EditorToolbar editor={editorInstance} />
+               <div className="flex-1 min-h-0">
+                 <DocumentEditor
+                   value={content}
+                   onChange={handleChange}
+                   onReady={editor => {
+                     editorRef.current = editor;
+                     setEditorInstance(editor);
+                   }}
+                   placeholder="在这里开始你的创作..."
+                 />
+               </div>
+             </div>
+
+             {/* 右侧：知识库 / AI 写作面板 */}
+             <div className="w-80 shrink-0 border-l border-border">
+               <Tabs
+                 value={rightPanelTab}
+                 onValueChange={(v) => setRightPanelTab(v as 'knowledge' | 'aiwriting')}
+                 className="h-full flex flex-col"
+               >
+                 <TabsList className="w-full rounded-none border-b border-border">
+                   <TabsTrigger value="knowledge" className="flex-1 gap-1">
+                     <BookOpen className="h-3.5 w-3.5" />
+                     知识库
+                   </TabsTrigger>
+                   <TabsTrigger value="aiwriting" className="flex-1 gap-1">
+                     <Sparkles className="h-3.5 w-3.5" />
+                     AI 写作
+                   </TabsTrigger>
+                   <Button
+                     variant="ghost"
+                     size="icon-sm"
+                     className="shrink-0 mr-1"
+                     onClick={() => setRightPanelOpen(false)}
+                     title="关闭面板"
+                   >
+                     <PanelRightClose className="h-4 w-4" />
+                   </Button>
+                 </TabsList>
+                 <TabsContent value="knowledge" className="flex-1 min-h-0 overflow-hidden">
+                   <KnowledgePanel editor={editorInstance} documentId={currentDocId} />
+                 </TabsContent>
+                 <TabsContent value="aiwriting" className="flex-1 min-h-0 overflow-hidden">
+                   <AIWritingPanel editor={editorInstance} />
+                 </TabsContent>
+               </Tabs>
+             </div>
+           </div>
         ) : (
-          <DocumentEditor
-            value={content}
-            onChange={handleChange}
-            onReady={editor => {
-              editorRef.current = editor;
-              setEditorInstance(editor);
-            }}
-            placeholder="在这里开始你的创作..."
-          />
+          <div className="flex flex-col h-full">
+            <EditorToolbar editor={editorInstance} />
+            <div className="flex-1 min-h-0">
+              <DocumentEditor
+                value={content}
+                onChange={handleChange}
+                onReady={editor => {
+                  editorRef.current = editor;
+                  setEditorInstance(editor);
+                }}
+                placeholder="在这里开始你的创作..."
+              />
+            </div>
+          </div>
         )}
       </main>
     </div>

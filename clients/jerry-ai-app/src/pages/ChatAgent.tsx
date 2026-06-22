@@ -125,9 +125,9 @@ const ChatAgent: React.FC = () => {
     setInputMode: state.setInputMode,
   })));
 
-  const { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel, updateSettings } = useSettingsStore();
+  const { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel, autoCompleteEnabled, updateSettings } = useSettingsStore();
   // 传递给 useChat 的 appSettings 对象
-  const appSettings = { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel };
+  const appSettings = { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel, autoCompleteEnabled };
   const toast = useToastStore();
   const confirm = useConfirmStore();
 

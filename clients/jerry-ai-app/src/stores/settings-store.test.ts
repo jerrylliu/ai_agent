@@ -21,6 +21,7 @@ describe('useSettingsStore', () => {
       summaryEnabled: true,
       injectMemoryOnNewSession: true,
       imageModel: 'wan2.7-image-pro',
+      autoCompleteEnabled: true,
     });
     localStorage.clear();
   });
@@ -45,6 +46,7 @@ describe('useSettingsStore', () => {
         summaryEnabled: false,
         injectMemoryOnNewSession: false,
         imageModel: 'wan2.7-image',
+        autoCompleteEnabled: true,
       });
       const state = useSettingsStore.getState();
       expect(state.memoryEnabled).toBe(false);
@@ -58,6 +60,7 @@ describe('useSettingsStore', () => {
         summaryEnabled: true,
         injectMemoryOnNewSession: true,
         imageModel: 'wan2.7-image-pro',
+        autoCompleteEnabled: true,
       });
       expect(useSettingsStore.getState().memoryEnabled).toBe(false);
       expect(useSettingsStore.getState().summaryEnabled).toBe(true);
@@ -97,6 +100,7 @@ describe('useSettingsStore', () => {
         summaryEnabled: false,
         injectMemoryOnNewSession: true,
         imageModel: 'wan2.7-image',
+        autoCompleteEnabled: true,
       });
       const stored = localStorage.getItem('app-settings');
       expect(stored).not.toBeNull();

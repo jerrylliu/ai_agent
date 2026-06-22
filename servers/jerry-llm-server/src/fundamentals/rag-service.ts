@@ -85,6 +85,7 @@ export async function handleDocumentUpload(file: any): Promise<{
     // 补充 legacyUpload 标识以便与版本管理上传的文档区分，
     // 这些向量无法通过版本管理界面进行更新/归档/删除，只能通过 /knowledge/clear 全量清空
     const metadata = {
+      documentTitle: originalName.replace(/\.[^/.]+$/, ''),
       source: originalName,
       uploadTime: new Date().toISOString(),
       mimeType: mimeType,
@@ -93,6 +94,13 @@ export async function handleDocumentUpload(file: any): Promise<{
       documentId: 'legacy',
       versionId: 'legacy',
     };
+
+    logger.info('旧路径上传到知识库 metadata', {
+      module: 'RagService',
+      documentTitle: metadata.documentTitle,
+      source: metadata.source,
+      textLength: textContent.length,
+    });
 
     const docCount = await addDocuments([textContent], [metadata], {
       chunkingStrategy: 'parent-child',
