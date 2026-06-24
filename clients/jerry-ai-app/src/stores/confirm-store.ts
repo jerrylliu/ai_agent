@@ -28,6 +28,8 @@ interface ConfirmState {
   // Actions - 工具确认
   showToolConfirmation: (confirmation: ToolConfirmation) => void;
   closeToolConfirmation: () => void;
+  /** 按 ID 从队列任意位置移除（用于飞书侧已解决后清掉对应弹窗） */
+  removeToolConfirmationById: (id: string) => void;
   // 当前显示的确认（队列头部）
   currentToolConfirmation: () => ToolConfirmation | null;
 }
@@ -55,5 +57,9 @@ export const useConfirmStore = create<ConfirmState>()((set, get) => ({
     set((state) => ({ toolConfirmationQueue: [...state.toolConfirmationQueue, confirmation] })),
   closeToolConfirmation: () =>
     set((state) => ({ toolConfirmationQueue: state.toolConfirmationQueue.slice(1) })),
+  removeToolConfirmationById: (id) =>
+    set((state) => ({
+      toolConfirmationQueue: state.toolConfirmationQueue.filter((c) => c.id !== id),
+    })),
   currentToolConfirmation: () => get().toolConfirmationQueue[0] || null,
 }));

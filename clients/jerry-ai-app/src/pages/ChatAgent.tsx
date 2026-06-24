@@ -183,7 +183,18 @@ const ChatAgent: React.FC = () => {
   } = useChat(isAuthenticated, appSettings, (event) => {
     // 收到工具确认请求时，加入确认队列
     confirm.showToolConfirmation(event);
+  }, (event) => {
+    // 飞书侧已审批 → 关闭对应的 Web 弹窗
+    confirm.removeToolConfirmationById(event.id);
+    // 同步清掉 ref，避免 onOpenChange 误触发拒绝
+    if (pendingToolConfirmIdRef.current === event.id) {
+      pendingToolConfirmIdRef.current = null;
+    }
   });
+
+  // 工具调用确认处理函数 —— ref 必须在 useChat 上方声明，
+  // 因为上面的 onConfirmationResolved 闭包里需要引用它（避免 TDZ 报错）
+  const pendingToolConfirmIdRef = useRef<string | null>(null);
 
   // 虚拟滚动相关
   const isAtBottomRef = useRef(true);
@@ -202,8 +213,7 @@ const ChatAgent: React.FC = () => {
   };
 
   // 工具调用确认处理函数
-  // 用 ref 保存当前确认的 ID，避免 closeToolConfirmation 后状态丢失
-  const pendingToolConfirmIdRef = useRef<string | null>(null);
+  // pendingToolConfirmIdRef 已在上方声明（onConfirmationResolved 闭包需要）
 
   // 当队列头部变化时，同步更新 ref
   const currentConfirmation = confirm.currentToolConfirmation();

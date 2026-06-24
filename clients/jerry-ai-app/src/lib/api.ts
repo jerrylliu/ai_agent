@@ -125,7 +125,7 @@ export async function getAIResponse(
   history: Message[] = [],
   sessionId?: string,
   signal?: AbortSignal,
-  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean; imageModel?: string; onToolStatus?: ((event: ToolStatusEvent) => void) | null; onConfirmationRequest?: ((event: ConfirmationRequestEvent) => void) | null; onFileCard?: ((event: FileCardEvent) => void) | null }
+  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean; imageModel?: string; onToolStatus?: ((event: ToolStatusEvent) => void) | null; onConfirmationRequest?: ((event: ConfirmationRequestEvent) => void) | null; onConfirmationResolved?: ((event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void) | null; onFileCard?: ((event: FileCardEvent) => void) | null }
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
     method: 'POST',
@@ -143,6 +143,7 @@ export async function getAIResponse(
   let sessionAction: SessionAction | null = null;
   const toolStatusCallback = options?.onToolStatus ?? null;
   const confirmationCallback = options?.onConfirmationRequest ?? null;
+  const confirmationResolvedCallback = options?.onConfirmationResolved ?? null;
   const fileCardCallback = options?.onFileCard ?? null;
   const fileCards: FileCardEvent[] = [];
 
@@ -177,6 +178,11 @@ export async function getAIResponse(
             onConfirmationRequest: (event) => {
               if (confirmationCallback) {
                 confirmationCallback(event);
+              }
+            },
+            onConfirmationResolved: (event) => {
+              if (confirmationResolvedCallback) {
+                confirmationResolvedCallback(event);
               }
             },
             onFileCard: (event) => {

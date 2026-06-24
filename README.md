@@ -1,16 +1,31 @@
 # Aether MC AI App
 
-> AI 驱动的桌面助手应用 | Tauri 2 + React 19 + NestJS 11 + LangChain
+> AI 驱动的桌面助手应用 | Tauri 2 + React 19 + NestJS 11 + LangChain + Tiptap 3
 
 ---
 
 ## 项目简介
 
-Aether MC AI App 是一个基于大语言模型的智能桌面助手，提供对话交互、知识库管理、RAG 检索增强生成、文档生成与管理等能力。采用 pnpm Monorepo 架构，前后端分离。
+Aether MC AI App 是一个基于大语言模型的智能桌面助手，提供对话交互、知识库管理、RAG 检索增强生成、文档生成与管理、AI 写作编辑器等能力。采用 pnpm Monorepo 架构，前后端分离。
+
+### 核心能力
+
+| 能力域 | 说明 |
+|--------|------|
+| **智能对话** | 流式问答、多轮对话、Function Calling Agent、Plan-Execute 规划、Human-in-the-Loop |
+| **RAG 知识库** | 文档上传解析、混合检索（向量+BM25 RRF融合）、Query Rewriting、Multi-hop 多跳检索、Reranker 重排 |
+| **AI 写作编辑器** | Tiptap 3 富文本编辑器、AI 幽灵补全（Tab 接受）、选区改写（润色/翻译/改写）、全文 AI 指令、知识库引用、多窗口编辑、一键发布到知识库 |
+| **Agent 工具集** | 13+ 工具：知识库搜索、联网搜索、网页抓取、天气、计算、NL2SQL、文档操作、文档生成、多模态输出、通知、工作流、MCP Proxy |
+| **安全防护** | Prompt 注入三级检测（blocked/suspicious/safe）、不可信上下文隔离指令 |
+| **基础设施** | Redis 缓存/分布式锁/限流、多级缓存（L1内存+L2Redis）、SSE 标准化协议、事件总线 |
+| **多模型支持** | Ollama 本地模型、DeepSeek API、智谱 API，运行时切换 |
+| **语音交互** | 火山引擎流式 ASR（WebSocket）、长音频转写、浏览器原生兜底 |
+
+### 技术栈
 
 | 模块 | 路径 | 技术栈 |
 |------|------|--------|
-| 桌面客户端 | `clients/jerry-ai-app/` | Tauri 2 + React 19 + TailwindCSS 4 + Zustand |
+| 桌面客户端 | `clients/jerry-ai-app/` | Tauri 2 + React 19 + TailwindCSS 4 + Zustand + Tiptap 3 |
 | LLM 后端服务 | `servers/jerry-llm-server/` | NestJS 11 + TypeORM + LangChain + Redis |
 
 ---
@@ -78,10 +93,12 @@ pnpm --filter jerry-ai-app tauri dev
 
 | 文档 | 内容 |
 |------|------|
+| `项目技术架构与分析文档.md` | 项目整体架构设计、AI 管道深度解析、API 接口矩阵、数据模型 ER 图、AI 写作编辑器架构 |
 | `CODING_WIKI.md` | 项目架构、模块说明、数据库设计 |
 | `servers/jerry-llm-server/docs/REDIS_INFRASTRUCTURE.md` | Redis 基础设施说明 |
 | `servers/jerry-llm-server/docs/document-version-management-plan.md` | 文档版本管理设计 |
 | `servers/jerry-llm-server/TEST_REPORT.md` | 后端测试报告 |
+| `interview/` | 面试备战资料（问答清单、技术深度故事、项目讲解脚本） |
 
 ---
 
@@ -117,6 +134,7 @@ pnpm --filter jerry-llm-server add -D lint-staged husky
 - ESLint (dbaeumer.vscode-eslint)
 - Prettier (esbenp.prettier-vscode)
 - Tailwind CSS IntelliSense (bradlc.vscode-tailwindcss)
+- Tiptap (tiptap.tiptap-vscode)  — 富文本编辑器开发需要
 - Rust Analyzer (rust-lang.rust-analyzer)  — Tauri 开发需要
 - Tauri (tauri-apps.tauri-vscode)
 - Code Spell Checker (streetsidesoftware.code-spell-checker)

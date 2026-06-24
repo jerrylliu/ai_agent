@@ -23,24 +23,29 @@
  */
 
 import nodemailer from 'nodemailer';
+import crypto from 'crypto';
 import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
 import { isChartImageUrl, parseChartImageUrl, chartPngDataUri, isMindmapImageUrl, parseMindmapImageUrl, mindmapPngDataUri } from './multimodal-output';
 import { isDocumentUrl, getCachedDocument } from './generate-document';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import { metrics } from '../metrics';
+import {
+  uploadImage as feishuUploadImage,
+  uploadFile as feishuUploadFile,
+  sendCardMessage,
+  sendImageMessage,
+  sendFileMessage,
+  detectReceiveIdType,
+  resolveOpenIdByEmail,
+  buildCardJson,
+} from '../feishu-notify.service';
 
 // ==================== 配置常量 ====================
 
 /** 单次请求超时 */
 const REQUEST_TIMEOUT_MS = 15000;
-
-/** 飞书 / Lark API 域名（与 feishu-connector 保持一致） */
-const FEISHU_API_BASE = 'https://open.feishu.cn/open-apis';
-const LARK_API_BASE = 'https://open.larksuite.com/open-apis';
-
-/** 飞书 tenant_access_token 内存缓存（与 feishu-connector 隔离，避免相互污染） */
-const tenantTokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 /** SMTP transporter 单例缓存：相同配置只建立一次连接池 */
 let cachedSmtpTransporter: nodemailer.Transporter | null = null;
@@ -113,7 +118,10 @@ export const sendNotificationParamsSchema = z.object({
   channel: z
     .enum(['feishu', 'email', 'webhook'])
     .describe(
-      '通知通道：feishu（飞书消息）、email（邮件）、webhook（HTTP POST，钉钉/企微等）',
+      '通知通道，三选一：\n' +
+      '- **feishu**：通过飞书自建应用 OpenAPI 发送。**所有"发到飞书"/"发到飞书群"/"发到飞书的某某群"的请求都必须用此通道**。支持发给个人 open_id (ou_xxx)、群聊 chat_id (oc_xxx)、邮箱、user_id；支持互动卡片、图片消息、文件消息。\n' +
+      '- **email**：通过 SMTP 发邮件，recipients 传邮箱地址。\n' +
+      '- **webhook**：通过用户**显式提供**的 HTTP POST URL（钉钉群机器人、企微群机器人、自建服务等）。**仅当用户明确给出 https:// 开头的 Webhook 地址时才用此通道**。⚠️ 不要为"发飞书群"选 webhook —— 飞书群已通过 feishu 通道 + chat_id 直接发送，不需要 Webhook。',
     ),
   title: z.string().min(1).describe('通知标题（邮件主题、卡片标题）'),
   content: z
@@ -124,7 +132,11 @@ export const sendNotificationParamsSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      '接收人列表：feishu 通道传 open_id/user_id/email；email 通道传邮箱地址；webhook 通道忽略此参数',
+      '接收人列表。feishu 通道支持四种 ID：① 邮箱（飞书绑定的邮箱）② open_id（ou_ 开头，个人）③ chat_id（oc_ 开头，群聊）④ user_id（企业内编号）；email 通道传邮箱地址；webhook 通道忽略此参数。\n' +
+      '⚠️ 重要规则：\n' +
+      '- 用户明确指定接收人时（"发到 xx 群"/"发给 yy 用户"），**只**发给该指定接收人，不要额外追加其他记忆里的接收人。\n' +
+      '- 用户提到群名称（如"测试群""超级群"）时，应使用群的 chat_id (oc_xxx)，不要把群名字符串当 recipient 传入。\n' +
+      '- 同一个通知**不要拆成多次工具调用**：所有需要发的接收人放进同一个 recipients 数组，一次调用完成。',
     ),
   webhookUrl: z
     .string()
@@ -136,7 +148,10 @@ export const sendNotificationParamsSchema = z.object({
     .array(sendNotificationAttachmentSchema)
     .optional()
     .describe(
-      '附件列表。图片（png/jpg/gif/webp）自动内嵌到邮件正文；PDF/Word/Markdown/txt 等非图片文件作为传统附件附在邮件中。当 generate_chart/create_mindmap/generate_image 返回图片URL时，直接填入此字段即可把图表/思维导图/图片嵌入邮件',
+      '附件列表，**全部三个通道（feishu/email/webhook）均生效**。\n' +
+      '- email 通道：图片自动内嵌正文，PDF/Word/Markdown 等作为邮件附件。\n' +
+      '- feishu 通道：图片上传飞书素材库后作为「图片消息」单独发出，可点击放大；PDF/Word/Excel 作为「文件消息」发出，群里可在线预览。\n' +
+      '- 重要：用户要求"把图发飞书""把 PDF 发飞书""三个东西都发飞书"等场景，**必须**把 generate_chart / create_mindmap / generate_image / generate_document 返回的 url（含 fc:// 协议）填入此字段，不能只在 content 里描述文字。少传 attachments 等于没发附件。',
     ),
 });
 
@@ -159,124 +174,269 @@ export interface SendNotificationResult {
   errors?: string[];
   /** 服务端返回的消息 ID（飞书）/ messageId（邮件）等便于追溯的标识 */
   refIds?: string[];
+  /**
+   * 结构化错误反馈：当工具失败时给 LLM 的修正建议。
+   * LLM 看到 suggestion.hint 后会自动调整参数重试，无需用户介入。
+   * 仅在能明确给出修正方案的失败场景下出现（如：channel 选错、参数缺失）。
+   */
+  suggestion?: {
+    /** 建议的动作类型 */
+    action: 'switch_channel' | 'add_param' | 'fix_recipient';
+    /** 建议切换到的目标通道（仅 switch_channel 时填） */
+    to?: string;
+    /** 用户可读的原因 */
+    reason: string;
+    /** LLM 可直接据此构造下一次调用的参数提示 */
+    hint: string;
+  };
 }
 
 // ==================== 飞书通道 ====================
 
 /**
- * 获取飞书 tenant_access_token，5 分钟内复用缓存
- * 与 feishu-connector 中的同名函数解耦：本工具使用独立的 AppID/AppSecret 配置项，
- * 允许"知识库同步"和"消息通知"使用不同的飞书应用
+ * 解析附件 URL 到二进制 Buffer
+ * 处理流程：
+ *   1. data URI → 直接解码
+ *   2. fc://chart/xxx / fc://mindmap/xxx → 调用对应渲染器拿 PNG
+ *   3. fc://document/xxx → 从持久化服务读取
+ *   4. http(s) URL → 网络下载
+ * 与 downloadAttachmentToBase64 共享逻辑，但返回 Buffer 而非 base64 字符串
  */
-async function getFeishuTenantToken(apiBase: string): Promise<string> {
-  const appId = config.notify.feishuAppId;
-  const appSecret = config.notify.feishuAppSecret;
-  const cacheKey = `${apiBase}:${appId}`;
-
-  const cached = tenantTokenCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.token;
-  }
-
-  // 用 AbortController 实现超时；fetch 在 Node 18+ 是内置实现
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const resp = await fetch(`${apiBase}/auth/v3/tenant_access_token/internal`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-      signal: ctrl.signal,
-    });
-    const data = (await resp.json()) as { code: number; msg: string; tenant_access_token: string; expire: number };
-    if (data.code !== 0) {
-      throw new Error(`飞书获取 token 失败：${data.msg}`);
-    }
-    // 提前 5 分钟过期，避免边界场景使用即将失效的 token
-    tenantTokenCache.set(cacheKey, {
-      token: data.tenant_access_token,
-      expiresAt: Date.now() + (data.expire - 300) * 1000,
-    });
-    return data.tenant_access_token;
-  } finally {
-    clearTimeout(timer);
-  }
+async function resolveAttachmentBuffer(url: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  // 复用邮件通道已有的 base64 解析逻辑
+  const result = await downloadAttachmentToBase64(url);
+  if (!result) return null;
+  return {
+    buffer: Buffer.from(result.base64, 'base64'),
+    mimeType: result.mimeType,
+  };
 }
 
 /**
- * 推断接收人 ID 类型
- *   - 邮箱格式 → email
- *   - 形如 ou_xxx → open_id
- *   - 其他 → user_id
+ * 生成消息幂等 uuid（F1 防止重复发送）
+ * 同一个 (channel, recipient, title, content, attachments) 组合在 5 分钟内会得到相同 uuid
+ * 飞书侧会拒绝相同 uuid 的重复请求
  */
-function detectFeishuReceiveIdType(id: string): 'email' | 'open_id' | 'user_id' {
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(id)) return 'email';
-  if (id.startsWith('ou_')) return 'open_id';
-  return 'user_id';
+function buildIdempotentUuid(
+  receiveId: string,
+  title: string,
+  content: string,
+  attachmentCount: number,
+): string {
+  // 时间窗口：5 分钟内的请求视为同一次，超过则允许重发
+  const timeWindow = Math.floor(Date.now() / (5 * 60 * 1000));
+  const raw = `${receiveId}|${title}|${content}|${attachmentCount}|${timeWindow}`;
+  return crypto.createHash('md5').update(raw).digest('hex');
 }
 
-/** 发送飞书消息：对每个 recipient 单独发一条，失败不影响其他人 */
+/**
+ * 发送飞书消息（A3 互动卡片 + A1 图片 + A2 文件）
+ *
+ * 发送策略：
+ *   1. 主消息 = 互动卡片（标题/正文/字段列表/查看原图链接）
+ *   2. 图片附件 → 上传后作为独立图片消息发出（飞书卡片对图片支持有限）
+ *   3. 非图片附件 → 上传后作为独立文件消息发出
+ *
+ * 失败容忍：
+ *   - 单个 recipient 失败不影响其他人
+ *   - 附件上传失败时降级为"卡片 + 错误提示"，主消息照常发送
+ */
 async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNotificationResult> {
   if (!feishuAvailable) {
-    return { success: false, channel: 'feishu', delivered: 0, errors: ['飞书通道未配置 NOTIFY_FEISHU_APP_ID/SECRET'] };
+    return {
+      success: false,
+      channel: 'feishu',
+      delivered: 0,
+      errors: ['飞书通道未配置 NOTIFY_FEISHU_APP_ID/SECRET'],
+    };
   }
   if (!params.recipients || params.recipients.length === 0) {
-    return { success: false, channel: 'feishu', delivered: 0, errors: ['recipients 不能为空'] };
+    return {
+      success: false,
+      channel: 'feishu',
+      delivered: 0,
+      errors: ['recipients 不能为空'],
+      suggestion: {
+        action: 'fix_recipient',
+        reason: '飞书通道必须指定接收人',
+        hint: '请提供 recipients 数组：发个人用 open_id（ou_xxx）或邮箱、发群用 chat_id（oc_xxx）。',
+      },
+    };
   }
 
-  // 根据域名后缀决定使用 feishu 还是 lark API（海外版）
-  const apiBase = (config.notify.feishuDomain || '').toLowerCase().includes('larksuite') ? LARK_API_BASE : FEISHU_API_BASE;
-  const token = await getFeishuTenantToken(apiBase);
+  // ----- 处理附件：分为图片/文件，统一预先上传到飞书素材库 -----
+  const imageAttachments: Array<{ filename: string; key: string; sourceUrl?: string }> = [];
+  const fileAttachments: Array<{ filename: string; key: string; sizeKB: number }> = [];
+  const attachmentErrors: string[] = [];
+
+  if (params.attachments && params.attachments.length > 0) {
+    for (let i = 0; i < params.attachments.length; i++) {
+      const att = params.attachments[i];
+      const filename = att.filename || `attachment_${i + 1}.bin`;
+
+      // 优先使用 url，其次使用 content（base64）
+      let buffer: Buffer | undefined;
+      let mimeType = inferMimeType(filename);
+
+      if (att.url) {
+        const resolved = await resolveAttachmentBuffer(att.url);
+        if (resolved) {
+          buffer = resolved.buffer;
+          if (resolved.mimeType && resolved.mimeType !== 'application/octet-stream') {
+            mimeType = resolved.mimeType;
+          }
+        }
+      } else if (att.content) {
+        let base64 = att.content;
+        if (base64.startsWith('data:')) {
+          const parsed = parseDataUri(base64);
+          if (parsed) {
+            mimeType = parsed.mimeType;
+            base64 = parsed.base64;
+          }
+        }
+        buffer = Buffer.from(base64, 'base64');
+      }
+
+      if (!buffer) {
+        attachmentErrors.push(`附件 ${filename} 内容获取失败`);
+        continue;
+      }
+
+      const isImage = isImageMime(mimeType);
+
+      if (isImage) {
+        // 上传图片素材
+        const r = await feishuUploadImage('', buffer);
+        if (r.success && r.key) {
+          imageAttachments.push({
+            filename,
+            key: r.key,
+            sourceUrl: att.url && (att.url.startsWith('http://') || att.url.startsWith('https://')) ? att.url : undefined,
+          });
+        } else {
+          attachmentErrors.push(`图片 ${filename} 上传失败: ${r.error}`);
+          logger.warn('飞书附件：图片上传失败', { module: 'SendNotification', filename, error: r.error });
+        }
+      } else {
+        // 上传文件素材
+        const r = await feishuUploadFile('', filename, buffer);
+        if (r.success && r.key) {
+          fileAttachments.push({
+            filename,
+            key: r.key,
+            sizeKB: Math.round(buffer.length / 1024),
+          });
+        } else {
+          attachmentErrors.push(`文件 ${filename} 上传失败: ${r.error}`);
+          logger.warn('飞书附件：文件上传失败', { module: 'SendNotification', filename, error: r.error });
+        }
+      }
+    }
+  }
+
+  // ----- 构建互动卡片（包含附件清单字段） -----
+  const cardFields: Array<{ label: string; value: string }> = [];
+  if (imageAttachments.length > 0) {
+    cardFields.push({
+      label: '图片附件',
+      value: imageAttachments.map((img) => `• ${img.filename}${img.sourceUrl ? ` ([原图](${img.sourceUrl}))` : ''}`).join('\n'),
+    });
+  }
+  if (fileAttachments.length > 0) {
+    cardFields.push({
+      label: '文件附件',
+      value: fileAttachments.map((f) => `• ${f.filename} (${f.sizeKB} KB)`).join('\n'),
+    });
+  }
+  if (attachmentErrors.length > 0) {
+    cardFields.push({
+      label: '⚠️ 附件警告',
+      value: attachmentErrors.join('\n'),
+    });
+  }
+
+  const card = buildCardJson({
+    title: params.title,
+    content: params.content,
+    headerColor: 'blue',
+    fields: cardFields.length > 0 ? cardFields : undefined,
+  });
 
   const errors: string[] = [];
   const refIds: string[] = [];
   let delivered = 0;
 
-  // 串行发送：飞书 IM API 有 5 QPS 限制，并发容易触发限流
-  for (const recipient of params.recipients) {
-    const idType = detectFeishuReceiveIdType(recipient);
-    // 飞书富文本 post 格式：标题 + 正文段落
-    const msgContent = JSON.stringify({
-      zh_cn: {
-        title: params.title,
-        content: [[{ tag: 'text', text: params.content }]],
-      },
-    });
+  // 串行发送：飞书 IM API 有 5 QPS 限制
+  for (const originalRecipient of params.recipients) {
+    // 接收人解析：先按字面识别（邮箱/open_id/chat_id/user_id）
+    // 邮箱场景下，先尝试直发；如果飞书返回"找不到用户"类错误，
+    // 自动调 contact API 把邮箱换成 open_id 再重试（C1 兜底）
+    let recipient = originalRecipient;
+    let idType = detectReceiveIdType(recipient);
+    const uuid = buildIdempotentUuid(recipient, params.title, params.content, (params.attachments || []).length);
 
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    // 1) 发送主卡片消息
+    let cardResult = await sendCardMessage(recipient, idType, card, uuid);
 
-    try {
-      const resp = await fetch(`${apiBase}/im/v1/messages?receive_id_type=${idType}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          receive_id: recipient,
-          msg_type: 'post',
-          content: msgContent,
-        }),
-        signal: ctrl.signal,
-      });
-      const data = (await resp.json()) as { code: number; msg: string; data?: { message_id: string } };
-      if (data.code === 0) {
-        delivered++;
-        if (data.data?.message_id) refIds.push(data.data.message_id);
-      } else {
-        errors.push(`recipient=${recipient}: ${data.msg}`);
+    // 1.1) 邮箱发送失败时的兜底：反查 open_id 重发
+    //      飞书邮箱直发要求收件人邮箱必须等于其飞书绑定邮箱；如果用户用了别名/工号邮箱，
+    //      直发会失败但 contact API 通常能查到（只要拥有 contact:user.email:readonly 权限）
+    if (!cardResult.success && idType === 'email') {
+      const openId = await resolveOpenIdByEmail(originalRecipient);
+      if (openId) {
+        recipient = openId;
+        idType = 'open_id';
+        const retryUuid = buildIdempotentUuid(recipient, params.title, params.content, (params.attachments || []).length);
+        cardResult = await sendCardMessage(recipient, idType, card, retryUuid);
       }
-    } catch (e: any) {
-      errors.push(`recipient=${recipient}: ${e.message || String(e)}`);
-    } finally {
-      clearTimeout(timer);
     }
+
+    if (!cardResult.success) {
+      errors.push(`recipient=${originalRecipient}: ${cardResult.error}`);
+      metrics.feishuMessageSent.inc({ channel: 'card', status: 'failure' });
+      continue;
+    }
+    if (cardResult.messageId) refIds.push(cardResult.messageId);
+    metrics.feishuMessageSent.inc({ channel: 'card', status: 'success' });
+
+    // 用最终生效的 recipient/idType 发送附件，保持与主卡片同一目标用户
+    const attachmentUuid = buildIdempotentUuid(recipient, params.title, params.content, (params.attachments || []).length);
+
+    // 飞书 uuid 限制：仅 [0-9a-zA-Z]，最长 50 字符。
+    // 直接拼 attachmentUuid+img.key 会含下划线且长度超限 → field validation failed。
+    // 改为对每个附件再做一次 MD5 哈希，得到 32 位纯 hex 字符串。
+    const subUuid = (kind: string, key: string): string =>
+      crypto.createHash('md5').update(`${attachmentUuid}|${kind}|${key}`).digest('hex');
+
+    // 2) 逐个发送图片消息（每个图片单独发，飞书原生预览体验最佳）
+    for (const img of imageAttachments) {
+      const r = await sendImageMessage(recipient, idType, img.key, subUuid('img', img.key));
+      if (!r.success) {
+        errors.push(`recipient=${originalRecipient}, 图片 ${img.filename}: ${r.error}`);
+        metrics.feishuMessageSent.inc({ channel: 'image', status: 'failure' });
+      } else {
+        if (r.messageId) refIds.push(r.messageId);
+        metrics.feishuMessageSent.inc({ channel: 'image', status: 'success' });
+      }
+    }
+
+    // 3) 逐个发送文件消息
+    for (const f of fileAttachments) {
+      const r = await sendFileMessage(recipient, idType, f.key, subUuid('file', f.key));
+      if (!r.success) {
+        errors.push(`recipient=${originalRecipient}, 文件 ${f.filename}: ${r.error}`);
+        metrics.feishuMessageSent.inc({ channel: 'file', status: 'failure' });
+      } else {
+        if (r.messageId) refIds.push(r.messageId);
+        metrics.feishuMessageSent.inc({ channel: 'file', status: 'success' });
+      }
+    }
+
+    delivered++;
   }
 
   return {
-    // 至少一条发送成功就算 success
     success: delivered > 0,
     channel: 'feishu',
     delivered,
@@ -419,7 +579,7 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
 
   // 内部协议 fc://chart/{key}：从缓存取出 ECharts option，puppeteer 本地渲染 PNG
   if (isChartImageUrl(url)) {
-    const option = parseChartImageUrl(url);
+    const option = await parseChartImageUrl(url);
     if (!option) {
       logger.warn('邮件附件：图表缓存已过期或不存在', { module: 'SendNotification', url });
       return null;
@@ -436,7 +596,7 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
 
   // 内部协议 fc://mindmap/{key}：从缓存取出 Mermaid 代码，puppeteer 本地渲染 PNG
   if (isMindmapImageUrl(url)) {
-    const mermaidCode = parseMindmapImageUrl(url);
+    const mermaidCode = await parseMindmapImageUrl(url);
     if (!mermaidCode) {
       logger.warn('邮件附件：思维导图缓存已过期或不存在', { module: 'SendNotification', url });
       return null;
@@ -516,7 +676,17 @@ async function sendEmail(params: SendNotificationParams): Promise<SendNotificati
   // 简单的邮箱格式校验：避免传入非邮箱地址被 SMTP 服务器拒绝整批
   const validRecipients = params.recipients.filter((r) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
   if (validRecipients.length === 0) {
-    return { success: false, channel: 'email', delivered: 0, errors: ['recipients 中没有合法邮箱地址'] };
+    return {
+      success: false,
+      channel: 'email',
+      delivered: 0,
+      errors: ['recipients 中没有合法邮箱地址'],
+      suggestion: {
+        action: 'fix_recipient',
+        reason: 'email 通道需要标准邮箱格式（如 user@example.com），但收到的 recipients 中没有任何符合该格式。',
+        hint: '若用户给的是飞书 ID（ou_/oc_ 开头），请改用 channel="feishu"；若是 webhook URL，请改用 channel="webhook"。',
+      },
+    };
   }
 
   // ----- 处理附件：分为内嵌图片和普通附件 -----
@@ -665,7 +835,20 @@ function isWebhookUrlSafe(url: string): { ok: boolean; reason?: string } {
 /** 发送 webhook（兼容钉钉/企微群机器人） */
 async function sendWebhook(params: SendNotificationParams): Promise<SendNotificationResult> {
   if (!params.webhookUrl) {
-    return { success: false, channel: 'webhook', delivered: 0, errors: ['webhookUrl 不能为空'] };
+    // 结构化错误反馈：LLM 看到 suggestion 会自动改 channel 重试
+    // 90% 触发场景：用户说"发飞书群"，LLM 误选 webhook（飞书群 ≠ Webhook）
+    return {
+      success: false,
+      channel: 'webhook',
+      delivered: 0,
+      errors: ['webhookUrl 不能为空'],
+      suggestion: {
+        action: 'switch_channel',
+        to: 'feishu',
+        reason: 'webhook 通道需要 webhookUrl 参数，但用户未提供。若用户提到"飞书群/飞书"，应改用 feishu 通道发送。',
+        hint: '若用户需求是发飞书群，请改用 channel="feishu" + recipients=["oc_xxx"]（群的 chat_id）；若是发钉钉/企微群，请向用户索要 webhook URL。',
+      },
+    };
   }
   const safe = isWebhookUrlSafe(params.webhookUrl);
   if (!safe.ok) {

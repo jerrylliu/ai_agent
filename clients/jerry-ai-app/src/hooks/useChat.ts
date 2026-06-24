@@ -51,7 +51,7 @@ export interface PendingDocument {
   documentId?: number;
 }
 
-export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, onConfirmationRequest?: (event: ConfirmationRequestEvent) => void) {
+export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, onConfirmationRequest?: (event: ConfirmationRequestEvent) => void, onConfirmationResolved?: (event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => generateSessionId());
   const [messages, setMessages] = useState<Message[]>([]);
@@ -469,6 +469,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
           });
         },
         onConfirmationRequest: onConfirmationRequest || undefined,
+        onConfirmationResolved: onConfirmationResolved || undefined,
         onFileCard: (event) => {
           // 实时把文件卡片挂到正在生成的 AI 消息上
           setMessages(prev => prev.map(msg =>

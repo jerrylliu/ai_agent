@@ -367,17 +367,23 @@ export class StreamingAsrClient {
 
             // 安全检查 utterances
             if (r.utterances && Array.isArray(r.utterances) && r.utterances.length > 0) {
-              for (const u of r.utterances) {
+              // 修复点：火山引擎 utterance 对象不包含 index 字段，u.index || 0 会让
+              // 所有分句都落到 index=0，导致前端按 index 去重时新句覆盖旧句。
+              // utterances 数组本身是按时间顺序累计返回（包含历史所有已识别的分句），
+              // 所以直接用数组下标 i 作为该句的稳定全局 index。
+              for (let i = 0; i < r.utterances.length; i++) {
+                const u = r.utterances[i];
                 if (u && typeof u === 'object') {
+                  const idx = typeof u.index === 'number' ? u.index : i;
                   if (u.definite) {
                     // 最终结果
                     const startTime = u.start_time || 0;
                     const endTime = u.end_time || 0;
-                    this.options.onFinal?.(u.text || '', u.index || 0, endTime - startTime);
+                    this.options.onFinal?.(u.text || '', idx, endTime - startTime);
                   } else {
                     // 中间结果
                     const timestamp = Date.now();
-                    this.options.onInterim?.(u.text || '', u.index || 0, timestamp);
+                    this.options.onInterim?.(u.text || '', idx, timestamp);
                   }
                 }
               }

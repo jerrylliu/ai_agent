@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: 'jerry-llm-server'
+    env: 'dev'
+
+scrape_configs:
+  - job_name: 'jerry-llm-server'
+    metrics_path: '/api/metrics'
+    static_configs:
+      # Windows/Mac Docker Desktop 标准做法：容器内访问宿主机用 host.docker.internal
+      # Linux 部署时改为宿主机内网 IP，或在 docker-compose 里加 extra_hosts
+      - targets:
+          - 'host.docker.internal:3000'
+        labels:
+          instance: 'local-dev'

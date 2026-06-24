@@ -10,6 +10,15 @@ jest.mock('./logger', () => ({
   logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
+// 飞书双通道审批仅在配置了 NOTIFY_FEISHU_HITL_USER 时启用，
+// 测试中 mock 掉避免模块加载时触发 config 解析（fail-fast 缺少 JWT_SECRET）
+jest.mock('./feishu-notify.service', () => ({
+  sendCardMessage: jest.fn().mockResolvedValue({ success: false, error: 'mocked' }),
+  buildCardJson: jest.fn().mockReturnValue({}),
+  detectReceiveIdType: jest.fn().mockReturnValue('email'),
+  updateCard: jest.fn().mockResolvedValue({ success: true }),
+}));
+
 // 每个测试独立导入（模块内部有 Map 共享状态）
 // 用 require 方式动态导入以获取清空的模块状态
 

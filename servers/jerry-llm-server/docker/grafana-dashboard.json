@@ -1,0 +1,324 @@
+{
+  "annotations": { "list": [] },
+  "description": "Jerry LLM Server 监控大盘 - 飞书消息 / HITL 审批 / 多级缓存 / Node.js 系统指标",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "🟦 飞书消息",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "飞书消息发送速率（按通道）",
+      "description": "每秒发送的消息数，分通道（card/image/file/text）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "id": 2,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (channel) (rate(jerry_feishu_message_sent_total[1m]))",
+          "legendFormat": "{{channel}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom" } }
+    },
+    {
+      "type": "stat",
+      "title": "飞书成功率（最近 5 分钟）",
+      "description": "成功消息数 / 总消息数",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
+      "id": 3,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(jerry_feishu_message_sent_total{status=\"success\"}[5m])) / sum(rate(jerry_feishu_message_sent_total[5m]))",
+          "legendFormat": "成功率"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.9 },
+              { "color": "green", "value": 0.98 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "飞书失败次数（累计）",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
+      "id": 4,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (channel) (jerry_feishu_message_sent_total{status=\"failure\"})",
+          "legendFormat": "{{channel}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "row",
+      "title": "🟨 HITL 双通道审批",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 5,
+      "collapsed": false
+    },
+    {
+      "type": "piechart",
+      "title": "审批来源占比（Web vs 飞书）",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "id": 6,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (source) (jerry_hitl_resolved_total)",
+          "legendFormat": "{{source}}"
+        }
+      ],
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "list", "placement": "right" },
+        "pieType": "donut"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "审批动作分布（confirm/reject/timeout）",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "id": 7,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (action) (increase(jerry_hitl_resolved_total[5m]))",
+          "legendFormat": "{{action}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "drawStyle": "bars" } }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "HITL 超时拒绝率",
+      "description": "超时的占比（理想值越低越好）",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "id": 8,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(jerry_hitl_resolved_total{action=\"timeout\"}) / sum(jerry_hitl_resolved_total)",
+          "legendFormat": "超时占比"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.1 },
+              { "color": "red", "value": 0.3 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "type": "row",
+      "title": "🟩 多级缓存",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "id": 9,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "缓存命中率趋势（按 namespace）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "id": 10,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jerry_multilevel_cache_overall_hit_rate",
+          "legendFormat": "{{namespace}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 20 }
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "L1/L2/Miss 分布（chart-option）",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 19 },
+      "id": 11,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jerry_multilevel_cache_l1_hits{namespace=\"chart-option\"}",
+          "legendFormat": "L1 命中"
+        },
+        {
+          "refId": "B",
+          "expr": "jerry_multilevel_cache_l2_hits{namespace=\"chart-option\"}",
+          "legendFormat": "L2 命中"
+        },
+        {
+          "refId": "C",
+          "expr": "jerry_multilevel_cache_misses{namespace=\"chart-option\"}",
+          "legendFormat": "未命中"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "type": "bargauge",
+      "title": "L1/L2/Miss 分布（mindmap-code）",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 19 },
+      "id": 12,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jerry_multilevel_cache_l1_hits{namespace=\"mindmap-code\"}",
+          "legendFormat": "L1 命中"
+        },
+        {
+          "refId": "B",
+          "expr": "jerry_multilevel_cache_l2_hits{namespace=\"mindmap-code\"}",
+          "legendFormat": "L2 命中"
+        },
+        {
+          "refId": "C",
+          "expr": "jerry_multilevel_cache_misses{namespace=\"mindmap-code\"}",
+          "legendFormat": "未命中"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "type": "row",
+      "title": "🟪 Node.js 系统指标",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "id": 13,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "堆内存使用",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "id": 14,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jerry_nodejs_heap_size_used_bytes",
+          "legendFormat": "已用堆内存"
+        },
+        {
+          "refId": "B",
+          "expr": "jerry_nodejs_heap_size_total_bytes",
+          "legendFormat": "总堆内存"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "事件循环延迟",
+      "description": "事件循环 lag，应该接近 0。超过 100ms 说明 CPU 阻塞严重",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "id": 15,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jerry_nodejs_eventloop_lag_seconds",
+          "legendFormat": "lag"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.1 }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["jerry-llm-server", "feishu", "hitl"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Jerry LLM Server 监控大盘",
+  "uid": "jerry-llm-server",
+  "version": 1,
+  "weekStart": ""
+}

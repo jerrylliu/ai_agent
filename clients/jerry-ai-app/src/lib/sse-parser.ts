@@ -105,6 +105,7 @@ export function handleSSEEvents(
     onSessionAction?: (action: SessionAction) => void;
     onToolStatus?: (event: ToolStatusEvent) => void;
     onConfirmationRequest?: (event: ConfirmationRequestEvent) => void;
+    onConfirmationResolved?: (event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void;
     onFileCard?: (event: FileCardEvent) => void;
     onContent?: (text: string) => void;
     onHeartbeat?: () => void;
@@ -145,6 +146,15 @@ export function handleSSEEvents(
           callbacks.onConfirmationRequest?.(confirmEvent);
         } catch (e) {
           console.warn('解析 confirmation_request 事件失败:', e);
+        }
+        break;
+      }
+      case 'confirmation_resolved': {
+        try {
+          const resolvedEvent = JSON.parse(event.eventData);
+          callbacks.onConfirmationResolved?.(resolvedEvent);
+        } catch (e) {
+          console.warn('解析 confirmation_resolved 事件失败:', e);
         }
         break;
       }

@@ -18,6 +18,23 @@ import { launchBrowser } from '../web-crawler';
 import type { Browser } from 'puppeteer';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 import { parseToolResultJson } from '../llm-json-parser';
+import { MultiLevelCache } from '../multi-level-cache';
+import { metrics } from '../metrics';
+
+// ==================== 图表/思维导图 缓存（L1 内存 + L2 Redis）====================
+//
+// 为什么换成 MultiLevelCache：
+//   chart/mindmap 用内部协议 fc://chart/{key} 把"option JSON"短地址化，发邮件/飞书时
+//   再用 key 反查原始 option。最初只放在进程内存 Map 里：
+//   - 开发期 start:dev 频繁重启 → key 全丢，跨重启发送必报"缓存已过期"
+//   - 默认 30 分钟过期 → 用户隔天回来发也报错
+//   - 多实例水平扩容时，A 实例生成的 key 在 B 实例查不到
+//
+// 改造方案：复用项目自有的 MultiLevelCache（L1 LRU 内存 + L2 Redis）
+//   - L1 内存：< 0.1ms 命中，同一进程内"刚生成→立即发飞书"零网络开销
+//   - L2 Redis：跨进程/跨实例/跨重启共享，重启后从 Redis 自动恢复
+//   - Redis 不可用：自动降级回 L1 单机模式（业务无感知）
+//   - TTL 抖动 ±10%：防止大量 key 同一秒过期引发雪崩
 
 // ==================== 文生图 API 响应 schema ====================
 //
@@ -47,33 +64,31 @@ const ImageGenerationResponseSchema = z.looseObject({
 // ==================== generate_chart ====================
 
 /**
- * 图表缓存：key → { option, expiresAt }
- * imageUrl 使用内部协议 fc://chart/{key}，send_notification 收到后通过 key 取回 option，
- * 用 puppeteer 本地渲染 PNG 嵌入邮件。
+ * 图表缓存：key → ECharts option（多级缓存：L1 LRU + L2 Redis）
+ *
+ * - namespace 'chart-option' → Redis key 形如 jerry:chart-option:{key}
+ * - ttlSec 1800 = 30 分钟，与历史行为一致
+ * - l1MaxSize 500 = 内存最多 500 张图表的 option，超过 LRU 淘汰
  */
-const chartCache = new Map<string, { option: Record<string, any>; expiresAt: number }>();
-const CHART_CACHE_TTL = 30 * 60 * 1000; // 30 分钟（覆盖用户从生成到发邮件的间隔）
+const chartCache = new MultiLevelCache<Record<string, any>>({
+  namespace: 'chart-option',
+  ttlSec: 30 * 60,
+  l1MaxSize: 500,
+  ttlJitterRatio: 0.1,
+});
+// 注册到 Prometheus，scrape 时自动读取命中率
+metrics.registerCacheInstance('chart-option', chartCache);
 
-/** 缓存 ECharts option 并返回短 key */
-function cacheChartOption(option: Record<string, any>): string {
+/** 缓存 ECharts option 并返回短 key（写入异步：L1 同步落地、L2 异步写 Redis 不阻塞） */
+async function cacheChartOption(option: Record<string, any>): Promise<string> {
   const key = Math.random().toString(36).substring(2, 10);
-  chartCache.set(key, { option, expiresAt: Date.now() + CHART_CACHE_TTL });
-  // 清理过期条目
-  for (const [k, v] of chartCache) {
-    if (v.expiresAt < Date.now()) chartCache.delete(k);
-  }
+  await chartCache.set(key, option);
   return key;
 }
 
-/** 从缓存读取（不删除，允许多次访问） */
-export function getCachedChartOption(key: string): Record<string, any> | null {
-  const entry = chartCache.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    chartCache.delete(key);
-    return null;
-  }
-  return entry.option;
+/** 从缓存读取 ECharts option（L1 → L2 → null） */
+export async function getCachedChartOption(key: string): Promise<Record<string, any> | null> {
+  return chartCache.get(key);
 }
 
 // ==================== Zod Schema: generate_chart ====================
@@ -220,8 +235,8 @@ function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
 const CHART_URL_PREFIX = 'fc://chart/';
 
 /** 生成图表的内部 imageUrl（短地址，供 send_notification 用） */
-export function chartImageUrl(echartsOption: Record<string, any>): string {
-  const key = cacheChartOption(echartsOption);
+export async function chartImageUrl(echartsOption: Record<string, any>): Promise<string> {
+  const key = await cacheChartOption(echartsOption);
   return `${CHART_URL_PREFIX}${key}`;
 }
 
@@ -231,7 +246,7 @@ export function isChartImageUrl(url: string): boolean {
 }
 
 /** 从内部图表 URL 取回 ECharts option */
-export function parseChartImageUrl(url: string): Record<string, any> | null {
+export async function parseChartImageUrl(url: string): Promise<Record<string, any> | null> {
   if (!isChartImageUrl(url)) return null;
   const key = url.slice(CHART_URL_PREFIX.length);
   return getCachedChartOption(key);
@@ -396,7 +411,7 @@ export async function executeGenerateChart(
 
   const echartsOption = buildEChartsOption(params);
   // 内部协议 URL：send_notification 收到后用 puppeteer 渲染 PNG 嵌入邮件
-  const imageUrl = chartImageUrl(echartsOption);
+  const imageUrl = await chartImageUrl(echartsOption);
 
   logger.info('FC工具 [generate_chart] 生成图表配置', {
     module: 'Tool:MultiModal',
@@ -689,30 +704,30 @@ export type CreateMindmapResult = z.infer<typeof createMindmapResultSchema>;
 
 /** 将 Mermaid 代码转为内部协议 imageUrl，send_notification 收到后用 puppeteer 渲染 PNG */
 const MINDMAP_URL_PREFIX = 'fc://mindmap/';
-const mindmapCache = new Map<string, { code: string; expiresAt: number }>();
-const MINDMAP_CACHE_TTL = 30 * 60 * 1000;
 
-function cacheMindmapCode(code: string): string {
+/**
+ * 思维导图缓存：key → Mermaid 源码（与图表缓存同款 L1 + L2 设计）
+ */
+const mindmapCache = new MultiLevelCache<string>({
+  namespace: 'mindmap-code',
+  ttlSec: 30 * 60,
+  l1MaxSize: 500,
+  ttlJitterRatio: 0.1,
+});
+metrics.registerCacheInstance('mindmap-code', mindmapCache);
+
+async function cacheMindmapCode(code: string): Promise<string> {
   const key = Math.random().toString(36).substring(2, 10);
-  mindmapCache.set(key, { code, expiresAt: Date.now() + MINDMAP_CACHE_TTL });
-  for (const [k, v] of mindmapCache) {
-    if (v.expiresAt < Date.now()) mindmapCache.delete(k);
-  }
+  await mindmapCache.set(key, code);
   return key;
 }
 
-export function getCachedMindmapCode(key: string): string | null {
-  const entry = mindmapCache.get(key);
-  if (!entry) return null;
-  if (entry.expiresAt < Date.now()) {
-    mindmapCache.delete(key);
-    return null;
-  }
-  return entry.code;
+export async function getCachedMindmapCode(key: string): Promise<string | null> {
+  return mindmapCache.get(key);
 }
 
-export function mindmapImageUrl(mermaidCode: string): string {
-  const key = cacheMindmapCode(mermaidCode);
+export async function mindmapImageUrl(mermaidCode: string): Promise<string> {
+  const key = await cacheMindmapCode(mermaidCode);
   return `${MINDMAP_URL_PREFIX}${key}`;
 }
 
@@ -720,7 +735,7 @@ export function isMindmapImageUrl(url: string): boolean {
   return url.startsWith(MINDMAP_URL_PREFIX);
 }
 
-export function parseMindmapImageUrl(url: string): string | null {
+export async function parseMindmapImageUrl(url: string): Promise<string | null> {
   if (!isMindmapImageUrl(url)) return null;
   const key = url.slice(MINDMAP_URL_PREFIX.length);
   return getCachedMindmapCode(key);
@@ -833,7 +848,7 @@ async function mindmapPngDataUriOnce(
 }
 
 /** @deprecated 保留旧 API，内部已切换到 mindmapImageUrl + puppeteer 渲染 */
-export function mindmapToImageUrl(mermaidCode: string): string {
+export async function mindmapToImageUrl(mermaidCode: string): Promise<string> {
   return mindmapImageUrl(mermaidCode);
 }
 
@@ -863,7 +878,7 @@ export async function executeCreateMindmap(
     mermaidCode = `mindmap\n  root((${params.title}))\n${mermaidCode.split('\n').map(line => '    ' + line).join('\n')}`;
   }
 
-  const imageUrl = mindmapToImageUrl(mermaidCode);
+  const imageUrl = await mindmapToImageUrl(mermaidCode);
 
   logger.info('FC工具 [create_mindmap] 生成思维导图', {
     module: 'Tool:MultiModal',

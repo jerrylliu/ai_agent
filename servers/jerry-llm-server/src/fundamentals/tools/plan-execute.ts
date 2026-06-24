@@ -20,6 +20,7 @@
 import { z } from 'zod';
 import { logger } from '../logger';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import { sendCardMessage, buildCardJson, detectReceiveIdType } from '../feishu-notify.service';
 
 // 内存中的计划存储（按会话隔离）
 const plans = new Map<string, Plan>();
@@ -363,6 +364,8 @@ export async function executeUpdatePlanStep(
   // 检查计划是否完成
   if (!nextStep) {
     plan.status = failedSteps > 0 ? 'failed' : 'completed';
+    // E4：Plan-Execute 完成播报到飞书
+    void notifyPlanCompletion(plan, completedSteps, failedSteps);
   }
 
   logger.info('规划工具：更新步骤状态', {
@@ -448,4 +451,36 @@ export async function executeGetPlan(
     totalSteps: plan.steps.length,
     message: `计划目标：${plan.goal}，进度：${completedSteps}/${plan.steps.length}，状态：${plan.status}`,
   };
+}
+
+/**
+ * E4：Plan 完成时向飞书推送完成播报
+ * 仅当配置了 NOTIFY_FEISHU_HITL_USER 时发送（复用同一接收人）
+ * 失败静默，不影响 Plan 主流程
+ */
+async function notifyPlanCompletion(plan: Plan, completedSteps: number, failedSteps: number): Promise<void> {
+  const recipient = process.env.NOTIFY_FEISHU_HITL_USER;
+  if (!recipient) return;
+
+  try {
+    const isSuccess = plan.status === 'completed';
+    const card = buildCardJson({
+      title: isSuccess ? '✅ 计划执行完成' : '⚠️ 计划执行结束（含失败）',
+      content: `**目标**：${plan.goal}\n\n所有步骤已处理完毕。`,
+      headerColor: isSuccess ? 'green' : 'yellow',
+      fields: [
+        { label: '总步数', value: String(plan.steps.length) },
+        { label: '成功', value: String(completedSteps) },
+        { label: '失败', value: String(failedSteps) },
+        { label: '耗时', value: `${Math.round((Date.now() - plan.createdAt.getTime()) / 1000)}s` },
+      ],
+    });
+    const idType = detectReceiveIdType(recipient);
+    const result = await sendCardMessage(recipient, idType, card);
+    if (!result.success) {
+      logger.warn('Plan 完成飞书播报失败', { module: 'Tool:PlanExecute', error: result.error });
+    }
+  } catch (error: any) {
+    logger.warn('Plan 完成飞书播报异常', { module: 'Tool:PlanExecute', error: error.message });
+  }
 }

@@ -184,7 +184,13 @@ async function saveSessionAssets(
     .filter(c => c.imageUrl)
     .map(c => ({ imageUrl: c.imageUrl!, chartType: c.chartType }));
   // 思维导图：优先用工具返回的 imageUrl，否则通过 mindmapImageUrl() 生成
-  const mindmaps = collectedMindmaps.map(m => ({ imageUrl: m.imageUrl || mindmapImageUrl(m.mermaidCode), title: m.title }));
+  // mindmapImageUrl 现在是 async（L2 Redis 写入需要 await），用 Promise.all 并发处理
+  const mindmaps = await Promise.all(
+    collectedMindmaps.map(async (m) => ({
+      imageUrl: m.imageUrl || (await mindmapImageUrl(m.mermaidCode)),
+      title: m.title,
+    })),
+  );
   // 文档：把 key 转为 fc://document/{key} 内部协议（与 send_notification.attachments 链路一致）
   const fileCards = collectedFileCards.map(f => ({
     fileUrl: `fc://document/${f.key}`,

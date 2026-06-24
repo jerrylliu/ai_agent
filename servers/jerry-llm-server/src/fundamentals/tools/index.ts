@@ -14,8 +14,9 @@ import { queryDatabaseSchema, executeQueryDatabase, validateQueryDatabaseConfig,
 import { buildMcpProxySchema, executeMcpProxy, validateMcpProxyConfig, isMcpProxyAvailable, initMcpProxy, type McpProxyParams, type McpProxyResult } from './mcp-proxy';
 import { buildExecuteWorkflowSchema, executeExecuteWorkflow, setWorkflowToolExecutor, type ExecuteWorkflowParams, type ExecuteWorkflowResult } from '../workflow/execute-workflow-tool';
 import { logger } from '../logger';
-import { requiresConfirmation, requestConfirmation, getPendingConfirmationInfo } from '../human-in-the-loop';
+import { requiresConfirmation, requestConfirmation, getPendingConfirmationInfo, attachSseResponseToConfirmation } from '../human-in-the-loop';
 import { sendConfirmationRequest } from '../sse-writer';
+import { applySelfHealing } from './self-healing';
 
 export interface ToolContext {
   userId?: string;
@@ -686,6 +687,8 @@ export async function executeTool(name: string, params: any, context?: ToolConte
     const pendingInfo = getPendingConfirmationInfo(confirmedPromise.confirmationId);
     if (pendingInfo && context?.res) {
       sendConfirmationRequest(context.res, pendingInfo);
+      // 关联 SSE Response，让飞书侧审批后能通过 SSE 通知 Web 关闭弹窗
+      attachSseResponseToConfirmation(confirmedPromise.confirmationId, context.res);
     }
 
     const confirmed = await confirmedPromise;
@@ -711,7 +714,14 @@ export async function executeTool(name: string, params: any, context?: ToolConte
       params = { ...params, model: context.imageModel };
     }
 
-    const result = await tool.executor(params, context);
+    const rawResult = await tool.executor(params, context);
+    // Self-Healing：失败结果若带 suggestion，追加 _selfHealing 元信息引导 LLM 自愈
+    const healed = applySelfHealing({
+      toolName: name,
+      sessionId: context?.sessionId,
+      result: rawResult,
+    });
+    const result = healed.result;
     const duration = Date.now() - startTime;
 
     const resultSummary = typeof result === 'object' && result !== null

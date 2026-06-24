@@ -122,6 +122,26 @@ export function sendConfirmationRequest(
 }
 
 /**
+ * 发送 confirmation_resolved 事件（人工确认已被解决）
+ *
+ * 使用场景：飞书端先点了确认/拒绝按钮 → 服务端需要通知 Web 端关闭那个还在等待的弹窗。
+ * 前端 onConfirmationResolved 回调里清掉对应 id 的弹窗即可。
+ *
+ * source 字段用于前端可选地展示来源（"已通过飞书审批"）
+ */
+export function sendConfirmationResolved(
+  res: Response | undefined,
+  data: {
+    id: string;
+    confirmed: boolean;
+    source: 'web' | 'feishu';
+  },
+) {
+  if (!res || res.writableEnded) return;
+  res.write(`event: confirmation_resolved\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
  * 发送 file_card 事件（generate_document 生成的文件卡片）
  * 前端在 AI 消息下方渲染下载/预览卡片，与 chart/mindmap 同级
  */

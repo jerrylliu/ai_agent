@@ -12,6 +12,26 @@ services:
     command: -config.file=/etc/loki/config.yaml
     restart: unless-stopped
 
+  # Prometheus：定时抓取 jerry-llm-server 的 /api/metrics 端点
+  # 配合 Grafana 可视化飞书消息、HITL 审批、多级缓存等业务指标
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: jerry-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus-config.yaml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    extra_hosts:
+      # Linux 主机上 host.docker.internal 默认不可用，显式映射到宿主机网关
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:latest
     container_name: jerry-grafana
@@ -24,8 +44,10 @@ services:
       - grafana-data:/var/lib/grafana
     depends_on:
       - loki
+      - prometheus
     restart: unless-stopped
 
 volumes:
   loki-data:
+  prometheus-data:
   grafana-data:

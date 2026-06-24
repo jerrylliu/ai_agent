@@ -126,10 +126,10 @@ const MEMORY_MERGE_PROMPT = `你是一个信息去重专家。你的任务是比
 - update: 新记忆是已有记忆的更新或更精确版本 → 用新记忆替换已有记忆
 - new: 新记忆是全新的信息 → 添加新记忆
 
-输出格式（严格 JSON）：
+输出格式（严格 JSON，每个对象都必须包含 existingMemoryIndex 字段；action 为 "new" 时该字段固定为 -1）：
 [
   {"newMemory": "用户是全栈开发者", "action": "update", "existingMemoryIndex": 0, "reason": "更精确的描述"},
-  {"newMemory": "用户喜欢暗色主题", "action": "new", "reason": "全新偏好信息"},
+  {"newMemory": "用户喜欢暗色主题", "action": "new", "existingMemoryIndex": -1, "reason": "全新偏好信息"},
   {"newMemory": "用户是开发者", "action": "duplicate", "existingMemoryIndex": 0, "reason": "与已有记忆重复"}
 ]
 
@@ -163,7 +163,8 @@ const ExtractedMemoryArraySchema = z.array(ExtractedMemorySchema);
 const MergeActionSchema = z.object({
   newMemory: z.string(),
   action: z.enum(['duplicate', 'update', 'new']),
-  existingMemoryIndex: z.number(),
+  // LLM 偶尔会在 action="new" 时省略该字段，这里宽松处理：缺失/非法时降级为 -1
+  existingMemoryIndex: z.number().optional().default(-1),
   reason: z.string(),
 });
 

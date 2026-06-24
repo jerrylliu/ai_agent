@@ -19,6 +19,14 @@ jest.mock('../logger', () => ({
   },
 }));
 
+// Mock 飞书服务，避免触发 config 解析（fail-fast 缺少 JWT_SECRET）
+jest.mock('../feishu-notify.service', () => ({
+  sendCardMessage: jest.fn().mockResolvedValue({ success: false }),
+  buildCardJson: jest.fn().mockReturnValue({}),
+  detectReceiveIdType: jest.fn().mockReturnValue('email'),
+  updateCard: jest.fn().mockResolvedValue({ success: true }),
+}));
+
 import {
   executeCreatePlan,
   executeUpdatePlanStep,

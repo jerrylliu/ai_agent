@@ -115,6 +115,10 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
 
   // 已完成句子（按 index 存储）。火山引擎每句有独立 index，interim 是该句累积，final 是该句最终版。
   const finalSentencesRef = useRef<Map<number, string>>(new Map());
+  // 进行中的句子（按 index 存储）。修复点：长语音会出现多个 index 并行 interim
+  // （新句子的 interim 在旧句子的 final 到达前就开始推送）。
+  // 必须按 index 隔离存储，否则新 interim 会覆盖旧 interim，stop 时丢失前文。
+  const interimSentencesRef = useRef<Map<number, string>>(new Map());
   // 当前正在识别的句子 index（最新的 interim 所属）
   const currentInterimIndexRef = useRef<number>(0);
 
@@ -268,12 +272,21 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     }, AUDIO_POLLING_INTERVAL);
   }, [enableLocalVAD, AUDIO_POLLING_INTERVAL]);
 
-  /** 把当前 interim 文本立即提交为 final（用于停止时） */
+  /** 把当前 interim 文本立即提交为 final（用于停止时）
+   *  修复点：必须把所有 index 的 interim 都 commit，不能只 commit 当前 index，
+   *  否则用户在第 N+1 句 interim 期间停止时，第 N 句尚未 final 化的内容会丢失。
+   */
   const commitInterimAsFinal = useCallback(() => {
-    const text = interimTextRef.current;
-    if (!text) return;
-    // 把当前 interim 当作该 index 的 final 存入
-    finalSentencesRef.current.set(currentInterimIndexRef.current, text);
+    if (interimSentencesRef.current.size === 0) return;
+    // 把所有进行中的 interim 当作对应 index 的 final 存入
+    // （final map 已有该 index 时不覆盖，因为 final 更准确）
+    for (const [idx, text] of interimSentencesRef.current.entries()) {
+      if (!finalSentencesRef.current.has(idx) && text) {
+        finalSentencesRef.current.set(idx, text);
+      }
+    }
+    interimSentencesRef.current.clear();
+
     const allFinals = Array.from(finalSentencesRef.current.entries())
       .sort(([a], [b]) => a - b)
       .map(([, t]) => t)
@@ -373,15 +386,32 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
             // idle 状态下忽略 interim（已完全停止）
             if (statusRef.current === 'idle') break;
             // 火山引擎 interim 是当前句子的累积文本（同一 index 不断刷新）
+            // 修复点：按 index 分桶存储，避免新句子的 interim 覆盖旧句子尚未 final 化的 interim。
             currentInterimIndexRef.current = msg.index;
-            setInterimText(msg.text);
-            interimTextRef.current = msg.text;
+            interimSentencesRef.current.set(msg.index, msg.text);
+            // 合成展示文本：所有 final + 所有 interim（按 index 排序拼接）
+            // 显示给输入框的"待确认部分"应包含所有进行中句子的 interim
+            const merged = new Map<number, string>();
+            for (const [i, t] of finalSentencesRef.current) merged.set(i, t);
+            for (const [i, t] of interimSentencesRef.current) {
+              if (!merged.has(i)) merged.set(i, t);
+            }
+            // interim 部分 = merged 减去 finalSentences（仅未 final 的部分）
+            const interimMerged = Array.from(interimSentencesRef.current.entries())
+              .filter(([i]) => !finalSentencesRef.current.has(i))
+              .sort(([a], [b]) => a - b)
+              .map(([, t]) => t)
+              .join('');
+            setInterimText(interimMerged);
+            interimTextRef.current = interimMerged;
             break;
           }
           case 'final': {
             // 火山引擎 final 是该 index 句子的最终版本，存入 map
             // 此处会自动覆盖 commitInterimAsFinal 写入的同 index 条目
             finalSentencesRef.current.set(msg.index, msg.text);
+            // 该 index 已 final，从 interim 表里移除，避免重复展示
+            interimSentencesRef.current.delete(msg.index);
             // 拼接所有已 final 的句子
             const allFinals = Array.from(finalSentencesRef.current.entries())
               .sort(([a], [b]) => a - b)
@@ -389,9 +419,13 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
               .join('');
             finalTextRef.current = allFinals;
             setFinalText(allFinals);
-            // 同步清空 interim ref
-            interimTextRef.current = '';
-            setInterimText('');
+            // 重新计算剩余 interim（其它仍在进行中的 index）
+            const remainingInterim = Array.from(interimSentencesRef.current.entries())
+              .sort(([a], [b]) => a - b)
+              .map(([, t]) => t)
+              .join('');
+            interimTextRef.current = remainingInterim;
+            setInterimText(remainingInterim);
             console.log('[ASR] 句子 #' + msg.index + ' final="' + msg.text + '", 累计=', allFinals);
             // 触发 onFinal 时传入"完整累计文本"（绝对值，非增量）
             onFinalRef.current?.(allFinals);
@@ -462,6 +496,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
       setFinalText('');
       finalTextRef.current = '';
       finalSentencesRef.current.clear();
+      interimSentencesRef.current.clear();
       currentInterimIndexRef.current = 0;
       reconnectAttemptsRef.current = 0;
       userStoppedRef.current = false;
@@ -656,6 +691,7 @@ export function useSpeechRecognition(options?: UseSpeechRecognitionOptions): Use
     setFinalText('');
     finalTextRef.current = '';
     finalSentencesRef.current.clear();
+    interimSentencesRef.current.clear();
     currentInterimIndexRef.current = 0;
     interimTextRef.current = '';
     setError(null);
