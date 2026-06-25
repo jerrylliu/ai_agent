@@ -25,7 +25,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { ChevronRight, ChevronLeft, Check, Bot } from "lucide-react";
 
-import { useChat } from "../hooks/useChat";
+import { useChat } from '../hooks/useChat';
+import { useAppRecovery } from '../hooks/useAppRecovery';
 import { useTheme } from "../hooks/useTheme";
 import { useAuth } from "../hooks/useAuth";
 
@@ -138,7 +139,7 @@ const ChatAgent: React.FC = () => {
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // 自定义Hooks
-  const { user, isAuthenticated, login, register, logout, uploadAvatar } = useAuth();
+  const { user, isLoading: authLoading, isAuthenticated, login, register, logout, uploadAvatar } = useAuth();
 
   const {
     sessions,
@@ -180,7 +181,8 @@ const ChatAgent: React.FC = () => {
     supportsVision,
     switchModel,
     configureApiKey,
-  } = useChat(isAuthenticated, appSettings, (event) => {
+    refreshAppData,
+  } = useChat(isAuthenticated, authLoading, appSettings, (event) => {
     // 收到工具确认请求时，加入确认队列
     confirm.showToolConfirmation(event);
   }, (event) => {
@@ -190,6 +192,12 @@ const ChatAgent: React.FC = () => {
     if (pendingToolConfirmIdRef.current === event.id) {
       pendingToolConfirmIdRef.current = null;
     }
+  });
+
+  const recovery = useAppRecovery({
+    enabled: !authLoading,
+    triggerKey: `${isAuthenticated ? user?.id ?? 'authenticated' : 'default'}`,
+    refresh: refreshAppData,
   });
 
   // 工具调用确认处理函数 —— ref 必须在 useChat 上方声明，
@@ -239,10 +247,7 @@ const ChatAgent: React.FC = () => {
   // 标记是否由按钮触发的确认，防止 onOpenChange 重复调用
   const toolConfirmTriggeredRef = useRef(false);
 
-  // 副作用: 组件挂载时检查知识库状态
-  useEffect(() => {
-    checkKnowledgeBaseStatus();
-  }, []);
+  // 统一恢复层负责启动、focus、visible、online 时刷新页面核心数据。
 
   // 副作用: 点击外部关闭"更多操作"菜单
   useEffect(() => {
@@ -440,7 +445,7 @@ const ChatAgent: React.FC = () => {
             showMoreMenu={showMoreMenu}
             onToggleMoreMenu={() => setShowMoreMenu(!showMoreMenu)}
             onClearKnowledgeBase={clearKnowledgeBase}
-            onCheckKnowledgeBaseStatus={checkKnowledgeBaseStatus}
+            onCheckKnowledgeBaseStatus={() => void checkKnowledgeBaseStatus().catch(() => {})}
             onKbFeedback={toast.setKbFeedback}
             onOpenMemorySummary={() => setShowMemorySummary(true)}
             onOpenDocumentManager={() => setShowDocumentManager(true)}
@@ -448,6 +453,8 @@ const ChatAgent: React.FC = () => {
             onOpenTokenUsage={() => setShowTokenUsage(true)}
             onOpenToolUsage={() => setShowToolUsage(true)}
             onOpenEvaluation={() => setShowEvaluation(true)}
+            onRefreshAppData={() => recovery.refreshNow('manual', { force: true })}
+            isRecovering={recovery.isRecovering}
           />
 
           <KbFeedbackToast feedback={toast.kbFeedback} />
@@ -585,7 +592,7 @@ const ChatAgent: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-black/50" style={{ top: '25px' }}>
           <div className="absolute inset-0 bg-card shadow-2xl">
             <ErrorBoundary>
-              <DocumentManager onClose={() => setShowDocumentManager(false)} onRefreshKnowledgeBase={checkKnowledgeBaseStatus} />
+              <DocumentManager onClose={() => setShowDocumentManager(false)} onRefreshKnowledgeBase={() => void checkKnowledgeBaseStatus().catch(() => {})} />
             </ErrorBoundary>
           </div>
         </div>
@@ -594,7 +601,7 @@ const ChatAgent: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-black/50" style={{ top: '25px' }}>
           <div className="absolute inset-0 bg-card shadow-2xl">
             <ErrorBoundary>
-              <KnowledgeSourceManager onClose={() => setShowKnowledgeSourceManager(false)} onContentChange={checkKnowledgeBaseStatus} />
+              <KnowledgeSourceManager onClose={() => setShowKnowledgeSourceManager(false)} onContentChange={() => void checkKnowledgeBaseStatus().catch(() => {})} />
             </ErrorBoundary>
           </div>
         </div>

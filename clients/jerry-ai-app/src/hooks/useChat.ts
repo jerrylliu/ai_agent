@@ -19,6 +19,7 @@ import {
   getModelInfo,
   switchModel as switchModelApi,
   setModelApiKey,
+  subscribeChatEvents,
 } from '../lib/api';
 import type { AvailableModel, ToolStatusEvent, ConfirmationRequestEvent } from '../lib/api';
 import type { AppSettings } from '../stores/settings-store';
@@ -51,7 +52,7 @@ export interface PendingDocument {
   documentId?: number;
 }
 
-export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, onConfirmationRequest?: (event: ConfirmationRequestEvent) => void, onConfirmationResolved?: (event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void) {
+export function useChat(isAuthenticated?: boolean, authLoading = false, appSettings?: AppSettings, onConfirmationRequest?: (event: ConfirmationRequestEvent) => void, onConfirmationResolved?: (event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => generateSessionId());
   const [messages, setMessages] = useState<Message[]>([]);
@@ -99,6 +100,14 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
   const messageLoadAbortRef = useRef<AbortController | null>(null);
   // 消息内存缓存：sessionId → Message[]，切换会话时先读缓存避免空白页
   const messagesCacheRef = useRef<Map<string, Message[]>>(new Map());
+  // 会话更新时间快照：用于识别飞书/工作流等外部入口写入的新消息
+  const sessionUpdatedAtRef = useRef<Map<string, string>>(new Map());
+  const lastPollingAtRef = useRef(0);
+  const isRefreshingRef = useRef(false);
+  const sseConnectedRef = useRef(false);
+  const isTypingRef = useRef(false);
+  const activeGeneratingSessionIdRef = useRef<string | null>(null);
+  const knowledgeRetryTimerRef = useRef<number | null>(null);
 
   // 辅助: 标记会话有内容 + 持久化
   const markSessionHasContent = (sessionId: string) => {
@@ -123,7 +132,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
   };
 
   useEffect(() => {
-    loadModelInfo();
+    void loadModelInfo().catch(() => {});
   }, []);
 
   const loadModelInfo = async () => {
@@ -136,8 +145,10 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
         setHasZhipuApiKey(info.hasZhipuApiKey);
         setSupportsVision(info.supportsVision);
       }
+      return info;
     } catch (error) {
       console.error('加载模型信息失败:', error);
+      throw error;
     }
   };
 
@@ -178,43 +189,46 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
     }
   };
 
-  // 加载所有会话
+  // 认证状态变化时重新加载会话：
+  // - authLoading=true 时先等待 token 校验结束，避免启动时先取 default 数据再切换到登录用户
+  // - 未登录：后端 OptionalAuthGuard 使用 default 用户，仍应展示 default 会话
+  // - 已登录：后端使用 JWT 中的真实 userId，展示该用户会话
   useEffect(() => {
+    if (authLoading) return;
+    messagesCacheRef.current.clear();
+    sessionUpdatedAtRef.current.clear();
+    setMessages([]);
+    setHistory([]);
+    setSessionHasContent(new Set());
+    localStorage.removeItem('session-has-content');
     loadSessions();
-  }, []);
-
-  // 认证状态变化时重新加载会话（登录/登出/切换账号）
-  useEffect(() => {
-    if (isAuthenticated) {
-      loadSessions();
-    } else {
-      // 登出时清空会话和消息
-      setSessions([]);
-      setMessages([]);
-      setHistory([]);
-      setSessionHasContent(new Set());
-      localStorage.removeItem('session-has-content');
-      setCurrentSessionId(generateSessionId());
-    }
-  }, [isAuthenticated]);
+  }, [authLoading, isAuthenticated]);
 
   // 同步 currentSessionId 到 ref，供异步回调中读取最新值
   useEffect(() => {
     currentSessionIdRef.current = currentSessionId;
   }, [currentSessionId]);
 
+  useEffect(() => {
+    isTypingRef.current = isTyping;
+  }, [isTyping]);
+
   // 切换会话时加载消息
   useEffect(() => {
+    if (authLoading) return;
     if (currentSessionId) {
       loadSessionMessages(currentSessionId);
     }
-  }, [currentSessionId]);
+  }, [authLoading, currentSessionId]);
 
   const loadSessions = async (skipAutoSwitch = false) => {
     try {
       setIsLoading(true);
       const sessionsData = await getSessions();
       setSessions(sessionsData);
+      sessionUpdatedAtRef.current = new Map(
+        sessionsData.map((session) => [session.sessionId, session.updatedAt]),
+      );
 
       if (!skipAutoSwitch && sessionsData.length > 0) {
         setCurrentSessionId(sessionsData[0].sessionId);
@@ -228,10 +242,14 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
     }
   };
 
-  const loadSessionMessages = async (sessionId: string) => {
+  const loadSessionMessages = async (sessionId: string, options?: { force?: boolean }) => {
+    if (options?.force) {
+      messagesCacheRef.current.delete(sessionId);
+    }
+
     // 先读缓存，有则直接使用，不发请求
     const cached = messagesCacheRef.current.get(sessionId);
-    if (cached) {
+    if (cached && !options?.force) {
       setMessages(cached);
       setIsMessagesLoading(false);
       return;
@@ -277,6 +295,106 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
       }
     }
   };
+
+  const refreshSessionsAndCurrentMessages = async (options?: { forceCurrentMessages?: boolean }) => {
+    if (authLoading || isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
+    try {
+      const previousUpdatedAt = new Map(sessionUpdatedAtRef.current);
+      const sessionsData = await getSessions();
+      setSessions(sessionsData);
+      sessionUpdatedAtRef.current = new Map(
+        sessionsData.map((session) => [session.sessionId, session.updatedAt]),
+      );
+
+      const currentId = currentSessionIdRef.current;
+      const currentSession = sessionsData.find((session) => session.sessionId === currentId);
+      if (currentSession) {
+        if (isTypingRef.current && activeGeneratingSessionIdRef.current === currentId) {
+          return;
+        }
+        const previous = previousUpdatedAt.get(currentId);
+        if (options?.forceCurrentMessages || !previous || previous !== currentSession.updatedAt) {
+          await loadSessionMessages(currentId, { force: true });
+        }
+        return;
+      }
+
+      if (sessionsData.length > 0) {
+        setCurrentSessionId(sessionsData[0].sessionId);
+      }
+    } catch (error) {
+      console.error('刷新会话失败:', error);
+      throw error;
+    } finally {
+      isRefreshingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (authLoading) return;
+
+    const refreshIfVisible = () => {
+      if (document.hidden) return;
+      if (isTyping) return;
+      const now = Date.now();
+      // SSE 已连通时，轮询退为兜底（间隔放大），减少无谓请求；断线时回到 5s 主动轮询
+      const minInterval = sseConnectedRef.current ? 18000 : 4500;
+      if (now - lastPollingAtRef.current < minInterval) return;
+      lastPollingAtRef.current = now;
+      void refreshSessionsAndCurrentMessages().catch(() => {});
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        lastPollingAtRef.current = 0;
+        refreshIfVisible();
+      }
+    };
+
+    const timer = window.setInterval(refreshIfVisible, 5000);
+    window.addEventListener('focus', refreshIfVisible);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshIfVisible);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [authLoading, isTyping]);
+
+  // 实时同步：订阅后端 chat_history 事件，任意来源写库后立即刷新（轮询保留为兜底）
+  useEffect(() => {
+    if (authLoading) return;
+
+    const unsubscribe = subscribeChatEvents(
+      (event) => {
+        // 正在本地流式生成时不打断（避免覆盖临时气泡），其余情况立即刷新
+        if (isTypingRef.current && activeGeneratingSessionIdRef.current === event.sessionId) {
+          return;
+        }
+        // 当前正打开的会话被外部更新时，强制重新拉取消息绕过缓存
+        const forceCurrent = event.sessionId === currentSessionIdRef.current;
+        void refreshSessionsAndCurrentMessages({ forceCurrentMessages: forceCurrent }).catch(() => {});
+      },
+      (connected) => {
+        sseConnectedRef.current = connected;
+      },
+    );
+
+    return () => {
+      sseConnectedRef.current = false;
+      unsubscribe();
+    };
+  }, [authLoading, isAuthenticated]);
+
+  useEffect(() => {
+    return () => {
+      if (knowledgeRetryTimerRef.current !== null) {
+        window.clearTimeout(knowledgeRetryTimerRef.current);
+      }
+    };
+  }, []);
 
   // 注意：自动滚动已移至 ChatAgent.tsx 中通过虚拟滚动 virtualizer 处理
 
@@ -396,6 +514,8 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
 
     setMessages(prev => [...prev, userMessage]);
     setIsTyping(true);
+    isTypingRef.current = true;
+    activeGeneratingSessionIdRef.current = currentSessionId;
     setPendingImages([]);
     setPendingDocuments([]);
 
@@ -513,9 +633,23 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
         if (done) break;
         
         fullResponse += value;
-        setMessages(prev => prev.map(msg =>
-          msg.id === assistantMessageId ? { ...msg, content: fullResponse } : msg
-        ));
+        setMessages(prev => {
+          const exists = prev.some(msg => msg.id === assistantMessageId);
+          if (!exists) {
+            const restoredAssistantMessage: Message = {
+              ...tempAssistantMessage,
+              content: fullResponse,
+            };
+            const next = [...prev, restoredAssistantMessage];
+            messagesCacheRef.current.set(currentSessionId, next);
+            return next;
+          }
+          const next = prev.map(msg =>
+            msg.id === assistantMessageId ? { ...msg, content: fullResponse } : msg
+          );
+          messagesCacheRef.current.set(currentSessionId, next);
+          return next;
+        });
       }
 
       // 流式响应完成，清除工具状态
@@ -528,11 +662,30 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
         content: fullResponse,
       });
 
+      isTypingRef.current = false;
+      activeGeneratingSessionIdRef.current = null;
+
       // 用数据库返回的 ID 更新前端消息 ID，确保删除时能匹配
       if (savedAssistantMsg?.id) {
-        setMessages(prev => prev.map(msg =>
-          msg.id === assistantMessageId ? { ...msg, id: savedAssistantMsg.id.toString() } : msg
-        ));
+        setMessages(prev => {
+          const exists = prev.some(msg => msg.id === assistantMessageId);
+          const next = exists
+            ? prev.map(msg =>
+                msg.id === assistantMessageId ? { ...msg, id: savedAssistantMsg.id.toString(), content: fullResponse } : msg
+              )
+            : [
+                ...prev,
+                {
+                  ...tempAssistantMessage,
+                  id: savedAssistantMsg.id.toString(),
+                  content: fullResponse,
+                  fromKnowledgeBase: usedKnowledgeBase,
+                  contextCount,
+                },
+              ];
+          messagesCacheRef.current.set(currentSessionId, next);
+          return next;
+        });
       }
 
       // 重新加载会话列表以更新会话标题和时间
@@ -559,6 +712,8 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
       }
     } finally {
       setIsTyping(false);
+      isTypingRef.current = false;
+      activeGeneratingSessionIdRef.current = null;
       setToolStatuses([]);
       abortControllerRef.current = null;
 
@@ -834,7 +989,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
     }
   };
 
-  const checkKnowledgeBaseStatus = async () => {
+  const checkKnowledgeBaseStatus = async (options?: { retry?: boolean }) => {
     try {
       const status = await getKnowledgeBaseStatus();
       setKnowledgeBaseStatus(status);
@@ -844,8 +999,20 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
         status: 'error' as const,
         message: `获取知识库状态失败: ${error.message}`,
       };
-      setKnowledgeBaseStatus(errorStatus);
-      return errorStatus;
+      setKnowledgeBaseStatus((prev) =>
+        prev.status === 'ready' || prev.status === 'empty'
+          ? { ...prev, message: errorStatus.message }
+          : errorStatus,
+      );
+
+      if (options?.retry !== false && knowledgeRetryTimerRef.current === null) {
+        knowledgeRetryTimerRef.current = window.setTimeout(() => {
+          knowledgeRetryTimerRef.current = null;
+          void checkKnowledgeBaseStatus({ retry: false }).catch(() => {});
+        }, 2000);
+      }
+
+      throw error;
     }
   };
 
@@ -857,7 +1024,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
     setIsTyping(true);
     try {
       const result = await uploadToKnowledgeBase(file);
-      await checkKnowledgeBaseStatus();
+      await checkKnowledgeBaseStatus().catch(() => {});
       return result;
     } catch (error: any) {
       const errorResult = {
@@ -867,6 +1034,20 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
       return errorResult;
     } finally {
       setIsTyping(false);
+    }
+  };
+
+  const refreshAppData = async (reason: string = 'manual') => {
+    const shouldForceCurrentMessages = reason === 'manual' && !isTypingRef.current;
+    const results = await Promise.allSettled([
+      loadModelInfo(),
+      checkKnowledgeBaseStatus({ retry: false }),
+      refreshSessionsAndCurrentMessages({ forceCurrentMessages: shouldForceCurrentMessages }),
+    ]);
+
+    const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult | undefined;
+    if (rejected) {
+      throw rejected.reason;
     }
   };
 
@@ -894,6 +1075,7 @@ export function useChat(isAuthenticated?: boolean, appSettings?: AppSettings, on
     stopGeneration,
     uploadToKnowledgeBase: uploadToKnowledgeBaseFromChat,
     checkKnowledgeBaseStatus,
+    refreshAppData,
     updateMessage,
     deleteMessage,
     clearHistory,

@@ -18,6 +18,26 @@ jest.mock('nest-winston', () => ({
   WINSTON_MODULE_NEST_PROVIDER: 'WINSTON_MODULE_NEST_PROVIDER',
 }));
 
+// fundamentals/logger.ts 顶层会调 WinstonModule.forRoot()，nest-winston 被 mock 成只暴露
+// 常量后会报 undefined.forRoot —— 这里直接 mock 掉 logger.ts，避免触发 winston 链路
+jest.mock('../fundamentals/logger.js', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  WinstonLoggerModule: {},
+}));
+jest.mock('../fundamentals/logger', () => ({
+  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  WinstonLoggerModule: {},
+}));
+
+// processIncomingMessage / setFeishuPromptInvoker 不在本测试范围内，整体 mock
+jest.mock('../fundamentals/distributed-lock', () => ({
+  acquireLock: jest.fn(),
+}));
+jest.mock('../fundamentals/feishu/feishu-chat-session', () => ({
+  buildSessionKey: jest.fn(),
+  getOrCreateChatSession: jest.fn(),
+}));
+
 // mock human-in-the-loop：所有飞书相关函数返回可控值
 jest.mock('../fundamentals/human-in-the-loop.js', () => ({
   handleConfirmationResponse: jest.fn(),

@@ -9,6 +9,7 @@ import { MessageFeedback } from '../entities/message-feedback.entity';
 import { AutoEvaluation } from '../entities/auto-evaluation.entity';
 import { GeneratedDocument } from '../entities/generated-document.entity';
 import { logger } from '../fundamentals/logger';
+import { publishChatHistoryEvent, publishSessionDeletedEvent } from '../fundamentals/chat-event-bus';
 import { SummaryService } from './summary.service';
 import { MemoryService } from './memory.service';
 
@@ -40,6 +41,7 @@ export class SessionService {
     content: string,
     userId: string = 'default',
     documentCards?: unknown[],
+    source: 'web' | 'feishu' = 'web',
   ) {
     logger.debug('保存聊天记录', { module: 'SessionService', sessionId, role, contentLength: content.length });
     const chatHistory = this.chatHistoryRepository.create({
@@ -80,6 +82,15 @@ export class SessionService {
       this.summaryService.checkAndUpdateSummary(sessionId, userId).catch(() => {});
       this.memoryService.checkAndExtractMemories(sessionId, userId).catch(() => {});
     }
+
+    // 发布实时事件：通知该用户的 Web 端有新消息落库（替代轮询为主路径）
+    publishChatHistoryEvent({
+      ownerUserId: userId,
+      sessionId,
+      role,
+      source,
+      at: Date.now(),
+    });
 
     return savedHistory;
   }
@@ -202,7 +213,16 @@ export class SessionService {
     // 再删除相关的聊天记录
     await this.chatHistoryRepository.delete({ sessionId });
     // 最后删除会话
-    return this.sessionRepository.delete(where);
+    const result = await this.sessionRepository.delete(where);
+
+    // 发布实时删除事件：正在查看该会话的 Web 端立即感知（飞书 /clear、Web 删除均经过此处）
+    publishSessionDeletedEvent({
+      ownerUserId: userId || 'default',
+      sessionId,
+      source: 'web',
+    });
+
+    return result;
   }
 
   // 切换会话置顶状态

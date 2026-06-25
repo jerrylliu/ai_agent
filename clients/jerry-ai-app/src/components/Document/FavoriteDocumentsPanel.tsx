@@ -32,6 +32,7 @@ function getFormatColor(format: string): string {
     case 'pdf': return 'text-red-600 dark:text-red-400';
     case 'docx': case 'doc': return 'text-blue-600 dark:text-blue-400';
     case 'html': case 'htm': return 'text-orange-600 dark:text-orange-400';
+    case 'md': case 'markdown': return 'text-purple-600 dark:text-purple-400';
     default: return 'text-gray-600 dark:text-gray-400';
   }
 }
@@ -118,7 +119,7 @@ export function FavoriteDocumentsPanel() {
           const { save } = await import('@tauri-apps/plugin-dialog');
           const { writeFile } = await import('@tauri-apps/plugin-fs');
           const ext = doc.format.toLowerCase();
-          const filterName = ext === 'docx' ? 'Word' : '文件';
+          const filterName = ext === 'docx' ? 'Word' : ext === 'md' ? 'Markdown' : '文件';
           const filePath = await save({ defaultPath: doc.filename, filters: [{ name: filterName, extensions: [ext] }] });
           if (!filePath) return;
           const resp = await fetch(dlUrl);
@@ -259,7 +260,7 @@ export function FavoriteDocumentsPanel() {
                             const { save } = await import('@tauri-apps/plugin-dialog');
                             const { writeFile } = await import('@tauri-apps/plugin-fs');
                             const ext = doc.format.toLowerCase();
-                            const filterName = ext === 'pdf' ? 'PDF' : ext === 'docx' ? 'Word' : ext === 'html' ? 'HTML' : '文件';
+                            const filterName = ext === 'pdf' ? 'PDF' : ext === 'docx' ? 'Word' : ext === 'html' ? 'HTML' : ext === 'md' ? 'Markdown' : '文件';
                             const filePath = await save({ defaultPath: doc.filename, filters: [{ name: filterName, extensions: [ext] }] });
                             if (!filePath) return;
                             const resp = await fetch(dlUrl);

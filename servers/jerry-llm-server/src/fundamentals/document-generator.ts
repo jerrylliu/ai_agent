@@ -1,13 +1,14 @@
 /**
- * 文档生成器 —— Markdown → HTML / PDF / DOCX
+ * 文档生成器 —— Markdown → HTML / PDF / DOCX / MD
  *
  * 设计目标：
- *   提供统一的 Markdown 转换入口，让 generate_document 工具可以输出三种主流文档格式。
+ *   提供统一的 Markdown 转换入口，让 generate_document 工具可以输出四种主流文档格式。
  *
  * 实现方案：
  *   - HTML：marked 渲染 Markdown，再包一层基础排版样式
  *   - PDF ：复用 multimodal-output 中的 puppeteer 单例，加载 HTML 后调用 page.pdf()
  *   - DOCX：使用 docx 库逐段构造段落（支持标题/段落/列表/粗体/代码块基础元素）
+ *   - MD  ：原样输出 Markdown 字节（UTF-8，不写 BOM，参考 markdownToMd）
  *
  * 中文渲染：
  *   PDF 在 Docker 中依赖 fonts-noto-cjk（已在 Dockerfile 中安装）。
@@ -353,10 +354,34 @@ function parseInlineRuns(text: string): TextRun[] {
   return runs.length > 0 ? runs : [new TextRun({ text })];
 }
 
+// ==================== MD 生成 ====================
+
+/**
+ * Markdown → Markdown Buffer
+ *
+ * 不做任何转换，直接把原始 Markdown 字符串作为 UTF-8 字节返回。
+ * 如果传入了 title 且正文未以一级标题开头，则在最前面补一行 `# {title}`，
+ * 保证文件打开后有清晰的标题。
+ *
+ * 注：不写 BOM —— GitHub / VSCode / Typora 等主流场景对无 BOM UTF-8 兼容性最佳，
+ * 写 BOM 反而会让某些 Markdown 渲染器把首个 # 当作普通字符。
+ */
+export function markdownToMd(markdown: string, options: { title?: string } = {}): Buffer {
+  const { title = '' } = options;
+  const trimmed = markdown.trimStart();
+  // 若用户已经在内容里写了 H1 则不重复加；否则用 title 补一个
+  const needTitle = title && !/^#\s+/.test(trimmed);
+  const finalText = needTitle ? `# ${title}\n\n${markdown}` : markdown;
+  return Buffer.from(finalText, 'utf-8');
+}
+
 // ==================== 工具函数 ====================
 
+/** 文档格式联合类型：与 generate_document 工具 schema 保持一致 */
+export type DocumentFormat = 'pdf' | 'docx' | 'html' | 'md';
+
 /** 根据格式获取标准 MIME 类型 */
-export function getDocumentMimeType(format: 'pdf' | 'docx' | 'html'): string {
+export function getDocumentMimeType(format: DocumentFormat): string {
   switch (format) {
     case 'pdf':
       return 'application/pdf';
@@ -364,6 +389,9 @@ export function getDocumentMimeType(format: 'pdf' | 'docx' | 'html'): string {
       return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
     case 'html':
       return 'text/html';
+    case 'md':
+      // RFC 7763 定义 text/markdown 为标准 MIME 类型
+      return 'text/markdown';
   }
 }
 
@@ -373,7 +401,7 @@ export function getDocumentMimeType(format: 'pdf' | 'docx' | 'html'): string {
  * - 已有其他文件扩展名（如 .txt / .md）：剥离后追加目标扩展名
  * - 没有扩展名：直接追加
  */
-export function ensureExtension(filename: string, format: 'pdf' | 'docx' | 'html'): string {
+export function ensureExtension(filename: string, format: DocumentFormat): string {
   const target = `.${format}`;
   if (filename.toLowerCase().endsWith(target)) return filename;
 

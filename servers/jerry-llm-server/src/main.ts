@@ -14,6 +14,7 @@ import { closeRedis, getRedis } from './fundamentals/redis-client';
 import { createSpeechWsHandler } from './gateways/speech.gateway';
 import { SpeechService } from './services/speech.service';
 import { AuthService } from './auth/auth.service';
+import { closeFeishuWsClient } from './fundamentals/feishu-ws-client';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -113,6 +114,7 @@ async function bootstrap() {
     // eslint-disable-next-line no-console
     console.log(`[main] 收到 ${signal}，开始优雅关闭...`);
     try {
+      closeFeishuWsClient();
       await app.close();
       await closeRedis();
     } catch (e) {

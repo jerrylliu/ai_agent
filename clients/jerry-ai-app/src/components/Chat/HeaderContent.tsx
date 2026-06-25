@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Button } from "../ui/button";
-import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star, Wrench } from "lucide-react";
+import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star, Wrench, RefreshCw } from "lucide-react";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 
 interface KbFeedback {
@@ -26,10 +26,12 @@ interface HeaderContentProps {
     onOpenTokenUsage?: () => void;
     onOpenToolUsage?: () => void;
     onOpenEvaluation?: () => void;
+    onRefreshAppData?: () => void;
+    isRecovering?: boolean;
 }
 
 const HeaderContent: React.FC<HeaderContentProps> = (props) => {
-    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager, onOpenTokenUsage, onOpenToolUsage, onOpenEvaluation } = props;
+    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager, onOpenTokenUsage, onOpenToolUsage, onOpenEvaluation, onRefreshAppData, isRecovering } = props;
 
     // 重置知识库确认弹窗状态
     const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
@@ -106,6 +108,18 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                             </button>
                         )}
                     </div>
+                    {onRefreshAppData && (
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="rounded-full"
+                            title="刷新页面数据"
+                            disabled={isRecovering}
+                            onClick={onRefreshAppData}
+                        >
+                            <RefreshCw className={`h-4 w-4 ${isRecovering ? 'animate-spin' : ''}`} />
+                        </Button>
+                    )}
                     <div className="relative more-menu">
                         <Button variant="ghost" size="sm" className="rounded-full" onClick={() => onToggleMoreMenu()}>
                             <MoreHorizontal className="h-5 w-5" />

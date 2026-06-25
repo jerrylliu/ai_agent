@@ -94,8 +94,37 @@ jest.mock('../services/generated-document.service', () => ({
     save = jest.fn().mockResolvedValue({});
     read = jest.fn().mockResolvedValue(null);
     list = jest.fn().mockResolvedValue([]);
+    listRecentBySession = jest.fn().mockResolvedValue([]);
     toggleFavorite = jest.fn().mockResolvedValue({});
     delete = jest.fn().mockResolvedValue({});
+  },
+}));
+
+const mockFindFeishuChatSessionBySessionId = jest.fn();
+const mockDeleteFeishuChatSessionBySessionId = jest.fn();
+const mockSendPlainTextMessage = jest.fn();
+const mockUploadImage = jest.fn();
+const mockSendImageMessage = jest.fn();
+
+jest.mock('../fundamentals/feishu/feishu-chat-session.js', () => ({
+  findFeishuChatSessionBySessionId: (...args: unknown[]) => mockFindFeishuChatSessionBySessionId(...args),
+  deleteFeishuChatSessionBySessionId: (...args: unknown[]) => mockDeleteFeishuChatSessionBySessionId(...args),
+}));
+
+jest.mock('../fundamentals/feishu-notify.service.js', () => ({
+  sendPlainTextMessage: (...args: unknown[]) => mockSendPlainTextMessage(...args),
+  uploadImage: (...args: unknown[]) => mockUploadImage(...args),
+  sendImageMessage: (...args: unknown[]) => mockSendImageMessage(...args),
+}));
+
+jest.mock('../fundamentals/chat-event-bus.js', () => ({
+  subscribeChatHistoryEvents: jest.fn(() => () => {}),
+}));
+
+jest.mock('../auth/auth.service', () => ({
+  AuthService: class {
+    verifyToken = jest.fn().mockReturnValue(null);
+    getUserById = jest.fn().mockResolvedValue(null);
   },
 }));
 
@@ -107,6 +136,7 @@ import { UsageService } from '../services/usage.service';
 import { EvaluationService } from '../services/evaluation.service';
 import { ToolUsageService } from '../services/tool-usage.service';
 import { GeneratedDocumentService } from '../services/generated-document.service';
+import { AuthService } from '../auth/auth.service';
 
 describe('ChatController', () => {
   let controller: ChatController;
@@ -117,6 +147,17 @@ describe('ChatController', () => {
   let appService: any;
 
   beforeEach(async () => {
+    mockFindFeishuChatSessionBySessionId.mockReset();
+    mockDeleteFeishuChatSessionBySessionId.mockReset();
+    mockSendPlainTextMessage.mockReset();
+    mockUploadImage.mockReset();
+    mockSendImageMessage.mockReset();
+    mockFindFeishuChatSessionBySessionId.mockResolvedValue(null);
+    mockDeleteFeishuChatSessionBySessionId.mockResolvedValue(undefined);
+    mockSendPlainTextMessage.mockResolvedValue({ success: true });
+    mockUploadImage.mockResolvedValue({ success: true, key: 'img_key_1' });
+    mockSendImageMessage.mockResolvedValue({ success: true });
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ChatController],
       providers: [
@@ -126,6 +167,7 @@ describe('ChatController', () => {
         { provide: EvaluationService, useValue: new (EvaluationService as any)() },
         { provide: ToolUsageService, useValue: new (ToolUsageService as any)() },
         { provide: GeneratedDocumentService, useValue: new (GeneratedDocumentService as any)() },
+        { provide: AuthService, useValue: new (AuthService as any)() },
       ],
     }).compile();
 
@@ -155,9 +197,10 @@ describe('ChatController', () => {
   });
 
   describe('deleteSession', () => {
-    it('应委托 SessionService.deleteSession', async () => {
+    it('应委托 SessionService.deleteSession 并清理飞书映射', async () => {
       await controller.deleteSession('s1', { userId: 'u1' });
       expect(sessionService.deleteSession).toHaveBeenCalledWith('s1', 'u1');
+      expect(mockDeleteFeishuChatSessionBySessionId).toHaveBeenCalledWith('s1', 'u1');
     });
   });
 
@@ -202,6 +245,167 @@ describe('ChatController', () => {
         { userId: 'u2' },
       );
       expect(sessionService.saveChatHistory).toHaveBeenCalledWith('s2', 'user', 'hello', 'u2', cards);
+    });
+
+    it('普通 Web 会话不应同步到飞书', async () => {
+      await controller.saveChatHistory(
+        { sessionId: 'normal-session', role: 'user', content: 'hi' },
+        { userId: 'u1' },
+      );
+      await Promise.resolve();
+
+      expect(mockFindFeishuChatSessionBySessionId).toHaveBeenCalledWith('normal-session');
+      expect(mockSendPlainTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('飞书私聊映射会话应把 Web user 消息同步到 sender open_id', async () => {
+      mockFindFeishuChatSessionBySessionId.mockResolvedValue({
+        ownerUserId: 'u1',
+        chatType: 'p2p',
+        chatId: 'p2p:ou_1',
+        senderOpenId: 'ou_1',
+      });
+
+      await controller.saveChatHistory(
+        { sessionId: 'feishu-session', role: 'user', content: '继续聊' },
+        { userId: 'u1' },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
+        'ou_1',
+        'open_id',
+        '来自 Web 端的消息：\n继续聊',
+        expect.any(String),
+      );
+    });
+
+    it('飞书群聊映射会话应把 assistant 回复同步到 chat_id', async () => {
+      mockFindFeishuChatSessionBySessionId.mockResolvedValue({
+        ownerUserId: 'u1',
+        chatType: 'group',
+        chatId: 'oc_1',
+        senderOpenId: 'ou_1',
+      });
+
+      await controller.saveChatHistory(
+        { sessionId: 'feishu-session', role: 'assistant', content: 'AI 回复' },
+        { userId: 'u1' },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
+        'oc_1',
+        'chat_id',
+        'AI 回复',
+        expect.any(String),
+      );
+    });
+
+    it('assistant 回复包含 Markdown 图片时应同步为飞书原生图片', async () => {
+      mockFindFeishuChatSessionBySessionId.mockResolvedValue({
+        ownerUserId: 'u1',
+        chatType: 'p2p',
+        chatId: 'p2p:ou_1',
+        senderOpenId: 'ou_1',
+      });
+
+      await controller.saveChatHistory(
+        { sessionId: 'feishu-session', role: 'assistant', content: '生成好了\n![星空](https://example.com/star.png)' },
+        { userId: 'u1' },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith('ou_1', 'open_id', '生成好了', expect.any(String));
+      expect(mockUploadImage).toHaveBeenCalledWith('https://example.com/star.png');
+      expect(mockSendImageMessage).toHaveBeenCalledWith('ou_1', 'open_id', 'img_key_1', expect.any(String));
+    });
+
+    it('群聊 assistant 回复包含 Markdown 图片时应同步为群内原生图片', async () => {
+      mockFindFeishuChatSessionBySessionId.mockResolvedValue({
+        ownerUserId: 'u1',
+        chatType: 'group',
+        chatId: 'oc_group_1',
+        senderOpenId: 'ou_1',
+      });
+
+      await controller.saveChatHistory(
+        { sessionId: 'feishu-group-session', role: 'assistant', content: '生成好了\n![星空](https://example.com/group-star.png)' },
+        { userId: 'u1' },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith('oc_group_1', 'chat_id', '生成好了', expect.any(String));
+      expect(mockUploadImage).toHaveBeenCalledWith('https://example.com/group-star.png');
+      expect(mockSendImageMessage).toHaveBeenCalledWith('oc_group_1', 'chat_id', 'img_key_1', expect.any(String));
+    });
+
+    it('飞书图片上传失败时应降级发送图片链接', async () => {
+      mockFindFeishuChatSessionBySessionId.mockResolvedValue({
+        ownerUserId: 'u1',
+        chatType: 'p2p',
+        chatId: 'p2p:ou_1',
+        senderOpenId: 'ou_1',
+      });
+      mockUploadImage.mockResolvedValue({ success: false, error: 'download failed' });
+
+      await controller.saveChatHistory(
+        { sessionId: 'feishu-session', role: 'assistant', content: '![星空](https://example.com/star.png)' },
+        { userId: 'u1' },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith('ou_1', 'open_id', 'AI 生成了内容：', expect.any(String));
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith('ou_1', 'open_id', 'https://example.com/star.png', expect.any(String));
+    });
+
+    it('飞书映射 owner 不匹配时不应同步到飞书', async () => {
+      mockFindFeishuChatSessionBySessionId.mockResolvedValue({
+        ownerUserId: 'other-user',
+        chatType: 'p2p',
+        chatId: 'p2p:ou_1',
+        senderOpenId: 'ou_1',
+      });
+
+      await controller.saveChatHistory(
+        { sessionId: 'feishu-session', role: 'user', content: '越权消息' },
+        { userId: 'u1' },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockSendPlainTextMessage).not.toHaveBeenCalled();
+    });
+
+    it('owner 为数字而映射存字符串时仍应判定为同一用户并同步', async () => {
+      mockFindFeishuChatSessionBySessionId.mockResolvedValue({
+        ownerUserId: '15',
+        chatType: 'p2p',
+        chatId: 'p2p:ou_1',
+        senderOpenId: 'ou_1',
+      });
+
+      await controller.saveChatHistory(
+        { sessionId: 'feishu-session', role: 'user', content: '继续聊' },
+        { userId: 15 },
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
+        'ou_1',
+        'open_id',
+        '来自 Web 端的消息：\n继续聊',
+        expect.any(String),
+      );
     });
   });
 

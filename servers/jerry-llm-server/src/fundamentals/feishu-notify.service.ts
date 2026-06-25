@@ -15,6 +15,9 @@
  */
 
 import { config } from './config';
+import { logger } from './logger';
+import { getRedis, isRedisReady } from './redis-client';
+import { deliverWithRetry, type FeishuApiResult } from './feishu-delivery';
 import crypto from 'crypto';
 
 // 注：飞书 App ID / Secret / 域名等配置项通过函数内访问 config.notify，
@@ -30,8 +33,22 @@ const REQUEST_TIMEOUT_MS = 15000;
 const FEISHU_API_BASE = 'https://open.feishu.cn/open-apis';
 const LARK_API_BASE = 'https://open.larksuite.com/open-apis';
 
-/** 飞书 tenant_access_token 内存缓存 */
+/**
+ * 飞书 tenant_access_token 两级缓存（F2 模块升级）
+ *
+ * L1 进程内 Map：纳秒级读取，命中后直接返回
+ * L2 Redis（带降级）：水平扩展时多实例共享同一份 token，避免每个实例独立换 token，
+ *                     减轻飞书 OpenAPI 调用压力（限流 / 配额 / 单点故障半径）
+ * 单飞（single-flight）：同进程内对同一 cacheKey 的并发请求共享同一个 Promise，
+ *                       防止冷启动瞬间的 Token 接口击穿
+ *
+ * Redis 不可用时静默降级到 L1 + 远端拉取，业务零感知。
+ */
 const tenantTokenCache = new Map<string, { token: string; expiresAt: number }>();
+const inflightTokenRequests = new Map<string, Promise<string>>();
+
+/** Redis 中保存 tenant_access_token 的 key 前缀（与全局 keyPrefix 拼接） */
+const REDIS_TOKEN_KEY_PREFIX = 'feishu:tenant_token:';
 
 // ==================== 类型定义 ====================
 
@@ -83,18 +100,60 @@ function getApiBase(): string {
     : FEISHU_API_BASE;
 }
 
-/** 获取飞书 tenant_access_token，5 分钟内复用缓存 */
+/** 获取飞书 tenant_access_token，5 分钟内复用缓存
+ *
+ * 读取顺序：L1 进程内 Map → L2 Redis → 远端飞书 OpenAPI
+ * 写入策略：远端拿到后同时回填 L1 + L2，L2 失败不阻塞
+ * 并发保护：同进程内对同一 cacheKey 的并发请求共享同一个 Promise（单飞）
+ */
 async function getTenantToken(): Promise<string> {
   const appId = config.notify.feishuAppId;
   const appSecret = config.notify.feishuAppSecret;
   const apiBase = getApiBase();
   const cacheKey = `${apiBase}:${appId}`;
 
+  // L1：进程内缓存
   const cached = tenantTokenCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.token;
   }
 
+  // 单飞：同 cacheKey 的并发请求共享同一个 Promise，避免冷启瞬间击穿
+  const existing = inflightTokenRequests.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+
+  const promise = (async () => {
+    try {
+      // L2：Redis 共享缓存（多实例部署时同一 App 复用同一份 token）
+      const fromRedis = await readTokenFromRedis(cacheKey);
+      if (fromRedis) {
+        tenantTokenCache.set(cacheKey, fromRedis);
+        return fromRedis.token;
+      }
+
+      // L3：远端拉取
+      const fresh = await fetchTokenFromFeishu(apiBase, appId, appSecret);
+      tenantTokenCache.set(cacheKey, fresh);
+      // L2 回填：失败仅降级，不影响主流程
+      void writeTokenToRedis(cacheKey, fresh).catch(() => {});
+      return fresh.token;
+    } finally {
+      inflightTokenRequests.delete(cacheKey);
+    }
+  })();
+
+  inflightTokenRequests.set(cacheKey, promise);
+  return promise;
+}
+
+/** 远端拉取 tenant_access_token */
+async function fetchTokenFromFeishu(
+  apiBase: string,
+  appId: string,
+  appSecret: string,
+): Promise<{ token: string; expiresAt: number }> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
 
@@ -114,13 +173,64 @@ async function getTenantToken(): Promise<string> {
     if (data.code !== 0) {
       throw new Error(`飞书获取 token 失败：${data.msg}`);
     }
-    tenantTokenCache.set(cacheKey, {
+    // 提前 5 分钟过期，规避 NTP 误差和网络抖动
+    return {
       token: data.tenant_access_token,
       expiresAt: Date.now() + (data.expire - 300) * 1000,
-    });
-    return data.tenant_access_token;
+    };
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/**
+ * 从 Redis 读取 tenant_access_token
+ * 任何异常都视为缓存未命中并降级，不抛错
+ */
+async function readTokenFromRedis(
+  cacheKey: string,
+): Promise<{ token: string; expiresAt: number } | null> {
+  const redis = getRedis();
+  if (!redis || !isRedisReady()) return null;
+  const key = `${REDIS_TOKEN_KEY_PREFIX}${cacheKey}`;
+  try {
+    const raw = await redis.get(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { token: string; expiresAt: number };
+    if (!parsed.token || !parsed.expiresAt) return null;
+    // Redis 端虽然有 EXPIRE 兜底，但本地再校验一次时间，防止时钟漂移
+    if (parsed.expiresAt <= Date.now()) return null;
+    return parsed;
+  } catch (e: any) {
+    logger.warn('飞书 token L2 缓存读取失败，降级到远端拉取', {
+      module: 'FeishuNotify:TokenCache',
+      err: (e?.message || String(e)).slice(0, 200),
+    });
+    return null;
+  }
+}
+
+/**
+ * 把 tenant_access_token 写入 Redis
+ * TTL 与 expiresAt 对齐，Redis 端到期自动清理；失败仅 warn 不抛
+ */
+async function writeTokenToRedis(
+  cacheKey: string,
+  entry: { token: string; expiresAt: number },
+): Promise<void> {
+  const redis = getRedis();
+  if (!redis || !isRedisReady()) return;
+  const key = `${REDIS_TOKEN_KEY_PREFIX}${cacheKey}`;
+  const ttlMs = entry.expiresAt - Date.now();
+  if (ttlMs <= 0) return;
+  try {
+    // PX = 毫秒级 TTL，避免秒级取整带来的早过期
+    await redis.set(key, JSON.stringify(entry), 'PX', ttlMs);
+  } catch (e: any) {
+    logger.warn('飞书 token L2 缓存写入失败，仅 L1 生效', {
+      module: 'FeishuNotify:TokenCache',
+      err: (e?.message || String(e)).slice(0, 200),
+    });
   }
 }
 
@@ -490,6 +600,72 @@ export function clearEmailCache(): void {
 }
 
 /**
+ * 统一的 im/v1/messages 发送器（F4：限流 + 重试 + 死信）。
+ *
+ * 把"取 token → POST → 解析飞书响应"封装为一次可重试单元，交给 deliverWithRetry。
+ * card / text / image / file 四类消息只是 body 不同，全部复用此函数，
+ * 避免每个发送函数各写一遍 fetch + 重试逻辑（消除漂移）。
+ *
+ * @param op       操作名（用于日志/死信，如 'sendCardMessage'）
+ * @param idType   接收人 ID 类型
+ * @param body     消息体（含 receive_id / msg_type / content / 可选 uuid）
+ * @param errLabel 业务错误前缀（如 '飞书发送消息失败'）
+ */
+async function postImMessage(
+  op: string,
+  idType: FeishuReceiveIdType,
+  body: Record<string, unknown>,
+  errLabel: string,
+): Promise<FeishuSendResult> {
+  const apiBase = getApiBase();
+
+  const result = await deliverWithRetry<FeishuApiResult & { messageId?: string; msg?: string }>(
+    async () => {
+      let token: string;
+      try {
+        token = await getTenantToken();
+      } catch (e: any) {
+        // token 获取失败按网络错误处理 → 可重试
+        return { code: -1, networkError: true, msg: `获取 token 失败: ${e?.message || String(e)}` };
+      }
+
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+      try {
+        const resp = await fetch(`${apiBase}/im/v1/messages?receive_id_type=${idType}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+          signal: ctrl.signal,
+        });
+        const data = (await resp.json()) as {
+          code: number;
+          msg: string;
+          data?: { message_id: string };
+        };
+        return {
+          code: data.code,
+          httpStatus: resp.status,
+          messageId: data.data?.message_id,
+          msg: data.msg,
+        };
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    { op, receiveId: String(body.receive_id ?? ''), uuid: body.uuid as string | undefined },
+  );
+
+  if (result.code !== 0 || (result.httpStatus !== undefined && result.httpStatus >= 400)) {
+    return { success: false, error: `${errLabel}: ${result.msg || `code=${result.code}`}` };
+  }
+  return { success: true, messageId: result.messageId };
+}
+
+/**
  * 发送互动卡片消息
  * 替代原有的 post 文本格式，支持卡片 UI
  */
@@ -499,54 +675,15 @@ export async function sendCardMessage(
   card: Record<string, unknown>,
   uuid?: string,
 ): Promise<FeishuSendResult> {
-  const token = await getTenantToken();
-  const apiBase = getApiBase();
-
   const body: Record<string, unknown> = {
     receive_id: receiveId,
     msg_type: 'interactive',
     content: JSON.stringify(card),
   };
-
   if (uuid) {
     body.uuid = uuid;
   }
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const resp = await fetch(
-      `${apiBase}/im/v1/messages?receive_id_type=${idType}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      },
-    );
-    const data = (await resp.json()) as {
-      code: number;
-      msg: string;
-      data?: { message_id: string; root_id?: string; open_message_id?: string };
-    };
-    if (data.code !== 0) {
-      return { success: false, error: `飞书发送消息失败: ${data.msg}` };
-    }
-    return {
-      success: true,
-      messageId: data.data?.message_id,
-      // 飞书不直接返回 cardId，需要通过消息详情获取
-      // 这里先不存 cardId，由调用方需要时再获取
-    };
-  } catch (e: any) {
-    return { success: false, error: e.message || String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
+  return postImMessage('sendCardMessage', idType, body, '飞书发送消息失败');
 }
 
 /**
@@ -559,9 +696,6 @@ export async function sendTextMessage(
   content: string,
   uuid?: string,
 ): Promise<FeishuSendResult> {
-  const token = await getTenantToken();
-  const apiBase = getApiBase();
-
   const msgContent = JSON.stringify({
     zh_cn: {
       title,
@@ -577,40 +711,7 @@ export async function sendTextMessage(
   if (uuid) {
     body.uuid = uuid;
   }
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const resp = await fetch(
-      `${apiBase}/im/v1/messages?receive_id_type=${idType}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      },
-    );
-    const data = (await resp.json()) as {
-      code: number;
-      msg: string;
-      data?: { message_id: string };
-    };
-    if (data.code !== 0) {
-      return { success: false, error: `飞书发送消息失败: ${data.msg}` };
-    }
-    return {
-      success: true,
-      messageId: data.data?.message_id,
-    };
-  } catch (e: any) {
-    return { success: false, error: e.message || String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
+  return postImMessage('sendTextMessage', idType, body, '飞书发送消息失败');
 }
 
 /**
@@ -623,9 +724,6 @@ export async function sendImageMessage(
   imageKey: string,
   uuid?: string,
 ): Promise<FeishuSendResult> {
-  const token = await getTenantToken();
-  const apiBase = getApiBase();
-
   const body: Record<string, unknown> = {
     receive_id: receiveId,
     msg_type: 'image',
@@ -634,40 +732,7 @@ export async function sendImageMessage(
   if (uuid) {
     body.uuid = uuid;
   }
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const resp = await fetch(
-      `${apiBase}/im/v1/messages?receive_id_type=${idType}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      },
-    );
-    const data = (await resp.json()) as {
-      code: number;
-      msg: string;
-      data?: { message_id: string };
-    };
-    if (data.code !== 0) {
-      return { success: false, error: `飞书发送图片失败: ${data.msg}` };
-    }
-    return {
-      success: true,
-      messageId: data.data?.message_id,
-    };
-  } catch (e: any) {
-    return { success: false, error: e.message || String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
+  return postImMessage('sendImageMessage', idType, body, '飞书发送图片失败');
 }
 
 /**
@@ -680,9 +745,6 @@ export async function sendFileMessage(
   fileKey: string,
   uuid?: string,
 ): Promise<FeishuSendResult> {
-  const token = await getTenantToken();
-  const apiBase = getApiBase();
-
   const body: Record<string, unknown> = {
     receive_id: receiveId,
     msg_type: 'file',
@@ -691,40 +753,7 @@ export async function sendFileMessage(
   if (uuid) {
     body.uuid = uuid;
   }
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const resp = await fetch(
-      `${apiBase}/im/v1/messages?receive_id_type=${idType}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      },
-    );
-    const data = (await resp.json()) as {
-      code: number;
-      msg: string;
-      data?: { message_id: string };
-    };
-    if (data.code !== 0) {
-      return { success: false, error: `飞书发送文件失败: ${data.msg}` };
-    }
-    return {
-      success: true,
-      messageId: data.data?.message_id,
-    };
-  } catch (e: any) {
-    return { success: false, error: e.message || String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
+  return postImMessage('sendFileMessage', idType, body, '飞书发送文件失败');
 }
 
 // ==================== 卡片更新 ====================
@@ -789,6 +818,93 @@ export async function updateCard(
   return { success: false, error: `卡片更新失败（${MAX_ATTEMPTS} 次尝试后放弃）: ${lastError}` };
 }
 
+// ==================== 纯文本消息（D1/D2 长聊天流式） ====================
+
+/**
+ * 发送 msg_type=text 的纯文本消息，返回 messageId 给后续流式编辑使用。
+ *
+ * 与 sendTextMessage（post 富文本）的区别：
+ *   - 这里用 `text` 而不是 `post`，因为飞书 PATCH 接口对 text 消息支持更稳定
+ *   - 没有标题、不分段、纯字符串内容
+ *   - D1/D2 场景下用来发占位消息（"🤔 思考中..."）和最终回复
+ */
+export async function sendPlainTextMessage(
+  receiveId: string,
+  idType: FeishuReceiveIdType,
+  content: string,
+  uuid?: string,
+): Promise<FeishuSendResult> {
+  const body: Record<string, unknown> = {
+    receive_id: receiveId,
+    msg_type: 'text',
+    content: JSON.stringify({ text: content }),
+  };
+  if (uuid) {
+    body.uuid = uuid;
+  }
+  // F4：限流 + 指数退避重试 + 死信，统一走 postImMessage（取代原 3 次抖动重试）
+  return postImMessage('sendPlainTextMessage', idType, body, '飞书发送文本失败');
+}
+
+/**
+ * 流式编辑已发送的文本消息（D1/D2 流式输出核心 API）
+ *
+ * 飞书端点：PATCH /im/v1/messages/{message_id}
+ * body：{ msg_type: 'text', content: JSON.stringify({ text }) }
+ *
+ * 与 updateCard 的区别：
+ *   - updateCard 走 content + 卡片 JSON
+ *   - 这里走 msg_type + 纯文本 content
+ *
+ * 同样附带 3 次网络抖动重试（间隔 300ms / 800ms），业务错误不重试。
+ */
+export async function updateTextMessage(
+  messageId: string,
+  text: string,
+): Promise<FeishuSendResult> {
+  let token: string;
+  try {
+    token = await getTenantToken();
+  } catch (e: any) {
+    return { success: false, error: `获取 token 失败: ${e.message || String(e)}` };
+  }
+  const apiBase = getApiBase();
+
+  const MAX_ATTEMPTS = 3;
+  let lastError = '';
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const resp = await fetch(`${apiBase}/im/v1/messages/${messageId}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          msg_type: 'text',
+          content: JSON.stringify({ text }),
+        }),
+        signal: ctrl.signal,
+      });
+      const data = (await resp.json()) as { code: number; msg: string };
+      if (data.code !== 0) {
+        return { success: false, error: `文本消息更新失败: ${data.msg}` };
+      }
+      return { success: true };
+    } catch (e: any) {
+      lastError = e.message || String(e);
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, attempt === 1 ? 300 : 800));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return { success: false, error: `文本消息更新失败（${MAX_ATTEMPTS} 次尝试后放弃）: ${lastError}` };
+}
+
 // ==================== 事件回调验证 ====================
 
 /**
@@ -847,7 +963,11 @@ export function getTokenCacheSize(): number {
   return tenantTokenCache.size;
 }
 
-/** 清理 Token 缓存（用于测试） */
+/** 清理 Token 缓存（用于测试）
+ *
+ * 仅清理进程内 L1 + 单飞 Map。L2 Redis 自带 TTL，不在测试中直接操作（避免依赖 Redis）
+ */
 export function clearTokenCache(): void {
   tenantTokenCache.clear();
+  inflightTokenRequests.clear();
 }

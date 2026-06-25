@@ -13,6 +13,7 @@ import { sendNotificationSchema, executeSendNotification, validateSendNotificati
 import { queryDatabaseSchema, executeQueryDatabase, validateQueryDatabaseConfig, isQueryDatabaseAvailable, type QueryDatabaseParams, type QueryDatabaseResult } from './query-database';
 import { buildMcpProxySchema, executeMcpProxy, validateMcpProxyConfig, isMcpProxyAvailable, initMcpProxy, type McpProxyParams, type McpProxyResult } from './mcp-proxy';
 import { buildExecuteWorkflowSchema, executeExecuteWorkflow, setWorkflowToolExecutor, type ExecuteWorkflowParams, type ExecuteWorkflowResult } from '../workflow/execute-workflow-tool';
+import { setWorkflowNotifier } from '../workflow/workflow-engine';
 import { logger } from '../logger';
 import { requiresConfirmation, requestConfirmation, getPendingConfirmationInfo, attachSseResponseToConfirmation } from '../human-in-the-loop';
 import { sendConfirmationRequest } from '../sse-writer';
@@ -217,6 +218,25 @@ setWorkflowToolExecutor(async (toolName, params, ctx) => {
   });
 });
 
+// E1：工作流引擎执行结束后的声明式通知发送器
+// 直接复用 send_notification 工具的执行链路，免去工作流定义里再写一遍发送步骤
+// 设计：notify 配置失败不抛错（仅 warn），但 send_notification 自身的失败仍由其内部 errors 字段携带
+setWorkflowNotifier(async ({ channel, title, content, recipients, webhookUrl }) => {
+  const result = await executeSendNotification({
+    channel,
+    title,
+    content,
+    recipients,
+    webhookUrl,
+  } as any);
+  if (!result?.success) {
+    // 把工具内部的失败原因往上抛，让 dispatchWorkflowNotify 的 try/catch 捕获后只记 warn
+    throw new Error(
+      `send_notification 失败：${(result?.errors ?? ['unknown']).join('; ').slice(0, 200)}`,
+    );
+  }
+});
+
 export function getAllToolSchemas(): any[] {
   return Object.values(TOOLS).map((t) => t.schema);
 }
@@ -247,7 +267,7 @@ const TOOL_COMPACT_DESCRIPTIONS: Record<string, string> = {
   generate_chart: '生成图表，折线柱状饼图等，数据可视化时使用',
   generate_image: '文生图，根据文字描述生成图片，需要图片时使用',
   create_mindmap: '生成思维导图，整理知识结构梳理逻辑时使用',
-  generate_document: '生成PDF/Word/HTML文档文件，返回fileUrl可作为邮件附件发送，用户要文档导出时使用',
+  generate_document: '生成PDF/Word/HTML/Markdown文档文件，返回fileUrl可作为邮件附件发送，用户要文档导出时使用',
   execute_workflow: '一键执行预置流水线，多步任务匹配模板时优先用此工具',
   send_notification: '发送通知到飞书邮件Webhook，任务完成或主动提醒时使用',
   query_database: '查询外部业务库执行SELECT语句，需要业务数据时使用',

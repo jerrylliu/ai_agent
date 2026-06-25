@@ -64,7 +64,7 @@ export class GeneratedDocumentService {
   async save(params: {
     buffer: Buffer;
     filename: string;
-    format: 'pdf' | 'docx' | 'html';
+    format: 'pdf' | 'docx' | 'html' | 'md';
     mimeType: string;
     userId?: string;
     sessionId?: string;
@@ -200,6 +200,25 @@ export class GeneratedDocumentService {
     });
 
     return { entity, buffer };
+  }
+
+  /**
+   * 列出某会话在指定时间点之后生成的、未过期的文档（按时间升序）。
+   * 用于 Web→飞书 / 飞书入站把刚生成的文档同步成飞书原生文件。
+   * @param sessionId 会话标识
+   * @param afterMs 只返回 createdAt 晚于此毫秒时间戳的文档（防止把历史文档重复同步）
+   */
+  async listRecentBySession(sessionId: string, afterMs: number): Promise<GeneratedDocument[]> {
+    const all = await this.repo.find({
+      where: { sessionId },
+      order: { createdAt: 'ASC' },
+    });
+    const now = new Date();
+    return all.filter(
+      (d) =>
+        new Date(d.createdAt as any).getTime() >= afterMs &&
+        (d.favorited || d.expiresAt >= now),
+    );
   }
 
   /**

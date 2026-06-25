@@ -71,6 +71,52 @@ function getAuthHeaders(): Record<string, string> {
 
 // API 调用函数
 
+/** chat_history 实时事件（与后端 chat-event-bus 对应） */
+export interface ChatHistoryRealtimeEvent {
+  ownerUserId: string;
+  sessionId: string;
+  role: string;
+  source: 'web' | 'feishu';
+  at: number;
+}
+
+/**
+ * 订阅 chat_history 实时事件（SSE）。
+ *
+ * 用于双端实时同步：飞书入站回复 / Web→飞书回流等任意来源写库后，
+ * Web 端立即收到信号并刷新，无需依赖 5 秒轮询。
+ *
+ * EventSource 无法自定义请求头，token 通过 query 传入（与后端 /chat/events 约定一致）。
+ * 返回关闭函数，组件卸载时调用以释放连接。
+ */
+export function subscribeChatEvents(
+  onEvent: (event: ChatHistoryRealtimeEvent) => void,
+  onStatusChange?: (connected: boolean) => void,
+): () => void {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const url = `${API_ENDPOINTS.BASE_URL}/chat/events${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  const source = new EventSource(url);
+
+  source.addEventListener('open', () => onStatusChange?.(true));
+  source.addEventListener('ready', () => onStatusChange?.(true));
+  source.addEventListener('chat_history', (e) => {
+    try {
+      onEvent(JSON.parse((e as MessageEvent).data));
+    } catch {
+      /* 单条事件解析失败忽略，等待下一条 */
+    }
+  });
+  source.addEventListener('error', () => {
+    // EventSource 会自动重连；这里只同步状态，交给轮询兜底
+    onStatusChange?.(false);
+  });
+
+  return () => {
+    source.close();
+    onStatusChange?.(false);
+  };
+}
+
 /**
  * 保存聊天记录
  * @param data 聊天历史项数据

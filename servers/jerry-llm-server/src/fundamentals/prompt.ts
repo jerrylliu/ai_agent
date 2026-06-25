@@ -116,6 +116,7 @@ import { MultiLevelCache } from './multi-level-cache';
 //   inspectPromptInjection                —— 检查输入是否包含可疑注入模式
 //   UNTRUSTED_CONTEXT_INSTRUCTION         —— 标准化的「不可信上下文」提示常量
 import { buildPromptInjectionSafetyInstruction, inspectPromptInjection, UNTRUSTED_CONTEXT_INSTRUCTION } from './prompt-injection-guard.js';
+import { stripMarkdownImages } from './feishu/feishu-markdown-image.js';
 
 /**
  * ========================================================================
@@ -356,18 +357,33 @@ function detectToolIntent(userMessage: string): ToolIntentDetection {
  *
  * 判断标准：消息长度足够（>=4字）且不是纯问候/感谢/确认。
  */
+/**
+ * 判断用户消息是否是"纯问候/感谢/确认/告别"等寒暄客套。
+ *
+ * 这类消息按定义不需要任何工具——既不查知识库，也不生成多媒体。
+ * 用于在 FC 首轮把 tool_choice 确定性设为 'none'，根治 auto 模式下
+ * 模型"手痒"乱调 list_knowledge_base 等无参工具的问题（不依赖模型遵守提示词）。
+ */
+const GREETING_PATTERNS: RegExp[] = [
+  /^(你好|您好|hi|hello|hey|嗨|哈喽|哈啰|早上好|中午好|下午好|晚上好|早安|晚安)[\s!！.。?？呀啊哦~]*$/i,
+  /^(谢谢|感谢|多谢|thx|thanks|thank you|3q)[\s!！.。你您~]*$/i,
+  /^(好的|明白|了解|收到|ok|okay|好|嗯|哦|嗯嗯|行|可以)[\s!！.。~]*$/i,
+  /^(再见|拜拜|bye|goodbye|88)[\s!！.。~]*$/i,
+  /^(在吗|在么|在不在)[\s!！.。?？~]*$/i,
+];
+
+function isPureGreeting(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  return GREETING_PATTERNS.some(p => p.test(trimmed));
+}
+
 function isSubstantiveQuery(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length < 4) return false;
 
   // 纯问候/感谢/确认/闲聊 → 不需要查知识库
-  const greetingPatterns = [
-    /^(你好|您好|hi|hello|hey|嗨|哈喽|早上好|下午好|晚上好)[\s!！.。?？]*$/i,
-    /^(谢谢|感谢|多谢|thx|thanks|thank you)[\s!！.。]*$/i,
-    /^(好的|明白|了解|收到|ok|okay|好|嗯|哦)[\s!！.。]*$/i,
-    /^(再见|拜拜|bye|goodbye)[\s!！.。]*$/i,
-  ];
-  if (greetingPatterns.some(p => p.test(trimmed))) return false;
+  if (isPureGreeting(trimmed)) return false;
 
   return true;
 }
@@ -856,7 +872,7 @@ function buildFCSystemPrompt(): string {
     generate_chart: '根据数据生成图表（折线图、柱状图、饼图等），返回 imageUrl 可嵌入邮件',
     generate_image: '根据文字描述生成图片（文生图）',
     create_mindmap: '生成思维导图，返回 imageUrl 可嵌入邮件',
-    generate_document: '把 Markdown 内容生成为 PDF / Word(docx) / HTML 文件，返回 fileUrl 可作为邮件附件发送',
+    generate_document: '把 Markdown 内容生成为 PDF / Word(docx) / HTML / Markdown(md) 文件，返回 fileUrl 可作为邮件附件发送',
     // ---------------- 外部 API 集成工具（方案 A） ----------------
     send_notification: '发送通知到飞书消息、邮件、Webhook（钉钉/企业微信群机器人），用于把任务结果主动推送给用户或团队',
     query_database: '查询外部业务数据库（仅支持 SELECT 语句），自动经过 SQL 安全网关校验，可用于统计订单/用户/销售等业务数据',
@@ -989,11 +1005,11 @@ ${toolList}
   }
 
   if (availableTools.includes('generate_document')) {
-    prompt += `\n\n文档生成规则（PDF / Word / HTML）：
-- 当用户要求"生成 PDF/Word/docx/HTML 文档"、"导出为文件"、"做一份报告/手册"等场景时，调用 generate_document
-- 必须提供 title（文档标题）、content（Markdown 格式正文）、format（'pdf' / 'docx' / 'html' 三选一）
+    prompt += `\n\n文档生成规则（PDF / Word / HTML / Markdown）：
+- 当用户要求"生成 PDF/Word/docx/HTML/Markdown/md 文档"、"导出为文件"、"做一份报告/手册"等场景时，调用 generate_document
+- 必须提供 title（文档标题）、content（Markdown 格式正文）、format（'pdf' / 'docx' / 'html' / 'md' 四选一）
 - content 必须是 Markdown：用 # 表示标题、- 表示列表、**xx** 加粗、\`\`\` 代码块、> 引用
-- 用户未指定格式时，默认选 pdf（最通用、可直接打印）；要求"可编辑"时选 docx；只在网页查看选 html
+- 用户未指定格式时，默认选 pdf（最通用、可直接打印）；要求"可编辑"时选 docx；只在网页查看选 html；用户明确要"Markdown / md / 源文件"时选 md
 - 工具返回 fileUrl 字段（内部协议 fc://document/xxx），如果用户要求邮件发送，把 fileUrl 直接填入 send_notification.attachments[].url 即可。示例：先 generate_document({title:"周报",content:"...",format:"pdf"}) 得到 { fileUrl }，再 send_notification({channel:"email", title:"本周周报", content:"详见附件", recipients:["x@x.com"], attachments:[{filename:"周报.pdf", url: fileUrl}]})
 - 不要把整段 Markdown 内容塞进 send_notification.content 当邮件正文——文档必须作为附件发送`;
   }
@@ -1463,6 +1479,19 @@ async function promptWithFunctionCalling(
         reason: '用户消息是实质性问题，且知识库工具可用',
       });
     }
+  }
+
+  // ==================== 纯寒暄：确定性禁用工具调用 ====================
+  // 问题：auto 模式下，模型首轮偶发"手痒"调用无参工具（如 list_knowledge_base），
+  //       对"你好啊"这类纯客套回出工具语气的怪异回复，下一轮才恢复正常。
+  // 根治：纯问候/感谢/确认/告别按定义不需要任何工具，直接 tool_choice='none'，
+  //       不依赖模型遵守"闲聊不调工具"的提示词。
+  if (toolChoiceParam === 'auto' && caps.supportsFC && caps.supportsToolChoice && isPureGreeting(promptText || '')) {
+    toolChoiceParam = 'none';
+    logger.info('FC模式：检测到纯寒暄，禁用首轮工具调用（tool_choice=none）', {
+      module: 'PromptService',
+      preview: (promptText || '').slice(0, 30),
+    });
   }
 
   // FC 能力弱的模型对 tool_choice 参数支持不佳，不传该参数
@@ -1976,7 +2005,6 @@ async function promptWithFunctionCalling(
           calculateCount: toolCallsMade.filter(tc => tc.name === 'calculate').length,
           toolCalls: toolCallsMade.map(tc => tc.name),
         };
-        const injectedImageUrls: string[] = []; // 记录已注入的图片 URL，用于过滤 LLM 重复输出
         try {
           // 先发送 metadata 和 session_action 事件
           sendMetadata(res, ragMetadata);
@@ -1995,7 +2023,6 @@ async function promptWithFunctionCalling(
             sendContent(res, imageContent + '\n\n');
             process.stdout.write(imageContent + '\n\n');
             fcFullResponse = imageContent + '\n\n';
-            injectedImageUrls.push(...collectedImages.map(img => img.url));
           }
           if (collectedMindmaps.length > 0) {
             for (const mm of collectedMindmaps) {
@@ -2038,8 +2065,9 @@ async function promptWithFunctionCalling(
           let inThinkBlock = false;
           let rawToolCallBuffer = ''; // 缓冲可能的原始工具调用格式
           let rawToolCallDetected = false; // 是否已检测到原始格式
-          let imageMarkdownBuffer = ''; // 缓冲可能的图片 Markdown（用于过滤重复图片）
-          const hasInjectedImages = injectedImageUrls.length > 0;
+          let imageMarkdownBuffer = ''; // 缓冲可能跨 chunk 的图片 Markdown，闭合后统一剥离
+          // 仅当服务端注入过图片时，才剥离 LLM 重复输出的图片，避免误删 AI 主动引用的合法图片
+          const hasInjectedImages = collectedImages.length > 0;
           for await (const chunk of stream) {
             if (isCancelled && isCancelled()) {
               logger.info('FC模式流式：检测到取消信号，停止生成', { module: 'PromptService' });
@@ -2094,51 +2122,29 @@ async function promptWithFunctionCalling(
                   process.stdout.write(rawToolCallBuffer);
                   rawToolCallBuffer = '';
                 }
-                // 过滤 LLM 重复输出的图片 Markdown（服务端已注入过图片）
-                let outputText = filtered.text;
-                if (hasInjectedImages && outputText.includes('![')) {
-                  // 可能包含图片 Markdown，缓冲后过滤
-                  imageMarkdownBuffer += outputText;
-                  // 检查缓冲区是否包含完整的图片 Markdown
-                  const imageMarkdownPattern = /!\[[^\]]*\]\([^)]+\)/g;
-                  const hasCompleteImageMarkdown = imageMarkdownPattern.test(imageMarkdownBuffer);
-                  if (hasCompleteImageMarkdown || imageMarkdownBuffer.length > 500) {
-                    // 缓冲区足够长，可以安全过滤
-                    const cleaned = imageMarkdownBuffer.replace(/!\[[^\]]*\]\([^)]+\)\s*/g, (match) => {
-                      // 检查是否包含已注入的图片 URL
-                      for (const url of injectedImageUrls) {
-                        if (match.includes(url)) return ''; // 过滤重复图片
-                      }
-                      return match; // 保留非重复图片
-                    });
-                    if (cleaned) {
-                      fcFullResponse += cleaned;
-                      sendContent(res, cleaned);
-                      process.stdout.write(cleaned);
-                    }
-                    imageMarkdownBuffer = '';
-                  }
-                  // 否则继续缓冲，不输出
+                // 图片唯一来源是服务端注入：仅当本轮注入过图片时，才剥离 LLM 重复输出的图片。
+                // 未注入图片时直接输出，既不误删 AI 引用的合法图片，也不引入缓冲延迟。
+                if (!hasInjectedImages) {
+                  fcFullResponse += filtered.text;
+                  sendContent(res, filtered.text);
+                  process.stdout.write(filtered.text);
                 } else {
-                  // 检查图片缓冲区是否有残留
-                  if (imageMarkdownBuffer) {
-                    // 缓冲区中没有完整图片 Markdown，安全输出
-                    const cleaned = imageMarkdownBuffer.replace(/!\[[^\]]*\]\([^)]+\)\s*/g, (match) => {
-                      for (const url of injectedImageUrls) {
-                        if (match.includes(url)) return '';
-                      }
-                      return match;
-                    });
-                    if (cleaned) {
-                      fcFullResponse += cleaned;
-                      sendContent(res, cleaned);
-                      process.stdout.write(cleaned);
-                    }
-                    imageMarkdownBuffer = '';
+                  // 图片 Markdown 可能跨 chunk，遇到未闭合的 `![` 时先缓冲，等闭合再剥离。
+                  imageMarkdownBuffer += filtered.text;
+                  const lastOpen = imageMarkdownBuffer.lastIndexOf('![');
+                  const hasUnclosedImage =
+                    lastOpen !== -1 && imageMarkdownBuffer.indexOf(')', lastOpen) === -1;
+                  if (hasUnclosedImage && imageMarkdownBuffer.length < 2000) {
+                    // 可能是半截图片语法，继续缓冲等待闭合
+                    continue;
                   }
-                  fcFullResponse += outputText;
-                  sendContent(res, outputText);
-                  process.stdout.write(outputText);
+                  const cleaned = stripMarkdownImages(imageMarkdownBuffer);
+                  imageMarkdownBuffer = '';
+                  if (cleaned) {
+                    fcFullResponse += cleaned;
+                    sendContent(res, cleaned);
+                    process.stdout.write(cleaned);
+                  }
                 }
               }
             }
@@ -2152,14 +2158,9 @@ async function promptWithFunctionCalling(
               process.stdout.write(cleaned);
             }
           }
-          // 输出图片 Markdown 缓冲区残留内容
+          // 输出图片 Markdown 缓冲区残留内容（统一剥离图片后再输出）
           if (imageMarkdownBuffer) {
-            const cleaned = imageMarkdownBuffer.replace(/!\[[^\]]*\]\([^)]+\)\s*/g, (match) => {
-              for (const url of injectedImageUrls) {
-                if (match.includes(url)) return '';
-              }
-              return match;
-            });
+            const cleaned = stripMarkdownImages(imageMarkdownBuffer);
             if (cleaned) {
               fcFullResponse += cleaned;
               sendContent(res, cleaned);
@@ -2198,14 +2199,9 @@ async function promptWithFunctionCalling(
             fallbackContent = fallbackContent.replace(/<think[\s\S]*?<\/think>/gs, "");
             // 过滤原始工具调用格式
             fallbackContent = filterRawToolCalls(fallbackContent);
-            // 过滤 LLM 重复输出的图片 Markdown（服务端已注入过图片）
-            if (injectedImageUrls.length > 0) {
-              fallbackContent = fallbackContent.replace(/!\[[^\]]*\]\([^)]+\)\s*/g, (match) => {
-                for (const url of injectedImageUrls) {
-                  if (match.includes(url)) return '';
-                }
-                return match;
-              });
+            // 图片唯一来源是服务端注入，回退路径同样剥离 LLM 输出的图片 Markdown
+            if (collectedImages.length > 0) {
+              fallbackContent = stripMarkdownImages(fallbackContent);
             }
             if (!res.writableEnded) {
               // fallback 时也需要发送 metadata，否则客户端收不到

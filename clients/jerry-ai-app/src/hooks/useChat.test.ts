@@ -65,6 +65,7 @@ vi.mock('../lib/api', () => ({
   uploadFile: vi.fn(),
   uploadToKnowledgeBase: vi.fn(),
   getKnowledgeBaseStatus: vi.fn(),
+  subscribeChatEvents: vi.fn(() => () => {}),
 }));
 
 import * as api from '../lib/api';
@@ -73,6 +74,7 @@ describe('useChat', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    vi.mocked(api.getSessionMessages).mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -80,7 +82,38 @@ describe('useChat', () => {
   });
 
   /* ====================================================================
-   * 初始状态
+   * refreshAppData
+   * ==================================================================*/
+  describe('refreshAppData', () => {
+    it('应统一刷新模型、知识库和会话数据', async () => {
+      vi.mocked(api.getModelInfo).mockResolvedValue(mockModelInfo);
+      vi.mocked(api.getKnowledgeBaseStatus).mockResolvedValue({
+        status: 'ready',
+        message: 'ready',
+        stats: {
+          documentCount: 1,
+          uploadedDocumentCount: 1,
+          knowledgeSourcePageCount: 0,
+          collectionName: 'test',
+        },
+      } as any);
+      vi.mocked(api.getSessions).mockResolvedValue(mockSessions);
+
+      const { result } = renderHook(() => useChat(true));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        await result.current.refreshAppData('manual');
+      });
+
+      expect(api.getModelInfo).toHaveBeenCalled();
+      expect(api.getKnowledgeBaseStatus).toHaveBeenCalled();
+      expect(api.getSessions).toHaveBeenCalled();
+    });
+  });
+
+  /* ====================================================================
+   * 其他状态
    * ==================================================================*/
   describe('初始状态', () => {
     it('初始状态应有默认值', async () => {
@@ -122,13 +155,31 @@ describe('useChat', () => {
       });
     });
 
-    it('authenticated 为 false 时 hook 仍会在 mount 时调用 loadSessions', async () => {
+    it('authLoading 为 true 时不应提前加载会话', async () => {
       vi.mocked(api.getModelInfo).mockResolvedValue(mockModelInfo);
-      vi.mocked(api.getSessions).mockResolvedValue([]);
+      vi.mocked(api.getSessions).mockResolvedValue(mockSessions);
 
-      renderHook(() => useChat(false));
+      renderHook(() => useChat(false, true));
 
-      // useChat 在 mount 时会无条件调用 loadSessions（然后 loadSessions 内处理认证逻辑）
+      await waitFor(() => {
+        expect(api.getModelInfo).toHaveBeenCalled();
+      });
+      expect(api.getSessions).not.toHaveBeenCalled();
+    });
+
+    it('authLoading 结束后应加载会话', async () => {
+      vi.mocked(api.getModelInfo).mockResolvedValue(mockModelInfo);
+      vi.mocked(api.getSessions).mockResolvedValue(mockSessions);
+
+      const { rerender } = renderHook(
+        ({ authLoading }) => useChat(true, authLoading),
+        { initialProps: { authLoading: true } },
+      );
+
+      expect(api.getSessions).not.toHaveBeenCalled();
+
+      rerender({ authLoading: false });
+
       await waitFor(() => {
         expect(api.getSessions).toHaveBeenCalled();
       });
@@ -332,7 +383,6 @@ describe('useChat', () => {
       vi.mocked(api.saveChatHistory).mockResolvedValue({ id: 1 });
       vi.mocked(api.updateSessionTitle).mockResolvedValue(undefined);
 
-      // Mock getAIResponse 返回一个 ReadableStream
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
         start(controller) {
@@ -355,6 +405,51 @@ describe('useChat', () => {
 
       await act(() => result.current.sendMessage('', ['img1.jpg']));
       expect(result.current.isTyping).toBe(false);
+    });
+
+    it('流式刷新覆盖临时 AI 消息后应恢复 assistant 气泡', async () => {
+      vi.mocked(api.getModelInfo).mockResolvedValue(mockModelInfo);
+      vi.mocked(api.getSessions).mockResolvedValue([]);
+      vi.mocked(api.saveChatHistory)
+        .mockResolvedValueOnce({ id: 1 })
+        .mockResolvedValueOnce({ id: 2 });
+      vi.mocked(api.updateSessionTitle).mockResolvedValue(undefined);
+
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue('生成好了');
+          controller.close();
+        },
+      });
+      vi.mocked(api.getAIResponse).mockImplementation(async () => {
+        vi.mocked(api.getSessionMessages).mockResolvedValueOnce([
+          {
+            id: 1,
+            role: 'user',
+            content: '生成图片',
+            createdAt: new Date().toISOString(),
+          },
+        ] as any);
+        return {
+          stream,
+          usedKnowledgeBase: false,
+          contextCount: 0,
+          sessionAction: null,
+          onToolStatus: null,
+          fileCards: [],
+        } as any;
+      });
+
+      const { result } = renderHook(() => useChat(false));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        const sending = result.current.sendMessage('生成图片');
+        await result.current.refreshAppData('manual').catch(() => {});
+        await sending;
+      });
+
+      expect(result.current.messages.some((msg) => msg.role === 'assistant' && msg.content === '生成好了')).toBe(true);
     });
   });
 

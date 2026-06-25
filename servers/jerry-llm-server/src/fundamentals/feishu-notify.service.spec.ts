@@ -27,6 +27,61 @@ jest.mock('./config', () => ({
   },
 }));
 
+// mock redis-client：通过 globalThis.__feishuRedisMock 状态切换可用性
+// jest.mock 工厂会被 hoist 到 import 之前执行，所以状态必须挂在 globalThis 上
+// 避免闭包未初始化的 TDZ 问题
+type RedisMockState = {
+  ready: boolean;
+  store: Map<string, { value: string; expiresAt: number }>;
+  getCalls: number;
+  setCalls: number;
+};
+
+(globalThis as any).__feishuRedisMock = {
+  ready: false,
+  store: new Map<string, { value: string; expiresAt: number }>(),
+  getCalls: 0,
+  setCalls: 0,
+} as RedisMockState;
+
+const redisMock = (globalThis as any).__feishuRedisMock as RedisMockState;
+
+jest.mock('./redis-client', () => ({
+  getRedis: () => {
+    const state = (globalThis as any).__feishuRedisMock as RedisMockState;
+    if (!state.ready) return null;
+    return {
+      get: async (key: string) => {
+        state.getCalls += 1;
+        const entry = state.store.get(key);
+        if (!entry) return null;
+        if (entry.expiresAt > 0 && entry.expiresAt <= Date.now()) {
+          state.store.delete(key);
+          return null;
+        }
+        return entry.value;
+      },
+      set: async (key: string, value: string, mode?: string, ttl?: number) => {
+        state.setCalls += 1;
+        const expiresAt = mode === 'PX' && typeof ttl === 'number' ? Date.now() + ttl : 0;
+        state.store.set(key, { value, expiresAt });
+        return 'OK';
+      },
+    };
+  },
+  isRedisReady: () => ((globalThis as any).__feishuRedisMock as RedisMockState).ready,
+}));
+
+// mock logger：避免测试输出污染
+jest.mock('./logger', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
+}));
+
 // 临时 helper：构造 fetch 响应
 function mockFetchResponse(jsonData: any, ok = true): Response {
   return {
@@ -61,6 +116,11 @@ describe('FeishuNotifyService', () => {
   beforeEach(() => {
     clearTokenCache();
     clearEmailCache();
+    // 每个用例默认禁用 L2 Redis，由 F2 用例自行打开
+    redisMock.ready = false;
+    redisMock.store.clear();
+    redisMock.getCalls = 0;
+    redisMock.setCalls = 0;
     fetchSpy = jest.spyOn(global, 'fetch') as unknown as jest.SpyInstance;
   });
 
@@ -245,6 +305,118 @@ describe('FeishuNotifyService', () => {
       expect(r2.success).toBe(true);
       // 第一次 2 次 fetch（token + send），第二次 1 次（send only）
       expect(fetchSpy).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  // ============================================================
+  // F2：L2 Redis 共享缓存（多实例 Token 复用）
+  // ============================================================
+  describe('Token L2 Redis 共享缓存（F2）', () => {
+    it('L2 命中时不应调用远端飞书 Token 接口', async () => {
+      // 预置 L2 中已有未过期 token
+      redisMock.ready = true;
+      const key = 'jerry:feishu:tenant_token:https://open.feishu.cn/open-apis:test-app-id';
+      // 注意：模块内 key 不包含 ioredis 的 keyPrefix（那是 client 透明添加的）
+      redisMock.store.set('feishu:tenant_token:https://open.feishu.cn/open-apis:test-app-id', {
+        value: JSON.stringify({ token: 'token-from-redis', expiresAt: Date.now() + 60_000 }),
+        expiresAt: Date.now() + 60_000,
+      });
+
+      // 只 mock 发送消息，不 mock token 接口；若代码错误走远端，fetch 会因为缺 mock 返回 undefined
+      fetchSpy.mockResolvedValueOnce(
+        mockFetchResponse({ code: 0, data: { message_id: 'om_l2_hit' } }),
+      );
+
+      const r = await sendTextMessage('ou_abc', 'open_id', 't', 'c');
+      expect(r.success).toBe(true);
+      // 只有一次 fetch（发送），没有 token 拉取
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(redisMock.getCalls).toBeGreaterThanOrEqual(1);
+      // L1 也应被同步填充
+      expect(getTokenCacheSize()).toBe(1);
+      // 显式消费 key 防止 unused 警告
+      expect(key).toContain('feishu:tenant_token');
+    });
+
+    it('L2 未命中 + 远端拉取后应回写 L2，TTL 与 expiresAt 对齐', async () => {
+      redisMock.ready = true;
+      fetchSpy
+        .mockResolvedValueOnce(
+          mockFetchResponse({ code: 0, tenant_access_token: 't_remote', expire: 7200 }),
+        )
+        .mockResolvedValueOnce(
+          mockFetchResponse({ code: 0, data: { message_id: 'om_l2_miss' } }),
+        );
+
+      const r = await sendTextMessage('ou_abc', 'open_id', 't', 'c');
+      expect(r.success).toBe(true);
+      // 远端拉了一次 token，发送了一次消息
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      // L2 写入一次
+      expect(redisMock.setCalls).toBe(1);
+      const entry = redisMock.store.get(
+        'feishu:tenant_token:https://open.feishu.cn/open-apis:test-app-id',
+      );
+      expect(entry).toBeDefined();
+      const parsed = JSON.parse(entry!.value);
+      expect(parsed.token).toBe('t_remote');
+      // expiresAt 应比当前时间晚至少 100 分钟（120 分钟 - 5 分钟提前量），不会超过 120 分钟
+      const remainMs = parsed.expiresAt - Date.now();
+      expect(remainMs).toBeGreaterThan(100 * 60_000);
+      expect(remainMs).toBeLessThanOrEqual(120 * 60_000);
+    });
+
+    it('Redis 不可用时应静默降级，不影响主流程', async () => {
+      // Redis 关闭（默认状态）
+      expect(redisMock.ready).toBe(false);
+      fetchSpy
+        .mockResolvedValueOnce(
+          mockFetchResponse({ code: 0, tenant_access_token: 't_local', expire: 7200 }),
+        )
+        .mockResolvedValueOnce(
+          mockFetchResponse({ code: 0, data: { message_id: 'om_no_redis' } }),
+        );
+
+      const r = await sendTextMessage('ou_abc', 'open_id', 't', 'c');
+      expect(r.success).toBe(true);
+      // 既没读也没写 L2
+      expect(redisMock.getCalls).toBe(0);
+      expect(redisMock.setCalls).toBe(0);
+      // L1 仍正常回填
+      expect(getTokenCacheSize()).toBe(1);
+    });
+
+    it('并发请求应共享同一个 Token 拉取（单飞，防击穿）', async () => {
+      redisMock.ready = true;
+      // L2 未命中；远端只 mock 一次 token，证明只调一次
+      fetchSpy.mockImplementation(async (url: any) => {
+        const u = typeof url === 'string' ? url : (url?.url ?? '');
+        if (u.includes('/auth/v3/tenant_access_token/internal')) {
+          return mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't_single_flight',
+            expire: 7200,
+          });
+        }
+        return mockFetchResponse({ code: 0, data: { message_id: 'om_concurrent' } });
+      });
+
+      // 同进程 5 个并发发送（同一 cacheKey）
+      const results = await Promise.all([
+        sendTextMessage('ou_a', 'open_id', 't', 'c'),
+        sendTextMessage('ou_b', 'open_id', 't', 'c'),
+        sendTextMessage('ou_c', 'open_id', 'oc', 'c'),
+        sendTextMessage('ou_d', 'open_id', 't', 'c'),
+        sendTextMessage('ou_e', 'open_id', 't', 'c'),
+      ]);
+      results.forEach((r) => expect(r.success).toBe(true));
+
+      // Token 接口只应被调用 1 次（单飞）
+      const tokenCalls = fetchSpy.mock.calls.filter((call: any[]) => {
+        const u = typeof call[0] === 'string' ? call[0] : (call[0]?.url ?? '');
+        return u.includes('/auth/v3/tenant_access_token/internal');
+      });
+      expect(tokenCalls).toHaveLength(1);
     });
   });
 

@@ -29,7 +29,7 @@ export class GeneratedDocument {
   @Column()
   filename: string;
 
-  /** 输出格式：pdf / docx / html */
+  /** 输出格式：pdf / docx / html / md */
   @Column({ length: 16 })
   format: string;
 

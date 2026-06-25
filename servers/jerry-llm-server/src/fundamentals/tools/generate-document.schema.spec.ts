@@ -13,6 +13,7 @@ jest.mock('../document-generator', () => ({
   markdownToHtml: jest.fn(),
   markdownToPdf: jest.fn(),
   markdownToDocx: jest.fn(),
+  markdownToMd: jest.fn(),
   getDocumentMimeType: jest.fn(),
   ensureExtension: jest.fn(),
 }));
@@ -34,9 +35,9 @@ describe('generateDocumentSchema 结构', () => {
     expect(params.required.sort()).toEqual(['content', 'format', 'title']);
   });
 
-  it('format enum 应为 pdf / docx / html', () => {
+  it('format enum 应为 pdf / docx / html / md', () => {
     const params = generateDocumentSchema.function.parameters as any;
-    expect(params.properties.format.enum).toEqual(['pdf', 'docx', 'html']);
+    expect(params.properties.format.enum).toEqual(['pdf', 'docx', 'html', 'md']);
   });
 });
 
@@ -46,6 +47,15 @@ describe('generateDocumentParamsSchema 校验', () => {
       title: '报告',
       content: '# 标题',
       format: 'pdf',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('md 格式应被接受', () => {
+    const r = generateDocumentParamsSchema.safeParse({
+      title: '报告',
+      content: '# 标题',
+      format: 'md',
     });
     expect(r.success).toBe(true);
   });

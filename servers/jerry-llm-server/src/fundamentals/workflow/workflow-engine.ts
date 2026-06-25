@@ -48,6 +48,43 @@ export interface WorkflowDefinition {
   description: string;
   /** 步骤列表（顺序执行） */
   steps: WorkflowStep[];
+  /**
+   * 完成后自动通知（E1 模块声明式通知）
+   *
+   * 工作流执行结束（无论 completed / partial / failed）时，自动调用 send_notification 推送一条结果。
+   * 不依赖 LLM 自行规划"再发一条通知"，避免 Plan-Execute / 流水线末尾被 LLM 漏掉 notify 步骤。
+   *
+   * 字段中的字符串支持以下模板变量：
+   *   ${context.xxx}     —— 工作流上下文（与 step.params 同语法）
+   *   ${workflow.id}     —— 流水线 ID
+   *   ${workflow.name}   —— 流水线名称
+   *   ${workflow.status} —— 'completed' | 'partial' | 'failed'
+   *   ${workflow.successCount} / ${workflow.failedCount} / ${workflow.totalDurationMs}
+   *
+   * 通知失败不影响主流程结果（只记录 warn 日志）。
+   */
+  notify?: WorkflowNotifyConfig;
+}
+
+/** 工作流完成后的声明式通知配置（E1） */
+export interface WorkflowNotifyConfig {
+  /** 通知通道；默认 feishu */
+  channel?: 'feishu' | 'email' | 'webhook';
+  /** 接收人列表（feishu open_id / 邮箱 / chat_id 等；webhook 通道忽略） */
+  recipients?: string[];
+  /** Webhook URL（仅 channel=webhook 时使用） */
+  webhookUrl?: string;
+  /** 通知标题模板，默认 "✅ 工作流 ${workflow.name} 执行${workflow.status}" */
+  title?: string;
+  /** 通知正文模板，默认包含步骤数、成功/失败计数、耗时 */
+  content?: string;
+  /**
+   * 触发条件，默认 always：
+   *   always   —— 任何结束状态都通知
+   *   success  —— 仅 completed 时通知
+   *   failure  —— 仅 partial / failed 时通知
+   */
+  trigger?: 'always' | 'success' | 'failure';
 }
 
 /** 单步执行结果 */
@@ -203,6 +240,30 @@ function resolveParams(
 
 /** 工具执行器函数类型（避免循环依赖，由调用方注入） */
 export type ToolExecutor = (toolName: string, params: any, ctx: { userId?: string; sessionId?: string; res?: Response }) => Promise<any>;
+
+/**
+ * 工作流声明式通知发送器（E1）
+ *
+ * 抽成函数注入，是为了避免 workflow-engine 直接依赖 send-notification 工具——
+ *   tools/index.ts 会同时注册工作流和 send_notification，互相 import 会形成循环依赖。
+ *   工作流引擎只持有"发什么"的描述（标题/正文/接收人），实际"怎么发"由上层注入。
+ *
+ * 任何异常都应被注入方捕获后只记 warn，不能让 notify 失败影响主流程返回。
+ */
+export type WorkflowNotifier = (params: {
+  channel: 'feishu' | 'email' | 'webhook';
+  title: string;
+  content: string;
+  recipients?: string[];
+  webhookUrl?: string;
+}) => Promise<void>;
+
+let workflowNotifierRef: WorkflowNotifier | null = null;
+
+/** 注入声明式通知发送器（应用启动时由 tools/index.ts 调用一次） */
+export function setWorkflowNotifier(notifier: WorkflowNotifier | null): void {
+  workflowNotifierRef = notifier;
+}
 
 /**
  * 执行流水线
@@ -444,6 +505,17 @@ export async function executeWorkflow(
     });
   }
 
+  // E1：声明式自动通知（成功/失败/部分成功后自动推送）
+  // 同步 await 是有意为之——通知应在工具结果返回前发出，便于上层串行编排和测试断言
+  await dispatchWorkflowNotify({
+    workflow,
+    context,
+    status,
+    successCount,
+    failedCount,
+    totalDurationMs,
+  });
+
   return {
     workflowId: workflow.id,
     status,
@@ -451,6 +523,123 @@ export async function executeWorkflow(
     totalDurationMs,
     finalOutput,
   };
+}
+
+/**
+ * E1：根据 workflow.notify 配置触发声明式通知
+ *
+ * 行为：
+ *   - 无 notify 配置 → 静默返回
+ *   - 未注入 notifier → warn 一次后返回（开发环境也能跑，只是没发出去）
+ *   - trigger=success 但 status 非 completed → 跳过
+ *   - trigger=failure 但 status=completed → 跳过
+ *   - notifier 抛错 → warn 后吞掉，不影响主流程
+ */
+async function dispatchWorkflowNotify(args: {
+  workflow: WorkflowDefinition;
+  context: WorkflowContext;
+  status: 'completed' | 'failed' | 'partial';
+  successCount: number;
+  failedCount: number;
+  totalDurationMs: number;
+}): Promise<void> {
+  const { workflow, context, status, successCount, failedCount, totalDurationMs } = args;
+  const notify = workflow.notify;
+  if (!notify) return;
+
+  const trigger = notify.trigger ?? 'always';
+  if (trigger === 'success' && status !== 'completed') return;
+  if (trigger === 'failure' && status === 'completed') return;
+
+  if (!workflowNotifierRef) {
+    logger.warn('Workflow：声明式通知配置存在但未注入 notifier，跳过', {
+      module: 'WorkflowEngine',
+      workflowId: workflow.id,
+      channel: notify.channel ?? 'feishu',
+    });
+    return;
+  }
+
+  const workflowMeta = {
+    id: workflow.id,
+    name: workflow.name,
+    status,
+    successCount,
+    failedCount,
+    totalDurationMs,
+    totalSteps: workflow.steps.length,
+  };
+
+  const channel = notify.channel ?? 'feishu';
+  const title = renderNotifyTemplate(notify.title, context, workflowMeta)
+    || defaultNotifyTitle(workflowMeta);
+  const content = renderNotifyTemplate(notify.content, context, workflowMeta)
+    || defaultNotifyContent(workflowMeta);
+
+  try {
+    await workflowNotifierRef({
+      channel,
+      title,
+      content,
+      recipients: notify.recipients,
+      webhookUrl: notify.webhookUrl,
+    });
+    logger.info('Workflow：声明式通知已发送', {
+      module: 'WorkflowEngine',
+      workflowId: workflow.id,
+      channel,
+      recipientsCount: notify.recipients?.length ?? 0,
+      status,
+    });
+  } catch (e: any) {
+    // 通知失败不影响主流程返回，但要有日志便于排查
+    logger.warn('Workflow：声明式通知发送失败（已忽略，不影响主流程）', {
+      module: 'WorkflowEngine',
+      workflowId: workflow.id,
+      channel,
+      err: (e?.message || String(e)).slice(0, 200),
+    });
+  }
+}
+
+/** E1 模板渲染：仅支持 ${context.xxx} 与 ${workflow.xxx} 两种变量 */
+function renderNotifyTemplate(
+  tpl: string | undefined,
+  context: WorkflowContext,
+  workflowMeta: Record<string, unknown>,
+): string {
+  if (!tpl) return '';
+  return tpl
+    .replace(/\$\{context\.([^}]+)\}/g, (_m, path: string) => {
+      const v = getByPath(context, path);
+      return v === undefined || v === null ? '' : String(v);
+    })
+    .replace(/\$\{workflow\.([^}]+)\}/g, (_m, path: string) => {
+      const v = getByPath(workflowMeta, path);
+      return v === undefined || v === null ? '' : String(v);
+    });
+}
+
+function defaultNotifyTitle(meta: { name: string; status: string }): string {
+  const emoji = meta.status === 'completed' ? '✅' : meta.status === 'partial' ? '⚠️' : '❌';
+  const cn = meta.status === 'completed' ? '执行完成' : meta.status === 'partial' ? '部分成功' : '执行失败';
+  return `${emoji} 工作流 ${meta.name} ${cn}`;
+}
+
+function defaultNotifyContent(meta: {
+  name: string;
+  status: string;
+  successCount: number;
+  failedCount: number;
+  totalSteps: number;
+  totalDurationMs: number;
+}): string {
+  return [
+    `**工作流**：${meta.name}`,
+    `**状态**：${meta.status}`,
+    `**步骤**：成功 ${meta.successCount} / 失败 ${meta.failedCount} / 总计 ${meta.totalSteps}`,
+    `**耗时**：${meta.totalDurationMs} ms`,
+  ].join('\n');
 }
 
 /**

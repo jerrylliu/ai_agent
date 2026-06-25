@@ -31,8 +31,10 @@ jest.mock('../sse-writer', () => ({
 import {
   executeWorkflow,
   validateWorkflow,
+  setWorkflowNotifier,
   type WorkflowDefinition,
   type ToolExecutor,
+  type WorkflowNotifier,
 } from './workflow-engine';
 
 describe('Workflow Engine（P1）', () => {
@@ -409,6 +411,130 @@ describe('Workflow Engine（P1）', () => {
       const result = validateWorkflow(wf);
       expect(result.valid).toBe(false);
       expect(result.errors.some(e => e.includes('tool'))).toBe(true);
+    });
+  });
+
+  // ============================================================
+  // E1：声明式 notify
+  // ============================================================
+  describe('声明式通知（E1）', () => {
+    const okExecutor: ToolExecutor = jest.fn(async () => ({ ok: true }));
+    const failExecutor: ToolExecutor = jest.fn(async () => {
+      throw new Error('boom');
+    });
+
+    afterEach(() => {
+      setWorkflowNotifier(null);
+    });
+
+    it('未配置 notify 时不应调用 notifier', async () => {
+      const notifier = jest.fn(async () => undefined);
+      setWorkflowNotifier(notifier);
+
+      const wf: WorkflowDefinition = {
+        id: 'no-notify', name: 'n', description: '',
+        steps: [{ id: 's1', description: '', tool: 't', params: {} }],
+      };
+      await executeWorkflow(wf, {}, okExecutor);
+      expect(notifier).not.toHaveBeenCalled();
+    });
+
+    it('配置 notify 且 status=completed 时应触发通知（含默认标题）', async () => {
+      const calls: any[] = [];
+      const notifier: WorkflowNotifier = jest.fn(async (p) => { calls.push(p); });
+      setWorkflowNotifier(notifier);
+
+      const wf: WorkflowDefinition = {
+        id: 'wf-default', name: '搜索并制图', description: '',
+        steps: [{ id: 's1', description: '', tool: 't', params: {} }],
+        notify: {
+          recipients: ['ou_abc'],
+        },
+      };
+      await executeWorkflow(wf, {}, okExecutor);
+      expect(notifier).toHaveBeenCalledTimes(1);
+      expect(calls[0].channel).toBe('feishu'); // 默认 feishu
+      expect(calls[0].recipients).toEqual(['ou_abc']);
+      expect(calls[0].title).toContain('搜索并制图');
+      expect(calls[0].title).toContain('✅');
+    });
+
+    it('trigger=success + status=failed 时应跳过通知', async () => {
+      const notifier = jest.fn(async () => undefined);
+      setWorkflowNotifier(notifier);
+
+      const wf: WorkflowDefinition = {
+        id: 'wf-trigger-success', name: 'n', description: '',
+        steps: [{ id: 's1', description: '', tool: 't', params: {}, onError: 'abort' }],
+        notify: { trigger: 'success', recipients: ['ou_abc'] },
+      };
+      await executeWorkflow(wf, {}, failExecutor);
+      expect(notifier).not.toHaveBeenCalled();
+    });
+
+    it('trigger=failure + status=failed 时应触发通知', async () => {
+      const calls: any[] = [];
+      const notifier: WorkflowNotifier = jest.fn(async (p) => { calls.push(p); });
+      setWorkflowNotifier(notifier);
+
+      const wf: WorkflowDefinition = {
+        id: 'wf-trigger-failure', name: 'n', description: '',
+        steps: [{ id: 's1', description: '', tool: 't', params: {}, onError: 'abort' }],
+        notify: { trigger: 'failure', recipients: ['ou_abc'] },
+      };
+      await executeWorkflow(wf, {}, failExecutor);
+      expect(notifier).toHaveBeenCalledTimes(1);
+      expect(calls[0].title).toContain('❌');
+    });
+
+    it('模板支持 ${context.xxx} 和 ${workflow.xxx} 变量替换', async () => {
+      const calls: any[] = [];
+      const notifier: WorkflowNotifier = jest.fn(async (p) => { calls.push(p); });
+      setWorkflowNotifier(notifier);
+
+      const wf: WorkflowDefinition = {
+        id: 'tpl', name: 'TplFlow', description: '',
+        steps: [{ id: 's1', description: '', tool: 't', params: {} }],
+        notify: {
+          recipients: ['user@example.com'],
+          channel: 'email',
+          title: '[${workflow.name}] 完成，由 ${context.userInput} 触发',
+          content: '状态=${workflow.status}，成功=${workflow.successCount}/${workflow.totalSteps}',
+        },
+      };
+      await executeWorkflow(wf, { userInput: 'Alice' }, okExecutor);
+
+      expect(calls[0].channel).toBe('email');
+      expect(calls[0].title).toBe('[TplFlow] 完成，由 Alice 触发');
+      expect(calls[0].content).toBe('状态=completed，成功=1/1');
+    });
+
+    it('notifier 抛错时主流程不应失败', async () => {
+      const notifier: WorkflowNotifier = jest.fn(async () => {
+        throw new Error('notify-down');
+      });
+      setWorkflowNotifier(notifier);
+
+      const wf: WorkflowDefinition = {
+        id: 'wf-notifier-err', name: 'n', description: '',
+        steps: [{ id: 's1', description: '', tool: 't', params: {} }],
+        notify: { recipients: ['ou_abc'] },
+      };
+      const result = await executeWorkflow(wf, {}, okExecutor);
+      // 主流程仍报 completed，没有被 notify 失败拖累
+      expect(result.status).toBe('completed');
+      expect(notifier).toHaveBeenCalledTimes(1);
+    });
+
+    it('未注入 notifier 时配置了 notify 不应抛错', async () => {
+      setWorkflowNotifier(null);
+      const wf: WorkflowDefinition = {
+        id: 'wf-no-notifier', name: 'n', description: '',
+        steps: [{ id: 's1', description: '', tool: 't', params: {} }],
+        notify: { recipients: ['ou_abc'] },
+      };
+      const result = await executeWorkflow(wf, {}, okExecutor);
+      expect(result.status).toBe('completed');
     });
   });
 });

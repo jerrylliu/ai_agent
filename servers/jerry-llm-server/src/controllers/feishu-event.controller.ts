@@ -1,12 +1,11 @@
 /**
- * 飞书事件订阅控制器
+ * 飞书事件订阅控制器（HTTP 回调模式）
  *
  * 职责：
  *   1. 注册飞书事件回调 URL（B1）
  *   2. 处理 URL 验证（飞书首次配置时的 challenge 验证）
  *   3. 验证事件 Token（F3 安全加固，不加密订阅模式）
  *   4. 处理卡片按钮点击事件（card.action.trigger → 路由到 HITL）
- *   5. 更新卡片状态（B3 卡片状态机：变灰、显示确认人）
  *
  * 兼容飞书事件 schema v1（旧）和 v2（新）：
  *   v1: { type: "event_callback", token, event: { type, ... } }
@@ -14,20 +13,20 @@
  *
  * 卡片按钮 action.value 由 buildHITLButtons 生成：
  *   { action: "confirm" | "reject", confirmation_id: "xxx" }
+ *
+ * 注意：业务逻辑已抽到 feishu-event-processor.ts，本 Controller 只做
+ * "HTTP 协议层校验 + 转发到业务函数"。长连接模式（FeishuWSClient）
+ * 共用同一业务函数。本路由在 EVENT_MODE=ws 时不会被飞书调用，但保留注册
+ * 不会有任何运行时副作用。
  */
 import { Controller, Post, Body, HttpCode, Inject } from '@nestjs/common';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
 import type { LoggerService } from '@nestjs/common';
 import {
-  handleConfirmationResponse,
-  getFeishuMessageIdForConfirmation,
-  updateFeishuHITLCard,
-  buildHITLResolvedCard,
-} from '../fundamentals/human-in-the-loop.js';
-import {
   verifyEventToken,
   handleEventVerification,
 } from '../fundamentals/feishu-notify.service.js';
+import { processCardAction } from '../fundamentals/feishu-event-processor.js';
 
 @Controller('api/feishu')
 export class FeishuEventController {
@@ -85,7 +84,7 @@ export class FeishuEventController {
 
     switch (eventType) {
       case 'card.action.trigger':
-        return this.handleCardAction(event);
+        return processCardAction(event, this.logger, 'FeishuEventController');
       default:
         this.logger.log?.(
           `收到未处理的事件类型: ${eventType}`,
@@ -93,122 +92,5 @@ export class FeishuEventController {
         );
         return { code: 0, msg: 'ok' };
     }
-  }
-
-  /**
-   * 处理卡片按钮点击事件（B2/B3）
-   *
-   * 飞书 card.action.trigger 事件结构（节选）：
-   *   {
-   *     operator: { open_id, user_id, ... },
-   *     action: { tag: "button", value: { action, confirmation_id } },
-   *     context: { open_message_id, open_chat_id, ... },
-   *   }
-   *
-   * 注意：飞书不返回 card_id，需要用 open_message_id 调用更新接口
-   */
-  private async handleCardAction(event: any): Promise<{
-    code?: number;
-    msg?: string;
-    toast?: { type: string; content: string };
-    card?: { type: string; data: Record<string, unknown> };
-  }> {
-    const messageId: string | undefined =
-      event?.context?.open_message_id ?? event?.open_message_id;
-    const action = event?.action;
-    const operatorId: string =
-      event?.operator?.open_id ||
-      event?.operator?.user_id ||
-      'unknown';
-
-    if (!action?.value) {
-      this.logger.warn?.(
-        '卡片按钮事件：缺少 action.value',
-        'FeishuEventController',
-      );
-      return { code: 400, msg: 'missing action value' };
-    }
-
-    const { confirmation_id, action: actionType } = action.value as {
-      confirmation_id?: string;
-      action?: string;
-    };
-    const isConfirm = actionType === 'confirm';
-
-    if (!confirmation_id || !actionType) {
-      this.logger.warn?.(
-        '卡片按钮事件：value 中缺少 confirmation_id 或 action',
-        'FeishuEventController',
-      );
-      return { code: 400, msg: 'missing fields' };
-    }
-
-    this.logger.log?.(
-      `卡片按钮: confirmation_id=${confirmation_id}, action=${actionType}, operator=${operatorId}, messageId=${messageId}`,
-      'FeishuEventController',
-    );
-
-    // 1) 先取出关联的 feishuMessageId（兼容飞书未透传 open_message_id 的情况）
-    const fallbackMessageId =
-      messageId || getFeishuMessageIdForConfirmation(confirmation_id);
-
-    // 2) 执行 HITL 确认/拒绝（source='feishu' 避免 HITL 内部再次反向更新卡片）
-    const success = handleConfirmationResponse(
-      confirmation_id,
-      isConfirm,
-      'feishu',
-    );
-
-    if (!success) {
-      // confirmation 已被消费（重复点击）或已超时（5 分钟）。
-      // 注意：必须返回 code=0，否则飞书会按 90 秒间隔重试 3 次（参考飞书 OpenAPI 文档）。
-      // 用 toast 字段反馈给用户"已处理或已过期"，体验更好。
-      this.logger.warn?.(
-        `confirmation_id 未找到或已过期: ${confirmation_id}`,
-        'FeishuEventController',
-      );
-      return {
-        code: 0,
-        msg: 'ok',
-        toast: {
-          type: 'warning',
-          content: '⚠️ 该审批请求已被处理或已超过 5 分钟有效期',
-        },
-      };
-    }
-
-    // 3) 更新卡片：按钮消失 + 显示结果
-    //
-    // 使用"同步响应"模式：直接把新卡片 JSON 放进响应体的 `card` 字段，飞书后端会用
-    // 它替换用户手机上的卡片，**零延迟**生效。比额外发 PATCH 请求异步更新快几百毫秒。
-    //
-    // 兜底：极少数情况下飞书要求 message_id 才能拿到上下文，这时同步响应可能不生效，
-    // 我们再异步 PATCH 一次保底（fire-and-forget，不阻塞返回）。
-    const resolvedCard = buildHITLResolvedCard(
-      '操作',
-      isConfirm,
-      `飞书用户 ${operatorId}`,
-    );
-    if (fallbackMessageId) {
-      void updateFeishuHITLCard(
-        fallbackMessageId,
-        '操作',
-        isConfirm,
-        `飞书用户 ${operatorId}`,
-      ).catch(() => {
-        // 兜底 PATCH 失败不影响主流程，因为同步响应已经覆盖了显示
-      });
-    }
-
-    return {
-      toast: {
-        type: isConfirm ? 'success' : 'info',
-        content: isConfirm ? '✅ 已确认' : '❌ 已拒绝',
-      },
-      card: {
-        type: 'raw',
-        data: resolvedCard,
-      },
-    };
   }
 }

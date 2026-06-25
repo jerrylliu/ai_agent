@@ -5,6 +5,7 @@
 // 从 @nestjs/common 导入控制器所需的装饰器
 import { Controller, Get, Head, Post, Put, Delete, Patch, Body, Query, Param, Res, UseGuards, Req } from '@nestjs/common';
 import type { Response } from 'express';
+import * as crypto from 'crypto';
 import { AppService } from '../app.service';
 import { SessionService } from '../services/session.service';
 import { UsageService } from '../services/usage.service';
@@ -13,11 +14,28 @@ import { ToolUsageService } from '../services/tool-usage.service';
 import { GeneratedDocumentService } from '../services/generated-document.service.js';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard.js';
 import { RateLimitGuard } from '../auth/rate-limit.guard.js';
+import { AuthService } from '../auth/auth.service.js';
+import { subscribeChatHistoryEvents } from '../fundamentals/chat-event-bus.js';
+import {
+  extractRichAssets,
+  syncRichAssetsToFeishu,
+  type AssetDocument,
+} from '../fundamentals/feishu/feishu-asset-sync.js';
 import { handleConfirmationResponse } from '../fundamentals/human-in-the-loop.js';
 import { logger } from '../fundamentals/logger';
 import { acquireLock } from '../fundamentals/distributed-lock';
 import { isRedisReady } from '../fundamentals/redis-client';
 import { inspectPromptInjection, logPromptInjectionDetection } from '../fundamentals/prompt-injection-guard.js';
+import {
+  deleteFeishuChatSessionBySessionId,
+  findFeishuChatSessionBySessionId,
+} from '../fundamentals/feishu/feishu-chat-session.js';
+import {
+  sendImageMessage,
+  sendPlainTextMessage,
+  uploadImage,
+} from '../fundamentals/feishu-notify.service.js';
+import { splitMarkdownImages } from '../fundamentals/feishu/feishu-markdown-image.js';
 
 // @Controller('chat') 声明该类为 NestJS 控制器，路由前缀为 /chat
 // 即该控制器下所有路由都以 /chat 开头
@@ -32,6 +50,7 @@ export class ChatController {
     private readonly evaluationService: EvaluationService,
     private readonly toolUsageService: ToolUsageService,
     private readonly generatedDocumentService: GeneratedDocumentService,
+    private readonly authService: AuthService,
   ) {}
 
   // ==================== 对话生成接口 ====================
@@ -143,6 +162,62 @@ export class ChatController {
     return this.appService.rag(message); // 委托给服务层处理 RAG 检索
   }
 
+  // ==================== 实时事件接口 ====================
+
+  /**
+   * GET /chat/events?token=xxx
+   * SSE 长连接：实时推送该用户的 chat_history 写入信号。
+   *
+   * 用于双端实时同步：飞书入站回复、Web→飞书回流等任意来源写库后，
+   * Web 端无需 5 秒轮询即可立刻感知并刷新（轮询保留为断线兜底）。
+   *
+   * 鉴权：EventSource 无法自定义请求头，token 通过 query 传入，
+   * 与 WebSocket 网关同一套 verifyToken；无 token 视为 default 用户。
+   * 事件体只含信号（sessionId/role/source），不含正文，前端收到后走既有接口拉取。
+   */
+  @Get('events')
+  async chatEvents(
+    @Query('token') token: string | undefined,
+    @Res() res: Response,
+  ) {
+    // 解析 owner：与 OptionalAuthGuard 同义，未登录归 default
+    let ownerUserId = 'default';
+    if (token) {
+      const decoded = this.authService.verifyToken(token);
+      if (decoded) {
+        ownerUserId = String(decoded.sub);
+      }
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // 关闭 Nginx 缓冲，保证实时
+    res.flushHeaders?.();
+
+    // 连接建立提示帧，让前端 onopen 后立即确认通道可用
+    res.write(`event: ready\ndata: ${JSON.stringify({ ownerUserId, at: Date.now() })}\n\n`);
+
+    const unsubscribe = subscribeChatHistoryEvents(ownerUserId, (event) => {
+      if (res.writableEnded) return;
+      res.write(`event: chat_history\ndata: ${JSON.stringify(event)}\n\n`);
+    });
+
+    // 心跳：每 25s 发一次注释帧，防止中间代理因空闲断开
+    const heartbeat = setInterval(() => {
+      if (res.writableEnded) return;
+      res.write(`event: heartbeat\ndata: {}\n\n`);
+    }, 25000);
+
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      if (!res.writableEnded) res.end();
+    };
+    res.on('close', cleanup);
+    res.on('error', cleanup);
+  }
+
   // ==================== 聊天记录接口 ====================
 
   /**
@@ -155,13 +230,173 @@ export class ChatController {
     @Body() body: { sessionId: string; role: string; content: string; documentCards?: unknown[] },
     @Req() req: any,
   ) {
-    return this.sessionService.saveChatHistory(
+    const saved = await this.sessionService.saveChatHistory(
       body.sessionId,
       body.role,
       body.content,
       req.userId,
       body.documentCards,
     );
+
+    void this.syncWebMessageToFeishu(body.sessionId, body.role, body.content, req.userId).catch((error) => {
+      logger.warn('Web 消息同步到飞书失败', {
+        module: 'ChatController',
+        sessionId: body.sessionId,
+        role: body.role,
+        error: error?.message || String(error),
+      });
+    });
+
+    return saved;
+  }
+
+  /**
+   * Web 端在飞书映射会话里继续对话时，把消息同步回飞书。
+   * 只处理 /chat/history 入口，飞书入站链路不经过这里，避免形成重复发送循环。
+   */
+  private async syncWebMessageToFeishu(
+    sessionId: string,
+    role: string,
+    content: string,
+    userId: string,
+  ): Promise<void> {
+    if (!content.trim() || (role !== 'user' && role !== 'assistant')) return;
+
+    const mapping = await findFeishuChatSessionBySessionId(sessionId);
+    // ownerUserId 在飞书映射表里是字符串，登录态 req.userId 可能是数字，统一转字符串比较
+    if (!mapping || String(mapping.ownerUserId) !== String(userId)) return;
+
+    const receiveId = mapping.chatType === 'group' ? mapping.chatId : mapping.senderOpenId;
+    const receiveIdType = mapping.chatType === 'group' ? 'chat_id' : 'open_id';
+
+    // 幂等基线：同一条 (session, role, 内容) 在 5 分钟窗口内生成同一个 uuid，
+    // 飞书侧会拒绝相同 uuid 的重复请求 —— 为后续接入失败重试做准备，避免重试发重复消息。
+    const baseUuid = this.buildFeishuSyncUuid(sessionId, role, content);
+
+    if (role === 'user') {
+      const result = await sendPlainTextMessage(
+        receiveId,
+        receiveIdType,
+        `来自 Web 端的消息：\n${content}`,
+        baseUuid,
+      );
+      if (!result.success) {
+        throw new Error(result.error || '飞书发送失败');
+      }
+      return;
+    }
+
+    // 先剥离图表/思维导图代码块（否则飞书会显示成一大段代码），再剥离 Markdown 图片
+    const { text: richStripped, charts, mindmaps } = extractRichAssets(content);
+    const { text, imageUrls } = splitMarkdownImages(richStripped);
+    const hasRichAssets = charts.length > 0 || mindmaps.length > 0;
+    const textToSend =
+      text.trim() || (imageUrls.length > 0 || hasRichAssets ? 'AI 生成了内容：' : '');
+    if (textToSend) {
+      const textResult = await sendPlainTextMessage(receiveId, receiveIdType, textToSend, `${baseUuid}t`);
+      if (!textResult.success) {
+        throw new Error(textResult.error || '飞书发送失败');
+      }
+    }
+
+    for (let i = 0; i < imageUrls.length; i++) {
+      const imageUrl = imageUrls[i];
+      // 每张图片用 baseUuid + 序号派生独立 uuid，保证多图各自幂等且互不冲突
+      const imageUuid = `${baseUuid}i${i}`;
+      logger.info('Web 图片同步飞书：开始上传', {
+        module: 'ChatController',
+        sessionId,
+        chatType: mapping.chatType,
+        receiveIdType,
+        imageUrl,
+      });
+      const uploadResult = await uploadImage(imageUrl);
+      if (uploadResult.success && uploadResult.key) {
+        logger.info('Web 图片同步飞书：上传成功', {
+          module: 'ChatController',
+          sessionId,
+          chatType: mapping.chatType,
+          receiveIdType,
+          imageKey: uploadResult.key,
+        });
+        const imageResult = await sendImageMessage(receiveId, receiveIdType, uploadResult.key, imageUuid);
+        if (imageResult.success) {
+          logger.info('Web 图片同步飞书：图片消息发送成功', {
+            module: 'ChatController',
+            sessionId,
+            chatType: mapping.chatType,
+            receiveIdType,
+            messageId: imageResult.messageId,
+          });
+          continue;
+        }
+        logger.warn('Web 图片同步飞书：图片消息发送失败，降级发送链接', {
+          module: 'ChatController',
+          sessionId,
+          chatType: mapping.chatType,
+          receiveIdType,
+          imageUrl,
+          error: imageResult.error,
+        });
+      } else {
+        logger.warn('Web 图片同步飞书：上传失败，降级发送链接', {
+          module: 'ChatController',
+          sessionId,
+          chatType: mapping.chatType,
+          receiveIdType,
+          imageUrl,
+          error: uploadResult.error,
+        });
+      }
+
+      const fallbackResult = await sendPlainTextMessage(receiveId, receiveIdType, imageUrl, `${imageUuid}f`);
+      if (!fallbackResult.success) {
+        throw new Error(fallbackResult.error || '飞书图片链接兜底发送失败');
+      }
+    }
+
+    // 同步图表/思维导图/文档为飞书原生消息（文档从 generated_document 表按会话查询）
+    let documents: AssetDocument[] = [];
+    try {
+      const since = Date.now() - 10 * 60 * 1000; // 只取最近 10 分钟内本会话生成的文档
+      const docEntities = await this.generatedDocumentService.listRecentBySession(sessionId, since);
+      const loaded = await Promise.all(
+        docEntities.map(async (d) => {
+          const read = await this.generatedDocumentService.read(d.key, null);
+          return read ? { key: d.key, filename: d.filename, buffer: read.buffer } : null;
+        }),
+      );
+      documents = loaded.filter((d): d is AssetDocument => d !== null);
+    } catch (e: any) {
+      logger.warn('Web 文档同步飞书：查询会话文档失败，跳过文档同步', {
+        module: 'ChatController',
+        sessionId,
+        error: e?.message || String(e),
+      });
+    }
+
+    if (charts.length > 0 || mindmaps.length > 0 || documents.length > 0) {
+      await syncRichAssetsToFeishu({
+        receiveId,
+        receiveIdType,
+        charts,
+        mindmaps,
+        documents,
+        idempotencyBase: baseUuid,
+        sessionId,
+      });
+    }
+  }
+
+  /**
+   * 生成 Web→飞书同步的幂等 uuid。
+   * 同一条 (sessionId, role, content) 在 5 分钟时间窗内得到相同值；
+   * 飞书 uuid 仅允许 [0-9a-zA-Z]，最长 50，这里用 md5 hex（32 位）。
+   */
+  private buildFeishuSyncUuid(sessionId: string, role: string, content: string): string {
+    const timeWindow = Math.floor(Date.now() / (5 * 60 * 1000));
+    const raw = `web-sync|${sessionId}|${role}|${content}|${timeWindow}`;
+    return crypto.createHash('md5').update(raw).digest('hex');
   }
 
   /**
@@ -254,7 +489,9 @@ export class ChatController {
    */
   @Delete('sessions/:sessionId') // 映射 DELETE 请求到 /chat/sessions/:sessionId
   async deleteSession(@Param('sessionId') sessionId: string, @Req() req: any) {
-    return this.sessionService.deleteSession(sessionId, req.userId);
+    const result = await this.sessionService.deleteSession(sessionId, req.userId);
+    await deleteFeishuChatSessionBySessionId(sessionId, req.userId);
+    return result;
   }
 
   /**

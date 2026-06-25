@@ -37,6 +37,9 @@ function getFormatStyle(format: string): { color: string; bg: string; label: str
     case 'html':
     case 'htm':
       return { color: 'text-orange-600 dark:text-orange-400', bg: 'bg-orange-50 dark:bg-orange-950/40', label: 'HTML' };
+    case 'md':
+    case 'markdown':
+      return { color: 'text-purple-600 dark:text-purple-400', bg: 'bg-purple-50 dark:bg-purple-950/40', label: 'Markdown' };
     default:
       return { color: 'text-gray-600 dark:text-gray-400', bg: 'bg-gray-50 dark:bg-gray-900', label: format.toUpperCase() };
   }
@@ -100,7 +103,7 @@ async function tauriDownload(url: string, filename: string, format: string): Pro
   const { save } = await import('@tauri-apps/plugin-dialog');
   const { writeFile } = await import('@tauri-apps/plugin-fs');
   const ext = format.toLowerCase();
-  const filterName = ext === 'pdf' ? 'PDF' : ext === 'docx' ? 'Word' : ext === 'html' ? 'HTML' : '文件';
+  const filterName = ext === 'pdf' ? 'PDF' : ext === 'docx' ? 'Word' : ext === 'html' ? 'HTML' : ext === 'md' ? 'Markdown' : '文件';
   const filePath = await save({
     defaultPath: filename,
     filters: [{ name: filterName, extensions: [ext] }],

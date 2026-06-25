@@ -1,8 +1,8 @@
 /**
- * generate_document 工具 —— AI 生成 PDF / Word / HTML 文档
+ * generate_document 工具 —— AI 生成 PDF / Word / HTML / Markdown 文档
  *
  * 设计目标：
- *   让 Agent 把 Markdown 内容转为 PDF / DOCX / HTML 文件，
+ *   让 Agent 把 Markdown 内容转为 PDF / DOCX / HTML / MD 文件，
  *   返回内部协议引用 fc://document/{key}，可直接传给 send_notification.attachments 发送邮件。
  *
  * 存储策略：
@@ -21,6 +21,7 @@ import {
   markdownToHtml,
   markdownToPdf,
   markdownToDocx,
+  markdownToMd,
   getDocumentMimeType,
   ensureExtension,
 } from '../document-generator';
@@ -32,7 +33,7 @@ let documentStorageService: {
   save: (params: {
     buffer: Buffer;
     filename: string;
-    format: 'pdf' | 'docx' | 'html';
+    format: 'pdf' | 'docx' | 'html' | 'md';
     mimeType: string;
     userId?: string;
     sessionId?: string;
@@ -94,9 +95,9 @@ export const generateDocumentParamsSchema = z.object({
       '文档正文内容，必须是 Markdown 格式。支持标题(#)、列表、粗体(**xx**)、代码块(```)、引用(>)、表格等。',
     ),
   format: z
-    .enum(['pdf', 'docx', 'html'])
+    .enum(['pdf', 'docx', 'html', 'md'])
     .describe(
-      '输出格式：pdf（适合打印分发）、docx（Word，适合二次编辑）、html（适合网页查看）',
+      '输出格式：pdf（适合打印分发）、docx（Word，适合二次编辑）、html（适合网页查看）、md（Markdown 源文件，适合在 GitHub/VSCode/Typora 中查看或二次编辑）',
     ),
 });
 
@@ -104,7 +105,7 @@ export type GenerateDocumentParams = z.infer<typeof generateDocumentParamsSchema
 
 export const generateDocumentSchema = buildToolJsonSchema(
   'generate_document',
-  '把 Markdown 内容生成为 PDF / Word(docx) / HTML 文件，返回 fileUrl 字段（内部协议引用）。当用户要求"生成 PDF/Word/HTML 文档/报告/手册"等场景时使用。返回的 fileUrl 可直接填入 send_notification.attachments[].url 作为邮件附件发送。',
+  '把 Markdown 内容生成为 PDF / Word(docx) / HTML / Markdown(md) 文件，返回 fileUrl 字段（内部协议引用）。当用户要求"生成 PDF/Word/HTML/Markdown 文档/报告/手册"等场景时使用。返回的 fileUrl 可直接填入 send_notification.attachments[].url 作为邮件附件发送。',
   generateDocumentParamsSchema,
 );
 
@@ -149,7 +150,7 @@ export async function executeGenerateDocument(
     return { success: false, message: '文档服务未初始化' };
   }
 
-  // zod 校验：title / content 非空、format 限定 pdf|docx|html
+  // zod 校验：title / content 非空、format 限定 pdf|docx|html|md
   const parsed = safeParseToolParams(generateDocumentParamsSchema, rawParams);
   if (!parsed.success) {
     logger.warn('FC工具 [generate_document] 参数校验失败', {
@@ -171,6 +172,8 @@ export async function executeGenerateDocument(
       buffer = await markdownToPdf(content, { title });
     } else if (format === 'docx') {
       buffer = await markdownToDocx(content, { title });
+    } else if (format === 'md') {
+      buffer = markdownToMd(content, { title });
     } else {
       const html = markdownToHtml(content, { title });
       buffer = Buffer.from(html, 'utf-8');

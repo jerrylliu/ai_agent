@@ -48,6 +48,30 @@ const NotifySchema = z.object({
   feishuAppId: z.string().default(''),
   feishuAppSecret: z.string().default(''),
   feishuDomain: z.string().default(''),
+  /**
+   * 飞书事件订阅模式：
+   * - 'ws'（默认）：通过 WebSocket 长连接接收事件，无需公网回调地址，开发期间首选
+   * - 'http'：传统回调模式，需要公网可访问的回调地址（上线后启用）
+   */
+  feishuEventMode: z.enum(['ws', 'http']).default('ws'),
+  /**
+   * 飞书机器人的 open_id（D1 群聊精确 @ 判定用）
+   *
+   * 用法：群聊里只有 @ 到这个 open_id 才会触发 AI 回复，避免误处理
+   * "@ 张三 帮 @AI 看看" 中"张三"被误判为 bot。
+   *
+   * 获取方式：发一条带 @ 机器人的消息到群里，看 webhook event.message.mentions
+   * 数组里 bot 对应那一项的 id.open_id；或者用 contact.v3.app/v3 API 查。
+   *
+   * 未配置时退化为"群里只要有 @ 就处理"（宽松模式）。
+   */
+  feishuBotOpenId: z.string().default(''),
+  /**
+   * 飞书 D1/D2 聊天记录归属的项目用户 ID。
+   * 默认 default，便于未登录 Web 端直接看到飞书会话；
+   * 如果你主要用登录态 Web 端查看，请改成该账号的 user.id。
+   */
+  feishuChatUserId: z.string().default('default'),
   smtpHost: z.string().default(''),
   smtpPort: z.coerce.number().int().positive().default(465),
   smtpUser: z.string().default(''),
@@ -194,6 +218,9 @@ function buildRawConfig() {
       feishuAppId: env.NOTIFY_FEISHU_APP_ID,
       feishuAppSecret: env.NOTIFY_FEISHU_APP_SECRET,
       feishuDomain: env.NOTIFY_FEISHU_DOMAIN,
+      feishuEventMode: env.NOTIFY_FEISHU_EVENT_MODE,
+      feishuBotOpenId: env.NOTIFY_FEISHU_BOT_OPEN_ID,
+      feishuChatUserId: env.NOTIFY_FEISHU_CHAT_USER_ID,
       smtpHost: env.NOTIFY_SMTP_HOST,
       smtpPort: env.NOTIFY_SMTP_PORT,
       smtpUser: env.NOTIFY_SMTP_USER,
