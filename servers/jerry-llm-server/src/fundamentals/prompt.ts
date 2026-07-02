@@ -2446,7 +2446,9 @@ export const promptTemplate = async (
     logger.info('当前模型不支持Function Calling，使用RAG注入模式', { module: 'PromptService', modelId: getCurrentModelId() });
   }
 
-  // 检查 FC 降级时是否已获取知识库结果，避免重复检索
+  // 检查 FC 降级时是否已获取知识库结果。降级时采用“复用 + 补检索”策略：
+  // 1. 复用 FC 已拿到的知识库结果，避免失败现场的有用信息丢失；
+  // 2. 同时用用户原始问题再检索一次，弥补 FC 工具 query 过窄或只保留最后一次结果导致的上下文不全。
   const fcFallbackKBResult = (fcError instanceof FCFallbackError && fcError.knowledgeBaseResult) ? fcError.knowledgeBaseResult : '';
 
   const conversions: Array<SystemMessage | HumanMessage | AIMessage> = [];
@@ -2455,21 +2457,78 @@ export const promptTemplate = async (
   let retrievedContext = '';
   let hasRetrievedContent = false;
   let ragContextCount = 0;
-  let retrievalResults: Array<{ content: string; metadata: any; score: number; vectorScore?: number }> = [];
+  type RagRetrievalResult = { content: string; metadata: unknown; score: number; vectorScore?: number };
+  const retrievalResults: RagRetrievalResult[] = [];
+  const seenContextContents = new Set<string>();
+  const extractFCFallbackRetrievalResults = (rawContent: string): RagRetrievalResult[] => {
+    try {
+      const parsed: unknown = JSON.parse(rawContent);
+      if (typeof parsed !== 'object' || parsed === null || !('results' in parsed)) {
+        return [{ content: rawContent, metadata: { source: 'fc_fallback' }, score: 0, vectorScore: 0 }];
+      }
+
+      const results = (parsed as { results?: unknown }).results;
+      if (!Array.isArray(results)) {
+        return [{ content: rawContent, metadata: { source: 'fc_fallback' }, score: 0, vectorScore: 0 }];
+      }
+
+      return results.flatMap((item): RagRetrievalResult[] => {
+        if (typeof item !== 'object' || item === null || !('content' in item)) {
+          return [];
+        }
+
+        const content = (item as { content?: unknown }).content;
+        if (typeof content !== 'string' || !content.trim()) {
+          return [];
+        }
+
+        const score = (item as { score?: unknown }).score;
+        const source = (item as { source?: unknown }).source;
+        const documentId = (item as { documentId?: unknown }).documentId;
+        const versionId = (item as { versionId?: unknown }).versionId;
+        return [{
+          content,
+          metadata: {
+            source: typeof source === 'string' ? source : 'fc_fallback',
+            documentId: typeof documentId === 'string' ? documentId : undefined,
+            versionId: typeof versionId === 'string' ? versionId : undefined,
+          },
+          score: typeof score === 'number' ? score : 0,
+          vectorScore: 0,
+        }];
+      });
+    } catch {
+      return [{ content: rawContent, metadata: { source: 'fc_fallback' }, score: 0, vectorScore: 0 }];
+    }
+  };
+  const appendRetrievalResult = (result: RagRetrievalResult): boolean => {
+    const normalizedContent = result.content.trim();
+    if (!normalizedContent || seenContextContents.has(normalizedContent)) {
+      return false;
+    }
+    seenContextContents.add(normalizedContent);
+    retrievalResults.push(result);
+    return true;
+  };
 
   if (fcFallbackKBResult) {
-    // FC 模式已检索过知识库，直接复用结果，跳过重复检索
-    logger.info('RAG模式：复用FC模式已获取的知识库结果，跳过重复检索', { module: 'PromptService' });
-    retrievedContext = fcFallbackKBResult;
-    hasRetrievedContent = true;
-    ragContextCount = 1;
-  } else if (promptText && promptText.trim()) {
+    logger.info('RAG模式：复用FC模式已获取的知识库结果，并继续用原始问题补充检索', { module: 'PromptService' });
+    const fallbackResults = extractFCFallbackRetrievalResults(fcFallbackKBResult);
+    const addedCount = fallbackResults.reduce((count, result) => appendRetrievalResult(result) ? count + 1 : count, 0);
+    logger.info('RAG模式：FC复用结果解析完成', {
+      module: 'PromptService',
+      fallbackResultCount: fallbackResults.length,
+      addedCount,
+    });
+  }
+
+  if (promptText && promptText.trim()) {
     try {
-      logger.info('正在从知识库检索相关文档', { module: 'PromptService' });
+      logger.info('正在从知识库检索相关文档', { module: 'PromptService', hasFCFallbackContext: !!fcFallbackKBResult });
       const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);
 
       if (retrieval.results && retrieval.results.length > 0) {
-        const relevantResults = retrieval.results.filter((r: any) => {
+        const relevantResults: RagRetrievalResult[] = retrieval.results.filter((r: RagRetrievalResult) => {
           const vecScore = r.vectorScore ?? r.score;
           if (vecScore > 0 && vecScore > 0.55) {
             logger.debug('过滤不相关结果', { module: 'PromptService', vectorScore: vecScore.toFixed(4), content: r.content.substring(0, 40) });
@@ -2479,22 +2538,32 @@ export const promptTemplate = async (
         });
 
         if (relevantResults.length > 0) {
-          hasRetrievedContent = true;
-          ragContextCount = relevantResults.length;
-          retrievedContext = relevantResults
-            .map((r: any, i: number) => `【文档 ${i + 1}】\n${r.content}`)
-            .join('\n\n') + UNTRUSTED_CONTEXT_INSTRUCTION;
-          retrievalResults = relevantResults;
-          logger.info('知识库检索完成', { module: 'PromptService', resultCount: relevantResults.length });
+          const addedCount = relevantResults.reduce((count: number, result: RagRetrievalResult) => appendRetrievalResult(result) ? count + 1 : count, 0);
+          logger.info('知识库检索完成', {
+            module: 'PromptService',
+            resultCount: relevantResults.length,
+            addedCount,
+            totalContextCount: retrievalResults.length,
+            reusedFCFallbackContext: !!fcFallbackKBResult,
+          });
         } else {
-          logger.info('知识库检索到结果但均不相关，将使用模型自身知识回答', { module: 'PromptService' });
+          logger.info('知识库检索到结果但均不相关，将使用已有FC复用内容或模型自身知识回答', { module: 'PromptService' });
         }
       } else {
         logger.info('知识库中没有找到相关内容', { module: 'PromptService' });
       }
-    } catch (error) {
-      logger.warn('知识库检索失败（可能未启动）', { module: 'PromptService', error: error.message });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn('知识库检索失败（可能未启动）', { module: 'PromptService', error: message });
     }
+  }
+
+  if (retrievalResults.length > 0) {
+    hasRetrievedContent = true;
+    ragContextCount = retrievalResults.length;
+    retrievedContext = retrievalResults
+      .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
+      .join('\n\n') + UNTRUSTED_CONTEXT_INSTRUCTION;
   }
 
   // ==================== 步骤2: 构建系统提示词 ====================
