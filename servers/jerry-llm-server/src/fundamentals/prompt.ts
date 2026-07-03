@@ -40,6 +40,10 @@ import * as https from 'https'; // HTTPS 请求客户端（用于下载远程资
 // sse-writer 提供 SSE 协议层的统一事件写入函数。
 import { sendToolStatus, startHeartbeat, stopHeartbeat, sendMetadata, sendSessionAction, sendContent, sendFileCard } from './sse-writer';
 
+// prompt-message-cleaner 提供"达到最大轮数强制总结"时的消息清理纯函数。
+// 单独提取成文件是为了可测试性（避免测试时加载整个 prompt.ts 的重依赖）。
+import { cleanMessagesForFinalSummary } from './prompt-message-cleaner';
+
 /**
  * 【自定义错误类】class 关键字 + extends Error 继承内置 Error。
  * 用途：FC（Function Calling）模式中检索知识库后若需要降级到 RAG 模式，
@@ -2245,15 +2249,10 @@ async function promptWithFunctionCalling(
 
   // 达到最大迭代次数时，不再绑定工具，强制让模型基于已有信息生成最终回答
   // 清理消息中的工具调用上下文，防止本地模型继续尝试工具调用格式
-  const cleanedMessages = messages.filter((msg, idx) => {
-    // 保留 SystemMessage
-    if (idx === 0 && msg instanceof SystemMessage) return true;
-    // 移除早期的 ToolMessage（只保留最后一轮工具结果）
-    if (msg instanceof ToolMessage) return false;
-    // 移除包含 tool_calls 的 AIMessage（早期轮次的工具调用记录）
-    if (msg instanceof AIMessage && msg.tool_calls && msg.tool_calls.length > 0) return false;
-    return true;
-  });
+  // 注意：保留最后一轮 ToolMessage，让模型能基于最近的工具输出收尾；
+  //       移除早期轮次工具记录 + 所有带 tool_calls 的 AIMessage（防模仿工具格式）
+  //       历史 bug：旧代码移除了所有 ToolMessage，导致模型完全看不到工具结果只能编造
+  const cleanedMessages = cleanMessagesForFinalSummary(messages);
 
   cleanedMessages.push(new HumanMessage({
     content: '请根据以上信息，直接用自然语言给出最终回答。注意：不要输出任何工具调用格式，不要提及工具名称，只需直接回答问题。',
