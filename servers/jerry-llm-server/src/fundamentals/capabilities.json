@@ -1,0 +1,29 @@
+{
+  "lastProbedAt": "2026-07-04T18:39:17.629Z",
+  "models": {
+    "ollama:qwen3.5-new": {
+      "supportsToolChoice": true,
+      "supportsVision": false,
+      "supportsFunctionCalling": true,
+      "probeNotes": "tool_choice: ok; vision: not supported; fc: ok"
+    },
+    "ollama:qwen3.5-2b": {
+      "supportsToolChoice": true,
+      "supportsVision": false,
+      "supportsFunctionCalling": true,
+      "probeNotes": "tool_choice: ok; vision: not supported; fc: ok"
+    },
+    "deepseek:deepseek-v4-flash": {
+      "supportsToolChoice": true,
+      "supportsVision": false,
+      "supportsFunctionCalling": true,
+      "probeNotes": "tool_choice: ok; vision: not supported; fc: ok"
+    },
+    "deepseek:deepseek-v4-pro": {
+      "supportsToolChoice": true,
+      "supportsVision": false,
+      "supportsFunctionCalling": true,
+      "probeNotes": "tool_choice: ok; vision: not supported; fc: ok"
+    }
+  }
+}

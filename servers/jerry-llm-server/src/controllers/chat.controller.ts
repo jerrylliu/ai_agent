@@ -23,7 +23,7 @@ import {
 } from '../fundamentals/feishu/feishu-asset-sync.js';
 import { handleConfirmationResponse } from '../fundamentals/human-in-the-loop.js';
 import { logger } from '../fundamentals/logger';
-import { acquireLock } from '../fundamentals/distributed-lock';
+import { acquireLock, type DistributedLock } from '../fundamentals/distributed-lock';
 import { isRedisReady } from '../fundamentals/redis-client';
 import { inspectPromptInjection, logPromptInjectionDetection } from '../fundamentals/prompt-injection-guard.js';
 import {
@@ -106,10 +106,19 @@ export class ChatController {
     // 创建 AbortController，用于中断 LLM 底层到 Ollama/DeepSeek 的 HTTP 连接
     const llmAbortController = new AbortController();
 
+    // 锁变量提前声明：close handler 和 finally 块都需要访问
+    // Ctrl+C 杀进程时 finally 不一定执行，但 TCP 断开会触发 close handler
+    let sessionLock: DistributedLock | null = null;
+
     // 监听连接关闭事件（客户端主动断开或网络中断）
     res.on('close', () => {
       cancelled = true; // 标记请求已取消（用于 isCancelled 回调判断）
       llmAbortController.abort(); // 中断 LLM 底层 HTTP 连接，停止 Ollama 推理
+      // 客户端断开时也释放锁（Ctrl+C 杀进程 / 关闭页面 / 网络断开）
+      // 避免 finally 块来不及执行导致锁残留 5 分钟
+      if (sessionLock) {
+        sessionLock.release().catch(() => {});
+      }
       logger.info('客户端断开连接，已发送中断信号到 LLM 底层连接', { module: 'ChatController' });
     });
 
@@ -119,7 +128,8 @@ export class ChatController {
     // 锁会自动过期，由后续请求接管（不会无限阻塞）
     // sessionId 为空时跳过锁（如匿名一次性请求），保持兼容
     const lockNamespace = body.sessionId ? `chat:session:${body.sessionId}` : null;
-    const sessionLock = lockNamespace ? await acquireLock(lockNamespace, 300) : null;
+    // 锁 TTL 30 秒：覆盖单次 LLM 请求的合理时长，Ctrl+C 后最多等 30 秒而非 5 分钟
+    sessionLock = lockNamespace ? await acquireLock(lockNamespace, 30) : null;
     // 注意：lockNamespace 非空但 sessionLock 为 null 有两种可能：
     //   ① Redis 不可用（降级，跳过锁，行为同改造前）
     //   ② 锁被占用（真正的并发拦截）

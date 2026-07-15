@@ -18,12 +18,79 @@
  */
 
 import { z } from 'zod';
-import { logger } from '../logger';
-import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
-import { sendCardMessage, buildCardJson, detectReceiveIdType } from '../feishu-notify.service';
+import { logger } from '../logger.js';
+import { buildToolJsonSchema, safeParseToolParams } from './_helpers.js';
+import { sendCardMessage, buildCardJson, detectReceiveIdType } from '../feishu-notify.service.js';
+import { getRedis, isRedisReady } from '../redis-client.js';
 
-// 内存中的计划存储（按会话隔离）
+// 内存中的计划存储（按会话隔离）—— 作为 L1 缓存，Redis 为 L2 持久层
 const plans = new Map<string, Plan>();
+
+// ==================== Redis 持久化（L2） ====================
+
+/** Redis Key 前缀 */
+const PLAN_REDIS_PREFIX = 'plan-execute:';
+/** 计划 TTL（24 小时，超过自动清理，避免无限堆积） */
+const PLAN_TTL_SEC = 86400;
+
+/**
+ * 持久化计划到 Redis（fire-and-forget）
+ *
+ * 设计为 fire-and-forget：调用方不需要 await，Redis 写失败不影响内存中的计划。
+ * 这样保持与原有同步代码的兼容性，同时获得持久化能力。
+ */
+async function persistPlan(plan: Plan): Promise<void> {
+  if (!isRedisReady()) return;
+  try {
+    const redis = getRedis();
+    if (!redis) return;
+    const key = `${PLAN_REDIS_PREFIX}${plan.sessionId}`;
+    await redis.set(key, JSON.stringify(plan), 'EX', PLAN_TTL_SEC);
+  } catch (e: any) {
+    logger.warn('Plan-Execute：Redis 持久化失败（内存仍可用）', {
+      module: 'Tool:PlanExecute',
+      sessionId: plan.sessionId,
+      err: (e?.message || String(e)).slice(0, 200),
+    });
+  }
+}
+
+/**
+ * 从 Redis 加载计划（Map 未命中时调用）
+ *
+ * 处理 Date 反序列化：JSON.parse 后 createdAt/updatedAt 是字符串，需转回 Date。
+ */
+async function loadPlanFromRedis(sessionId: string): Promise<Plan | undefined> {
+  if (!isRedisReady()) return undefined;
+  try {
+    const redis = getRedis();
+    if (!redis) return undefined;
+    const key = `${PLAN_REDIS_PREFIX}${sessionId}`;
+    const raw = await redis.get(key);
+    if (!raw) return undefined;
+
+    const plan = JSON.parse(raw) as Plan;
+    // 反序列化 Date 字段
+    plan.createdAt = new Date(plan.createdAt);
+    plan.updatedAt = new Date(plan.updatedAt);
+
+    logger.info('Plan-Execute：从 Redis 恢复计划', {
+      module: 'Tool:PlanExecute',
+      sessionId,
+      goal: plan.goal,
+      stepCount: plan.steps.length,
+      status: plan.status,
+    });
+    return plan;
+  } catch (e: any) {
+    logger.warn('Plan-Execute：从 Redis 加载失败', {
+      module: 'Tool:PlanExecute',
+      sessionId,
+      err: (e?.message || String(e)).slice(0, 200),
+    });
+    return undefined;
+  }
+}
 
 export interface PlanStep {
   id: number;
@@ -138,6 +205,25 @@ export function getSessionPlan(sessionId: string): Plan | undefined {
 }
 
 /**
+ * 预加载会话计划到内存（异步）
+ *
+ * 在 FC 循环开始前调用，确保计划从 Redis 恢复到内存 Map，
+ * 这样后续的同步函数（getSessionPlan / findMatchingStep / storeStepOutput）才能正常工作。
+ *
+ * @returns true 表示计划已就绪（内存命中或从 Redis 恢复），false 表示无计划
+ */
+export async function preloadSessionPlan(sessionId: string): Promise<boolean> {
+  const sid = sessionId || 'default';
+  if (plans.has(sid)) return true;
+  const plan = await loadPlanFromRedis(sid);
+  if (plan) {
+    plans.set(sid, plan);
+    return true;
+  }
+  return false;
+}
+
+/**
  * 将工具执行结果存储到计划步骤的 output 中
  * 由 FC 循环在工具执行成功后调用
  */
@@ -150,6 +236,9 @@ export function storeStepOutput(sessionId: string, stepId: number, output: any):
 
   step.output = output;
   plan.updatedAt = new Date();
+
+  // 持久化到 Redis（fire-and-forget，storeStepOutput 是同步函数无法 await）
+  void persistPlan(plan).catch(() => {});
 
   logger.info('数据绑定：已存储步骤输出', {
     module: 'Tool:PlanExecute',
@@ -356,6 +445,8 @@ export async function executeUpdatePlanStep(
     step.output = params.output;
   }
   plan.updatedAt = new Date();
+  // 持久化更新到 Redis（await 确保写入完成后才返回）
+  await persistPlan(plan);
 
   const completedSteps = plan.steps.filter(s => s.status === 'completed').length;
   const failedSteps = plan.steps.filter(s => s.status === 'failed').length;
@@ -428,7 +519,12 @@ export async function executeGetPlan(
   context?: { sessionId?: string },
 ): Promise<GetPlanResult> {
   const sessionId = context?.sessionId || 'default';
-  const plan = plans.get(sessionId);
+  // L1 Map 未命中时从 Redis 加载
+  let plan = plans.get(sessionId);
+  if (!plan) {
+    plan = await loadPlanFromRedis(sessionId);
+    if (plan) plans.set(sessionId, plan);
+  }
 
   if (!plan) {
     return {

@@ -25,21 +25,21 @@ import { useEffect, useRef, useState } from "react";
 
 import { ChevronRight, ChevronLeft, Check, Bot } from "lucide-react";
 
-import { useChat } from '../hooks/useChat';
-import { useAppRecovery } from '../hooks/useAppRecovery';
+import { useChat } from "../hooks/useChat";
+import { useAppRecovery } from "../hooks/useAppRecovery";
 import { useTheme } from "../hooks/useTheme";
 import { useAuth } from "../hooks/useAuth";
 
 import { AuthDialog } from "../components/Auth";
 import { clearKnowledgeBase, respondToConfirmation } from "../lib/api";
-import { DocumentManager } from '../components/Document';
-import { KnowledgeSourceManager } from '../components/KnowledgeSource';
-import { ErrorBoundary } from '../components/ui/error-boundary';
-import { SidebarHeader, SessionList, UserProfile } from '../components/Sidebar';
-import { FavoriteDocumentsPanel } from '../components/Document';
-import { FavoriteDocProvider } from '../contexts/FavoriteDocContext';
-import { SettingsDialog } from '../components/Settings';
-import { ConfirmDialog } from '../components/ui/confirm-dialog';
+import { DocumentManager } from "../components/Document";
+import { KnowledgeSourceManager } from "../components/KnowledgeSource";
+import { ErrorBoundary } from "../components/ui/error-boundary";
+import { SidebarHeader, SessionList, UserProfile } from "../components/Sidebar";
+import { FavoriteDocumentsPanel } from "../components/Document";
+import { FavoriteDocProvider } from "../contexts/FavoriteDocContext";
+import { SettingsDialog } from "../components/Settings";
+import { ConfirmDialog } from "../components/ui/confirm-dialog";
 
 import {
   HeaderContent,
@@ -52,83 +52,118 @@ import {
   TokenUsagePanel,
   ToolUsagePanel,
   EvaluationPanel,
-} from '../components/Chat';
+} from "../components/Chat";
 
-import { useUIStore } from '../stores/ui-store';
-import { useSettingsStore } from '../stores/settings-store';
-import { useToastStore } from '../stores/toast-store';
-import { useConfirmStore } from '../stores/confirm-store';
-import { useShallow } from 'zustand/react/shallow';
+import { useUIStore } from "../stores/ui-store";
+import { useSettingsStore } from "../stores/settings-store";
+import { useToastStore } from "../stores/toast-store";
+import { useConfirmStore } from "../stores/confirm-store";
+import { useShallow } from "zustand/react/shallow";
 
 const ChatAgent: React.FC = () => {
   // ==================== Zustand 状态管理 ====================
   const {
-    inputValue, setInputValue,
-    searchKeyword, setSearchKeyword,
-    showMoreMenu, setShowMoreMenu,
-    showApiKeyDialog, setShowApiKeyDialog,
-    apiKeyDialogProvider, setApiKeyDialogProvider,
-    apiKeyInput, setApiKeyInput,
-    showModelPanel, setShowModelPanel,
-    showSidebar, setShowSidebar,
-    showHistoryList, setShowHistoryList,
-    showRecentQuestions, setShowRecentQuestions,
-    showAuthDialog, setShowAuthDialog,
-    showMemorySummary, setShowMemorySummary,
-    showTokenUsage, setShowTokenUsage,
-    showToolUsage, setShowToolUsage,
-    showEvaluation, setShowEvaluation,
-    showSettings, setShowSettings,
-    showDocumentManager, setShowDocumentManager,
-    showKnowledgeSourceManager, setShowKnowledgeSourceManager,
-    avatarUploading, setAvatarUploading,
-    inputMode, setInputMode,
-  } = useUIStore(useShallow((state) => ({
-    inputValue: state.inputValue,
-    setInputValue: state.setInputValue,
-    searchKeyword: state.searchKeyword,
-    setSearchKeyword: state.setSearchKeyword,
-    showMoreMenu: state.showMoreMenu,
-    setShowMoreMenu: state.setShowMoreMenu,
-    showApiKeyDialog: state.showApiKeyDialog,
-    setShowApiKeyDialog: state.setShowApiKeyDialog,
-    apiKeyDialogProvider: state.apiKeyDialogProvider,
-    setApiKeyDialogProvider: state.setApiKeyDialogProvider,
-    apiKeyInput: state.apiKeyInput,
-    setApiKeyInput: state.setApiKeyInput,
-    showModelPanel: state.showModelPanel,
-    setShowModelPanel: state.setShowModelPanel,
-    showSidebar: state.showSidebar,
-    setShowSidebar: state.setShowSidebar,
-    showHistoryList: state.showHistoryList,
-    setShowHistoryList: state.setShowHistoryList,
-    showRecentQuestions: state.showRecentQuestions,
-    setShowRecentQuestions: state.setShowRecentQuestions,
-    showAuthDialog: state.showAuthDialog,
-    setShowAuthDialog: state.setShowAuthDialog,
-    showMemorySummary: state.showMemorySummary,
-    setShowMemorySummary: state.setShowMemorySummary,
-    showTokenUsage: state.showTokenUsage,
-    setShowTokenUsage: state.setShowTokenUsage,
-    showToolUsage: state.showToolUsage,
-    setShowToolUsage: state.setShowToolUsage,
-    showEvaluation: state.showEvaluation,
-    setShowEvaluation: state.setShowEvaluation,
-    showSettings: state.showSettings,
-    setShowSettings: state.setShowSettings,
-    showDocumentManager: state.showDocumentManager,
-    setShowDocumentManager: state.setShowDocumentManager,
-    showKnowledgeSourceManager: state.showKnowledgeSourceManager,
-    setShowKnowledgeSourceManager: state.setShowKnowledgeSourceManager,
-    avatarUploading: state.avatarUploading,
-    setAvatarUploading: state.setAvatarUploading,
-    inputMode: state.inputMode,
-    setInputMode: state.setInputMode,
-  })));
+    inputValue,
+    setInputValue,
+    searchKeyword,
+    setSearchKeyword,
+    showMoreMenu,
+    setShowMoreMenu,
+    showApiKeyDialog,
+    setShowApiKeyDialog,
+    apiKeyDialogProvider,
+    setApiKeyDialogProvider,
+    apiKeyInput,
+    setApiKeyInput,
+    showModelPanel,
+    setShowModelPanel,
+    showSidebar,
+    setShowSidebar,
+    showHistoryList,
+    setShowHistoryList,
+    showRecentQuestions,
+    setShowRecentQuestions,
+    showAuthDialog,
+    setShowAuthDialog,
+    showMemorySummary,
+    setShowMemorySummary,
+    showTokenUsage,
+    setShowTokenUsage,
+    showToolUsage,
+    setShowToolUsage,
+    showEvaluation,
+    setShowEvaluation,
+    showSettings,
+    setShowSettings,
+    showDocumentManager,
+    setShowDocumentManager,
+    showKnowledgeSourceManager,
+    setShowKnowledgeSourceManager,
+    avatarUploading,
+    setAvatarUploading,
+    inputMode,
+    setInputMode,
+  } = useUIStore(
+    useShallow((state) => ({
+      inputValue: state.inputValue,
+      setInputValue: state.setInputValue,
+      searchKeyword: state.searchKeyword,
+      setSearchKeyword: state.setSearchKeyword,
+      showMoreMenu: state.showMoreMenu,
+      setShowMoreMenu: state.setShowMoreMenu,
+      showApiKeyDialog: state.showApiKeyDialog,
+      setShowApiKeyDialog: state.setShowApiKeyDialog,
+      apiKeyDialogProvider: state.apiKeyDialogProvider,
+      setApiKeyDialogProvider: state.setApiKeyDialogProvider,
+      apiKeyInput: state.apiKeyInput,
+      setApiKeyInput: state.setApiKeyInput,
+      showModelPanel: state.showModelPanel,
+      setShowModelPanel: state.setShowModelPanel,
+      showSidebar: state.showSidebar,
+      setShowSidebar: state.setShowSidebar,
+      showHistoryList: state.showHistoryList,
+      setShowHistoryList: state.setShowHistoryList,
+      showRecentQuestions: state.showRecentQuestions,
+      setShowRecentQuestions: state.setShowRecentQuestions,
+      showAuthDialog: state.showAuthDialog,
+      setShowAuthDialog: state.setShowAuthDialog,
+      showMemorySummary: state.showMemorySummary,
+      setShowMemorySummary: state.setShowMemorySummary,
+      showTokenUsage: state.showTokenUsage,
+      setShowTokenUsage: state.setShowTokenUsage,
+      showToolUsage: state.showToolUsage,
+      setShowToolUsage: state.setShowToolUsage,
+      showEvaluation: state.showEvaluation,
+      setShowEvaluation: state.setShowEvaluation,
+      showSettings: state.showSettings,
+      setShowSettings: state.setShowSettings,
+      showDocumentManager: state.showDocumentManager,
+      setShowDocumentManager: state.setShowDocumentManager,
+      showKnowledgeSourceManager: state.showKnowledgeSourceManager,
+      setShowKnowledgeSourceManager: state.setShowKnowledgeSourceManager,
+      avatarUploading: state.avatarUploading,
+      setAvatarUploading: state.setAvatarUploading,
+      inputMode: state.inputMode,
+      setInputMode: state.setInputMode,
+    })),
+  );
 
-  const { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel, autoCompleteEnabled, updateSettings } = useSettingsStore();
+  const {
+    memoryEnabled,
+    summaryEnabled,
+    injectMemoryOnNewSession,
+    imageModel,
+    autoCompleteEnabled,
+    updateSettings,
+  } = useSettingsStore();
   // 传递给 useChat 的 appSettings 对象
-  const appSettings = { memoryEnabled, summaryEnabled, injectMemoryOnNewSession, imageModel, autoCompleteEnabled };
+  const appSettings = {
+    memoryEnabled,
+    summaryEnabled,
+    injectMemoryOnNewSession,
+    imageModel,
+    autoCompleteEnabled,
+  };
   const toast = useToastStore();
   const confirm = useConfirmStore();
 
@@ -139,7 +174,15 @@ const ChatAgent: React.FC = () => {
   const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // 自定义Hooks
-  const { user, isLoading: authLoading, isAuthenticated, login, register, logout, uploadAvatar } = useAuth();
+  const {
+    user,
+    isLoading: authLoading,
+    isAuthenticated,
+    login,
+    register,
+    logout,
+    uploadAvatar,
+  } = useAuth();
 
   const {
     sessions,
@@ -181,22 +224,29 @@ const ChatAgent: React.FC = () => {
     supportsVision,
     switchModel,
     configureApiKey,
+    probeCapabilities,
     refreshAppData,
-  } = useChat(isAuthenticated, authLoading, appSettings, (event) => {
-    // 收到工具确认请求时，加入确认队列
-    confirm.showToolConfirmation(event);
-  }, (event) => {
-    // 飞书侧已审批 → 关闭对应的 Web 弹窗
-    confirm.removeToolConfirmationById(event.id);
-    // 同步清掉 ref，避免 onOpenChange 误触发拒绝
-    if (pendingToolConfirmIdRef.current === event.id) {
-      pendingToolConfirmIdRef.current = null;
-    }
-  });
+  } = useChat(
+    isAuthenticated,
+    authLoading,
+    appSettings,
+    (event) => {
+      // 收到工具确认请求时，加入确认队列
+      confirm.showToolConfirmation(event);
+    },
+    (event) => {
+      // 飞书侧已审批 → 关闭对应的 Web 弹窗
+      confirm.removeToolConfirmationById(event.id);
+      // 同步清掉 ref，避免 onOpenChange 误触发拒绝
+      if (pendingToolConfirmIdRef.current === event.id) {
+        pendingToolConfirmIdRef.current = null;
+      }
+    },
+  );
 
   const recovery = useAppRecovery({
     enabled: !authLoading,
-    triggerKey: `${isAuthenticated ? user?.id ?? 'authenticated' : 'default'}`,
+    triggerKey: `${isAuthenticated ? (user?.id ?? "authenticated") : "default"}`,
     refresh: refreshAppData,
   });
 
@@ -216,7 +266,7 @@ const ChatAgent: React.FC = () => {
     try {
       await deleteMessage(targetId);
     } catch (error: any) {
-      confirm.showAlert('删除消息失败: ' + (error.message || '未知错误'));
+      confirm.showAlert("删除消息失败: " + (error.message || "未知错误"));
     }
   };
 
@@ -225,7 +275,10 @@ const ChatAgent: React.FC = () => {
 
   // 当队列头部变化时，同步更新 ref
   const currentConfirmation = confirm.currentToolConfirmation();
-  if (currentConfirmation && pendingToolConfirmIdRef.current !== currentConfirmation.id) {
+  if (
+    currentConfirmation &&
+    pendingToolConfirmIdRef.current !== currentConfirmation.id
+  ) {
     pendingToolConfirmIdRef.current = currentConfirmation.id;
   }
 
@@ -237,10 +290,10 @@ const ChatAgent: React.FC = () => {
     try {
       const result = await respondToConfirmation(confirmId, confirmed);
       if (!result.success) {
-        confirm.showAlert('确认响应失败，该请求可能已超时，请重试');
+        confirm.showAlert("确认响应失败，该请求可能已超时，请重试");
       }
     } catch (error: any) {
-      confirm.showAlert('确认响应失败: ' + (error.message || '网络错误'));
+      confirm.showAlert("确认响应失败: " + (error.message || "网络错误"));
     }
   };
 
@@ -253,13 +306,13 @@ const ChatAgent: React.FC = () => {
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('.more-menu')) {
+      if (!target.closest(".more-menu")) {
         setShowMoreMenu(false);
       }
     };
-    document.addEventListener('click', handleClickOutside);
+    document.addEventListener("click", handleClickOutside);
     return () => {
-      document.removeEventListener('click', handleClickOutside);
+      document.removeEventListener("click", handleClickOutside);
     };
   }, []);
 
@@ -267,35 +320,52 @@ const ChatAgent: React.FC = () => {
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      toast.setKbFeedback({ show: true, success: false, message: '请选择图片文件（JPG/PNG/GIF/WebP）' });
+    if (!file.type.startsWith("image/")) {
+      toast.setKbFeedback({
+        show: true,
+        success: false,
+        message: "请选择图片文件（JPG/PNG/GIF/WebP）",
+      });
       setTimeout(() => toast.hideKbFeedback(), 3000);
       return;
     }
     if (file.size > 20 * 1024 * 1024) {
-      toast.setKbFeedback({ show: true, success: false, message: '图片大小不能超过 20MB' });
+      toast.setKbFeedback({
+        show: true,
+        success: false,
+        message: "图片大小不能超过 20MB",
+      });
       setTimeout(() => toast.hideKbFeedback(), 3000);
       return;
     }
     setAvatarUploading(true);
     try {
       await uploadAvatar(file);
-      toast.setKbFeedback({ show: true, success: true, message: '头像更新成功' });
+      toast.setKbFeedback({
+        show: true,
+        success: true,
+        message: "头像更新成功",
+      });
       setTimeout(() => toast.hideKbFeedback(), 3000);
     } catch (err: any) {
-      const msg = err?.message || '头像上传失败，请重试';
+      const msg = err?.message || "头像上传失败，请重试";
       toast.setKbFeedback({ show: true, success: false, message: msg });
       setTimeout(() => toast.hideKbFeedback(), 3000);
     } finally {
       setAvatarUploading(false);
       if (avatarInputRef.current) {
-        avatarInputRef.current.value = '';
+        avatarInputRef.current.value = "";
       }
     }
   };
 
   const handleSend = async () => {
-    if (!inputValue.trim() && pendingImages.length === 0 && pendingDocuments.length === 0) return;
+    if (
+      !inputValue.trim() &&
+      pendingImages.length === 0 &&
+      pendingDocuments.length === 0
+    )
+      return;
     const userInput = inputValue;
     setInputValue("");
     await sendMessage(userInput, pendingImages, pendingDocuments);
@@ -330,9 +400,9 @@ const ChatAgent: React.FC = () => {
   // 输入框位置模式：center = 欢迎页居中，bottom = 对话底部
   useEffect(() => {
     if (sessionHasContent.has(currentSessionId) || isMessagesLoading) {
-      setInputMode('bottom');
+      setInputMode("bottom");
     } else {
-      setInputMode('center');
+      setInputMode("center");
     }
   }, [currentSessionId, sessionHasContent, isMessagesLoading]);
 
@@ -343,11 +413,12 @@ const ChatAgent: React.FC = () => {
         {/* ==================== 左侧边栏区域 ==================== */}
         <div className="relative h-full">
           <button
-            className={`absolute left-0 top-1/2 -translate-y-1/2 z-30 w-7 h-14 flex items-center justify-center bg-card border border-r-0 border-gray-200 dark:border-slate-600 rounded-r-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors shadow-sm ${showSidebar ? 'translate-x-0' : 'translate-x-0'
-              }`}
-            style={{ left: showSidebar ? '288px' : '0px' }}
+            className={`absolute left-0 top-1/2 -translate-y-1/2 z-30 w-7 h-14 flex items-center justify-center bg-card border border-r-0 border-gray-200 dark:border-slate-600 rounded-r-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors shadow-sm ${
+              showSidebar ? "translate-x-0" : "translate-x-0"
+            }`}
+            style={{ left: showSidebar ? "288px" : "0px" }}
             onClick={() => setShowSidebar(!showSidebar)}
-            title={showSidebar ? '收起侧边栏' : '展开侧边栏'}
+            title={showSidebar ? "收起侧边栏" : "展开侧边栏"}
           >
             {showSidebar ? (
               <ChevronLeft className="h-4 w-4 text-gray-500 dark:text-gray-300" />
@@ -357,8 +428,9 @@ const ChatAgent: React.FC = () => {
           </button>
 
           <div
-            className={`h-full bg-card border-r border-gray-200 dark:border-slate-600 transition-all duration-300 ease-in-out overflow-hidden shadow-lg cyberpunk-border-glow ${showSidebar ? 'w-72' : 'w-0'
-              }`}
+            className={`h-full bg-card border-r border-gray-200 dark:border-slate-600 transition-all duration-300 ease-in-out overflow-hidden shadow-lg cyberpunk-border-glow ${
+              showSidebar ? "w-72" : "w-0"
+            }`}
           >
             {showSidebar && (
               <div className="w-72 h-full flex flex-col">
@@ -376,8 +448,8 @@ const ChatAgent: React.FC = () => {
                     onClick={() => setShowFavoritesTab(false)}
                     className={`flex-1 py-2 text-xs font-medium transition-colors text-center ${
                       !showFavoritesTab
-                        ? 'text-foreground border-b-2 border-primary'
-                        : 'text-muted-foreground hover:text-foreground'
+                        ? "text-foreground border-b-2 border-primary"
+                        : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     会话
@@ -387,8 +459,8 @@ const ChatAgent: React.FC = () => {
                     onClick={() => setShowFavoritesTab(true)}
                     className={`flex-1 py-2 text-xs font-medium transition-colors text-center ${
                       showFavoritesTab
-                        ? 'text-foreground border-b-2 border-primary'
-                        : 'text-muted-foreground hover:text-foreground'
+                        ? "text-foreground border-b-2 border-primary"
+                        : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
                     我的收藏
@@ -411,8 +483,12 @@ const ChatAgent: React.FC = () => {
                     onDeleteSession={deleteSession}
                     onTogglePin={toggleSessionPin}
                     onHistoryClick={handleHistoryClick}
-                    onToggleHistoryList={() => setShowHistoryList(!showHistoryList)}
-                    onToggleRecentQuestions={() => setShowRecentQuestions(!showRecentQuestions)}
+                    onToggleHistoryList={() =>
+                      setShowHistoryList(!showHistoryList)
+                    }
+                    onToggleRecentQuestions={() =>
+                      setShowRecentQuestions(!showRecentQuestions)
+                    }
                     onClearHistory={clearHistory}
                     onClearSearch={() => setSearchKeyword("")}
                     onCreateSession={createNewSession}
@@ -445,15 +521,21 @@ const ChatAgent: React.FC = () => {
             showMoreMenu={showMoreMenu}
             onToggleMoreMenu={() => setShowMoreMenu(!showMoreMenu)}
             onClearKnowledgeBase={clearKnowledgeBase}
-            onCheckKnowledgeBaseStatus={() => void checkKnowledgeBaseStatus().catch(() => {})}
+            onCheckKnowledgeBaseStatus={() =>
+              void checkKnowledgeBaseStatus().catch(() => {})
+            }
             onKbFeedback={toast.setKbFeedback}
             onOpenMemorySummary={() => setShowMemorySummary(true)}
             onOpenDocumentManager={() => setShowDocumentManager(true)}
-            onOpenKnowledgeSourceManager={() => setShowKnowledgeSourceManager(true)}
+            onOpenKnowledgeSourceManager={() =>
+              setShowKnowledgeSourceManager(true)
+            }
             onOpenTokenUsage={() => setShowTokenUsage(true)}
             onOpenToolUsage={() => setShowToolUsage(true)}
             onOpenEvaluation={() => setShowEvaluation(true)}
-            onRefreshAppData={() => recovery.refreshNow('manual', { force: true })}
+            onRefreshAppData={() =>
+              recovery.refreshNow("manual", { force: true })
+            }
             isRecovering={recovery.isRecovering}
           />
 
@@ -472,8 +554,16 @@ const ChatAgent: React.FC = () => {
                   currentSessionId={currentSessionId}
                   feedbackState={toast.feedbackState}
                   onFeedbackStateChange={toast.setFeedbackState}
-                  onCopyToast={(t) => t.show ? toast.showCopyToast(t.message, t.x, t.y) : toast.hideCopyToast()}
-                  onFeedbackToast={(t) => t.show ? toast.showFeedbackToast(t.message, t.x, t.y) : toast.hideFeedbackToast()}
+                  onCopyToast={(t) =>
+                    t.show
+                      ? toast.showCopyToast(t.message, t.x, t.y)
+                      : toast.hideCopyToast()
+                  }
+                  onFeedbackToast={(t) =>
+                    t.show
+                      ? toast.showFeedbackToast(t.message, t.x, t.y)
+                      : toast.hideFeedbackToast()
+                  }
                   onUpdateMessage={updateMessage}
                   onDeleteMessage={handleDeleteMessage}
                   onAlert={handleAlert}
@@ -487,21 +577,26 @@ const ChatAgent: React.FC = () => {
             <div
               className="absolute left-1/2 max-w-[750px] transition-[top,bottom,width] duration-500 ease-in-out pointer-events-none"
               style={{
-                width: inputMode === 'center' ? '80%' : '95%',
+                width: inputMode === "center" ? "80%" : "95%",
                 // 底部模式：用 bottom 吸附，让容器随预览区高度自适应向上撑开
                 // 居中模式：保持 top 50% 居中显示
-                top: inputMode === 'center' ? '43%' : 'auto',
-                bottom: inputMode === 'center' ? 'auto' : '16px',
-                transform: inputMode === 'center' ? 'translate(-50%, -50%)' : 'translate(-50%, 0)',
+                top: inputMode === "center" ? "43%" : "auto",
+                bottom: inputMode === "center" ? "auto" : "16px",
+                transform:
+                  inputMode === "center"
+                    ? "translate(-50%, -50%)"
+                    : "translate(-50%, 0)",
               }}
             >
               {/* 欢迎标题：底部时淡出 */}
               <div
                 className="flex items-center justify-center gap-1 mb-10 transition-opacity duration-500 ease-in-out"
-                style={{ opacity: inputMode === 'center' ? 1 : 0 }}
+                style={{ opacity: inputMode === "center" ? 1 : 0 }}
               >
                 <Bot className="h-8 w-8 text-primary cyberpunk-header-title" />
-                <h2 className="text-2xl font-medium text-foreground cyberpunk-useremail">你好，我是以太忆核</h2>
+                <h2 className="text-2xl font-medium text-foreground cyberpunk-useremail">
+                  你好，我是以太忆核
+                </h2>
               </div>
 
               <div className="pointer-events-auto">
@@ -521,7 +616,7 @@ const ChatAgent: React.FC = () => {
                   onSendFile={sendFile}
                   parsingFile={parsingFile}
                   supportsVision={supportsVision}
-                  compact={inputMode === 'bottom'}
+                  compact={inputMode === "bottom"}
                 />
               </div>
             </div>
@@ -541,6 +636,7 @@ const ChatAgent: React.FC = () => {
             setApiKeyDialogProvider(provider);
             setShowApiKeyDialog(true);
           }}
+          onProbeCapabilities={probeCapabilities}
           onAlert={handleAlert}
         />
 
@@ -589,19 +685,29 @@ const ChatAgent: React.FC = () => {
         onSettingsChange={updateSettings}
       />
       {showDocumentManager && (
-        <div className="fixed inset-0 z-50 bg-black/50" style={{ top: '25px' }}>
+        <div className="fixed inset-0 z-50 bg-black/50" style={{ top: "25px" }}>
           <div className="absolute inset-0 bg-card shadow-2xl">
             <ErrorBoundary>
-              <DocumentManager onClose={() => setShowDocumentManager(false)} onRefreshKnowledgeBase={() => void checkKnowledgeBaseStatus().catch(() => {})} />
+              <DocumentManager
+                onClose={() => setShowDocumentManager(false)}
+                onRefreshKnowledgeBase={() =>
+                  void checkKnowledgeBaseStatus().catch(() => {})
+                }
+              />
             </ErrorBoundary>
           </div>
         </div>
       )}
       {showKnowledgeSourceManager && (
-        <div className="fixed inset-0 z-50 bg-black/50" style={{ top: '25px' }}>
+        <div className="fixed inset-0 z-50 bg-black/50" style={{ top: "25px" }}>
           <div className="absolute inset-0 bg-card shadow-2xl">
             <ErrorBoundary>
-              <KnowledgeSourceManager onClose={() => setShowKnowledgeSourceManager(false)} onContentChange={() => void checkKnowledgeBaseStatus().catch(() => {})} />
+              <KnowledgeSourceManager
+                onClose={() => setShowKnowledgeSourceManager(false)}
+                onContentChange={() =>
+                  void checkKnowledgeBaseStatus().catch(() => {})
+                }
+              />
             </ErrorBoundary>
           </div>
         </div>
@@ -611,7 +717,11 @@ const ChatAgent: React.FC = () => {
       {toast.copyToast.show && (
         <div
           className="fixed z-[100] animate-in fade-in slide-in-from-bottom-2 duration-300 pointer-events-none"
-          style={{ left: toast.copyToast.x, top: toast.copyToast.y, transform: 'translate(-50%, -100%)' }}
+          style={{
+            left: toast.copyToast.x,
+            top: toast.copyToast.y,
+            transform: "translate(-50%, -100%)",
+          }}
         >
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg shadow-lg bg-green-600 text-white text-xs whitespace-nowrap">
             <Check className="h-3 w-3" />
@@ -623,7 +733,11 @@ const ChatAgent: React.FC = () => {
       {toast.feedbackToast.show && (
         <div
           className="fixed z-[100] animate-in fade-in slide-in-from-bottom-2 duration-300 pointer-events-none"
-          style={{ left: toast.feedbackToast.x, top: toast.feedbackToast.y, transform: 'translate(-50%, -100%)' }}
+          style={{
+            left: toast.feedbackToast.x,
+            top: toast.feedbackToast.y,
+            transform: "translate(-50%, -100%)",
+          }}
         >
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg shadow-lg bg-blue-600 text-white text-xs whitespace-nowrap">
             {toast.feedbackToast.message}
@@ -634,7 +748,9 @@ const ChatAgent: React.FC = () => {
       {/* 删除消息确认弹窗 */}
       <ConfirmDialog
         open={confirm.deleteMsgConfirmOpen}
-        onOpenChange={(open) => { if (!open) confirm.closeDeleteConfirm(); }}
+        onOpenChange={(open) => {
+          if (!open) confirm.closeDeleteConfirm();
+        }}
         title="删除消息"
         description="确定要删除这条消息吗？将同时删除AI的回复。"
         confirmLabel="确认删除"
@@ -645,7 +761,9 @@ const ChatAgent: React.FC = () => {
       {/* 错误提示弹窗 */}
       <ConfirmDialog
         open={confirm.alertOpen}
-        onOpenChange={(open) => { if (!open) confirm.closeAlert(); }}
+        onOpenChange={(open) => {
+          if (!open) confirm.closeAlert();
+        }}
         title="提示"
         description={confirm.alertMessage}
         confirmLabel="确定"
@@ -665,12 +783,14 @@ const ChatAgent: React.FC = () => {
         title="工具调用确认"
         description={
           currentConfirmation
-            ? `${currentConfirmation.message}\n\n工具：${currentConfirmation.toolName}\n操作：${currentConfirmation.paramsSummary}\n风险等级：${currentConfirmation.riskLevel === 'high' ? '高' : currentConfirmation.riskLevel === 'medium' ? '中' : '低'}`
-            : ''
+            ? `${currentConfirmation.message}\n\n工具：${currentConfirmation.toolName}\n操作：${currentConfirmation.paramsSummary}\n风险等级：${currentConfirmation.riskLevel === "high" ? "高" : currentConfirmation.riskLevel === "medium" ? "中" : "低"}`
+            : ""
         }
         confirmLabel="确认执行"
         cancelLabel="拒绝"
-        variant={currentConfirmation?.riskLevel === 'high' ? 'destructive' : undefined}
+        variant={
+          currentConfirmation?.riskLevel === "high" ? "destructive" : undefined
+        }
         onConfirm={() => {
           toolConfirmTriggeredRef.current = true;
           handleToolConfirmation(true);

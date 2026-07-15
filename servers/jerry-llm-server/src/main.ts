@@ -10,11 +10,14 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { validateSearchWebConfig, validateWeatherConfig } from './fundamentals/tools';
 import { config } from './fundamentals/config';
-import { closeRedis, getRedis } from './fundamentals/redis-client';
+import { closeRedis, getRedis, waitForRedisReady } from './fundamentals/redis-client';
+import { loadApiKeysFromStorage } from './fundamentals/model-provider';
+import { cleanupStaleSessionLocks } from './fundamentals/distributed-lock';
 import { createSpeechWsHandler } from './gateways/speech.gateway';
 import { SpeechService } from './services/speech.service';
 import { AuthService } from './auth/auth.service';
-import { closeFeishuWsClient } from './fundamentals/feishu-ws-client';
+import { closeFeishuWsClient } from './fundamentals/feishu-ws-client.js';
+import { stopDeadLetterCompensation } from './fundamentals/feishu-notify.service.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
@@ -30,7 +33,17 @@ async function bootstrap() {
   // 预热 Redis 连接（启动时即建立连接，避免首请求 cold start）
   // 如果 REDIS_ENABLED=false，getRedis() 返回 null，本调用不会有任何副作用
   getRedis();
-  
+
+  // 等待 Redis 连接就绪后再恢复 API Key 和模型设置
+  // 不等待的话 isRedisReady() 返回 false，loadApiKeysFromStorage 会跳过加载
+  await waitForRedisReady(5000);
+
+  // 从 Redis 恢复已保存的 API Key 和当前模型（加密存储，重启后自动恢复）
+  await loadApiKeysFromStorage();
+
+  // 清理上一轮运行残留的会话锁（Ctrl+C 杀进程时 finally 不执行，锁会留在 Redis）
+  await cleanupStaleSessionLocks();
+
   // 配置 bodyParser，支持大文件上传
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));

@@ -48,6 +48,7 @@ import { EvaluationService } from './services/evaluation.service.js';
 import { ToolUsageService } from './services/tool-usage.service.js';
 import { GeneratedDocumentService } from './services/generated-document.service.js';
 import { GeneratedDocumentSchedulerService } from './services/generated-document-scheduler.service.js';
+import { HealthService } from './services/health.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { WinstonLoggerModule } from './fundamentals/logger.js';
 import { initManageSession, setToolUsageCallback, initMcpProxy } from './fundamentals/tools/index.js';
@@ -88,7 +89,7 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     AuthModule,
   ],
   controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController, DocumentController, KnowledgeSourceController, RedisDashboardController, SpeechController, AiWritingController, FeishuEventController, MetricsController],
-  providers: [AppService, SessionService, SummaryService, MemoryService, UsageService, EvaluationService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService, ToolUsageService, GeneratedDocumentService, GeneratedDocumentSchedulerService, SpeechService],
+  providers: [AppService, SessionService, SummaryService, MemoryService, UsageService, EvaluationService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService, ToolUsageService, GeneratedDocumentService, GeneratedDocumentSchedulerService, SpeechService, HealthService],
 })
 export class AppModule implements OnModuleInit {
   constructor(

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from "react";
 import {
   saveChatHistory,
   getAIResponse,
@@ -19,13 +19,18 @@ import {
   getModelInfo,
   switchModel as switchModelApi,
   setModelApiKey,
+  probeModelCapabilities as probeModelCapabilitiesApi,
   subscribeChatEvents,
-} from '../lib/api';
-import type { AvailableModel, ToolStatusEvent, ConfirmationRequestEvent } from '../lib/api';
-import type { AppSettings } from '../stores/settings-store';
-import { generateId, generateSessionId } from '../lib/utils';
-import { ERROR_MESSAGE } from '../lib/constants';
-import { Session, Message, HistoryItem } from '../types/session';
+} from "../lib/api";
+import type {
+  AvailableModel,
+  ToolStatusEvent,
+  ConfirmationRequestEvent,
+} from "../lib/api";
+import type { AppSettings } from "../stores/settings-store";
+import { generateId, generateSessionId } from "../lib/utils";
+import { ERROR_MESSAGE } from "../lib/constants";
+import { Session, Message, HistoryItem } from "../types/session";
 
 /**
  * 待发送文档：上传后未实际发出的文档
@@ -52,9 +57,21 @@ export interface PendingDocument {
   documentId?: number;
 }
 
-export function useChat(isAuthenticated?: boolean, authLoading = false, appSettings?: AppSettings, onConfirmationRequest?: (event: ConfirmationRequestEvent) => void, onConfirmationResolved?: (event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void) {
+export function useChat(
+  isAuthenticated?: boolean,
+  authLoading = false,
+  appSettings?: AppSettings,
+  onConfirmationRequest?: (event: ConfirmationRequestEvent) => void,
+  onConfirmationResolved?: (event: {
+    id: string;
+    confirmed: boolean;
+    source: "web" | "feishu";
+  }) => void,
+) {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string>(() => generateSessionId());
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() =>
+    generateSessionId(),
+  );
   const [messages, setMessages] = useState<Message[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isTyping, setIsTyping] = useState(false);
@@ -65,19 +82,29 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
    * 用户上传文档后先放进这里，输入框上方显示预览卡片
    * 用户点【发送】按钮时才把内容拼接到消息里实际发出
    */
-  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([]);
+  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>(
+    [],
+  );
   /**
    * 正在解析的文档信息（用于显示进度条）
    * 非图片文档上传解析期间设为 { fileName }，解析完成后置 null
    */
-  const [parsingFile, setParsingFile] = useState<{ fileName: string } | null>(null);
+  const [parsingFile, setParsingFile] = useState<{ fileName: string } | null>(
+    null,
+  );
   const [knowledgeBaseStatus, setKnowledgeBaseStatus] = useState<{
-    status: 'ready' | 'empty' | 'error' | 'unknown';
+    status: "ready" | "empty" | "error" | "unknown";
     message: string;
-    stats?: { documentCount: number; uploadedDocumentCount: number; knowledgeSourcePageCount: number; collectionName: string };
+    stats?: {
+      documentCount: number;
+      uploadedDocumentCount: number;
+      knowledgeSourcePageCount: number;
+      collectionName: string;
+    };
     hasContentUpdate?: boolean;
-  }>({ status: 'unknown', message: '未检查知识库状态' });
-  const [currentModelId, setCurrentModelId] = useState<string>('ollama:minicpm');
+  }>({ status: "unknown", message: "未检查知识库状态" });
+  const [currentModelId, setCurrentModelId] =
+    useState<string>("ollama:minicpm");
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [hasDeepseekApiKey, setHasDeepseekApiKey] = useState(false);
   const [hasZhipuApiKey, setHasZhipuApiKey] = useState(false);
@@ -85,14 +112,16 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
   const [toolStatuses, setToolStatuses] = useState<ToolStatusEvent[]>([]);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   // 记录哪些会话曾经有过内容（卸载所有消息后也不回欢迎页）
-  const [sessionHasContent, setSessionHasContent] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem('session-has-content');
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
+  const [sessionHasContent, setSessionHasContent] = useState<Set<string>>(
+    () => {
+      try {
+        const saved = localStorage.getItem("session-has-content");
+        return saved ? new Set(JSON.parse(saved)) : new Set();
+      } catch {
+        return new Set();
+      }
+    },
+  );
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentSessionIdRef = useRef(currentSessionId);
@@ -115,7 +144,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       if (prev.has(sessionId)) return prev;
       const next = new Set(prev);
       next.add(sessionId);
-      localStorage.setItem('session-has-content', JSON.stringify([...next]));
+      localStorage.setItem("session-has-content", JSON.stringify([...next]));
       return next;
     });
   };
@@ -126,7 +155,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       if (!prev.has(sessionId)) return prev;
       const next = new Set(prev);
       next.delete(sessionId);
-      localStorage.setItem('session-has-content', JSON.stringify([...next]));
+      localStorage.setItem("session-has-content", JSON.stringify([...next]));
       return next;
     });
   };
@@ -147,7 +176,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       }
       return info;
     } catch (error) {
-      console.error('加载模型信息失败:', error);
+      console.error("加载模型信息失败:", error);
       throw error;
     }
   };
@@ -158,34 +187,62 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       if (result.success) {
         setCurrentModelId(modelId);
         // 从 availableModels 中查找当前模型的 supportsVision
-        const model = availableModels.find(m => m.id === modelId);
+        const model = availableModels.find((m) => m.id === modelId);
         if (model) {
           setSupportsVision(model.supportsVision);
         }
         console.log(`✅ 已切换模型: ${modelId}`);
       } else {
-        console.error('切换模型失败:', result.message);
+        console.error("切换模型失败:", result.message);
       }
       return result;
     } catch (error) {
-      console.error('切换模型失败:', error);
-      return { success: false, message: '切换模型失败' };
+      console.error("切换模型失败:", error);
+      return { success: false, message: "切换模型失败" };
     }
   };
 
   const configureApiKey = async (provider: string, apiKey: string) => {
     try {
       const result = await setModelApiKey(provider, apiKey);
-      if (result.success && provider === 'deepseek') {
+      if (result.success && provider === "deepseek") {
         setHasDeepseekApiKey(true);
       }
-      if (result.success && provider === 'zhipu') {
+      if (result.success && provider === "zhipu") {
         setHasZhipuApiKey(true);
       }
       return result;
     } catch (error) {
-      console.error('设置 API Key 失败:', error);
-      return { success: false, message: '设置 API Key 失败' };
+      console.error("设置 API Key 失败:", error);
+      return { success: false, message: "设置 API Key 失败" };
+    }
+  };
+
+  /**
+   * 探测模型能力（vision / function calling / tool_choice）
+   *
+   * 使用应用内存中的 API Key 探测，探测完成后刷新模型信息
+   * （capabilities.json 已更新，getModelInfo 会返回新的能力值）
+   */
+  const probeCapabilities = async (): Promise<{
+    success: boolean;
+    message: string;
+  }> => {
+    try {
+      const result = await probeModelCapabilitiesApi();
+      if (result.success) {
+        // 探测成功后刷新模型信息，刷新失败不影响探测成功状态
+        try {
+          await loadModelInfo();
+        } catch {
+          // 刷新失败不改变探测结果，用户下次操作时会重新加载
+        }
+      }
+      return { success: result.success, message: result.message };
+    } catch (error) {
+      console.error("探测模型能力失败:", error);
+      const detail = error instanceof Error ? error.message : String(error);
+      return { success: false, message: `探测失败: ${detail}` };
     }
   };
 
@@ -200,7 +257,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     setMessages([]);
     setHistory([]);
     setSessionHasContent(new Set());
-    localStorage.removeItem('session-has-content');
+    localStorage.removeItem("session-has-content");
     loadSessions();
   }, [authLoading, isAuthenticated]);
 
@@ -235,14 +292,17 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       }
       return sessionsData;
     } catch (error) {
-      console.error('加载会话失败:', error);
+      console.error("加载会话失败:", error);
       return [];
     } finally {
       setIsLoading(false);
     }
   };
 
-  const loadSessionMessages = async (sessionId: string, options?: { force?: boolean }) => {
+  const loadSessionMessages = async (
+    sessionId: string,
+    options?: { force?: boolean },
+  ) => {
     if (options?.force) {
       messagesCacheRef.current.delete(sessionId);
     }
@@ -271,11 +331,13 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
         const formattedMessages: Message[] = messagesData.map((msg: any) => ({
           id: msg.id.toString(),
           content: msg.content,
-          role: msg.role as 'user' | 'assistant',
+          role: msg.role as "user" | "assistant",
           timestamp: new Date(msg.createdAt),
           attachments: Array.isArray(msg.attachments) ? msg.attachments : [],
           // 还原持久化的文档卡片（后端以 JSON 字符串存储，已由 service 反序列化为数组）
-          documentCards: Array.isArray(msg.documentCards) ? msg.documentCards : undefined,
+          documentCards: Array.isArray(msg.documentCards)
+            ? msg.documentCards
+            : undefined,
         }));
         setMessages(formattedMessages);
         messagesCacheRef.current.set(sessionId, formattedMessages);
@@ -285,8 +347,8 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
         messagesCacheRef.current.set(sessionId, []);
       }
     } catch (error: any) {
-      if (error?.name === 'AbortError') return;
-      console.error('加载会话消息失败:', error);
+      if (error?.name === "AbortError") return;
+      console.error("加载会话消息失败:", error);
       if (currentSessionIdRef.current !== sessionId) return;
       // 出错时不清空消息，保留当前显示状态
     } finally {
@@ -296,7 +358,9 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     }
   };
 
-  const refreshSessionsAndCurrentMessages = async (options?: { forceCurrentMessages?: boolean }) => {
+  const refreshSessionsAndCurrentMessages = async (options?: {
+    forceCurrentMessages?: boolean;
+  }) => {
     if (authLoading || isRefreshingRef.current) return;
     isRefreshingRef.current = true;
     try {
@@ -308,13 +372,22 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       );
 
       const currentId = currentSessionIdRef.current;
-      const currentSession = sessionsData.find((session) => session.sessionId === currentId);
+      const currentSession = sessionsData.find(
+        (session) => session.sessionId === currentId,
+      );
       if (currentSession) {
-        if (isTypingRef.current && activeGeneratingSessionIdRef.current === currentId) {
+        if (
+          isTypingRef.current &&
+          activeGeneratingSessionIdRef.current === currentId
+        ) {
           return;
         }
         const previous = previousUpdatedAt.get(currentId);
-        if (options?.forceCurrentMessages || !previous || previous !== currentSession.updatedAt) {
+        if (
+          options?.forceCurrentMessages ||
+          !previous ||
+          previous !== currentSession.updatedAt
+        ) {
           await loadSessionMessages(currentId, { force: true });
         }
         return;
@@ -324,7 +397,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
         setCurrentSessionId(sessionsData[0].sessionId);
       }
     } catch (error) {
-      console.error('刷新会话失败:', error);
+      console.error("刷新会话失败:", error);
       throw error;
     } finally {
       isRefreshingRef.current = false;
@@ -353,13 +426,13 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     };
 
     const timer = window.setInterval(refreshIfVisible, 5000);
-    window.addEventListener('focus', refreshIfVisible);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener("focus", refreshIfVisible);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.clearInterval(timer);
-      window.removeEventListener('focus', refreshIfVisible);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener("focus", refreshIfVisible);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [authLoading, isTyping]);
 
@@ -370,12 +443,17 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     const unsubscribe = subscribeChatEvents(
       (event) => {
         // 正在本地流式生成时不打断（避免覆盖临时气泡），其余情况立即刷新
-        if (isTypingRef.current && activeGeneratingSessionIdRef.current === event.sessionId) {
+        if (
+          isTypingRef.current &&
+          activeGeneratingSessionIdRef.current === event.sessionId
+        ) {
           return;
         }
         // 当前正打开的会话被外部更新时，强制重新拉取消息绕过缓存
         const forceCurrent = event.sessionId === currentSessionIdRef.current;
-        void refreshSessionsAndCurrentMessages({ forceCurrentMessages: forceCurrent }).catch(() => {});
+        void refreshSessionsAndCurrentMessages({
+          forceCurrentMessages: forceCurrent,
+        }).catch(() => {});
       },
       (connected) => {
         sseConnectedRef.current = connected;
@@ -400,7 +478,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
 
   const createNewSession = async () => {
     const newSessionId = generateSessionId();
-    const sessionTitle = '新对话';
+    const sessionTitle = "新对话";
 
     try {
       await createSession(newSessionId, sessionTitle);
@@ -411,7 +489,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       // 新会话缓存空消息
       messagesCacheRef.current.set(newSessionId, []);
     } catch (error) {
-      console.error('创建新会话失败:', error);
+      console.error("创建新会话失败:", error);
     }
   };
 
@@ -447,12 +525,17 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
         }
       }
     } catch (error) {
-      console.error('删除会话失败:', error);
+      console.error("删除会话失败:", error);
     }
   };
 
-  const sendMessage = async (userInput: string, images: string[] = [], documents: PendingDocument[] = []) => {
-    if (!userInput.trim() && images.length === 0 && documents.length === 0) return;
+  const sendMessage = async (
+    userInput: string,
+    images: string[] = [],
+    documents: PendingDocument[] = [],
+  ) => {
+    if (!userInput.trim() && images.length === 0 && documents.length === 0)
+      return;
 
     // 发消息即标记该会话有内容
     markSessionHasContent(currentSessionId);
@@ -461,10 +544,10 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       const errorMessage: Message = {
         id: generateId(),
         content: `⚠️ 当前模型不支持图片输入，请切换到支持图片的模型（如 MiniCPM）后再试。`,
-        role: 'assistant',
+        role: "assistant",
         timestamp: new Date(),
       };
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages((prev) => [...prev, errorMessage]);
       return;
     }
 
@@ -472,18 +555,18 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     // 这部分是 AI 实际看到的，包括所有文档原文
     let aiInputContent = userInput.trim();
     if (documents.length > 0) {
-      const docSections = documents.map(doc => {
+      const docSections = documents.map((doc) => {
         const truncationNote = doc.truncated
-          ? `\n[注：文档过长，原文共 ${doc.totalChars ?? '?'} 字符，已截取前 ${doc.text.length} 字符。如需回答后半部分内容，请将文档上传到文档管理并发布到知识库]`
-          : '';
+          ? `\n[注：文档过长，原文共 ${doc.totalChars ?? "?"} 字符，已截取前 ${doc.text.length} 字符。如需回答后半部分内容，请将文档上传到文档管理并发布到知识库]`
+          : "";
         if (doc.text) {
           return `【文档：${doc.fileName}】\n${doc.text}${truncationNote}`;
         }
         return `【文档：${doc.fileName}】(${doc.fileUrl})`;
       });
       aiInputContent = aiInputContent
-        ? `${aiInputContent}\n\n${docSections.join('\n\n')}`
-        : docSections.join('\n\n');
+        ? `${aiInputContent}\n\n${docSections.join("\n\n")}`
+        : docSections.join("\n\n");
     }
 
     // "展示给用户"的内容：只放用户输入的文字（不含文档全文）
@@ -494,25 +577,26 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       id: generateId(),
       content: displayContent,
       images: images.length > 0 ? images : undefined,
-      role: 'user',
+      role: "user",
       timestamp: new Date(),
       // 把所有文档的轻量元信息附加到消息上，供 ChatBubble 渲染卡片
-      documentCards: documents.length > 0
-        ? documents.map(d => ({
-            id: d.id,
-            fileName: d.fileName,
-            sizeBytes: d.sizeBytes,
-            charCount: d.text.length,
-            truncated: d.truncated,
-            totalChars: d.totalChars,
-            fileUrl: d.fileUrl,
-            contentJson: d.contentJson,
-            documentId: d.documentId,
-          }))
-        : undefined,
+      documentCards:
+        documents.length > 0
+          ? documents.map((d) => ({
+              id: d.id,
+              fileName: d.fileName,
+              sizeBytes: d.sizeBytes,
+              charCount: d.text.length,
+              truncated: d.truncated,
+              totalChars: d.totalChars,
+              fileUrl: d.fileUrl,
+              contentJson: d.contentJson,
+              documentId: d.documentId,
+            }))
+          : undefined,
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    setMessages((prev) => [...prev, userMessage]);
     setIsTyping(true);
     isTypingRef.current = true;
     activeGeneratingSessionIdRef.current = currentSessionId;
@@ -526,7 +610,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     try {
       const savedUserMsg = await saveChatHistory({
         sessionId: currentSessionId,
-        role: 'user',
+        role: "user",
         content: displayContent,
         images,
         // 文档卡片随消息一起持久化，重启后仍可显示
@@ -535,9 +619,13 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
 
       // 用数据库返回的 ID 更新前端消息 ID，确保删除时能匹配
       if (savedUserMsg?.id) {
-        setMessages(prev => prev.map(msg =>
-          msg.id === userMessage.id ? { ...msg, id: savedUserMsg.id.toString() } : msg
-        ));
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === userMessage.id
+              ? { ...msg, id: savedUserMsg.id.toString() }
+              : msg,
+          ),
+        );
       }
 
       // 检查是否是第一条消息
@@ -553,7 +641,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
         query: userInput,
         timestamp: new Date(),
       };
-      setHistory(prev => [newHistoryItem, ...prev].slice(0, 10));
+      setHistory((prev) => [newHistoryItem, ...prev].slice(0, 10));
 
       // 准备历史消息（排除默认消息）
       const chatHistory = messages;
@@ -562,79 +650,90 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       const assistantMessageId = generateId();
       const tempAssistantMessage: Message = {
         id: assistantMessageId,
-        content: '',
-        role: 'assistant',
+        content: "",
+        role: "assistant",
         timestamp: new Date(),
         fromKnowledgeBase: false,
         attachments: [],
       };
-      setMessages(prev => [...prev, tempAssistantMessage]);
+      setMessages((prev) => [...prev, tempAssistantMessage]);
 
       // 处理流式响应（传入图片和 signal）
-      const aiResponse = await getAIResponse(aiInputContent, images, chatHistory, currentSessionId, abortController.signal, {
-        memoryEnabled: appSettings?.memoryEnabled ?? true,
-        summaryEnabled: appSettings?.summaryEnabled ?? true,
-        injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
-        imageModel: appSettings?.imageModel ?? 'wan2.7-image-pro',
-        onToolStatus: (event) => {
-          setToolStatuses(prev => {
-            // 更新同名工具的状态，或追加新工具
-            const idx = prev.findIndex(e => e.toolName === event.toolName);
-            if (idx >= 0) {
-              const updated = [...prev];
-              updated[idx] = event;
-              return updated;
-            }
-            return [...prev, event];
-          });
+      const aiResponse = await getAIResponse(
+        aiInputContent,
+        images,
+        chatHistory,
+        currentSessionId,
+        abortController.signal,
+        {
+          memoryEnabled: appSettings?.memoryEnabled ?? true,
+          summaryEnabled: appSettings?.summaryEnabled ?? true,
+          injectMemory: appSettings?.injectMemoryOnNewSession ?? true,
+          imageModel: appSettings?.imageModel ?? "wan2.7-image-pro",
+          onToolStatus: (event) => {
+            setToolStatuses((prev) => {
+              // 更新同名工具的状态，或追加新工具
+              const idx = prev.findIndex((e) => e.toolName === event.toolName);
+              if (idx >= 0) {
+                const updated = [...prev];
+                updated[idx] = event;
+                return updated;
+              }
+              return [...prev, event];
+            });
+          },
+          onConfirmationRequest: onConfirmationRequest || undefined,
+          onConfirmationResolved: onConfirmationResolved || undefined,
+          onFileCard: (event) => {
+            // 实时把文件卡片挂到正在生成的 AI 消息上
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantMessageId
+                  ? {
+                      ...msg,
+                      attachments: [
+                        ...(msg.attachments || []),
+                        {
+                          key: event.key,
+                          filename: event.filename,
+                          format: event.format,
+                          sizeBytes: event.sizeBytes,
+                          downloadUrl: event.downloadUrl,
+                          previewUrl: event.previewUrl,
+                          expiresAt: event.expiresAt,
+                          favorited: event.favorited,
+                        },
+                      ],
+                    }
+                  : msg,
+              ),
+            );
+          },
         },
-        onConfirmationRequest: onConfirmationRequest || undefined,
-        onConfirmationResolved: onConfirmationResolved || undefined,
-        onFileCard: (event) => {
-          // 实时把文件卡片挂到正在生成的 AI 消息上
-          setMessages(prev => prev.map(msg =>
-            msg.id === assistantMessageId
-              ? {
-                  ...msg,
-                  attachments: [
-                    ...(msg.attachments || []),
-                    {
-                      key: event.key,
-                      filename: event.filename,
-                      format: event.format,
-                      sizeBytes: event.sizeBytes,
-                      downloadUrl: event.downloadUrl,
-                      previewUrl: event.previewUrl,
-                      expiresAt: event.expiresAt,
-                      favorited: event.favorited,
-                    },
-                  ],
-                }
-              : msg
-          ));
-        },
-      });
-      
+      );
+
       // 设置知识库来源标记
       const usedKnowledgeBase = aiResponse.usedKnowledgeBase;
       const contextCount = aiResponse.contextCount;
-      
-      setMessages(prev => prev.map(msg =>
-        msg.id === assistantMessageId 
-          ? { ...msg, fromKnowledgeBase: usedKnowledgeBase, contextCount } 
-          : msg
-      ));
-      
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? { ...msg, fromKnowledgeBase: usedKnowledgeBase, contextCount }
+            : msg,
+        ),
+      );
+
       const reader = aiResponse.stream.getReader();
-      let fullResponse = '';
+      let fullResponse = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         fullResponse += value;
-        setMessages(prev => {
-          const exists = prev.some(msg => msg.id === assistantMessageId);
+        setMessages((prev) => {
+          const exists = prev.some((msg) => msg.id === assistantMessageId);
           if (!exists) {
             const restoredAssistantMessage: Message = {
               ...tempAssistantMessage,
@@ -644,8 +743,10 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
             messagesCacheRef.current.set(currentSessionId, next);
             return next;
           }
-          const next = prev.map(msg =>
-            msg.id === assistantMessageId ? { ...msg, content: fullResponse } : msg
+          const next = prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, content: fullResponse }
+              : msg,
           );
           messagesCacheRef.current.set(currentSessionId, next);
           return next;
@@ -658,7 +759,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       // 保存完整的响应
       const savedAssistantMsg = await saveChatHistory({
         sessionId: currentSessionId,
-        role: 'assistant',
+        role: "assistant",
         content: fullResponse,
       });
 
@@ -667,11 +768,17 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
 
       // 用数据库返回的 ID 更新前端消息 ID，确保删除时能匹配
       if (savedAssistantMsg?.id) {
-        setMessages(prev => {
-          const exists = prev.some(msg => msg.id === assistantMessageId);
+        setMessages((prev) => {
+          const exists = prev.some((msg) => msg.id === assistantMessageId);
           const next = exists
-            ? prev.map(msg =>
-                msg.id === assistantMessageId ? { ...msg, id: savedAssistantMsg.id.toString(), content: fullResponse } : msg
+            ? prev.map((msg) =>
+                msg.id === assistantMessageId
+                  ? {
+                      ...msg,
+                      id: savedAssistantMsg.id.toString(),
+                      content: fullResponse,
+                    }
+                  : msg,
               )
             : [
                 ...prev,
@@ -695,20 +802,19 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       if (aiResponse.sessionAction) {
         handleSessionAction(aiResponse.sessionAction);
       }
-
     } catch (error: any) {
       // 用户主动取消，不显示错误
-      if (error.name === 'AbortError') {
-        console.log('🛑 用户停止了生成');
+      if (error.name === "AbortError") {
+        console.log("🛑 用户停止了生成");
       } else {
-        console.error('发送消息失败:', error);
+        console.error("发送消息失败:", error);
         const errorMessage: Message = {
           id: generateId(),
           content: ERROR_MESSAGE,
-          role: 'assistant',
+          role: "assistant",
           timestamp: new Date(),
         };
-        setMessages(prev => [...prev, errorMessage]);
+        setMessages((prev) => [...prev, errorMessage]);
       }
     } finally {
       setIsTyping(false);
@@ -718,11 +824,12 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       abortControllerRef.current = null;
 
       // 清理空的 AI 回复（连接断开或取消时，AI 可能没有输出任何内容）
-      setMessages(prev => {
+      setMessages((prev) => {
         const lastMsg = prev[prev.length - 1];
-        const cleaned = (lastMsg && lastMsg.role === 'assistant' && !lastMsg.content.trim())
-          ? prev.slice(0, -1)
-          : prev;
+        const cleaned =
+          lastMsg && lastMsg.role === "assistant" && !lastMsg.content.trim()
+            ? prev.slice(0, -1)
+            : prev;
         // 更新缓存（使用 ref 确保即使会话已切换也能写入正确的会话）
         messagesCacheRef.current.set(currentSessionIdRef.current, cleaned);
         return cleaned;
@@ -742,9 +849,9 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
   const sendFile = async (file: File) => {
     try {
       // 图片仍走原 uploadFile 接口（只需 URL），加到 pendingImages
-      if (file.type.startsWith('image/')) {
+      if (file.type.startsWith("image/")) {
         const uploadResult = await uploadFile(file);
-        setPendingImages(prev => [...prev, uploadResult.url]);
+        setPendingImages((prev) => [...prev, uploadResult.url]);
         return;
       }
 
@@ -764,33 +871,33 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
           totalChars: result.totalChars,
           documentId: result.documentId,
         };
-        setPendingDocuments(prev => [...prev, pending]);
+        setPendingDocuments((prev) => [...prev, pending]);
       } catch (err) {
         // 提取失败：用旧逻辑兜底（上传得到 URL，加到 pendingDocuments 仅作链接用）
-        console.warn('文档内容提取失败，作为链接附件附加', err);
+        console.warn("文档内容提取失败，作为链接附件附加", err);
         const uploadResult = await uploadFile(file);
         const pending: PendingDocument = {
           id: generateId(),
           fileName: file.name,
           sizeBytes: file.size,
-          text: '',
+          text: "",
           contentJson: null,
           fileUrl: uploadResult.url,
           truncated: false,
         };
-        setPendingDocuments(prev => [...prev, pending]);
+        setPendingDocuments((prev) => [...prev, pending]);
       } finally {
         setParsingFile(null);
       }
     } catch (error) {
-      console.error('上传文件失败:', error);
+      console.error("上传文件失败:", error);
       const errorMessage: Message = {
         id: generateId(),
-        content: '文件上传失败，请重试',
-        role: 'assistant',
+        content: "文件上传失败，请重试",
+        role: "assistant",
         timestamp: new Date(),
       };
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages((prev) => [...prev, errorMessage]);
     }
   };
 
@@ -799,7 +906,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
   };
 
   const removePendingImage = (index: number) => {
-    setPendingImages(prev => prev.filter((_, i) => i !== index));
+    setPendingImages((prev) => prev.filter((_, i) => i !== index));
   };
 
   const clearPendingDocuments = () => {
@@ -807,7 +914,7 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
   };
 
   const removePendingDocument = (id: string) => {
-    setPendingDocuments(prev => prev.filter(d => d.id !== id));
+    setPendingDocuments((prev) => prev.filter((d) => d.id !== id));
   };
 
   const stopGeneration = () => {
@@ -821,16 +928,16 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     try {
       await updateMessageApi(messageId, content);
       // 更新本地消息列表
-      setMessages(prev => {
-        const updated = prev.map(msg =>
-          msg.id === messageId ? { ...msg, content } : msg
+      setMessages((prev) => {
+        const updated = prev.map((msg) =>
+          msg.id === messageId ? { ...msg, content } : msg,
         );
         // 同步更新缓存，防止切换会话后修改丢失
         messagesCacheRef.current.set(currentSessionId, updated);
         return updated;
       });
     } catch (error) {
-      console.error('更新消息失败:', error);
+      console.error("更新消息失败:", error);
       throw error;
     }
   };
@@ -839,24 +946,28 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     try {
       await deleteMessageApi(messageId);
 
-      setMessages(prev => {
-        const index = prev.findIndex(msg => msg.id === messageId);
+      setMessages((prev) => {
+        const index = prev.findIndex((msg) => msg.id === messageId);
         const idsToRemove = [messageId];
 
-        if (index !== -1 && index + 1 < prev.length && prev[index + 1].role === 'assistant') {
+        if (
+          index !== -1 &&
+          index + 1 < prev.length &&
+          prev[index + 1].role === "assistant"
+        ) {
           idsToRemove.push(prev[index + 1].id);
-          deleteMessageApi(prev[index + 1].id).catch(err =>
-            console.error('删除关联AI回复失败:', err)
+          deleteMessageApi(prev[index + 1].id).catch((err) =>
+            console.error("删除关联AI回复失败:", err),
           );
         }
 
-        const updated = prev.filter(msg => !idsToRemove.includes(msg.id));
+        const updated = prev.filter((msg) => !idsToRemove.includes(msg.id));
         // 同步更新缓存，防止切换会话后已删除消息从旧缓存恢复
         messagesCacheRef.current.set(currentSessionId, updated);
         return updated;
       });
     } catch (error) {
-      console.error('删除消息失败:', error);
+      console.error("删除消息失败:", error);
       throw error;
     }
   };
@@ -870,29 +981,29 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       await toggleSessionPin(sessionId);
       await loadSessions(true);
     } catch (error) {
-      console.error('切换会话置顶状态失败:', error);
+      console.error("切换会话置顶状态失败:", error);
     }
   };
 
   const handleSessionAction = (action: { type: string; payload: any }) => {
     switch (action.type) {
-      case 'switch_session':
+      case "switch_session":
         if (action.payload?.sessionId) {
           switchSession(action.payload.sessionId);
         }
         break;
-      case 'create_session':
+      case "create_session":
         // 创建会话已在后端完成，刷新列表并切换
         loadSessions(true);
         if (action.payload?.sessionId) {
           switchSession(action.payload.sessionId);
         }
         break;
-      case 'delete_session':
+      case "delete_session":
         // 删除已在后端完成，刷新列表
         loadSessions(true);
         break;
-      case 'refresh_sessions':
+      case "refresh_sessions":
         loadSessions(true);
         break;
     }
@@ -901,14 +1012,16 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
   const renameSession = async (sessionId: string, newTitle: string) => {
     // 乐观更新：先更新本地状态
     const prevSessions = sessions;
-    setSessions(prev => prev.map(s =>
-      s.sessionId === sessionId ? { ...s, title: newTitle } : s
-    ));
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.sessionId === sessionId ? { ...s, title: newTitle } : s,
+      ),
+    );
     try {
       await updateSessionTitle(sessionId, newTitle);
     } catch (error) {
       // 失败则回滚
-      console.error('更新会话标题失败:', error);
+      console.error("更新会话标题失败:", error);
       setSessions(prevSessions);
     }
   };
@@ -918,32 +1031,40 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       await duplicateSessionApi(sessionId);
       await loadSessions(true);
     } catch (error) {
-      console.error('复制会话失败:', error);
+      console.error("复制会话失败:", error);
       throw error;
     }
   };
 
-  const exportSessionById = async (sessionId: string, format: 'json' | 'markdown' | 'text' = 'markdown') => {
-    console.log('[导出] 开始导出会话:', sessionId, format);
+  const exportSessionById = async (
+    sessionId: string,
+    format: "json" | "markdown" | "text" = "markdown",
+  ) => {
+    console.log("[导出] 开始导出会话:", sessionId, format);
     try {
       const result = await exportSessionApi(sessionId, format);
-      console.log('[导出] API 返回成功:', result.filename);
+      console.log("[导出] API 返回成功:", result.filename);
 
       let content: string;
       let mimeType: string;
-      const ext = format === 'markdown' ? 'md' : format === 'text' ? 'txt' : 'json';
+      const ext =
+        format === "markdown" ? "md" : format === "text" ? "txt" : "json";
       const filename = result.filename || `session_export.${ext}`;
 
-      if (format === 'json') {
-        content = JSON.stringify({
-          session: result.session,
-          messages: result.messages,
-          exportedAt: result.exportedAt,
-        }, null, 2);
-        mimeType = 'application/json';
+      if (format === "json") {
+        content = JSON.stringify(
+          {
+            session: result.session,
+            messages: result.messages,
+            exportedAt: result.exportedAt,
+          },
+          null,
+          2,
+        );
+        mimeType = "application/json";
       } else {
-        content = result.content || '';
-        mimeType = format === 'markdown' ? 'text/markdown' : 'text/plain';
+        content = result.content || "";
+        mimeType = format === "markdown" ? "text/markdown" : "text/plain";
       }
 
       // 尝试使用 Tauri 原生文件保存对话框
@@ -951,40 +1072,47 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       try {
         const isTauri = !!(window as any).__TAURI_INTERNALS__;
         if (isTauri) {
-          const { save } = await import('@tauri-apps/plugin-dialog');
-          const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+          const { save } = await import("@tauri-apps/plugin-dialog");
+          const { writeTextFile } = await import("@tauri-apps/plugin-fs");
           const filePath = await save({
             defaultPath: filename,
-            filters: [{
-              name: format === 'markdown' ? 'Markdown' : format === 'json' ? 'JSON' : 'Text',
-              extensions: [ext],
-            }],
+            filters: [
+              {
+                name:
+                  format === "markdown"
+                    ? "Markdown"
+                    : format === "json"
+                      ? "JSON"
+                      : "Text",
+                extensions: [ext],
+              },
+            ],
           });
           if (filePath) {
-            console.log('[导出] Tauri 保存路径:', filePath);
+            console.log("[导出] Tauri 保存路径:", filePath);
             await writeTextFile(filePath, content);
             saved = true;
           }
         }
       } catch (e) {
-        console.warn('[导出] Tauri 保存失败，降级为浏览器下载:', e);
+        console.warn("[导出] Tauri 保存失败，降级为浏览器下载:", e);
       }
 
       if (!saved) {
         // 浏览器 / Tauri WebView 通用下载方式
         const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
+        const a = document.createElement("a");
         a.href = url;
         a.download = filename;
-        a.style.display = 'none';
+        a.style.display = "none";
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       }
     } catch (error) {
-      console.error('[导出] 导出会话失败:', error);
+      console.error("[导出] 导出会话失败:", error);
       throw error;
     }
   };
@@ -996,11 +1124,11 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
       return status;
     } catch (error: any) {
       const errorStatus = {
-        status: 'error' as const,
+        status: "error" as const,
         message: `获取知识库状态失败: ${error.message}`,
       };
       setKnowledgeBaseStatus((prev) =>
-        prev.status === 'ready' || prev.status === 'empty'
+        prev.status === "ready" || prev.status === "empty"
           ? { ...prev, message: errorStatus.message }
           : errorStatus,
       );
@@ -1016,7 +1144,9 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     }
   };
 
-  const uploadToKnowledgeBaseFromChat = async (file: File): Promise<{
+  const uploadToKnowledgeBaseFromChat = async (
+    file: File,
+  ): Promise<{
     success: boolean;
     message: string;
     documentCount?: number;
@@ -1037,15 +1167,20 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     }
   };
 
-  const refreshAppData = async (reason: string = 'manual') => {
-    const shouldForceCurrentMessages = reason === 'manual' && !isTypingRef.current;
+  const refreshAppData = async (reason: string = "manual") => {
+    const shouldForceCurrentMessages =
+      reason === "manual" && !isTypingRef.current;
     const results = await Promise.allSettled([
       loadModelInfo(),
       checkKnowledgeBaseStatus({ retry: false }),
-      refreshSessionsAndCurrentMessages({ forceCurrentMessages: shouldForceCurrentMessages }),
+      refreshSessionsAndCurrentMessages({
+        forceCurrentMessages: shouldForceCurrentMessages,
+      }),
     ]);
 
-    const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult | undefined;
+    const rejected = results.find((result) => result.status === "rejected") as
+      | PromiseRejectedResult
+      | undefined;
     if (rejected) {
       throw rejected.reason;
     }
@@ -1093,5 +1228,6 @@ export function useChat(isAuthenticated?: boolean, authLoading = false, appSetti
     supportsVision,
     switchModel,
     configureApiKey,
+    probeCapabilities,
   };
 }

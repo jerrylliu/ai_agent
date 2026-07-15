@@ -1,0 +1,99 @@
+# =============================================================================
+# 开发环境依赖服务编排（MySQL / Redis / ChromaDB / Ollama）
+#
+# 用途：面试展示 / 本地开发，一行命令拉起所有依赖，无需手动安装。
+# 后端服务本身不进容器，通过 pnpm start:dev 在宿主机运行，连接 localhost。
+#
+# 使用方式：
+#   cd servers/jerry-llm-server/docker
+#
+#   方式一（全量，适合什么都没装的新人）：
+#     docker compose -f docker-compose.dev.yml up -d
+#
+#   方式二（按需，本地已装 MySQL/Ollama 就只起缺的）：
+#     docker compose -f docker-compose.dev.yml up -d redis chroma
+#     docker compose -f docker-compose.dev.yml up -d redis        # 只起 Redis
+#     docker compose -f docker-compose.dev.yml up -d chroma       # 只起 ChromaDB
+#
+# 停止并清理（保留数据）：
+#   docker compose -f docker-compose.dev.yml down
+#
+# 彻底清空数据（重新开始）：
+#   docker compose -f docker-compose.dev.yml down -v
+# =============================================================================
+
+services:
+  # ==================== MySQL 8 ====================
+  mysql:
+    image: mysql:8.0
+    container_name: jerry-mysql-dev
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: cyberpunk
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  # ==================== Redis 7 ====================
+  # 可选组件：REDIS_ENABLED=false 时后端自动降级到内存模式
+  redis:
+    image: redis:7-alpine
+    container_name: jerry-redis-dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # 开发环境不设密码，生产环境务必加 --requirepass
+    command: redis-server --appendonly yes
+
+  # ==================== ChromaDB（向量数据库） ====================
+  chroma:
+    image: chromadb/chroma:latest
+    container_name: jerry-chroma-dev
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+  # ==================== Ollama（本地 LLM + 嵌入模型） ====================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: jerry-ollama-dev
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    # GPU 加速：如有 NVIDIA GPU，取消下方注释
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  mysql-data:
+  redis-data:
+  chroma-data:
+  ollama-models:

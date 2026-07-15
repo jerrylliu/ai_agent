@@ -22,7 +22,8 @@
     "migration:generate": "pnpm build && pnpm typeorm migration:generate src/migrations/InitialSchema",
     "migration:run": "pnpm build && pnpm typeorm migration:run",
     "migration:revert": "pnpm build && pnpm typeorm migration:revert",
-    "migration:show": "pnpm build && pnpm typeorm migration:show"
+    "migration:show": "pnpm build && pnpm typeorm migration:show",
+    "probe": "ts-node scripts/probe-model-capabilities.ts"
   },
   "dependencies": {
     "@langchain/classic": "^1.0.29",

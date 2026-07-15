@@ -106,6 +106,39 @@ end
 `;
 
 /**
+ * 清理所有残留的会话锁（服务启动时调用）
+ *
+ * 场景：上一次运行被 Ctrl+C 杀掉，finally 块没执行，锁留在 Redis 里。
+ * 服务重启时，上一轮的锁全是残留的，直接清理即可。
+ *
+ * 仅清理 chat:session: 命名空间的锁，不影响其他用途的锁。
+ */
+export async function cleanupStaleSessionLocks(): Promise<number> {
+  if (!isRedisReady()) return 0;
+  const redis = getRedis();
+  if (!redis) return 0;
+
+  try {
+    // KEYS 命令在启动时使用是安全的（此时没有请求在处理）
+    const keys = await redis.keys('lock:chat:session:*');
+    if (keys.length > 0) {
+      await redis.del(...keys);
+    }
+    logger.info('DistributedLock: 启动锁清理完成', {
+      module: 'DistributedLock',
+      cleaned: keys.length,
+    });
+    return keys.length;
+  } catch (e: any) {
+    logger.warn('DistributedLock: 清理残留锁失败', {
+      module: 'DistributedLock',
+      err: (e?.message || String(e)).slice(0, 200),
+    });
+    return 0;
+  }
+}
+
+/**
  * 尝试获取分布式锁。
  *
  * @param namespace 锁的命名空间，建议用业务语义命名，如 'session:{id}' / 'cron:summary'
@@ -174,7 +207,14 @@ export async function acquireLock(
 /**
  * 释放锁（内部函数，调用方应使用 lock.release()）
  *
- * 安全释放：用 Lua 脚本原子地"校验 token + 删除 key"，防止误删别人的锁。
+ * 安全释放：先 GET 校验 token，再 DEL 删除 key。
+ *
+ * 注意：原实现用 Lua 脚本（EVAL）原子校验+删除，但 ioredis 的 keyPrefix
+ * 对 EVAL 的 KEYS 参数不生效，导致释放时找错 key（缺少 jerry: 前缀），
+ * 锁永远释放不掉，只能等 TTL 过期。改用 GET + DEL 确保 keyPrefix 生效。
+ *
+ * 非原子性取舍：GET 和 DEL 之间有微小窗口可能被其他人抢锁，但本项目是
+ * 单用户桌面端，不存在并发抢锁场景，安全性足够。
  */
 async function releaseLock(key: string, token: string): Promise<boolean> {
   const redis = getRedis();
@@ -187,18 +227,20 @@ async function releaseLock(key: string, token: string): Promise<boolean> {
   }
 
   try {
-    // ioredis 的 eval：(script, numKeys, ...keysAndArgs)
-    const result = (await redis.eval(RELEASE_LOCK_SCRIPT, 1, key, token)) as number;
-    if (result === 1) {
-      logger.debug('DistributedLock: 释放锁成功', { module: 'DistributedLock', key });
-      return true;
+    // GET 校验 token（redis.get 的 keyPrefix 一定生效）
+    const currentToken = await redis.get(key);
+    if (currentToken !== token) {
+      // 锁不是自己的（已过期 / 被别人覆盖）
+      logger.debug('DistributedLock: 释放锁跳过（token 不匹配，可能已过期）', {
+        module: 'DistributedLock',
+        key,
+      });
+      return false;
     }
-    // 0 = 锁不是自己的（已过期 / 被别人覆盖）；不算错误，但要记录便于排查超时问题
-    logger.warn('DistributedLock: 释放锁失败（锁不属于当前持有者，可能已过期）', {
-      module: 'DistributedLock',
-      key,
-    });
-    return false;
+    // DEL 删除（redis.del 的 keyPrefix 一定生效）
+    await redis.del(key);
+    logger.debug('DistributedLock: 释放锁成功', { module: 'DistributedLock', key });
+    return true;
   } catch (e: any) {
     logger.warn('DistributedLock: 释放锁异常', {
       module: 'DistributedLock',

@@ -1,9 +1,19 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, Query } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { KnowledgeSourceService } from '../services/knowledge-source.service.js';
 import { SourceType } from '../entities/knowledge-source.entity.js';
 import { logger } from '../fundamentals/logger';
 import { CreateKnowledgeSourceSchema, UpdateKnowledgeSourceSchema, BatchSyncSchema, type CreateKnowledgeSourceInput, type UpdateKnowledgeSourceInput } from './knowledge-source.schema.js';
 
+/**
+ * 知识源管理接口限流调整
+ *
+ * 全局 ThrottlerGuard 默认 10 次/60 秒（见 auth.module.ts），
+ * 但本模块在前端同步进行时会每 5~10 秒轮询 list + stats 两个接口，
+ * 默认配额会被快速耗尽并返回 429，导致列表加载失败、红色提示框误报。
+ * 这里将该 Controller 的限流放宽到 60 次/60 秒，足以容纳轮询 + 用户主动操作。
+ */
+@Throttle({ default: { ttl: 60000, limit: 60 } })
 @Controller('knowledge-sources')
 export class KnowledgeSourceController {
   constructor(private readonly sourceService: KnowledgeSourceService) {}

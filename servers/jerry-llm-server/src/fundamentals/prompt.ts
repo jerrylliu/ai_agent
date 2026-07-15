@@ -90,11 +90,11 @@ import { getToolSchemasForModel, executeTool, hasTool, getAvailableToolNames } f
 //   getSessionPlan      —— 读取会话当前的 plan 对象
 //   storeStepOutput     —— 把某步骤产出存入会话上下文，供后续步骤引用
 //   findMatchingStep    —— 根据 tool 调用反查所属 plan step
-import { resolveDataBindings, getSessionPlan, storeStepOutput, findMatchingStep } from './tools/plan-execute';
+import { resolveDataBindings, getSessionPlan, storeStepOutput, findMatchingStep, preloadSessionPlan } from './tools/plan-execute';
 // 【智能路由】根据用户输入判断走哪条链路（普通 chat / RAG / Agent）：
 //   routeRequest             —— 给定 query，返回路由决策
 //   applyAgentToolWhitelist  —— 按 Agent 类型筛掉禁用的工具
-import { routeRequest, applyAgentToolWhitelist } from './router/agent-router';
+import { routeRequest, applyAgentToolWhitelist, getAgent } from './router/agent-router';
 // 【搜索结果格式化】把搜索引擎原始 JSON 转成模型友好的 Markdown 摘要。
 import { formatSearchResultAsSummary } from './tools/search-web';
 // 【日志器 & 配置】项目级单例：
@@ -271,7 +271,7 @@ async function getSessionAssets(sessionId: string | undefined): Promise<string |
 /**
  * 用户意图检测结果
  */
-interface ToolIntentDetection {
+export interface ToolIntentDetection {
   /** 是否需要强制 LLM 必须调用工具（true 时 tool_choice 不能用 auto） */
   shouldForce: boolean;
   /** 锁定到的具体工具名（如能精准识别），为空则用 'required' 让模型自选 */
@@ -296,7 +296,7 @@ interface ToolIntentDetection {
  *   "做一个前端学习思维导图" → specificTool='create_mindmap'
  *   "帮我做点什么"           → shouldForce=false（太模糊）
  */
-function detectToolIntent(userMessage: string): ToolIntentDetection {
+export function detectToolIntent(userMessage: string): ToolIntentDetection {
   if (!userMessage || userMessage.trim().length === 0) {
     return { shouldForce: false, reason: '空消息' };
   }
@@ -1319,12 +1319,8 @@ async function promptWithFunctionCalling(
   // 根据用户输入选择最合适的 Agent，决定 system prompt 增量和工具白名单
   // 路由失败时回落到 general Agent，不阻断主流程
   const routing = routeRequest(promptText);
-  if (routing.agent.extraPrompt) {
-    fcSystemPrompt += routing.agent.extraPrompt;
-  }
-  if (routing.suggestedWorkflow) {
-    fcSystemPrompt += `\n\n用户输入匹配预置流水线 "${routing.suggestedWorkflow.templateId}"（${routing.suggestedWorkflow.reason}）。如果该流水线符合用户需求，请优先调用 execute_workflow 工具触发。`;
-  }
+  // 注意：extraPrompt 和 suggestedWorkflow 的追加移到"能力协商"之后，
+  //       避免 fallback 到 general 后原 Agent 的 extraPrompt 残留产生矛盾指令
   logger.info('FC模式：Agent 路由决策', {
     module: 'PromptService',
     agentRole: routing.agent.role,
@@ -1333,6 +1329,42 @@ async function promptWithFunctionCalling(
     score: routing.score,
     suggestedWorkflow: routing.suggestedWorkflow?.templateId,
   });
+
+  // ==================== Agent 能力协商：用户意图工具不在白名单时 fallback 到 general ====================
+  // 问题：用户说"生成一张图片"被路由到"知识库查询 Agent"，白名单里没有 generate_image →
+  //       防线 1 退到 tool_choice='required'，模型被迫调不相干的知识库工具（浪费一轮），
+  //       且因 alreadyUsedTools=true 导致防线 2/3 全部跳过，模型可能嘴炮"我来生成图片"但不被拦截。
+  // 方案：提前用 detectToolIntent 识别用户意图工具，若该工具不在当前 Agent 白名单，
+  //       自动切回 general Agent（不限制工具），保证用户能拿到结果。
+  const intentDetection = detectToolIntent(promptText || '');
+  if (intentDetection.shouldForce && intentDetection.specificTool) {
+    const whitelist = routing.agent.toolWhitelist;  // general 为 undefined = 不限制
+    const toolAvailable = !whitelist || whitelist.includes(intentDetection.specificTool);
+    if (!toolAvailable) {
+      const originalAgentRole = routing.agent.role;
+      const originalAgentName = routing.agent.name;
+      routing.agent = getAgent('general');
+      logger.info('FC模式：用户意图工具不在当前 Agent 白名单，fallback 到 general Agent', {
+        module: 'PromptService',
+        originalAgentRole,
+        originalAgentName,
+        fallbackAgentRole: routing.agent.role,
+        requestedTool: intentDetection.specificTool,
+        reason: intentDetection.reason,
+      });
+      // 追加上下文提示，让模型知道用户原意，避免重复询问
+      fcSystemPrompt += `\n\n注意：用户最初意图是调用 ${intentDetection.specificTool} 工具，请直接帮用户完成该操作。`;
+    }
+  }
+
+  // 能力协商结束后，统一追加最终 Agent 的 extraPrompt 和 suggestedWorkflow
+  // （若 fallback 到 general，这里追加的是 general 的 extraPrompt，不会残留原 Agent 的矛盾指令）
+  if (routing.agent.extraPrompt) {
+    fcSystemPrompt += routing.agent.extraPrompt;
+  }
+  if (routing.suggestedWorkflow) {
+    fcSystemPrompt += `\n\n用户输入匹配预置流水线 "${routing.suggestedWorkflow.templateId}"（${routing.suggestedWorkflow.reason}）。如果该流水线符合用户需求，请优先调用 execute_workflow 工具触发。`;
+  }
 
   const currentDate = new Date();
   const dateStr = `${currentDate.getFullYear()}年${currentDate.getMonth() + 1}月${currentDate.getDate()}日`;
@@ -1435,7 +1467,7 @@ async function promptWithFunctionCalling(
   // 注意：only 仅锁定我们能确定的工具，避免误锁查询型场景（搜索/天气/计算）。
   // 注意：DeepSeek Thinking mode 等模型不支持 tool_choice 参数（会报 400），
   //       必须用 caps.supportsToolChoice 守卫，否则整个 FC 调用会失败降级到 RAG。
-  const intentDetection = detectToolIntent(promptText || '');
+  // 注意：intentDetection 已在上方"Agent 能力协商"中提前声明，此处直接复用，避免重复调用
   let toolChoiceParam: any = 'auto';
   if (intentDetection.shouldForce && caps.supportsFC && caps.supportsToolChoice && filteredToolSchemas.length > 0) {
     // 检查锁定的具体工具是否在白名单内（防止 Agent 路由删掉了该工具）
@@ -1490,12 +1522,26 @@ async function promptWithFunctionCalling(
   //       对"你好啊"这类纯客套回出工具语气的怪异回复，下一轮才恢复正常。
   // 根治：纯问候/感谢/确认/告别按定义不需要任何工具，直接 tool_choice='none'，
   //       不依赖模型遵守"闲聊不调工具"的提示词。
-  if (toolChoiceParam === 'auto' && caps.supportsFC && caps.supportsToolChoice && isPureGreeting(promptText || '')) {
-    toolChoiceParam = 'none';
-    logger.info('FC模式：检测到纯寒暄，禁用首轮工具调用（tool_choice=none）', {
-      module: 'PromptService',
-      preview: (promptText || '').slice(0, 30),
-    });
+  //
+  // 注意：supportsToolChoice=false 的模型（如 DeepSeek Thinking mode）不能用
+  //       tool_choice='none' 硬禁，但仍然需要设置 greetingRound=true 来跳过防嘴炮
+  //       检测——否则模型正常回复"你好，有什么可以帮你"会被误判为嘴炮，强制重试
+  //       后模型被迫调用工具，越弄越糟。
+  let greetingRound = false;
+  if (toolChoiceParam === 'auto' && caps.supportsFC && isPureGreeting(promptText || '')) {
+    greetingRound = true;
+    if (caps.supportsToolChoice) {
+      toolChoiceParam = 'none';
+      logger.info('FC模式：检测到纯寒暄，禁用首轮工具调用（tool_choice=none）', {
+        module: 'PromptService',
+        preview: (promptText || '').slice(0, 30),
+      });
+    } else {
+      logger.info('FC模式：检测到纯寒暄（模型不支持 tool_choice，跳过防嘴炮检测）', {
+        module: 'PromptService',
+        preview: (promptText || '').slice(0, 30),
+      });
+    }
   }
 
   // FC 能力弱的模型对 tool_choice 参数支持不佳，不传该参数
@@ -1511,7 +1557,12 @@ async function promptWithFunctionCalling(
       llmWithToolsAuto = llmWithTools;
     } else if (!caps.supportsToolChoice) {
       // 模型不支持 tool_choice，绑定时不传该参数
-      llmWithTools = llm.bindTools(filteredToolSchemas);
+      // 纯寒暄时不绑定工具：模型无工具可调，杜绝"手痒"主动调工具
+      if (greetingRound) {
+        llmWithTools = llm;
+      } else {
+        llmWithTools = llm.bindTools(filteredToolSchemas);
+      }
       llmWithToolsAuto = llmWithTools;
     } else {
       llmWithTools = llm.bindTools(filteredToolSchemas, { tool_choice: toolChoiceParam });
@@ -1547,6 +1598,27 @@ async function promptWithFunctionCalling(
 
   // 启动心跳，在工具调用循环期间保持连接活跃
   const heartbeatTimer = startHeartbeat(res);
+
+  // 预加载会话计划：如果服务重启过，从 Redis 恢复未完成的 Plan-Execute 计划到内存
+  // 这样 FC 循环中的 getSessionPlan / findMatchingStep / storeStepOutput 才能正常工作
+  // 用 try/catch 包裹：即使预加载失败也不影响正常对话流程
+  if (sessionId) {
+    try {
+      const loaded = await preloadSessionPlan(sessionId);
+      logger.info('Plan-Execute 预加载完成', {
+        module: 'PromptService',
+        sessionId,
+        planLoaded: loaded,
+      });
+    } catch (e: any) {
+      logger.error('Plan-Execute 预加载异常（不影响后续流程）', {
+        module: 'PromptService',
+        sessionId,
+        err: (e?.message || String(e)).slice(0, 300),
+        stack: (e?.stack || '').slice(0, 500),
+      });
+    }
+  }
 
   logger.info('FC模式：开始工具调用循环', { module: 'PromptService', modelId: getCurrentModelId() });
 
@@ -1934,7 +2006,7 @@ async function promptWithFunctionCalling(
 
       const suspectedIntent = explicitIntent || implicitIntent;
 
-      if (suspectedIntent && iteration < MAX_TOOL_ITERATIONS - 1) {
+      if (!greetingRound && suspectedIntent && iteration < MAX_TOOL_ITERATIONS - 1) {
         logger.info('FC模式：检测到疑似工具调用意图文本，添加提示重试', {
           module: 'PromptService',
           textPreview: textContent.substring(0, 200),

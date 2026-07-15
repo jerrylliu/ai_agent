@@ -62,8 +62,10 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
     setTimeout(() => setFeedback(prev => ({ ...prev, show: false })), 3000);
   }, []);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async (silent = false) => {
+    // silent 模式跳过 loading 状态切换，用于轮询：避免每次轮询都触发
+    // 刷新按钮 disabled/旋转抖动 + 空列表时"暂无知识源"闪烁
+    if (!silent) setLoading(true);
     try {
       const [sourceList, statsData] = await Promise.all([
         getKnowledgeSources(),
@@ -72,9 +74,12 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
       setSources(sourceList);
       setStats(statsData);
     } catch (err: any) {
+      // 429 限流通常是瞬态（轮询密集或全局限流窗口未恢复），下一轮轮询会自动重试；
+      // 静默处理避免红色提示框误报，同时因未调用 setSources，已有列表数据不会被清空
+      if (err?.status === 429) return;
       showFeedback(false, err.message || '加载失败');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [showFeedback]);
 
@@ -108,25 +113,43 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
     } else if (prevSyncingRef.current) {
       prevSyncingRef.current = false;
       onContentChange?.();
+      // 同步完成时刷新选中源的同步日志
+      // （fire-and-forget 后 handleSync 无法捕获完成时机，由轮询发现状态变化时刷新）
+      if (selectedId !== null) {
+        loadSyncLogs(selectedId);
+      }
     }
 
     if (!hasSyncing) return;
 
+    // 轮询拉取同步进度：间隔 10s，配合后端 @Throttle(60次/60秒) 限流配额，
+    // 避免高频轮询耗尽配额触发 429；silent=true 避免每次轮询触发 loading 抖动
     const timer = setInterval(() => {
-      loadData();
-    }, 5000);
+      loadData(true);
+    }, 10000);
 
     return () => clearInterval(timer);
-  }, [sources, loadData]);
+  }, [sources, loadData, selectedId, loadSyncLogs]);
 
   const handleSync = async (id: number) => {
     setSyncingIds(prev => new Set(prev).add(id));
     try {
-      await syncKnowledgeSource(id);
-      showFeedback(true, '同步已触发');
+      // 后端 sync 接口同步阻塞（爬取+入库耗时数分钟），这里不 await，
+      // 改为 fire-and-forget 立即返回，避免前端长时间阻塞无反馈。
+      // 后端任务即使前端连接断开也会继续执行完成，前端通过轮询拿 syncing 状态跟进进度。
+      // isSyncing(source.lastSyncStatus === 'syncing') 会禁用同步按钮并显示旋转图标，
+      // 防止重复点击；后端 service 另有"正在同步中"拦截兜底。
+      void syncKnowledgeSource(id).catch((err: any) => {
+        showFeedback(false, err.message || '同步失败');
+      });
+      showFeedback(true, '同步已触发，正在后台执行');
       await loadData();
+      // 兜底竞态：后端尚未将状态置为 syncing 时立即刷新可能拿不到，
+      // 延迟再刷一次确保按钮禁用 + 轮询启动
+      setTimeout(() => loadData(true), 500);
       if (selectedId === id) await loadSyncLogs(id);
-      onContentChange?.();
+      // 注意：不在此处调用 onContentChange——同步尚未完成，内容未变。
+      // 同步完成（syncing→非 syncing）由下方 useEffect 的 prevSyncingRef 逻辑捕获并通知。
     } catch (err: any) {
       showFeedback(false, err.message || '同步失败');
     } finally {
@@ -195,7 +218,7 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
           知识源管理
         </h2>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={loadData} disabled={loading}>
+          <Button variant="outline" size="sm" onClick={() => loadData()} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
           <Button size="sm" onClick={() => setShowCreate(true)}>

@@ -48,7 +48,9 @@ describe('AppController - 缓存与限流 API', () => {
 
   beforeEach(() => {
     const { AppService } = require('./app.service');
-    controller = new AppController(new AppService());
+    // HealthService mock：健康检查端点的依赖，这里返回空对象即可通过构造
+    const mockHealthService = { getHealthStatus: () => ({ status: 'ok', checks: [] }) };
+    controller = new AppController(new AppService(), mockHealthService as any);
   });
 
   // ==================== 缓存管理接口 ====================

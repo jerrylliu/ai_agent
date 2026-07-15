@@ -17,7 +17,7 @@
 import { config } from './config';
 import { logger } from './logger';
 import { getRedis, isRedisReady } from './redis-client';
-import { deliverWithRetry, type FeishuApiResult } from './feishu-delivery';
+import { deliverWithRetry, registerRetryHandler, retryDeadLetters, type FeishuApiResult, type DeadLetterEntry } from './feishu-delivery.js';
 import crypto from 'crypto';
 
 // 注：飞书 App ID / Secret / 域名等配置项通过函数内访问 config.notify，
@@ -599,6 +599,108 @@ export function clearEmailCache(): void {
   emailToOpenIdCache.clear();
 }
 
+// ==================== F4 死信补偿消费 ====================
+
+/**
+ * 补偿重试载荷结构（与 postImMessage 的参数一一对应）
+ */
+interface RetryPayload {
+  op: string;
+  idType: FeishuReceiveIdType;
+  body: Record<string, unknown>;
+  errLabel: string;
+}
+
+/**
+ * 注册飞书死信补偿处理器
+ *
+ * 当死信队列中有条目时，补偿消费者会调用此处理器，
+ * 处理器通过 entry.retryPayload 重建 postImMessage 调用进行重试。
+ *
+ * 重试成功（code=0）返回 true，死信将被移除；否则返回 false，放回队列。
+ */
+registerRetryHandler(async (entry: DeadLetterEntry): Promise<boolean> => {
+  const payload = entry.retryPayload as RetryPayload | undefined;
+  if (!payload) {
+    // 旧版死信无 retryPayload，无法自动补偿
+    logger.warn('飞书死信补偿：条目无 retryPayload，跳过', {
+      module: 'FeishuNotify',
+      op: entry.op,
+      at: entry.at,
+    });
+    return false;
+  }
+
+  try {
+    const result = await postImMessage(
+      payload.op,
+      payload.idType,
+      payload.body,
+      payload.errLabel,
+    );
+    if (result.success) {
+      logger.info('飞书死信补偿：重试成功', {
+        module: 'FeishuNotify',
+        op: entry.op,
+        originalAttempts: entry.attempts,
+      });
+      return true;
+    }
+    return false;
+  } catch (e: any) {
+    logger.debug('飞书死信补偿：重试异常', {
+      module: 'FeishuNotify',
+      op: entry.op,
+      err: (e?.message || String(e)).slice(0, 200),
+    });
+    return false;
+  }
+});
+
+/**
+ * 定时补偿消费：每 5 分钟扫描一次死信队列，尝试重试
+ *
+ * 使用 setInterval 而非 @nestjs/schedule，因为 feishu-notify.service.ts
+ * 是 fundamentals 模块（不在 NestJS DI 容器中），与 redis-client.ts
+ * 管理自身生命周期的模式一致。
+ */
+const COMPENSATION_INTERVAL_MS = 5 * 60 * 1000; // 5 分钟
+let compensationTimer: NodeJS.Timeout | null = null;
+
+/**
+ * 启动死信补偿定时任务
+ */
+export function startDeadLetterCompensation(): void {
+  if (compensationTimer) return;
+  compensationTimer = setInterval(async () => {
+    try {
+      await retryDeadLetters(20);
+    } catch (e: any) {
+      logger.warn('飞书死信补偿：定时任务异常', {
+        module: 'FeishuNotify',
+        err: (e?.message || String(e)).slice(0, 200),
+      });
+    }
+  }, COMPENSATION_INTERVAL_MS);
+  logger.info('飞书死信补偿定时任务已启动', {
+    module: 'FeishuNotify',
+    intervalMs: COMPENSATION_INTERVAL_MS,
+  });
+}
+
+/**
+ * 停止死信补偿定时任务（用于测试 / 优雅关闭）
+ */
+export function stopDeadLetterCompensation(): void {
+  if (compensationTimer) {
+    clearInterval(compensationTimer);
+    compensationTimer = null;
+  }
+}
+
+// 模块加载时自动启动补偿定时任务
+startDeadLetterCompensation();
+
 /**
  * 统一的 im/v1/messages 发送器（F4：限流 + 重试 + 死信）。
  *
@@ -656,7 +758,13 @@ async function postImMessage(
         clearTimeout(timer);
       }
     },
-    { op, receiveId: String(body.receive_id ?? ''), uuid: body.uuid as string | undefined },
+    {
+      op,
+      receiveId: String(body.receive_id ?? ''),
+      uuid: body.uuid as string | undefined,
+      // 补偿重试所需的载荷：重建 postImMessage 调用的全部参数
+      retryPayload: { op, idType, body, errLabel },
+    },
   );
 
   if (result.code !== 0 || (result.httpStatus !== undefined && result.httpStatus >= 400)) {

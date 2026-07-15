@@ -24,6 +24,31 @@ export const COLLECTION_NAME = 'knowledge_base';
 /** 嵌入模型（中文支持好） */
 export const EMBEDDING_MODEL = 'bge-large';
 
+/**
+ * BGE 查询前缀
+ *
+ * BGE 系列模型（bge-large-zh / bge-large-en）要求查询时加指令前缀，
+ * 否则查询嵌入与文档嵌入不在同一语义空间，导致检索准确率极低。
+ *
+ * 实测：不加前缀 "考勤异常处理细则" vs 考勤文档相似度 0.51（低于无关技术文档 0.56）；
+ *       加前缀后相似度提升至 0.66，正确匹配。
+ *
+ * 文档入库时不加前缀（embedDocuments），仅查询时加（embedQuery）。
+ */
+const BGE_QUERY_PREFIX = '为这个句子生成表示以用于检索相关文章：';
+
+/**
+ * 包装 OllamaEmbeddings，为 BGE 模型自动添加查询前缀
+ *
+ * - embedQuery：加前缀（用于检索时的查询嵌入）
+ * - embedDocuments：不加前缀（用于入库时的文档嵌入）
+ */
+class BgeOllamaEmbeddings extends OllamaEmbeddings {
+  async embedQuery(text: string): Promise<number[]> {
+    return super.embedQuery(`${BGE_QUERY_PREFIX}${text}`);
+  }
+}
+
 /** ChromaDB 数据持久化目录 */
 export const PERSIST_DIR = path.join(__dirname, '..', '..', '..', 'chromadb_data');
 
@@ -33,8 +58,8 @@ export const BATCH_SIZE = 20;
 /** 入库并发控制：同时允许的最大嵌入请求数 */
 export const MAX_EMBEDDING_CONCURRENCY = 2;
 
-/** 创建嵌入模型实例（全局单例） */
-export const embeddings = new OllamaEmbeddings({
+/** 创建嵌入模型实例（全局单例）—— 使用 BgeOllamaEmbeddings 自动添加查询前缀 */
+export const embeddings = new BgeOllamaEmbeddings({
   model: EMBEDDING_MODEL,
   baseUrl: config.ollamaBaseUrl,
 });

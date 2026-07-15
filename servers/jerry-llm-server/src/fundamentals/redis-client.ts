@@ -142,6 +142,31 @@ export function isRedisReady(): boolean {
 }
 
 /**
+ * 等待 Redis 连接就绪（Promise 版，用于启动时需要 Redis 数据的场景）
+ *
+ * @param timeoutMs 超时毫秒数，超时返回 false（不抛错，调用方自行降级）
+ * @returns true 表示就绪，false 表示超时或未启用
+ */
+export function waitForRedisReady(timeoutMs = 5000): Promise<boolean> {
+  // 已就绪：立即返回
+  if (ready) return Promise.resolve(true);
+  // 未启用或未初始化：返回 false
+  if (!config.redis.enabled || !client) return Promise.resolve(false);
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      logger.warn('等待 Redis 就绪超时，降级跳过', { module: 'RedisClient', timeoutMs });
+      resolve(false);
+    }, timeoutMs);
+
+    client!.once('ready', () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+/**
  * 优雅关闭：在进程退出 / NestJS onApplicationShutdown 钩子里调用。
  * 让 Redis Server 立刻回收 socket，避免 TCP TIME_WAIT 堆积。
  */

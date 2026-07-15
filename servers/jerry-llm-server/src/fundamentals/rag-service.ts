@@ -9,6 +9,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { Response } from 'express';
 import { logger } from './logger';
+import { SemanticCache } from './semantic-cache.js';
+import { embeddings } from './vector-store/store-state.js';
 
 // 配置
 const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
@@ -18,6 +20,28 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024;
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
+
+// ==================== L3 语义缓存 ====================
+//
+// 基于 embedding 相似度匹配的 RAG 检索结果缓存。
+// 当用户查询与已缓存的查询语义相似时（如"今天天气" vs "今日天气"），直接返回缓存结果，
+// 避免重复执行向量检索 + BM25 混合搜索的开销。
+//
+// 设计取舍：
+//   - 仅缓存默认参数（topK=3, 无 filter）的检索结果，非默认参数跳过缓存
+//   - 嵌入计算依赖 Ollama，不可用时降级为"始终 miss"
+//   - 缓存条目上限 100，TTL 1 小时，相似度阈值 0.92
+type RagSearchResult = Array<{ content: string; metadata: any; score: number }>;
+
+const ragSemanticCache = new SemanticCache<RagSearchResult>(
+  {
+    namespace: 'rag-retrieval',
+    maxEntries: 100,
+    ttlSec: 3600,
+    similarityThreshold: 0.92,
+  },
+  (text: string) => embeddings.embedQuery(text),
+);
 
 /**
  * 处理文档上传
@@ -148,7 +172,24 @@ export async function retrieveFromKnowledgeBase(
   context: string;
   hasResults: boolean;
 }> {
+  // L3 语义缓存：仅对默认参数（topK=3, 无 filter）启用
+  const cacheable = topK === 3 && !filter;
+  if (cacheable) {
+    const cached = await ragSemanticCache.get(query);
+    if (cached) {
+      logger.info('RAG 语义缓存命中', { module: 'RagService', query: query.substring(0, 80) });
+      const context = cached.map((r, i) => `【文档 ${i + 1}】\n${r.content}`).join('\n\n');
+      return { query, results: cached, context, hasResults: cached.length > 0 };
+    }
+    logger.info('RAG 语义缓存未命中，执行检索', { module: 'RagService', query: query.substring(0, 80) });
+  }
+
   const results = await hybridSearchKnowledgeBase(query, topK, 0.7, 0.3, filter);
+
+  // 写入语义缓存（仅有结果时缓存，避免空结果污染）
+  if (cacheable && results.length > 0) {
+    void ragSemanticCache.set(query, results);
+  }
 
   const context = results
     .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
@@ -183,7 +224,28 @@ export async function hybridRetrieveFromKnowledgeBase(
   context: string;
   hasResults: boolean;
 }> {
+  // L3 语义缓存：仅对默认参数启用
+  const cacheable = topK === 3 && vectorWeight === 0.7 && bm25Weight === 0.3 && !filter;
+  if (cacheable) {
+    const cached = await ragSemanticCache.get(query);
+    if (cached) {
+      logger.info('RAG 语义缓存命中（混合检索）', { module: 'RagService', query: query.substring(0, 80) });
+      const context = cached.map((r, i) => `【文档 ${i + 1}】\n${r.content}`).join('\n\n');
+      return {
+        query,
+        results: cached.map((r) => ({ ...r, sources: [] })),
+        context,
+        hasResults: cached.length > 0,
+      };
+    }
+  }
+
   const results = await hybridSearchKnowledgeBase(query, topK, vectorWeight, bm25Weight, filter);
+
+  // 写入语义缓存
+  if (cacheable && results.length > 0) {
+    void ragSemanticCache.set(query, results);
+  }
 
   const context = results
     .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)

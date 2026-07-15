@@ -1,15 +1,20 @@
 // API 端点常量导入
-import { API_ENDPOINTS, API_BASE_URL } from './constants';
-import { Session, Message } from '../types/session';
-import { parseSSEFrames, handleSSEEvents, type ConfirmationRequestEvent, type FileCardEvent } from './sse-parser';
+import { API_ENDPOINTS, API_BASE_URL } from "./constants";
+import { Session, Message } from "../types/session";
+import {
+  parseSSEFrames,
+  handleSSEEvents,
+  type ConfirmationRequestEvent,
+  type FileCardEvent,
+} from "./sse-parser";
 
 // 重新导出 SSE 类型，供其他模块使用
-export type { ConfirmationRequestEvent, FileCardEvent } from './sse-parser';
+export type { ConfirmationRequestEvent, FileCardEvent } from "./sse-parser";
 
 // 类型定义
 export interface ChatHistoryItem {
   sessionId: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   images?: string[];
   /** 用户消息携带的文档卡片（聊天上传文档时附加） */
@@ -39,32 +44,37 @@ export interface UploadResponse {
 }
 
 // 错误处理函数
+// 抛出的 Error 会带上 HTTP status 字段，便于调用方区分限流(429)等场景做差异化处理
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({
-      message: '请求失败',
+      message: "请求失败",
     }));
     const msg = Array.isArray(errorData.message)
-      ? errorData.message.join('; ')
+      ? errorData.message.join("; ")
       : errorData.message || `请求失败: ${response.status}`;
-    throw new Error(msg);
+    const error = new Error(msg) as Error & { status: number };
+    error.status = response.status;
+    throw error;
   }
   return response.json() as Promise<T>;
 }
 
 // ==================== 认证相关辅助函数 ====================
 
-const TOKEN_KEY = 'miaoma_auth_token';
+const TOKEN_KEY = "miaoma_auth_token";
 
 /**
  * 获取认证请求头
  * 如果本地存储中有 token，自动添加 Authorization header
  */
 function getAuthHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+    headers["Authorization"] = `Bearer ${token}`;
   }
   return headers;
 }
@@ -76,7 +86,7 @@ export interface ChatHistoryRealtimeEvent {
   ownerUserId: string;
   sessionId: string;
   role: string;
-  source: 'web' | 'feishu';
+  source: "web" | "feishu";
   at: number;
 }
 
@@ -94,19 +104,19 @@ export function subscribeChatEvents(
   onStatusChange?: (connected: boolean) => void,
 ): () => void {
   const token = localStorage.getItem(TOKEN_KEY);
-  const url = `${API_ENDPOINTS.BASE_URL}/chat/events${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  const url = `${API_ENDPOINTS.BASE_URL}/chat/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
   const source = new EventSource(url);
 
-  source.addEventListener('open', () => onStatusChange?.(true));
-  source.addEventListener('ready', () => onStatusChange?.(true));
-  source.addEventListener('chat_history', (e) => {
+  source.addEventListener("open", () => onStatusChange?.(true));
+  source.addEventListener("ready", () => onStatusChange?.(true));
+  source.addEventListener("chat_history", (e) => {
     try {
       onEvent(JSON.parse((e as MessageEvent).data));
     } catch {
       /* 单条事件解析失败忽略，等待下一条 */
     }
   });
-  source.addEventListener('error', () => {
+  source.addEventListener("error", () => {
     // EventSource 会自动重连；这里只同步状态，交给轮询兜底
     onStatusChange?.(false);
   });
@@ -122,14 +132,16 @@ export function subscribeChatEvents(
  * @param data 聊天历史项数据
  * @throws 保存失败时抛出错误
  */
-export async function saveChatHistory(data: ChatHistoryItem): Promise<{ id: number }> {
+export async function saveChatHistory(
+  data: ChatHistoryItem,
+): Promise<{ id: number }> {
   const response = await fetch(API_ENDPOINTS.CHAT_HISTORY, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(data),
   });
   if (!response.ok) {
-    throw new Error('保存聊天记录失败');
+    throw new Error("保存聊天记录失败");
   }
   return response.json();
 }
@@ -137,13 +149,17 @@ export async function saveChatHistory(data: ChatHistoryItem): Promise<{ id: numb
 export interface ToolStatusEvent {
   toolName: string;
   label: string;
-  status: 'calling' | 'executing' | 'done';
+  status: "calling" | "executing" | "done";
   iteration?: number;
   error?: boolean;
 }
 
 export interface SessionAction {
-  type: 'switch_session' | 'create_session' | 'delete_session' | 'refresh_sessions';
+  type:
+    | "switch_session"
+    | "create_session"
+    | "delete_session"
+    | "refresh_sessions";
   payload: any;
 }
 
@@ -171,16 +187,31 @@ export async function getAIResponse(
   history: Message[] = [],
   sessionId?: string,
   signal?: AbortSignal,
-  options?: { memoryEnabled?: boolean; summaryEnabled?: boolean; injectMemory?: boolean; imageModel?: string; onToolStatus?: ((event: ToolStatusEvent) => void) | null; onConfirmationRequest?: ((event: ConfirmationRequestEvent) => void) | null; onConfirmationResolved?: ((event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void) | null; onFileCard?: ((event: FileCardEvent) => void) | null }
+  options?: {
+    memoryEnabled?: boolean;
+    summaryEnabled?: boolean;
+    injectMemory?: boolean;
+    imageModel?: string;
+    onToolStatus?: ((event: ToolStatusEvent) => void) | null;
+    onConfirmationRequest?: ((event: ConfirmationRequestEvent) => void) | null;
+    onConfirmationResolved?:
+      | ((event: {
+          id: string;
+          confirmed: boolean;
+          source: "web" | "feishu";
+        }) => void)
+      | null;
+    onFileCard?: ((event: FileCardEvent) => void) | null;
+  },
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ message, images, history, sessionId, ...options }),
     signal,
   });
   if (!response.ok) {
-    throw new Error('获取 AI 响应失败');
+    throw new Error("获取 AI 响应失败");
   }
 
   const stream = response.body!.pipeThrough(new TextDecoderStream());
@@ -196,7 +227,7 @@ export async function getAIResponse(
   const modifiedStream = new ReadableStream<string>({
     async start(controller) {
       const reader = stream.getReader();
-      let buffer = '';
+      let buffer = "";
 
       try {
         while (true) {
@@ -264,10 +295,15 @@ export async function getAIResponse(
  * @param sessionId 会话 ID
  * @returns 聊天记录列表
  */
-export async function getSessionHistory(sessionId: string): Promise<ChatHistoryRecord[]> {
-  const response = await fetch(`${API_ENDPOINTS.CHAT_HISTORY}?sessionId=${sessionId}`, {
-    headers: getAuthHeaders(),
-  });
+export async function getSessionHistory(
+  sessionId: string,
+): Promise<ChatHistoryRecord[]> {
+  const response = await fetch(
+    `${API_ENDPOINTS.CHAT_HISTORY}?sessionId=${sessionId}`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<ChatHistoryRecord[]>(response);
 }
 
@@ -301,9 +337,12 @@ export async function getSessions(): Promise<Session[]> {
  * @param title 会话标题
  * @returns 创建的会话对象
  */
-export async function createSession(sessionId: string, title: string): Promise<Session> {
+export async function createSession(
+  sessionId: string,
+  title: string,
+): Promise<Session> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ sessionId, title }),
   });
@@ -316,9 +355,12 @@ export async function createSession(sessionId: string, title: string): Promise<S
  * @returns 会话对象
  */
 export async function getSession(sessionId: string): Promise<Session> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`, {
-    headers: getAuthHeaders(),
-  });
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<Session>(response);
 }
 
@@ -328,14 +370,20 @@ export async function getSession(sessionId: string): Promise<Session> {
  * @param title 新标题
  * @throws 更新失败时抛出错误
  */
-export async function updateSessionTitle(sessionId: string, title: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`, {
-    method: 'PUT',
-    headers: getAuthHeaders(),
-    body: JSON.stringify({ title }),
-  });
+export async function updateSessionTitle(
+  sessionId: string,
+  title: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`,
+    {
+      method: "PUT",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ title }),
+    },
+  );
   if (!response.ok) {
-    throw new Error('更新会话标题失败');
+    throw new Error("更新会话标题失败");
   }
 }
 
@@ -345,12 +393,15 @@ export async function updateSessionTitle(sessionId: string, title: string): Prom
  * @throws 删除失败时抛出错误
  */
 export async function deleteSession(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`, {
-    method: 'DELETE',
-    headers: getAuthHeaders(),
-  });
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}`,
+    {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    },
+  );
   if (!response.ok) {
-    throw new Error('删除会话失败');
+    throw new Error("删除会话失败");
   }
 }
 
@@ -360,12 +411,15 @@ export async function deleteSession(sessionId: string): Promise<void> {
  * @throws 操作失败时抛出错误
  */
 export async function toggleSessionPin(sessionId: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/pin`, {
-    method: 'PATCH',
-    headers: getAuthHeaders(),
-  });
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/pin`,
+    {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+    },
+  );
   if (!response.ok) {
-    throw new Error('切换会话置顶状态失败');
+    throw new Error("切换会话置顶状态失败");
   }
 }
 
@@ -375,10 +429,13 @@ export async function toggleSessionPin(sessionId: string): Promise<void> {
  * @returns 新创建的会话对象
  */
 export async function duplicateSession(sessionId: string): Promise<Session> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/duplicate`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-  });
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/duplicate`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<Session>(response);
 }
 
@@ -390,7 +447,7 @@ export async function duplicateSession(sessionId: string): Promise<Session> {
  */
 export async function exportSession(
   sessionId: string,
-  format: 'json' | 'markdown' | 'text' = 'json',
+  format: "json" | "markdown" | "text" = "json",
 ): Promise<{
   content?: string;
   filename: string;
@@ -416,10 +473,15 @@ export async function exportSession(
  * @param sessionId 会话 ID
  * @returns 消息记录列表
  */
-export async function getSessionMessages(sessionId: string): Promise<ChatHistoryRecord[]> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/messages`, {
-    headers: getAuthHeaders(),
-  });
+export async function getSessionMessages(
+  sessionId: string,
+): Promise<ChatHistoryRecord[]> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/sessions/${sessionId}/messages`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<ChatHistoryRecord[]>(response);
 }
 
@@ -430,9 +492,9 @@ export async function getSessionMessages(sessionId: string): Promise<ChatHistory
  */
 export async function uploadFile(file: File): Promise<UploadResponse> {
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append("file", file);
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/upload`, {
-    method: 'POST',
+    method: "POST",
     body: formData,
   });
   return handleResponse<UploadResponse>(response);
@@ -467,11 +529,13 @@ export interface ExtractDocumentResponse {
  * @param file 要提取的文档文件（docx/pdf/xlsx/txt/md 等）
  * @returns 提取结果，包含 text / contentJson / fileUrl 等
  */
-export async function extractDocument(file: File): Promise<ExtractDocumentResponse> {
+export async function extractDocument(
+  file: File,
+): Promise<ExtractDocumentResponse> {
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append("file", file);
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/upload/extract`, {
-    method: 'POST',
+    method: "POST",
     body: formData,
   });
   return handleResponse<ExtractDocumentResponse>(response);
@@ -483,14 +547,20 @@ export async function extractDocument(file: File): Promise<ExtractDocumentRespon
  * @param content 新内容
  * @throws 更新失败时抛出错误
  */
-export async function updateMessage(id: string, content: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/messages/${id}`, {
-    method: 'PUT',
-    headers: getAuthHeaders(),
-    body: JSON.stringify({ content }),
-  });
+export async function updateMessage(
+  id: string,
+  content: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/messages/${id}`,
+    {
+      method: "PUT",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ content }),
+    },
+  );
   if (!response.ok) {
-    throw new Error('更新消息失败');
+    throw new Error("更新消息失败");
   }
 }
 
@@ -500,11 +570,14 @@ export async function updateMessage(id: string, content: string): Promise<void> 
  * @throws 删除失败时抛出错误
  */
 export async function deleteMessage(id: string): Promise<void> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/messages/${id}`, {
-    method: 'DELETE',
-  });
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/messages/${id}`,
+    {
+      method: "DELETE",
+    },
+  );
   if (!response.ok) {
-    throw new Error('删除消息失败');
+    throw new Error("删除消息失败");
   }
 }
 
@@ -523,10 +596,10 @@ export async function uploadToKnowledgeBase(file: File): Promise<{
   documentCount?: number;
 }> {
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append("file", file);
 
   const response = await fetch(API_ENDPOINTS.KNOWLEDGE_UPLOAD, {
-    method: 'POST',
+    method: "POST",
     body: formData,
   });
 
@@ -543,7 +616,7 @@ export async function uploadToKnowledgeBase(file: File): Promise<{
 
 export interface AvailableModel {
   id: string;
-  provider: 'ollama' | 'deepseek' | 'zhipu';
+  provider: "ollama" | "deepseek" | "zhipu";
   name: string;
   description: string;
   requiresApiKey: boolean;
@@ -572,7 +645,7 @@ export async function switchModel(modelId: string): Promise<{
   currentModel?: any;
 }> {
   const response = await fetch(API_ENDPOINTS.MODELS_SWITCH, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ modelId }),
   });
@@ -585,19 +658,52 @@ export async function switchModel(modelId: string): Promise<{
 
 export async function setModelApiKey(
   provider: string,
-  apiKey: string
+  apiKey: string,
 ): Promise<{
   success: boolean;
   message: string;
 }> {
   const response = await fetch(API_ENDPOINTS.MODELS_APIKEY, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ provider, apiKey }),
   });
   return handleResponse<{
     success: boolean;
     message: string;
+  }>(response);
+}
+
+/**
+ * 探测模型能力（vision / function calling / tool_choice）
+ *
+ * 使用应用内存中的 API Key 探测，结果写入后端 capabilities.json。
+ * 探测完成后需刷新模型信息（重新调用 getModels）以获取更新后的能力值。
+ */
+export interface ProbeResult {
+  supportsToolChoice: boolean;
+  supportsVision: boolean;
+  supportsFunctionCalling: boolean;
+  probeNotes: string;
+}
+
+export async function probeModelCapabilities(): Promise<{
+  success: boolean;
+  message: string;
+  lastProbedAt?: string;
+  models?: Record<string, ProbeResult>;
+  log?: string[];
+}> {
+  const response = await fetch(API_ENDPOINTS.MODELS_PROBE, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{
+    success: boolean;
+    message: string;
+    lastProbedAt?: string;
+    models?: Record<string, ProbeResult>;
+    log?: string[];
   }>(response);
 }
 
@@ -630,7 +736,7 @@ export async function register(body: {
   username?: string;
 }): Promise<AuthResponse> {
   const response = await fetch(API_ENDPOINTS.AUTH_REGISTER, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(body),
   });
@@ -642,7 +748,7 @@ export async function login(body: {
   password: string;
 }): Promise<AuthResponse> {
   const response = await fetch(API_ENDPOINTS.AUTH_LOGIN, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(body),
   });
@@ -651,9 +757,9 @@ export async function login(body: {
 
 export async function getProfile(token: string): Promise<UserInfo> {
   const headers = getAuthHeaders();
-  headers['Authorization'] = `Bearer ${token}`;
+  headers["Authorization"] = `Bearer ${token}`;
   const response = await fetch(API_ENDPOINTS.AUTH_PROFILE, {
-    method: 'GET',
+    method: "GET",
     headers,
   });
   return handleResponse<UserInfo>(response);
@@ -664,13 +770,15 @@ export async function updateProfile(
   body: { username?: string; avatar?: string },
 ): Promise<{ success: boolean; message: string; user: UserInfo }> {
   const headers = getAuthHeaders();
-  headers['Authorization'] = `Bearer ${token}`;
+  headers["Authorization"] = `Bearer ${token}`;
   const response = await fetch(API_ENDPOINTS.AUTH_PROFILE, {
-    method: 'PUT',
+    method: "PUT",
     headers,
     body: JSON.stringify(body),
   });
-  return handleResponse<{ success: boolean; message: string; user: UserInfo }>(response);
+  return handleResponse<{ success: boolean; message: string; user: UserInfo }>(
+    response,
+  );
 }
 
 export async function verifyToken(token: string): Promise<{
@@ -679,12 +787,14 @@ export async function verifyToken(token: string): Promise<{
   user: UserInfo;
 }> {
   const headers = getAuthHeaders();
-  headers['Authorization'] = `Bearer ${token}`;
+  headers["Authorization"] = `Bearer ${token}`;
   const response = await fetch(API_ENDPOINTS.AUTH_VERIFY, {
-    method: 'GET',
+    method: "GET",
     headers,
   });
-  return handleResponse<{ success: boolean; valid: boolean; user: UserInfo }>(response);
+  return handleResponse<{ success: boolean; valid: boolean; user: UserInfo }>(
+    response,
+  );
 }
 
 export async function changePassword(
@@ -692,9 +802,9 @@ export async function changePassword(
   body: { oldPassword: string; newPassword: string },
 ): Promise<{ success: boolean; message: string }> {
   const headers = getAuthHeaders();
-  headers['Authorization'] = `Bearer ${token}`;
+  headers["Authorization"] = `Bearer ${token}`;
   const response = await fetch(API_ENDPOINTS.AUTH_CHANGE_PASSWORD, {
-    method: 'PUT',
+    method: "PUT",
     headers,
     body: JSON.stringify(body),
   });
@@ -707,24 +817,27 @@ export async function changePassword(
 
 export interface TranscribeResult {
   taskId: string;
-  status: 'pending' | 'success' | 'failed';
+  status: "pending" | "success" | "failed";
   text?: string;
   segments?: Array<{ start: number; end: number; text: string }>;
   message?: string;
 }
 
 /** 提交长音频转写任务 */
-export async function submitTranscribe(file: File, format?: string): Promise<{ taskId: string; status: string }> {
+export async function submitTranscribe(
+  file: File,
+  format?: string,
+): Promise<{ taskId: string; status: string }> {
   const formData = new FormData();
-  formData.append('file', file);
-  if (format) formData.append('format', format);
+  formData.append("file", file);
+  if (format) formData.append("format", format);
 
-  const token = localStorage.getItem('miaoma_auth_token');
+  const token = localStorage.getItem("miaoma_auth_token");
   const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   const response = await fetch(API_ENDPOINTS.SPEECH_TRANSCRIBE, {
-    method: 'POST',
+    method: "POST",
     headers,
     body: formData,
   });
@@ -732,7 +845,9 @@ export async function submitTranscribe(file: File, format?: string): Promise<{ t
 }
 
 /** 查询长音频转写结果 */
-export async function queryTranscribe(taskId: string): Promise<TranscribeResult> {
+export async function queryTranscribe(
+  taskId: string,
+): Promise<TranscribeResult> {
   const response = await fetch(`${API_ENDPOINTS.SPEECH_TRANSCRIBE}/${taskId}`, {
     headers: getAuthHeaders(),
   });
@@ -746,9 +861,11 @@ export async function queryTranscribe(taskId: string): Promise<TranscribeResult>
 /**
  * 用户主动删除生成的文档
  */
-export async function deleteGeneratedDocument(key: string): Promise<{ success: boolean; message?: string }> {
+export async function deleteGeneratedDocument(
+  key: string,
+): Promise<{ success: boolean; message?: string }> {
   const response = await fetch(`${API_BASE_URL}/chat/documents/${key}`, {
-    method: 'DELETE',
+    method: "DELETE",
     headers: getAuthHeaders(),
   });
   return handleResponse<{ success: boolean; message?: string }>(response);
@@ -762,12 +879,19 @@ export async function setDocumentFavorite(
   key: string,
   favorited: boolean,
 ): Promise<{ success: boolean; favorited: boolean; message?: string }> {
-  const response = await fetch(`${API_BASE_URL}/chat/documents/${key}/favorite`, {
-    method: 'PATCH',
-    headers: getAuthHeaders(),
-    body: JSON.stringify({ favorited }),
-  });
-  return handleResponse<{ success: boolean; favorited: boolean; message?: string }>(response);
+  const response = await fetch(
+    `${API_BASE_URL}/chat/documents/${key}/favorite`,
+    {
+      method: "PATCH",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ favorited }),
+    },
+  );
+  return handleResponse<{
+    success: boolean;
+    favorited: boolean;
+    message?: string;
+  }>(response);
 }
 
 /** 收藏文档的 API 返回类型（与 MessageAttachment 对齐） */
@@ -788,10 +912,13 @@ export interface FavoriteDocument {
  */
 export async function fetchFavoriteDocuments(): Promise<FavoriteDocument[]> {
   const response = await fetch(`${API_BASE_URL}/chat/documents/favorites`, {
-    method: 'GET',
+    method: "GET",
     headers: getAuthHeaders(),
   });
-  const result = await handleResponse<{ success: boolean; data: FavoriteDocument[] }>(response);
+  const result = await handleResponse<{
+    success: boolean;
+    data: FavoriteDocument[];
+  }>(response);
   return result.data || [];
 }
 
@@ -800,15 +927,17 @@ export async function uploadAvatar(
   file: File,
 ): Promise<{ success: boolean; message: string; user: UserInfo }> {
   const formData = new FormData();
-  formData.append('file', file);
+  formData.append("file", file);
   const response = await fetch(API_ENDPOINTS.AUTH_AVATAR, {
-    method: 'POST',
+    method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
     },
     body: formData,
   });
-  return handleResponse<{ success: boolean; message: string; user: UserInfo }>(response);
+  return handleResponse<{ success: boolean; message: string; user: UserInfo }>(
+    response,
+  );
 }
 
 /**
@@ -816,7 +945,7 @@ export async function uploadAvatar(
  * @returns 知识库状态信息
  */
 export async function getKnowledgeBaseStatus(): Promise<{
-  status: 'ready' | 'empty' | 'error';
+  status: "ready" | "empty" | "error";
   message: string;
   hasContentUpdate?: boolean;
   stats?: {
@@ -831,7 +960,7 @@ export async function getKnowledgeBaseStatus(): Promise<{
   };
 }> {
   const response = await fetch(API_ENDPOINTS.KNOWLEDGE_STATUS, {
-    method: 'GET',
+    method: "GET",
   });
 
   const data = await handleResponse<any>(response);
@@ -842,14 +971,14 @@ export async function getKnowledgeBaseStatus(): Promise<{
   const isEmpty = documentCount === 0;
 
   return {
-    status: isEmpty ? 'empty' : (data.status || 'ready'),
-    message: data.message || '',
+    status: isEmpty ? "empty" : data.status || "ready",
+    message: data.message || "",
     hasContentUpdate: data.hasContentUpdate || false,
     stats: {
       documentCount,
       uploadedDocumentCount,
       knowledgeSourcePageCount,
-      collectionName: data.collectionName || data.stats?.collectionName || '',
+      collectionName: data.collectionName || data.stats?.collectionName || "",
       activeVersionCount: data.activeVersionCount,
       totalVersionCount: data.totalVersionCount,
       totalChunkCount: data.totalChunkCount,
@@ -882,7 +1011,7 @@ export async function searchKnowledgeBase(
   context: string;
 }> {
   const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SEARCH, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ query, topK, filter }),
     signal,
@@ -904,9 +1033,12 @@ export async function clearKnowledgeBase(): Promise<{
   success: boolean;
   message: string;
 }> {
-  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SEARCH.replace('/search', '/clear'), {
-    method: 'DELETE',
-  });
+  const response = await fetch(
+    API_ENDPOINTS.KNOWLEDGE_SEARCH.replace("/search", "/clear"),
+    {
+      method: "DELETE",
+    },
+  );
 
   return handleResponse<{
     success: boolean;
@@ -933,10 +1065,15 @@ export interface SessionSummaryData {
  * @param sessionId 会话 ID
  * @returns 摘要数据
  */
-export async function getSessionSummary(sessionId: string): Promise<SessionSummaryData> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/sessions/${sessionId}/summary`, {
-    headers: getAuthHeaders(),
-  });
+export async function getSessionSummary(
+  sessionId: string,
+): Promise<SessionSummaryData> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/memory/sessions/${sessionId}/summary`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<SessionSummaryData>(response);
 }
 
@@ -945,11 +1082,16 @@ export async function getSessionSummary(sessionId: string): Promise<SessionSumma
  * @param sessionId 会话 ID
  * @returns 生成的摘要数据
  */
-export async function generateSessionSummary(sessionId: string): Promise<SessionSummaryData> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/sessions/${sessionId}/summary`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-  });
+export async function generateSessionSummary(
+  sessionId: string,
+): Promise<SessionSummaryData> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/memory/sessions/${sessionId}/summary`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<SessionSummaryData>(response);
 }
 
@@ -980,7 +1122,9 @@ export interface UserMemoriesResponse {
  * @param userId 用户 ID（默认 'default'）
  * @returns 记忆列表
  */
-export async function getUserMemories(userId?: string): Promise<UserMemoriesResponse> {
+export async function getUserMemories(
+  userId?: string,
+): Promise<UserMemoriesResponse> {
   const url = userId
     ? `${API_ENDPOINTS.BASE_URL}/memory/memories?userId=${userId}`
     : `${API_ENDPOINTS.BASE_URL}/memory/memories`;
@@ -999,11 +1143,11 @@ export async function getUserMemories(userId?: string): Promise<UserMemoriesResp
  */
 export async function addUserMemory(
   content: string,
-  category: string = 'fact',
+  category: string = "fact",
   importance: number = 3,
 ): Promise<{ success: boolean; memory: UserMemoryData }> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/memories`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ content, category, importance }),
   });
@@ -1014,11 +1158,16 @@ export async function addUserMemory(
  * 删除一条用户记忆
  * @param id 记忆 ID
  */
-export async function deleteUserMemory(id: number): Promise<{ success: boolean; message: string }> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/memories/${id}`, {
-    method: 'DELETE',
-    headers: getAuthHeaders(),
-  });
+export async function deleteUserMemory(
+  id: number,
+): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/memory/memories/${id}`,
+    {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<{ success: boolean; message: string }>(response);
 }
 
@@ -1035,11 +1184,14 @@ export async function updateUserMemory(
   category?: string,
   importance?: number,
 ): Promise<{ success: boolean; memory: UserMemoryData }> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/memories/${id}`, {
-    method: 'PUT',
-    headers: getAuthHeaders(),
-    body: JSON.stringify({ content, category, importance }),
-  });
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/memory/memories/${id}`,
+    {
+      method: "PUT",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ content, category, importance }),
+    },
+  );
   return handleResponse<{ success: boolean; memory: UserMemoryData }>(response);
 }
 
@@ -1047,12 +1199,14 @@ export async function updateUserMemory(
  * 清空用户所有记忆
  * @param userId 用户 ID
  */
-export async function clearUserMemories(userId?: string): Promise<{ success: boolean; message: string }> {
+export async function clearUserMemories(
+  userId?: string,
+): Promise<{ success: boolean; message: string }> {
   const url = userId
     ? `${API_ENDPOINTS.BASE_URL}/memory/memories?userId=${userId}`
     : `${API_ENDPOINTS.BASE_URL}/memory/memories`;
   const response = await fetch(url, {
-    method: 'DELETE',
+    method: "DELETE",
     headers: getAuthHeaders(),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
@@ -1062,11 +1216,16 @@ export async function clearUserMemories(userId?: string): Promise<{ success: boo
  * 手动触发记忆提取
  * @param sessionId 会话 ID
  */
-export async function extractMemories(sessionId: string): Promise<UserMemoriesResponse> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/memory/memories/extract/${sessionId}`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-  });
+export async function extractMemories(
+  sessionId: string,
+): Promise<UserMemoriesResponse> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/memory/memories/extract/${sessionId}`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<UserMemoriesResponse>(response);
 }
 
@@ -1092,8 +1251,8 @@ export interface DocumentVersionItem {
   fileSize: number;
   fileType: string;
   checksum: string | null;
-  status: 'draft' | 'active' | 'archived';
-  parsingStatus: 'pending' | 'parsing' | 'success' | 'failed';
+  status: "draft" | "active" | "archived";
+  parsingStatus: "pending" | "parsing" | "success" | "failed";
   uploadedBy: string;
   createdAt: string;
   updatedAt: string;
@@ -1103,7 +1262,7 @@ export interface DocumentAuditLogItem {
   id: number;
   documentId: number;
   versionId: number | null;
-  action: 'upload' | 'activate' | 'archive' | 'rollback' | 'delete';
+  action: "upload" | "activate" | "archive" | "rollback" | "delete";
   operator: string;
   detail: string | null;
   createdAt: string;
@@ -1120,7 +1279,10 @@ export async function getDocuments(): Promise<DocumentItem[]> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}`, {
     headers: getAuthHeaders(),
   });
-  const data = await handleResponse<{ success: boolean; documents: DocumentItem[] }>(response);
+  const data = await handleResponse<{
+    success: boolean;
+    documents: DocumentItem[];
+  }>(response);
   return data.documents ?? [];
 }
 
@@ -1133,11 +1295,19 @@ export async function getDocument(id: number): Promise<DocumentItem> {
 }
 
 /** 按标题查找文档（用于编辑器草稿模式按文件名匹配已有文档） */
-export async function getDocumentByTitle(title: string): Promise<DocumentItem | null> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/by-title?title=${encodeURIComponent(title)}`, {
-    headers: getAuthHeaders(),
-  });
-  const data = await handleResponse<{ success: boolean; document: DocumentItem | null }>(response);
+export async function getDocumentByTitle(
+  title: string,
+): Promise<DocumentItem | null> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/by-title?title=${encodeURIComponent(title)}`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
+  const data = await handleResponse<{
+    success: boolean;
+    document: DocumentItem | null;
+  }>(response);
   return data.document ?? null;
 }
 
@@ -1150,7 +1320,9 @@ export interface DocumentContentResponse {
 }
 
 /** 获取文档的富文本编辑器内容 */
-export async function getDocumentContent(id: number): Promise<DocumentContentResponse> {
+export async function getDocumentContent(
+  id: number,
+): Promise<DocumentContentResponse> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}/content`, {
     headers: getAuthHeaders(),
   });
@@ -1163,11 +1335,13 @@ export async function saveDocumentContent(
   payload: { contentJson: unknown; contentText: string },
 ): Promise<{ success: boolean; contentUpdatedAt: string | null }> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}/content`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(payload),
   });
-  return handleResponse<{ success: boolean; contentUpdatedAt: string | null }>(response);
+  return handleResponse<{ success: boolean; contentUpdatedAt: string | null }>(
+    response,
+  );
 }
 
 /**
@@ -1193,8 +1367,8 @@ export async function saveDocumentDraft(
   isNew: boolean;
 }> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/save-draft`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ fileName, contentJson, contentText }),
   });
   return handleResponse<{
@@ -1218,38 +1392,62 @@ export async function publishToVectorStore(
   const response = await fetch(
     `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}/publish`,
     {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     },
   );
-  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(response);
+  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(
+    response,
+  );
 }
 
 /** 上传文档（新建或新增版本） */
 export async function uploadDocument(
   file: File,
-  options?: { documentId?: number; title?: string; description?: string; tags?: string[] },
-): Promise<{ success: boolean; document: DocumentItem; version: DocumentVersionItem }> {
+  options?: {
+    documentId?: number;
+    title?: string;
+    description?: string;
+    tags?: string[];
+  },
+): Promise<{
+  success: boolean;
+  document: DocumentItem;
+  version: DocumentVersionItem;
+}> {
   const formData = new FormData();
-  formData.append('file', file);
-  if (options?.documentId) formData.append('documentId', String(options.documentId));
-  if (options?.title) formData.append('title', options.title);
-  if (options?.description) formData.append('description', options.description);
-  if (options?.tags) formData.append('tags', JSON.stringify(options.tags));
+  formData.append("file", file);
+  if (options?.documentId)
+    formData.append("documentId", String(options.documentId));
+  if (options?.title) formData.append("title", options.title);
+  if (options?.description) formData.append("description", options.description);
+  if (options?.tags) formData.append("tags", JSON.stringify(options.tags));
 
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/upload`, {
-    method: 'POST',
+    method: "POST",
     body: formData,
   });
-  return handleResponse<{ success: boolean; document: DocumentItem; version: DocumentVersionItem }>(response);
+  return handleResponse<{
+    success: boolean;
+    document: DocumentItem;
+    version: DocumentVersionItem;
+  }>(response);
 }
 
 /** 获取文档版本列表 */
-export async function getDocumentVersions(documentId: number): Promise<DocumentVersionItem[]> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions`, {
-    headers: getAuthHeaders(),
-  });
-  const data = await handleResponse<{ success: boolean; versions: DocumentVersionItem[] }>(response);
+export async function getDocumentVersions(
+  documentId: number,
+): Promise<DocumentVersionItem[]> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
+  const data = await handleResponse<{
+    success: boolean;
+    versions: DocumentVersionItem[];
+  }>(response);
   return data.versions ?? [];
 }
 
@@ -1257,7 +1455,7 @@ export async function getDocumentVersions(documentId: number): Promise<DocumentV
 export async function exportVersion(
   documentId: number,
   versionId: number,
-  format: 'md' | 'txt' | 'docx',
+  format: "md" | "txt" | "docx",
 ): Promise<Blob> {
   const response = await fetch(
     `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}/export?format=${format}`,
@@ -1270,51 +1468,86 @@ export async function exportVersion(
 }
 
 /** 激活版本 */
-export async function activateVersion(documentId: number, versionId: number): Promise<{ success: boolean; version: DocumentVersionItem }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`, {
-    method: 'PATCH',
-    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'active' }),
-  });
-  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(response);
+export async function activateVersion(
+  documentId: number,
+  versionId: number,
+): Promise<{ success: boolean; version: DocumentVersionItem }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`,
+    {
+      method: "PATCH",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "active" }),
+    },
+  );
+  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(
+    response,
+  );
 }
 
 /** 归档版本 */
-export async function archiveVersion(documentId: number, versionId: number): Promise<{ success: boolean; version: DocumentVersionItem }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`, {
-    method: 'PATCH',
-    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status: 'archived' }),
-  });
-  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(response);
+export async function archiveVersion(
+  documentId: number,
+  versionId: number,
+): Promise<{ success: boolean; version: DocumentVersionItem }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`,
+    {
+      method: "PATCH",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "archived" }),
+    },
+  );
+  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(
+    response,
+  );
 }
 
 /** 回滚到指定版本 */
 export async function rollbackVersion(
   documentId: number,
   versionId: number,
-): Promise<{ success: boolean; document: DocumentItem; activatedVersion: DocumentVersionItem }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/rollback`, {
-    method: 'POST',
-    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ versionId }),
-  });
-  return handleResponse<{ success: boolean; document: DocumentItem; activatedVersion: DocumentVersionItem }>(response);
+): Promise<{
+  success: boolean;
+  document: DocumentItem;
+  activatedVersion: DocumentVersionItem;
+}> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/rollback`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ versionId }),
+    },
+  );
+  return handleResponse<{
+    success: boolean;
+    document: DocumentItem;
+    activatedVersion: DocumentVersionItem;
+  }>(response);
 }
 
 /** 删除版本 */
-export async function deleteVersion(documentId: number, versionId: number): Promise<{ success: boolean; message: string }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`, {
-    method: 'DELETE',
-    headers: getAuthHeaders(),
-  });
+export async function deleteVersion(
+  documentId: number,
+  versionId: number,
+): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}`,
+    {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<{ success: boolean; message: string }>(response);
 }
 
 /** 删除文档 */
-export async function deleteDocument(id: number): Promise<{ success: boolean; message: string }> {
+export async function deleteDocument(
+  id: number,
+): Promise<{ success: boolean; message: string }> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}`, {
-    method: 'DELETE',
+    method: "DELETE",
     headers: getAuthHeaders(),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
@@ -1326,9 +1559,12 @@ export async function diffVersions(
   v1: number,
   v2: number,
 ): Promise<{ success: boolean; diff: DiffLine[] }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/diff?v1=${v1}&v2=${v2}`, {
-    headers: getAuthHeaders(),
-  });
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/diff?v1=${v1}&v2=${v2}`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<{ success: boolean; diff: DiffLine[] }>(response);
 }
 
@@ -1336,18 +1572,24 @@ export async function diffVersions(
 export async function getDocumentAuditLogs(
   documentId: number,
 ): Promise<DocumentAuditLogItem[]> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${documentId}/audit-log`, {
-    headers: getAuthHeaders(),
-  });
-  const data = await handleResponse<{ success: boolean; logs: DocumentAuditLogItem[] }>(response);
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/audit-log`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
+  const data = await handleResponse<{
+    success: boolean;
+    logs: DocumentAuditLogItem[];
+  }>(response);
   return data.logs ?? [];
 }
 
 export interface PendingVectorOpItem {
   id: number;
   versionId: number;
-  operation: 'remove' | 'update_status' | 'reindex';
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  operation: "remove" | "update_status" | "reindex";
+  status: "pending" | "processing" | "completed" | "failed";
   retryCount: number;
   errorMessage: string | null;
   params: Record<string, any> | null;
@@ -1358,32 +1600,54 @@ export async function getPendingVectorOps(): Promise<PendingVectorOpItem[]> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/pending-ops`, {
     headers: getAuthHeaders(),
   });
-  const data = await handleResponse<{ success: boolean; ops: PendingVectorOpItem[] }>(response);
+  const data = await handleResponse<{
+    success: boolean;
+    ops: PendingVectorOpItem[];
+  }>(response);
   return data.ops ?? [];
 }
 
-export async function retrySingleVectorOp(opId: number): Promise<{ success: boolean; error?: string }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/pending-ops/${opId}/retry`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-  });
+export async function retrySingleVectorOp(
+  opId: number,
+): Promise<{ success: boolean; error?: string }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/pending-ops/${opId}/retry`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<{ success: boolean; error?: string }>(response);
 }
 
-export async function deletePendingVectorOp(opId: number): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/pending-ops/${opId}`, {
-    method: 'DELETE',
-    headers: getAuthHeaders(),
-  });
+export async function deletePendingVectorOp(
+  opId: number,
+): Promise<{ success: boolean }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/pending-ops/${opId}`,
+    {
+      method: "DELETE",
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<{ success: boolean }>(response);
 }
 
-export async function retryAllFailedOps(): Promise<{ success: boolean; retried: number; total: number }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/scheduler/retry-failed-ops`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-  });
-  return handleResponse<{ success: boolean; retried: number; total: number }>(response);
+export async function retryAllFailedOps(): Promise<{
+  success: boolean;
+  retried: number;
+  total: number;
+}> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/scheduler/retry-failed-ops`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
+  return handleResponse<{ success: boolean; retried: number; total: number }>(
+    response,
+  );
 }
 
 // ============================================
@@ -1393,10 +1657,10 @@ export async function retryAllFailedOps(): Promise<{ success: boolean; retried: 
 export interface KnowledgeSourceItem {
   id: number;
   name: string;
-  type: 'web' | 'feishu';
+  type: "web" | "feishu";
   config: Record<string, any>;
   syncInterval: number;
-  lastSyncStatus: 'idle' | 'syncing' | 'success' | 'failed';
+  lastSyncStatus: "idle" | "syncing" | "success" | "failed";
   lastSyncAt: string | null;
   lastSyncError: string | null;
   enabled: boolean;
@@ -1420,7 +1684,7 @@ export interface KnowledgeSourceStats {
 export interface KnowledgeSourceSyncLog {
   id: number;
   sourceId: number;
-  status: 'running' | 'success' | 'failed';
+  status: "running" | "success" | "failed";
   pagesFetched: number;
   chunksAdded: number;
   chunksUpdated: number;
@@ -1435,14 +1699,26 @@ export interface KnowledgeSourceSyncLog {
 }
 
 export async function getKnowledgeSources(): Promise<KnowledgeSourceItem[]> {
-  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SOURCES, { headers: getAuthHeaders() });
-  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceItem[] }>(response);
+  const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SOURCES, {
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse<{
+    success: boolean;
+    data: KnowledgeSourceItem[];
+  }>(response);
   return data.data;
 }
 
-export async function getKnowledgeSource(id: number): Promise<KnowledgeSourceItem> {
-  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}`, { headers: getAuthHeaders() });
-  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceItem }>(response);
+export async function getKnowledgeSource(
+  id: number,
+): Promise<KnowledgeSourceItem> {
+  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}`, {
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse<{
+    success: boolean;
+    data: KnowledgeSourceItem;
+  }>(response);
   return data.data;
 }
 
@@ -1457,76 +1733,123 @@ export async function createKnowledgeSource(body: {
   enableJsRendering?: boolean;
 }): Promise<KnowledgeSourceItem> {
   const response = await fetch(API_ENDPOINTS.KNOWLEDGE_SOURCES, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(body),
   });
-  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceItem }>(response);
+  const data = await handleResponse<{
+    success: boolean;
+    data: KnowledgeSourceItem;
+  }>(response);
   return data.data;
 }
 
 export async function updateKnowledgeSource(
   id: number,
-  body: Partial<{ name: string; config: Record<string, any>; syncInterval: number; maxDepth: number; maxPages: number; preferMarkdown: boolean; enableJsRendering: boolean; enabled: boolean }>,
+  body: Partial<{
+    name: string;
+    config: Record<string, any>;
+    syncInterval: number;
+    maxDepth: number;
+    maxPages: number;
+    preferMarkdown: boolean;
+    enableJsRendering: boolean;
+    enabled: boolean;
+  }>,
 ): Promise<KnowledgeSourceItem> {
   const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}`, {
-    method: 'PUT',
+    method: "PUT",
     headers: getAuthHeaders(),
     body: JSON.stringify(body),
   });
-  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceItem }>(response);
+  const data = await handleResponse<{
+    success: boolean;
+    data: KnowledgeSourceItem;
+  }>(response);
   return data.data;
 }
 
 export async function deleteKnowledgeSource(id: number): Promise<void> {
   await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}`, {
-    method: 'DELETE',
+    method: "DELETE",
     headers: getAuthHeaders(),
   });
 }
 
-export async function syncKnowledgeSource(id: number): Promise<KnowledgeSourceSyncLog> {
-  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/sync`, {
-    method: 'POST',
-    headers: getAuthHeaders(),
-  });
-  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceSyncLog }>(response);
+export async function syncKnowledgeSource(
+  id: number,
+): Promise<KnowledgeSourceSyncLog> {
+  const response = await fetch(
+    `${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/sync`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
+  const data = await handleResponse<{
+    success: boolean;
+    data: KnowledgeSourceSyncLog;
+  }>(response);
   return data.data;
 }
 
 export async function resetKnowledgeSourceStatus(id: number): Promise<void> {
   await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/reset-status`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
   });
 }
 
-export async function acknowledgeKnowledgeSourceUpdate(id: number): Promise<void> {
+export async function acknowledgeKnowledgeSourceUpdate(
+  id: number,
+): Promise<void> {
   await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/acknowledge-update`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
   });
 }
 
 export async function getKnowledgeSourceStats(): Promise<KnowledgeSourceStats> {
-  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/stats`, { headers: getAuthHeaders() });
-  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceStats }>(response);
-  return data.data;
-}
-
-export async function getKnowledgeSourceSyncLogs(id: number, limit: number = 20): Promise<KnowledgeSourceSyncLog[]> {
-  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/logs?limit=${limit}`, { headers: getAuthHeaders() });
-  const data = await handleResponse<{ success: boolean; data: KnowledgeSourceSyncLog[] }>(response);
-  return data.data;
-}
-
-export async function batchSyncKnowledgeSources(sourceIds: number[]): Promise<Array<{ sourceId: number; success: boolean; message: string }>> {
-  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/batch/sync`, {
-    method: 'POST',
+  const response = await fetch(`${API_ENDPOINTS.KNOWLEDGE_SOURCES}/stats`, {
     headers: getAuthHeaders(),
-    body: JSON.stringify({ sourceIds }),
   });
-  const data = await handleResponse<{ success: boolean; data: Array<{ sourceId: number; success: boolean; message: string }> }>(response);
+  const data = await handleResponse<{
+    success: boolean;
+    data: KnowledgeSourceStats;
+  }>(response);
+  return data.data;
+}
+
+export async function getKnowledgeSourceSyncLogs(
+  id: number,
+  limit: number = 20,
+): Promise<KnowledgeSourceSyncLog[]> {
+  const response = await fetch(
+    `${API_ENDPOINTS.KNOWLEDGE_SOURCES}/${id}/logs?limit=${limit}`,
+    { headers: getAuthHeaders() },
+  );
+  const data = await handleResponse<{
+    success: boolean;
+    data: KnowledgeSourceSyncLog[];
+  }>(response);
+  return data.data;
+}
+
+export async function batchSyncKnowledgeSources(
+  sourceIds: number[],
+): Promise<Array<{ sourceId: number; success: boolean; message: string }>> {
+  const response = await fetch(
+    `${API_ENDPOINTS.KNOWLEDGE_SOURCES}/batch/sync`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ sourceIds }),
+    },
+  );
+  const data = await handleResponse<{
+    success: boolean;
+    data: Array<{ sourceId: number; success: boolean; message: string }>;
+  }>(response);
   return data.data;
 }
 
@@ -1541,7 +1864,10 @@ export interface LlmUsageStats {
   totalTokens: number;
   avgResponseTimeMs: number;
   knowledgeBaseHitRate: number;
-  dailyStats: Record<string, { calls: number; inputTokens: number; outputTokens: number }>;
+  dailyStats: Record<
+    string,
+    { calls: number; inputTokens: number; outputTokens: number }
+  >;
   recentRecords: Array<{
     id: number;
     userId: string;
@@ -1562,10 +1888,15 @@ export interface LlmUsageStats {
  * 获取 LLM 用量统计
  * @param days 统计最近多少天（默认 7 天）
  */
-export async function getLlmUsageStats(days: number = 7): Promise<LlmUsageStats> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/llm-usage?days=${days}`, {
-    headers: getAuthHeaders(),
-  });
+export async function getLlmUsageStats(
+  days: number = 7,
+): Promise<LlmUsageStats> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/llm-usage?days=${days}`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<LlmUsageStats>(response);
 }
 
@@ -1580,17 +1911,19 @@ export async function submitFeedback(params: {
   sessionId: string;
   userMessage: string;
   assistantMessage: string;
-  rating: 'positive' | 'negative';
+  rating: "positive" | "negative";
   comment?: string;
   modelId?: string;
   usedKnowledgeBase?: boolean;
-}): Promise<{ action: 'created' | 'removed'; rating?: string }> {
+}): Promise<{ action: "created" | "removed"; rating?: string }> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/feedback`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
-  return handleResponse<{ action: 'created' | 'removed'; rating?: string }>(response);
+  return handleResponse<{ action: "created" | "removed"; rating?: string }>(
+    response,
+  );
 }
 
 export interface EvaluationStats {
@@ -1605,7 +1938,7 @@ export interface EvaluationStats {
       sessionId: string;
       userMessage: string;
       assistantMessage: string;
-      rating: 'positive' | 'negative';
+      rating: "positive" | "negative";
       comment: string;
       modelId: string;
       usedKnowledgeBase: boolean;
@@ -1636,10 +1969,15 @@ export interface EvaluationStats {
 /**
  * 获取准确率评估统计
  */
-export async function getEvaluationStats(days: number = 7): Promise<EvaluationStats> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/evaluation-stats?days=${days}`, {
-    headers: getAuthHeaders(),
-  });
+export async function getEvaluationStats(
+  days: number = 7,
+): Promise<EvaluationStats> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/evaluation-stats?days=${days}`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<EvaluationStats>(response);
 }
 
@@ -1653,15 +1991,21 @@ export interface ToolUsageStats {
   failedCalls: number;
   successRate: number;
   avgDurationMs: number;
-  byTool: Record<string, {
-    calls: number;
-    successRate: number;
-    avgDurationMs: number;
-  }>;
-  dailyStats: Record<string, {
-    calls: number;
-    successCalls: number;
-  }>;
+  byTool: Record<
+    string,
+    {
+      calls: number;
+      successRate: number;
+      avgDurationMs: number;
+    }
+  >;
+  dailyStats: Record<
+    string,
+    {
+      calls: number;
+      successCalls: number;
+    }
+  >;
   recentRecords: Array<{
     id: number;
     userId: string;
@@ -1680,10 +2024,15 @@ export interface ToolUsageStats {
  * 获取工具调用统计
  * @param days 统计最近多少天（默认 7 天）
  */
-export async function getToolUsageStats(days: number = 7): Promise<ToolUsageStats> {
-  const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/tool-usage?days=${days}`, {
-    headers: getAuthHeaders(),
-  });
+export async function getToolUsageStats(
+  days: number = 7,
+): Promise<ToolUsageStats> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/chat/tool-usage?days=${days}`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
   return handleResponse<ToolUsageStats>(response);
 }
 
@@ -1695,7 +2044,7 @@ export async function respondToConfirmation(
   confirmed: boolean,
 ): Promise<{ success: boolean; confirmationId: string }> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/confirm`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify({ confirmationId, confirmed }),
   });
@@ -1735,20 +2084,26 @@ export interface RateLimiterStatus {
 
 /** 获取缓存统计 */
 export async function getCacheStats(): Promise<CacheStats> {
-  const response = await fetch(API_ENDPOINTS.CACHE_STATS, { headers: getAuthHeaders() });
+  const response = await fetch(API_ENDPOINTS.CACHE_STATS, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<CacheStats>(response);
 }
 
 /** 获取缓存配置 */
 export async function getCacheConfig(): Promise<CacheConfig> {
-  const response = await fetch(API_ENDPOINTS.CACHE_CONFIG, { headers: getAuthHeaders() });
+  const response = await fetch(API_ENDPOINTS.CACHE_CONFIG, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<CacheConfig>(response);
 }
 
 /** 更新缓存配置 */
-export async function updateCacheConfig(config: Partial<CacheConfig>): Promise<{ success: boolean; message: string }> {
+export async function updateCacheConfig(
+  config: Partial<CacheConfig>,
+): Promise<{ success: boolean; message: string }> {
   const response = await fetch(API_ENDPOINTS.CACHE_CONFIG, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(config),
   });
@@ -1760,7 +2115,7 @@ export async function updateCacheConfig(config: Partial<CacheConfig>): Promise<{
 // ============================================
 
 /** 补全模式 */
-export type CompletionMode = 'autocomplete' | 'continue' | 'rewrite';
+export type CompletionMode = "autocomplete" | "continue" | "rewrite";
 
 /**
  * 请求 AI 写作补全（SSE 流式）
@@ -1779,7 +2134,7 @@ export async function requestCompletionStream(
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/ai/completion`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(payload),
     signal,
@@ -1791,26 +2146,33 @@ export async function requestCompletionStream(
 
   const stream = response.body!.pipeThrough(new TextDecoderStream());
   const reader = stream.getReader();
-  let buffer = '';
+  let buffer = "";
 
   // 监听 abort 信号：主动 cancel reader 中断流读取
   // 仅靠 fetch signal 无法中断已开始的流式读取，必须手动 cancel
   const onAbort = () => {
     reader.cancel().catch(() => {});
   };
-  signal?.addEventListener('abort', onAbort);
+  signal?.addEventListener("abort", onAbort);
 
   // 超时保护：12 秒无数据视为连接 hang，自动中断
   // 后端心跳间隔 5 秒，正常情况每 5 秒内有数据；12 秒 = 2 个心跳周期 + 余量
   // 防止 SSE 流异常时 reader.read() 永远不返回，导致 finally 不执行、状态卡死
   const IDLE_TIMEOUT_MS = 12000;
-  const readWithIdleTimeout = (): Promise<ReadableStreamDefaultReader<string>['read'] extends Promise<infer R> ? R : never> => {
+  const readWithIdleTimeout = (): Promise<
+    ReadableStreamDefaultReader<string>["read"] extends Promise<infer R>
+      ? R
+      : never
+  > => {
     let timeoutId: ReturnType<typeof setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error('AI 补全超时（30秒无响应）')), IDLE_TIMEOUT_MS);
+      timeoutId = setTimeout(
+        () => reject(new Error("AI 补全超时（30秒无响应）")),
+        IDLE_TIMEOUT_MS,
+      );
     });
     return Promise.race([
-      reader.read().then(result => {
+      reader.read().then((result) => {
         clearTimeout(timeoutId);
         return result;
       }),
@@ -1821,7 +2183,7 @@ export async function requestCompletionStream(
   try {
     while (true) {
       // 保险：abort 后即使 reader.read() 没立即 reject 也主动跳出
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const { done, value } = await readWithIdleTimeout();
       if (done) break;
 
@@ -1830,27 +2192,27 @@ export async function requestCompletionStream(
       buffer = remainingBuffer;
 
       for (const event of events) {
-        if (event.eventType === 'content') {
+        if (event.eventType === "content") {
           try {
             const text = JSON.parse(event.eventData);
             onDelta(text);
           } catch {
             onDelta(event.eventData);
           }
-        } else if (event.eventType === 'error') {
+        } else if (event.eventType === "error") {
           try {
             const data = JSON.parse(event.eventData);
-            throw new Error(data.message || 'AI 补全出错');
+            throw new Error(data.message || "AI 补全出错");
           } catch (e) {
-            if (e instanceof Error && e.message !== 'Unexpected') throw e;
-            throw new Error('AI 补全出错');
+            if (e instanceof Error && e.message !== "Unexpected") throw e;
+            throw new Error("AI 补全出错");
           }
         }
         // done / heartbeat 事件忽略
       }
     }
   } finally {
-    signal?.removeEventListener('abort', onAbort);
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
 }
@@ -1871,7 +2233,7 @@ export async function requestCompletion(
   signal?: AbortSignal,
 ): Promise<string> {
   const response = await fetch(`${API_BASE_URL}/ai/complete`, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(payload),
     signal,
@@ -1883,15 +2245,18 @@ export async function requestCompletion(
 
   const data = await response.json();
   if (!data.success) {
-    throw new Error(data.message || 'AI 补全失败');
+    throw new Error(data.message || "AI 补全失败");
   }
-  return data.suggestion || '';
+  return data.suggestion || "";
 }
 
 /** 清空缓存 */
-export async function clearCache(): Promise<{ success: boolean; message: string }> {
+export async function clearCache(): Promise<{
+  success: boolean;
+  message: string;
+}> {
   const response = await fetch(API_ENDPOINTS.CACHE_CLEAR, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
@@ -1899,20 +2264,26 @@ export async function clearCache(): Promise<{ success: boolean; message: string 
 
 /** 获取限流器状态 */
 export async function getRateLimiterStatus(): Promise<RateLimiterStatus> {
-  const response = await fetch(API_ENDPOINTS.RATE_LIMITER_STATUS, { headers: getAuthHeaders() });
+  const response = await fetch(API_ENDPOINTS.RATE_LIMITER_STATUS, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<RateLimiterStatus>(response);
 }
 
 /** 获取限流器配置 */
 export async function getRateLimiterConfig(): Promise<RateLimiterConfig> {
-  const response = await fetch(API_ENDPOINTS.RATE_LIMITER_CONFIG, { headers: getAuthHeaders() });
+  const response = await fetch(API_ENDPOINTS.RATE_LIMITER_CONFIG, {
+    headers: getAuthHeaders(),
+  });
   return handleResponse<RateLimiterConfig>(response);
 }
 
 /** 更新限流器配置 */
-export async function updateRateLimiterConfig(config: Partial<RateLimiterConfig>): Promise<{ success: boolean; message: string }> {
+export async function updateRateLimiterConfig(
+  config: Partial<RateLimiterConfig>,
+): Promise<{ success: boolean; message: string }> {
   const response = await fetch(API_ENDPOINTS.RATE_LIMITER_CONFIG, {
-    method: 'POST',
+    method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(config),
   });

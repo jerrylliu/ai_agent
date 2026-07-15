@@ -1,4 +1,5 @@
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
 
 export const API_ENDPOINTS = {
   BASE_URL: API_BASE_URL,
@@ -11,6 +12,7 @@ export const API_ENDPOINTS = {
   MODELS: `${API_BASE_URL}/models`,
   MODELS_SWITCH: `${API_BASE_URL}/models/switch`,
   MODELS_APIKEY: `${API_BASE_URL}/models/apikey`,
+  MODELS_PROBE: `${API_BASE_URL}/models/probe`,
   AUTH_REGISTER: `${API_BASE_URL}/auth/register`,
   AUTH_LOGIN: `${API_BASE_URL}/auth/login`,
   AUTH_PROFILE: `${API_BASE_URL}/auth/profile`,
@@ -31,16 +33,20 @@ export const API_ENDPOINTS = {
 export const MAX_HISTORY_ITEMS = 10;
 
 export const DEFAULT_MESSAGE = {
-  id: '1',
-  content: '你好！我是以太忆核，有什么可以帮助你的吗？',
-  role: 'assistant' as const,
+  id: "1",
+  content: "你好！我是以太忆核，有什么可以帮助你的吗？",
+  role: "assistant" as const,
   timestamp: new Date(),
 };
 
-export const ERROR_MESSAGE = '抱歉，发生了错误，请稍后重试。';
+export const ERROR_MESSAGE = "抱歉，发生了错误，请稍后重试。";
 
 /** 默认用户头像 URL */
-export const DEFAULT_USER_AVATAR_URL = import.meta.env.VITE_USER_AVATAR_URL || 'https://neeko-copilot.bytedance.net/api/text2image?prompt=user%20avatar&size=512x512';
+export const DEFAULT_USER_AVATAR_URL =
+  import.meta.env.VITE_USER_AVATAR_URL ||
+  "https://neeko-copilot.bytedance.net/api/text2image?prompt=user%20avatar&size=512x512";
 
 /** 默认 AI 助手头像 URL */
-export const DEFAULT_AI_AVATAR_URL = import.meta.env.VITE_AI_AVATAR_URL || 'https://neeko-copilot.bytedance.net/api/text2image?prompt=AI%20assistant%20avatar&size=512x512';
+export const DEFAULT_AI_AVATAR_URL =
+  import.meta.env.VITE_AI_AVATAR_URL ||
+  "https://neeko-copilot.bytedance.net/api/text2image?prompt=AI%20assistant%20avatar&size=512x512";

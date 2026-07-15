@@ -133,6 +133,11 @@ export interface DeadLetterEntry {
   attempts: number;
   /** 落库时间戳 */
   at: number;
+  /**
+   * 补偿重试所需的载荷数据（由调用方提供，如消息体 + 接收人类型）。
+   * 补偿消费者通过此字段重建发送调用。
+   */
+  retryPayload?: unknown;
 }
 
 /** 内存环形缓冲（Redis 不可用时的死信兜底） */
@@ -197,6 +202,12 @@ export interface DeliverOptions {
   op: string;
   receiveId?: string;
   uuid?: string;
+  /**
+   * 补偿重试所需的载荷数据。
+   * 重试耗尽落死信时会一并存储，供补偿消费者重建发送调用。
+   * 如果不需要补偿重试（如非关键消息），可不传。
+   */
+  retryPayload?: unknown;
 }
 
 /**
@@ -241,6 +252,7 @@ export async function deliverWithRetry<T extends FeishuApiResult>(
             lastError,
             attempts: attempt + 1,
             at: Date.now(),
+            retryPayload: options.retryPayload,
           });
         }
         return result;
@@ -256,6 +268,7 @@ export async function deliverWithRetry<T extends FeishuApiResult>(
           lastError,
           attempts: attempt + 1,
           at: Date.now(),
+          retryPayload: options.retryPayload,
         });
         return lastResult;
       }
@@ -274,4 +287,126 @@ export async function deliverWithRetry<T extends FeishuApiResult>(
   }
 
   return lastResult as T;
+}
+
+// ==================== 补偿消费（死信重试） ====================
+
+/**
+ * 补偿重试处理器类型
+ *
+ * 返回 true 表示重试成功（死信将被移除），false 表示仍失败（放回队列等下一轮）。
+ */
+export type RetryHandler = (entry: DeadLetterEntry) => Promise<boolean>;
+
+/** 已注册的补偿处理器（由 feishu-notify.service.ts 注册） */
+let retryHandler: RetryHandler | null = null;
+
+/**
+ * 注册补偿消费处理器
+ *
+ * 由 feishu-notify.service.ts 在模块加载时调用，注册一个函数来重试死信队列中的消息。
+ * 处理器通过 entry.retryPayload 获取原始消息数据，重建发送调用。
+ */
+export function registerRetryHandler(handler: RetryHandler): void {
+  retryHandler = handler;
+  logger.info('飞书死信补偿处理器已注册', { module: 'FeishuDelivery' });
+}
+
+/**
+ * 将条目放回死信队列（重试失败时调用）
+ *
+ * 注意：此函数不记录 error 日志（避免与首次入队混淆），仅做数据操作。
+ */
+async function requeueDeadLetter(entry: DeadLetterEntry): Promise<void> {
+  if (isRedisReady()) {
+    try {
+      const redis = getRedis();
+      if (redis) {
+        await redis.lpush(DEAD_LETTER_KEY, JSON.stringify(entry));
+        return;
+      }
+    } catch {
+      // 落到内存
+    }
+  }
+  localDeadLetters.unshift(entry);
+  if (localDeadLetters.length > DEAD_LETTER_MAX) {
+    localDeadLetters.length = DEAD_LETTER_MAX;
+  }
+}
+
+/**
+ * 执行一轮死信补偿消费
+ *
+ * 从队列尾部取出最多 limit 条死信，逐条重试：
+ * - 重试成功 → 丢弃（消息已发出）
+ * - 重试失败 → 放回队列头部（等下一轮补偿）
+ * - 无处理器注册 → 直接返回
+ *
+ * 由定时任务（setInterval）周期性调用，默认每 5 分钟一轮。
+ */
+export async function retryDeadLetters(
+  limit = 20,
+): Promise<{ retried: number; succeeded: number; failed: number }> {
+  if (!retryHandler) return { retried: 0, succeeded: 0, failed: 0 };
+
+  const entries: DeadLetterEntry[] = [];
+
+  // 从队列尾部取出（最早入队的先处理）
+  if (isRedisReady()) {
+    try {
+      const redis = getRedis();
+      if (redis) {
+        for (let i = 0; i < limit; i++) {
+          const raw = await redis.rpop(DEAD_LETTER_KEY);
+          if (!raw) break;
+          entries.push(JSON.parse(raw) as DeadLetterEntry);
+        }
+      }
+    } catch (e: any) {
+      logger.warn('飞书死信补偿：从 Redis 读取失败', {
+        module: 'FeishuDelivery',
+        err: (e?.message || String(e)).slice(0, 200),
+      });
+    }
+  } else {
+    // 内存兜底：从尾部取
+    while (entries.length < limit && localDeadLetters.length > 0) {
+      entries.push(localDeadLetters.pop()!);
+    }
+  }
+
+  if (entries.length === 0) return { retried: 0, succeeded: 0, failed: 0 };
+
+  let succeeded = 0;
+  let failed = 0;
+
+  for (const entry of entries) {
+    try {
+      const ok = await retryHandler(entry);
+      if (ok) {
+        succeeded++;
+      } else {
+        failed++;
+        await requeueDeadLetter(entry);
+      }
+    } catch (e: any) {
+      failed++;
+      await requeueDeadLetter(entry);
+      logger.debug('飞书死信补偿：单条重试异常', {
+        module: 'FeishuDelivery',
+        op: entry.op,
+        err: (e?.message || String(e)).slice(0, 200),
+      });
+    }
+  }
+
+  logger.info('飞书死信补偿消费完成', {
+    module: 'FeishuDelivery',
+    retried: entries.length,
+    succeeded,
+    failed,
+  });
+
+  return { retried: entries.length, succeeded, failed };
 }

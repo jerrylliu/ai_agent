@@ -1,15 +1,31 @@
 import { Controller, Get, Post, Body } from '@nestjs/common';
-import { AppService } from './app.service';
-import { getCacheStats, getCacheConfig, updateCacheConfig, clearCache } from './fundamentals/cache';
-import { getRateLimiterStatus, getRateLimiterConfig, updateRateLimiterConfig } from './fundamentals/llm-rate-limiter';
+import { AppService } from './app.service.js';
+import { getCacheStats, getCacheConfig, updateCacheConfig, clearCache } from './fundamentals/cache.js';
+import { getRateLimiterStatus, getRateLimiterConfig, updateRateLimiterConfig } from './fundamentals/llm-rate-limiter.js';
+import { HealthService } from './services/health.service.js';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(
+    private readonly appService: AppService,
+    private readonly healthService: HealthService,
+  ) {}
 
   @Get()
   getHello(): string {
     return this.appService.getHello();
+  }
+
+  // ==================== 健康检查 ====================
+
+  /**
+   * GET /api/health
+   * 健康检查端点（供 Docker HEALTHCHECK / 负载均衡探活使用）
+   * 返回进程存活、MySQL / Redis 连通性状态
+   */
+  @Get('api/health')
+  async getHealth() {
+    return this.healthService.getHealthStatus();
   }
 
   // ==================== 缓存管理接口 ====================
