@@ -105,6 +105,17 @@ async function bootstrap() {
   app.use('/audios', express.static(audioDir));
 
   // ============================================
+  // 配置知识库图片目录（多模态入库的原图存储）
+  // {IMAGE_STORAGE_DIR}/{docId}/img_{index}.png 通过 /images/{docId}/img_{index}.png 访问
+  // 使用 config.imageStorage.dir 与 persistImage / loadImageBuffer / deleteDocumentImageFiles 保持一致
+  // ============================================
+  const imageStorageDir = path.resolve(process.cwd(), config.imageStorage.dir);
+  if (!fs.existsSync(imageStorageDir)) {
+    fs.mkdirSync(imageStorageDir, { recursive: true });
+  }
+  app.use('/images', express.static(imageStorageDir));
+
+  // ============================================
   // 启动 HTTP 服务器
   // ============================================
   await app.listen(config.port);

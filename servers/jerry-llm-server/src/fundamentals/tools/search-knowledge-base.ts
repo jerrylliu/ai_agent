@@ -16,6 +16,7 @@ import { multiHopSearch, type MultiHopResult } from '../vector-store/multi-hop-s
 import { rerankResults, type RerankedResult } from '../vector-store/result-reranker';
 import { logger } from '../logger';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import { enrichWithImageDescriptions } from '../rag-service';
 
 // ==================== Zod Schema（仅暴露给 LLM 的字段）====================
 
@@ -88,6 +89,8 @@ export interface SearchKnowledgeBaseResult {
     hop?: number;
     /** 重排相关性分数（启用重排时有效） */
     rerankScore?: number;
+    /** 块元数据（含 chunk_type / image_path 等，用于 FC 模式下识别图片块并注入可访问 URL） */
+    metadata?: Record<string, any>;
   }>;
   total: number;
   query: string;
@@ -337,6 +340,10 @@ export async function executeSearchKnowledgeBase(
   const totalDuration = Date.now() - totalStartTime;
   timings.total = totalDuration;
 
+  // 图片补查：如果命中的文本块含 [图片] 占位符但无图片块，
+  // 通过 docId 补查 image_description 表，用查询关键词过滤相关图片
+  await enrichWithImageDescriptions(rerankedResults, query);
+
   const mappedResults = rerankedResults.map((r, idx) => {
     const contentPreview = r.content.length > 100 ? r.content.substring(0, 100) + '...' : r.content;
     logger.debug(`FC工具 [search_knowledge_base] 结果 #${idx + 1}`, {
@@ -359,6 +366,8 @@ export async function executeSearchKnowledgeBase(
       versionId: r.metadata?.versionId || '',
       hop: r.hop,
       rerankScore: wasReranked ? r.rerankScore : undefined,
+      // 保留 metadata 供 FC 模式识别图片块并注入可访问 URL
+      metadata: r.metadata as Record<string, any> | undefined,
     };
   });
 

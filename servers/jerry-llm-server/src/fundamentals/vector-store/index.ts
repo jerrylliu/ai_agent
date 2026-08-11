@@ -64,8 +64,13 @@ export {
 // ==================== 文档 CRUD ====================
 export {
   addDocuments,
+  addImageChunks,
   deleteDocuments,
   getAllDocuments,
+} from './vector-crud.js';
+
+export type {
+  ImageChunkInput,
 } from './vector-crud.js';
 
 // ==================== 检索 ====================

@@ -68,7 +68,8 @@ class FCFallbackError extends Error {
 import * as http from 'http';
 
 // 【RAG 链路】retrieveFromKnowledgeBase：执行向量召回 + 重排，返回拼接好的上下文文本。
-import { retrieveFromKnowledgeBase } from './rag-service';
+// buildContextFromResults：把检索结果构建为 LLM 上下文（图片块附加可访问 URL）。
+import { retrieveFromKnowledgeBase, buildContextFromResults } from './rag-service';
 // 【向量库统计】getKnowledgeBaseStats：返回当前知识库文档数等元信息（用于路由决策）。
 import { getKnowledgeBaseStats } from './vector-store';
 // 【模型工厂】批量解构 6 个函数：
@@ -698,6 +699,29 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
     return data.message || content;
   }
 
+  if (toolName === 'search_knowledge_base') {
+    // 知识库搜索结果：用 buildContextFromResults 处理
+    // - 图片块（metadata.chunk_type === 'image'）附加可访问 URL
+    // - 文本块清理 MinerU 残留的无效图片引用
+    try {
+      const parsed = JSON.parse(content);
+      if (parsed && parsed.results && Array.isArray(parsed.results)) {
+        // 保留 metadata 字段，让 buildContextFromResults 能识别图片块
+        const results = parsed.results.map((r: any) => ({
+          content: r.content || '',
+          metadata: r.metadata || {},
+        }));
+        return buildContextFromResults(results);
+      }
+    } catch {
+      // JSON 解析失败，直接清理字符串
+    }
+    return content.replace(
+      /!\[[^\]]*\]\((?!https?:\/\/)([^)]+)\)/g,
+      '[图片]',
+    );
+  }
+
   // 其他工具保持原始内容
   return content;
 }
@@ -911,7 +935,10 @@ ${toolList}
 - 当用户的问题可能涉及已上传的文档、知识库中的信息时，优先调用 search_knowledge_base
 - 如果 search_knowledge_base 返回空结果或结果与问题无关，必须如实告知用户"知识库中未找到相关内容"
 - 严禁在知识库没有相关内容时，凭自身知识编造文档中的具体条款、规范、数据等内容
-- 可以建议用户：检查文档是否已发布到知识库，或换一种关键词重新提问`;
+- 可以建议用户：检查文档是否已发布到知识库，或换一种关键词重新提问
+- 工具结果中的【图片 N】块包含图片描述和可访问的图片 URL（格式：![图片 N](http://...)）。
+  当回复涉及图片内容时，请直接使用该 URL 以 ![描述](URL) 格式在回答中展示图片，让用户能直接看到原图。
+  不要使用 ![](images/xxx.jpg) 这种相对路径格式，必须使用工具结果中提供的完整 URL`;
   }
 
   if (availableTools.includes('search_web')) {
@@ -2645,9 +2672,11 @@ export const promptTemplate = async (
   }
 
   if (hasRetrievedContent) {
-    const docList = retrievalResults
-      .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
-      .join('\n\n');
+    // 使用 buildContextFromResults 构建上下文：
+    // - 图片块附加可访问的 URL（http://localhost:3000/images/{docId}/img_{idx}.png）
+    // - 文本块清理 MinerU 残留的无效图片引用（旧文档兼容）
+    // - LLM 可直接在回复中用 ![图片 N](url) 引用原图
+    const docList = buildContextFromResults(retrievalResults);
 
     let kbStatsInfo = '';
     try {
@@ -2667,7 +2696,10 @@ ${docList}
 3. 如果参考资料与用户问题完全无关：
    - 对于通用知识问题（如"什么是光合作用"），可以回复"知识库中未找到相关信息，以下基于通用知识回答："后用自己的知识回答
    - 对于涉及用户文档/知识库的问题（如用户提到"文档""规范""规定"等），必须回复"知识库中未找到相关内容，请检查文档是否已发布到知识库"，严禁凭自身知识编造文档中的具体条款、规范、数据等内容
-4. 当用户问知识库有多少文档时，请根据"知识库统计"信息回答，不要只数参考资料的条数${UNTRUSTED_CONTEXT_INSTRUCTION}`;
+4. 当用户问知识库有多少文档时，请根据"知识库统计"信息回答，不要只数参考资料的条数
+5. 参考资料中的【图片 N】块包含图片描述和可访问的图片 URL（格式：![图片 N](http://...)）。
+   当回复涉及图片内容时，请直接使用该 URL 以 ![描述](URL) 格式在回答中展示图片，让用户能直接看到原图。
+   不要使用 ![](images/xxx.jpg) 这种相对路径格式，必须使用参考资料中提供的完整 URL${UNTRUSTED_CONTEXT_INSTRUCTION}`;
   } else {
     // 知识库未检索到任何内容时的 fallback 提示
     // 防止 AI 在用户询问文档内容时凭空编造

@@ -36,8 +36,10 @@ import { AutoEvaluation } from './entities/auto-evaluation.entity.js';
 import { ToolUsage } from './entities/tool-usage.entity.js';
 import { GeneratedDocument } from './entities/generated-document.entity.js';
 import { FeishuChatSession } from './entities/feishu-chat-session.entity.js';
+import { ImageDescription } from './entities/image-description.entity.js';
 import { DocumentService } from './services/document.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
+import { ImageRetrySchedulerService } from './services/image-retry-scheduler.service.js';
 import { KnowledgeSourceService } from './services/knowledge-source.service.js';
 import { KnowledgeSourceSchedulerService } from './services/knowledge-source-scheduler.service.js';
 import { SessionService } from './services/session.service.js';
@@ -51,7 +53,11 @@ import { GeneratedDocumentSchedulerService } from './services/generated-document
 import { HealthService } from './services/health.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { WinstonLoggerModule } from './fundamentals/logger.js';
-import { initManageSession, setToolUsageCallback, initMcpProxy } from './fundamentals/tools/index.js';
+import {
+  initManageSession,
+  setToolUsageCallback,
+  initMcpProxy,
+} from './fundamentals/tools/index.js';
 import { initDocumentTools } from './fundamentals/tools/document-ops.js';
 import { initGenerateDocumentTool } from './fundamentals/tools/generate-document.js';
 import { config } from './fundamentals/config.js';
@@ -75,7 +81,27 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
       username: config.db.username,
       password: config.db.password,
       database: config.db.database,
-      entities: [ChatHistory, Session, User, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage, GeneratedDocument, FeishuChatSession],
+      entities: [
+        ChatHistory,
+        Session,
+        User,
+        SessionSummary,
+        UserMemory,
+        Document,
+        DocumentVersion,
+        DocumentAuditLog,
+        PendingVectorOp,
+        KnowledgeSource,
+        KnowledgeSourceSyncLog,
+        KnowledgeSourcePage,
+        LlmUsage,
+        MessageFeedback,
+        AutoEvaluation,
+        ToolUsage,
+        GeneratedDocument,
+        FeishuChatSession,
+        ImageDescription,
+      ],
       // 不在 NestJS 启动时加载 migrations：
       // 1. NestJS 运行在 ESM 模式，TypeORM 同步 require 加载 ESM 迁移文件会崩
       //    （报错：Unexpected module status 0 / MigrationInterface 命名导出缺失）
@@ -85,11 +111,61 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
       synchronize: config.db.synchronize,
       migrationsRun: false,
     }),
-    TypeOrmModule.forFeature([ChatHistory, Session, SessionSummary, UserMemory, Document, DocumentVersion, DocumentAuditLog, PendingVectorOp, KnowledgeSource, KnowledgeSourceSyncLog, KnowledgeSourcePage, LlmUsage, MessageFeedback, AutoEvaluation, ToolUsage, GeneratedDocument, FeishuChatSession]),
+    TypeOrmModule.forFeature([
+      ChatHistory,
+      Session,
+      SessionSummary,
+      UserMemory,
+      Document,
+      DocumentVersion,
+      DocumentAuditLog,
+      PendingVectorOp,
+      KnowledgeSource,
+      KnowledgeSourceSyncLog,
+      KnowledgeSourcePage,
+      LlmUsage,
+      MessageFeedback,
+      AutoEvaluation,
+      ToolUsage,
+      GeneratedDocument,
+      FeishuChatSession,
+      ImageDescription,
+    ]),
     AuthModule,
   ],
-  controllers: [AppController, ChatController, MemoryController, KnowledgeController, ModelController, UploadController, DocumentController, KnowledgeSourceController, RedisDashboardController, SpeechController, AiWritingController, FeishuEventController, MetricsController],
-  providers: [AppService, SessionService, SummaryService, MemoryService, UsageService, EvaluationService, DocumentService, DocumentSchedulerService, KnowledgeSourceService, KnowledgeSourceSchedulerService, ToolUsageService, GeneratedDocumentService, GeneratedDocumentSchedulerService, SpeechService, HealthService],
+  controllers: [
+    AppController,
+    ChatController,
+    MemoryController,
+    KnowledgeController,
+    ModelController,
+    UploadController,
+    DocumentController,
+    KnowledgeSourceController,
+    RedisDashboardController,
+    SpeechController,
+    AiWritingController,
+    FeishuEventController,
+    MetricsController,
+  ],
+  providers: [
+    AppService,
+    SessionService,
+    SummaryService,
+    MemoryService,
+    UsageService,
+    EvaluationService,
+    DocumentService,
+    DocumentSchedulerService,
+    ImageRetrySchedulerService,
+    KnowledgeSourceService,
+    KnowledgeSourceSchedulerService,
+    ToolUsageService,
+    GeneratedDocumentService,
+    GeneratedDocumentSchedulerService,
+    SpeechService,
+    HealthService,
+  ],
 })
 export class AppModule implements OnModuleInit {
   constructor(
@@ -119,7 +195,10 @@ export class AppModule implements OnModuleInit {
       read: async (key, userId) => {
         const r = await this.generatedDocumentService.read(key, userId);
         if (!r) return null;
-        return { entity: { mimeType: r.entity.mimeType, filename: r.entity.filename }, buffer: r.buffer };
+        return {
+          entity: { mimeType: r.entity.mimeType, filename: r.entity.filename },
+          buffer: r.buffer,
+        };
       },
     });
     // 异步初始化 MCP 客户端（启动 MCP Server 子进程并拉取 tools 列表）
@@ -223,14 +302,22 @@ export class AppModule implements OnModuleInit {
 
     // 注入会话文档查询器：飞书入站回复时把本次新生成的文档同步成飞书原生文件
     setFeishuDocumentFetcher(async ({ sessionId, afterMs }) => {
-      const entities = await this.generatedDocumentService.listRecentBySession(sessionId, afterMs);
+      const entities = await this.generatedDocumentService.listRecentBySession(
+        sessionId,
+        afterMs,
+      );
       const loaded = await Promise.all(
         entities.map(async (d) => {
           const read = await this.generatedDocumentService.read(d.key, null);
-          return read ? { key: d.key, filename: d.filename, buffer: read.buffer } : null;
+          return read
+            ? { key: d.key, filename: d.filename, buffer: read.buffer }
+            : null;
         }),
       );
-      return loaded.filter((d): d is { key: string; filename: string; buffer: Buffer } => d !== null);
+      return loaded.filter(
+        (d): d is { key: string; filename: string; buffer: Buffer } =>
+          d !== null,
+      );
     });
   }
 }

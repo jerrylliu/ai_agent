@@ -4,7 +4,13 @@
 // 路由前缀：/upload
 
 // 从 @nestjs/common 导入控制器所需的装饰器
-import { Controller, Post, UseInterceptors, UploadedFile, HttpException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  UseInterceptors,
+  UploadedFile,
+  HttpException,
+} from '@nestjs/common';
 // 导入 Multer 文件拦截器，用于解析 multipart/form-data 格式的文件上传
 import { FileInterceptor } from '@nestjs/platform-express';
 // 导入 Node.js path 模块，用于处理文件路径
@@ -18,7 +24,6 @@ import { logger } from '../fundamentals/logger';
 // @Controller('upload') 声明该类为 NestJS 控制器，路由前缀为 /upload
 @Controller('upload')
 export class UploadController {
-
   /**
    * POST /upload
    * 上传文件到服务器
@@ -83,7 +88,9 @@ export class UploadController {
 
     // multer 默认用 latin1 解码 originalname，中文会乱码
     // 转回 utf8 才能正确显示中文文件名
-    const fileName: string = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    const fileName: string = Buffer.from(file.originalname, 'latin1').toString(
+      'utf8',
+    );
     const sizeBytes: number = file.size;
     const mimeType: string = file.mimetype || getMimeType(fileName);
 
@@ -100,7 +107,8 @@ export class UploadController {
     fs.writeFileSync(tempFilePath, file.buffer);
 
     try {
-      const text = await parseDocument(tempFilePath, mimeType);
+      const parsed = await parseDocument(tempFilePath, mimeType);
+      const text = parsed.text;
 
       // 超长文档截断（避免 token 爆炸），保留前 5 万字符
       const MAX_CHARS = 50000;
@@ -111,18 +119,19 @@ export class UploadController {
       // 按段落拆分，每段一个 paragraph 节点
       const paragraphs = safeText
         .split(/\n{2,}/)
-        .map(p => p.trim())
-        .filter(p => p.length > 0)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0)
         .slice(0, 500); // 最多 500 段，防止恶意大文档
 
       const contentJson = {
         type: 'doc',
-        content: paragraphs.length > 0
-          ? paragraphs.map(p => ({
-              type: 'paragraph',
-              content: [{ type: 'text', text: p }],
-            }))
-          : [{ type: 'paragraph' }],
+        content:
+          paragraphs.length > 0
+            ? paragraphs.map((p) => ({
+                type: 'paragraph',
+                content: [{ type: 'text', text: p }],
+              }))
+            : [{ type: 'paragraph' }],
       };
 
       // 同时保留文件 URL 供下载

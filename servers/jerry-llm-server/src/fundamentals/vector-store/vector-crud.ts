@@ -92,16 +92,24 @@ export async function addDocuments(
 
     const fileType = meta.fileType || '';
     const mimeType = meta.mimeType || '';
-    const adaptiveProfile = getAdaptiveChunkingProfile({ fileType, mimeType, content: text });
+    const adaptiveProfile = getAdaptiveChunkingProfile({
+      fileType,
+      mimeType,
+      content: text,
+    });
 
     if (chunkingStrategy === 'parent-child') {
       // Parent-Child 切分
       const pcOptions = options?.parentChild;
       const pcResult = await parentChildSplit(text, {
-        parentChunkSize: pcOptions?.parentChunkSize ?? adaptiveProfile.parentChunkSize,
-        parentChunkOverlap: pcOptions?.parentChunkOverlap ?? adaptiveProfile.parentChunkOverlap,
-        childChunkSize: pcOptions?.childChunkSize ?? adaptiveProfile.childChunkSize,
-        childChunkOverlap: pcOptions?.childChunkOverlap ?? adaptiveProfile.childChunkOverlap,
+        parentChunkSize:
+          pcOptions?.parentChunkSize ?? adaptiveProfile.parentChunkSize,
+        parentChunkOverlap:
+          pcOptions?.parentChunkOverlap ?? adaptiveProfile.parentChunkOverlap,
+        childChunkSize:
+          pcOptions?.childChunkSize ?? adaptiveProfile.childChunkSize,
+        childChunkOverlap:
+          pcOptions?.childChunkOverlap ?? adaptiveProfile.childChunkOverlap,
         // 传入文档类型和扩展名，让父块切分器按 Markdown 标题 / 代码结构切分
         documentType: adaptiveProfile.documentType,
         fileType,
@@ -117,9 +125,14 @@ export async function addDocuments(
         childChunkSize: adaptiveProfile.childChunkSize,
         childChunkOverlap: adaptiveProfile.childChunkOverlap,
         parentCount: pcResult.length,
-        totalChildren: pcResult.reduce((sum, pc) => sum + pc.children.length, 0),
-        parentSizes: pcResult.map(pc => pc.parent.text.length),
-        childSizes: pcResult.flatMap(pc => pc.children.map(c => c.text.length)),
+        totalChildren: pcResult.reduce(
+          (sum, pc) => sum + pc.children.length,
+          0,
+        ),
+        parentSizes: pcResult.map((pc) => pc.parent.text.length),
+        childSizes: pcResult.flatMap((pc) =>
+          pc.children.map((c) => c.text.length),
+        ),
       });
 
       for (const pc of pcResult) {
@@ -167,7 +180,7 @@ export async function addDocuments(
         module: 'VectorStore',
         docIndex: i,
         chunkCount: chunks.length,
-        chunkSizes: chunks.map(c => c.length),
+        chunkSizes: chunks.map((c) => c.length),
       });
 
       for (let j = 0; j < chunks.length; j++) {
@@ -184,10 +197,13 @@ export async function addDocuments(
     module: 'VectorStore',
     totalChunks: allChunks.length,
     chunkingStrategy,
-    parentChildStats: chunkingStrategy === 'parent-child' ? {
-      children: allChunks.filter(c => c.chunkRole === 'child').length,
-      note: '父块不写入向量库，内容通过子块 parent_content 元数据关联',
-    } : undefined,
+    parentChildStats:
+      chunkingStrategy === 'parent-child'
+        ? {
+            children: allChunks.filter((c) => c.chunkRole === 'child').length,
+            note: '父块不写入向量库，内容通过子块 parent_content 元数据关联',
+          }
+        : undefined,
   });
 
   // 2. 批量写入 ChromaDB（通过信号量控制并发，避免 Ollama 嵌入请求堆积）
@@ -222,7 +238,13 @@ export async function addDocuments(
     try {
       await store.addDocuments(batch);
       addedCount += batch.length;
-      logger.debug('批量添加成功', { module: 'VectorStore', callerId, batchStart: i, batchSize: batch.length, totalAdded: addedCount });
+      logger.debug('批量添加成功', {
+        module: 'VectorStore',
+        callerId,
+        batchStart: i,
+        batchSize: batch.length,
+        totalAdded: addedCount,
+      });
     } catch (error: any) {
       logger.error('批量添加文档失败，尝试逐条添加', {
         module: 'VectorStore',
@@ -293,11 +315,17 @@ export async function addDocuments(
       const bm25DocumentStore = getBM25DocumentStore();
       const sourceValue = chunkMetadata.source;
       const chunkIndexValue = chunkMetadata.chunk_index;
-      if (sourceValue !== undefined && chunkIndexValue !== undefined && bm25Index) {
+      if (
+        sourceValue !== undefined &&
+        chunkIndexValue !== undefined &&
+        bm25Index
+      ) {
         const idsToRemove: string[] = [];
         for (const [existingId, existingDoc] of bm25DocumentStore.entries()) {
-          if (existingDoc.metadata?.source === sourceValue &&
-              existingDoc.metadata?.chunk_index === chunkIndexValue) {
+          if (
+            existingDoc.metadata?.source === sourceValue &&
+            existingDoc.metadata?.chunk_index === chunkIndexValue
+          ) {
             idsToRemove.push(existingId);
           }
         }
@@ -326,11 +354,20 @@ export async function addDocuments(
     await saveBM25Index(); // 批量操作完成后统一保存
 
     if (bm25DedupedCount > 0) {
-      logger.info('BM25 索引去重清理', { module: 'VectorStore', dedupedCount: bm25DedupedCount });
+      logger.info('BM25 索引去重清理', {
+        module: 'VectorStore',
+        dedupedCount: bm25DedupedCount,
+      });
     }
-    logger.info('已添加文档到 BM25 索引', { module: 'VectorStore', documentCount: bm25AddedCount });
+    logger.info('已添加文档到 BM25 索引', {
+      module: 'VectorStore',
+      documentCount: bm25AddedCount,
+    });
   } catch (bm25Error: any) {
-    logger.warn('BM25 索引添加失败，不影响文档存储', { module: 'VectorStore', error: bm25Error.message });
+    logger.warn('BM25 索引添加失败，不影响文档存储', {
+      module: 'VectorStore',
+      error: bm25Error.message,
+    });
   }
 
   return addedCount;
@@ -349,7 +386,9 @@ export async function addDocuments(
  *
  * @param filter 删除文档的过滤条件（基于元数据字段匹配）
  */
-export async function deleteDocuments(filter: Record<string, any>): Promise<void> {
+export async function deleteDocuments(
+  filter: Record<string, any>,
+): Promise<void> {
   const store = await initializeVectorStore();
 
   logger.info('开始删除文档', { module: 'VectorStore', filter });
@@ -368,7 +407,11 @@ export async function deleteDocuments(filter: Record<string, any>): Promise<void
       const idsToRemove: string[] = [];
       const totalBM25Docs = bm25DocumentStore.size;
 
-      logger.debug('BM25 增量删除：扫描文档', { module: 'VectorStore', totalBM25Docs, filter });
+      logger.debug('BM25 增量删除：扫描文档', {
+        module: 'VectorStore',
+        totalBM25Docs,
+        filter,
+      });
 
       for (const [id, doc] of bm25DocumentStore.entries()) {
         const docMeta = doc.metadata;
@@ -393,20 +436,33 @@ export async function deleteDocuments(filter: Record<string, any>): Promise<void
           bm25DocumentStore.delete(id);
           bm25DeletedCount++;
         } catch {
-          logger.warn('BM25 删除文档失败（可能已不存在）', { module: 'VectorStore', id });
+          logger.warn('BM25 删除文档失败（可能已不存在）', {
+            module: 'VectorStore',
+            id,
+          });
         }
       }
 
       if (bm25DeletedCount > 0) {
         await saveBM25Index();
-        logger.info('已从 BM25 索引增量删除文档', { module: 'VectorStore', deletedCount: bm25DeletedCount, remainingCount: bm25DocumentStore.size });
+        logger.info('已从 BM25 索引增量删除文档', {
+          module: 'VectorStore',
+          deletedCount: bm25DeletedCount,
+          remainingCount: bm25DocumentStore.size,
+        });
       } else {
-        logger.info('BM25 索引中未找到匹配文档', { module: 'VectorStore', filter });
+        logger.info('BM25 索引中未找到匹配文档', {
+          module: 'VectorStore',
+          filter,
+        });
       }
     }
   } catch (bm25Error: any) {
     // BM25 增量删除失败时降级为全量重建
-    logger.warn('BM25 增量删除失败，降级为全量重建', { module: 'VectorStore', error: bm25Error.message });
+    logger.warn('BM25 增量删除失败，降级为全量重建', {
+      module: 'VectorStore',
+      error: bm25Error.message,
+    });
     await rebuildBM25Index(getAllDocuments);
   }
 
@@ -424,11 +480,16 @@ export async function deleteDocuments(filter: Record<string, any>): Promise<void
  *
  * @returns 所有文档的列表
  */
-export async function getAllDocuments(): Promise<Array<{ content: string; metadata: any }>> {
+export async function getAllDocuments(): Promise<
+  Array<{ content: string; metadata: any }>
+> {
   logger.info('获取知识库所有文档', { module: 'VectorStore' });
 
   try {
-    const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
+    const client = new ChromaClient({
+      host: config.chromaHost,
+      port: config.chromaPort,
+    });
     const collection = await client.getCollection({ name: COLLECTION_NAME });
     const results = await collection.get();
 
@@ -437,10 +498,286 @@ export async function getAllDocuments(): Promise<Array<{ content: string; metada
       metadata: results.metadatas?.[i] || {},
     }));
 
-    logger.info('知识库文档统计', { module: 'VectorStore', documentCount: documents.length });
+    logger.info('知识库文档统计', {
+      module: 'VectorStore',
+      documentCount: documents.length,
+    });
     return documents;
   } catch (error) {
-    logger.error('获取文档列表失败', { module: 'VectorStore', error: String(error) });
+    logger.error('获取文档列表失败', {
+      module: 'VectorStore',
+      error: String(error),
+    });
     return [];
+  }
+}
+
+// ==================== 图片描述块入库 ====================
+
+/**
+ * 图片描述块入库输入
+ *
+ * 每个图片描述块对应一张图片的 VLM 翻译结果，
+ * 通过 chunkType='image' 元数据与普通文本块区分。
+ */
+export interface ImageChunkInput {
+  /** 图片描述文本（VLM 生成或元数据兜底） */
+  description: string;
+  /** 元数据：documentId / versionId / source 等基础字段 */
+  baseMetadata: Record<string, any>;
+  /** 图片专属元数据 */
+  imageMetadata: {
+    /** 原图相对路径（相对 IMAGE_STORAGE_DIR） */
+    imagePath: string;
+    /** 图片内容 hash */
+    imageHash: string;
+    /** 图注 */
+    caption: string | null;
+    /** 页码 */
+    page: number | null;
+    /** 章节 */
+    section: string | null;
+    /** 文档内索引 */
+    imageSourceIndex: number;
+    /** 来源类型：embedded / scanned_page */
+    sourceType: 'embedded' | 'scanned_page';
+  };
+}
+
+/**
+ * 添加图片描述块到知识库
+ *
+ * 与 addDocuments 不同：
+ * - 不走文本切分器（图片描述已是完整语义单元，无需再切）
+ * - 直接作为单个 chunk 入库，chunkType='image'
+ * - 同时写入 ChromaDB 和 BM25 索引
+ *
+ * @param chunks 图片描述块数组
+ * @returns 成功添加的数量
+ */
+export async function addImageChunks(
+  chunks: ImageChunkInput[],
+): Promise<number> {
+  if (chunks.length === 0) return 0;
+
+  const store = await initializeVectorStore();
+  const semaphore = getEmbeddingSemaphore();
+
+  // 去重：删除同 documentId + image_hash 的旧图片描述块
+  // 场景：
+  // 1. 重新发布：removeDocumentVersion 已按 versionId 删除，但跨版本重发时可能残留
+  // 2. 异步重试成功：首次 Layer 4 兜底块已入库，重试成功后需删除旧块避免重复
+  await deduplicateImageChunks(store, chunks);
+
+  let addedCount = 0;
+
+  // 构造 LangChain Document 数组
+  const documents = chunks.map((chunk) => {
+    const metadata: Record<string, any> = {
+      ...chunk.baseMetadata,
+      chunk_index: chunk.imageMetadata.imageSourceIndex,
+      source: chunk.baseMetadata.source || 'unknown',
+      doc_type: 'image',
+      // 图片专属元数据
+      chunk_type: 'image',
+      image_path: chunk.imageMetadata.imagePath,
+      image_hash: chunk.imageMetadata.imageHash,
+      caption: chunk.imageMetadata.caption ?? '',
+      page: chunk.imageMetadata.page ?? -1,
+      section: chunk.imageMetadata.section ?? '',
+      image_source_index: chunk.imageMetadata.imageSourceIndex,
+      image_source_type: chunk.imageMetadata.sourceType,
+    };
+
+    return new Document({
+      pageContent: chunk.description,
+      metadata,
+    });
+  });
+
+  // 批量入库（受信号量保护，与 addDocuments 一致）
+  for (let i = 0; i < documents.length; i += BATCH_SIZE) {
+    const batch = documents.slice(i, i + BATCH_SIZE);
+    const callerId = await semaphore.acquire(`addImage_batch${i}`);
+
+    try {
+      await store.addDocuments(batch);
+      addedCount += batch.length;
+      logger.debug('图片描述块批量入库成功', {
+        module: 'VectorStore',
+        callerId,
+        batchStart: i,
+        batchSize: batch.length,
+        totalAdded: addedCount,
+      });
+    } catch (error: any) {
+      logger.error('图片描述块批量入库失败，尝试逐条添加', {
+        module: 'VectorStore',
+        callerId,
+        batchStart: i,
+        batchSize: batch.length,
+        error: error.message,
+      });
+
+      // 降级为逐条添加
+      for (let j = 0; j < batch.length; j++) {
+        try {
+          await store.addDocuments([batch[j]]);
+          addedCount++;
+        } catch (singleError: any) {
+          logger.error('图片描述块单条入库失败', {
+            module: 'VectorStore',
+            callerId,
+            index: i + j + 1,
+            imageHash: batch[j].metadata.image_hash,
+            error: singleError.message,
+          });
+        }
+      }
+    } finally {
+      semaphore.release(callerId);
+    }
+  }
+
+  logger.info('图片描述块入库完成', {
+    module: 'VectorStore',
+    addedCount,
+    totalCount: chunks.length,
+  });
+
+  // 同步写入 BM25 索引（失败不影响主流程）
+  try {
+    await initializeBM25Index();
+
+    for (const doc of documents) {
+      const id = `img_${Date.now()}_${Math.random().toString(36).substring(2, 9)}_${doc.metadata.image_source_index}`;
+      await addToBM25Index(id, doc.pageContent, doc.metadata, true);
+    }
+    await saveBM25Index();
+
+    logger.info('图片描述块已加入 BM25 索引', {
+      module: 'VectorStore',
+      bm25AddedCount: documents.length,
+    });
+  } catch (bm25Error: any) {
+    logger.warn('图片描述块 BM25 索引添加失败，不影响主流程', {
+      module: 'VectorStore',
+      error: bm25Error.message,
+    });
+  }
+
+  // 通知缓存更新
+  eventBus.emit('knowledge-base-updated', '图片描述块添加');
+
+  return addedCount;
+}
+
+// ==================== 图片描述块去重 ====================
+
+/**
+ * 删除同 documentId + image_hash 的旧图片描述块
+ *
+ * 在 addImageChunks 入库前调用，确保同一图片不会在向量库中产生重复块。
+ * 同时清理 ChromaDB 和 BM25 索引中的旧条目。
+ *
+ * 去重维度：documentId + image_hash + chunk_type='image'
+ * 不用 versionId 做去重，因为重试成功后 versionId 相同但描述不同。
+ */
+async function deduplicateImageChunks(
+  store: Awaited<ReturnType<typeof initializeVectorStore>>,
+  chunks: ImageChunkInput[],
+): Promise<void> {
+  const collection = store.collection;
+  if (!collection) return;
+
+  // 收集需要去重的 (documentId, image_hash) 对
+  const dedupKeys = new Set<string>();
+  for (const chunk of chunks) {
+    const docId = chunk.baseMetadata.documentId;
+    const hash = chunk.imageMetadata.imageHash;
+    if (docId && hash) {
+      dedupKeys.add(`${docId}__${hash}`);
+    }
+  }
+
+  if (dedupKeys.size === 0) return;
+
+  // 1. 清理 ChromaDB 中的旧图片块
+  let chromaDeletedCount = 0;
+  for (const key of dedupKeys) {
+    const [docId, hash] = key.split('__');
+    try {
+      // ChromaDB where 条件只支持单字段等值，用 $and 组合
+      const existing = await collection.get({
+        where: {
+          $and: [
+            { documentId: docId },
+            { image_hash: hash },
+            { chunk_type: 'image' },
+          ],
+        },
+      });
+      if (existing.ids.length > 0) {
+        await collection.delete({ ids: existing.ids });
+        chromaDeletedCount += existing.ids.length;
+      }
+    } catch (err: any) {
+      logger.warn('ChromaDB 图片块去重失败（不影响入库）', {
+        module: 'VectorStore',
+        documentId: docId,
+        imageHash: hash,
+        error: err.message,
+      });
+    }
+  }
+
+  // 2. 清理 BM25 索引中的旧图片块
+  let bm25DeletedCount = 0;
+  try {
+    await initializeBM25Index();
+    const bm25Index = getBM25Index();
+    const bm25DocumentStore = getBM25DocumentStore();
+
+    if (bm25Index) {
+      const idsToRemove: string[] = [];
+      for (const [id, doc] of bm25DocumentStore.entries()) {
+        const meta = doc.metadata;
+        if (
+          meta?.chunk_type === 'image' &&
+          meta?.documentId &&
+          dedupKeys.has(`${meta.documentId}__${meta.image_hash}`)
+        ) {
+          idsToRemove.push(id);
+        }
+      }
+
+      for (const id of idsToRemove) {
+        try {
+          bm25Index.remove(id);
+          bm25DocumentStore.delete(id);
+          bm25DeletedCount++;
+        } catch {
+          /* 旧条目可能已不存在 */
+        }
+      }
+
+      if (idsToRemove.length > 0) {
+        await saveBM25Index();
+      }
+    }
+  } catch (err: any) {
+    logger.warn('BM25 图片块去重失败（不影响入库）', {
+      module: 'VectorStore',
+      error: err.message,
+    });
+  }
+
+  if (chromaDeletedCount > 0 || bm25DeletedCount > 0) {
+    logger.info('图片描述块去重清理', {
+      module: 'VectorStore',
+      chromaDeletedCount,
+      bm25DeletedCount,
+      dedupKeyCount: dedupKeys.size,
+    });
   }
 }

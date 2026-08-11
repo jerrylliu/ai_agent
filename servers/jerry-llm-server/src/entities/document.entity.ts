@@ -1,4 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  OneToMany,
+  Index,
+} from 'typeorm';
 import { DocumentVersion } from './document-version.entity.js';
 import { DocumentAuditLog } from './document-audit-log.entity.js';
 
@@ -39,15 +47,29 @@ export class Document {
   @Column({ type: 'timestamp', nullable: true })
   contentUpdatedAt: Date | null;
 
+  /**
+   * 文档中的图片总数（解析阶段统计）
+   * 用于前端展示图片处理进度
+   */
+  @Column({ name: 'image_total', type: 'int', default: 0 })
+  imageTotal: number;
+
+  /**
+   * 已成功翻译的图片数量（VLM 处理完成 + 兜底成功的累计值）
+   * imageProcessed / imageTotal 即处理完成比例
+   */
+  @Column({ name: 'image_processed', type: 'int', default: 0 })
+  imageProcessed: number;
+
   @CreateDateColumn()
   createdAt: Date;
 
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @OneToMany(() => DocumentVersion, version => version.document)
+  @OneToMany(() => DocumentVersion, (version) => version.document)
   versions: DocumentVersion[];
 
-  @OneToMany(() => DocumentAuditLog, log => log.document)
+  @OneToMany(() => DocumentAuditLog, (log) => log.document)
   auditLogs: DocumentAuditLog[];
 }

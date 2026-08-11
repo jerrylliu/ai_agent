@@ -26,7 +26,8 @@ export interface MultiHopResult {
     content: string;
     metadata: any;
     score: number;
-    vectorScore: number;
+    /** 原始向量相似度分数（cosine 距离，越小越相似）；undefined 表示未命中向量检索 */
+    vectorScore?: number;
     sources: string[];
     /** 来自第几跳（1-based） */
     hop: number;
@@ -45,7 +46,8 @@ interface SearchResult {
   content: string;
   metadata: any;
   score: number;
-  vectorScore: number;
+  /** 原始向量相似度分数（cosine 距离，越小越相似）；undefined 表示未命中向量检索 */
+  vectorScore?: number;
   sources: string[];
 }
 

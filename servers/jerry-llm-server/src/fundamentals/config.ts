@@ -25,13 +25,11 @@ import { z } from 'zod';
  * z.coerce.boolean() 默认会把 'false' 也当成 truthy，因此显式实现
  */
 const zBoolFromString = (defaultValue: boolean) =>
-  z
-    .union([z.string(), z.boolean(), z.undefined()])
-    .transform((v) => {
-      if (typeof v === 'boolean') return v;
-      if (v == null || v === '') return defaultValue;
-      return v.toLowerCase() === 'true';
-    });
+  z.union([z.string(), z.boolean(), z.undefined()]).transform((v) => {
+    if (typeof v === 'boolean') return v;
+    if (v == null || v === '') return defaultValue;
+    return v.toLowerCase() === 'true';
+  });
 
 // ==================== 一级 Schema ====================
 
@@ -117,7 +115,9 @@ const VolcAsrSchema = z.object({
   appId: z.string().default(''),
   accessToken: z.string().default(''),
   resourceId: z.string().default('volc.seedasr.sauc.duration'),
-  wsUrl: z.string().default('wss://openspeech.bytedance.com/api/v3/sauc/bigmodel'),
+  wsUrl: z
+    .string()
+    .default('wss://openspeech.bytedance.com/api/v3/sauc/bigmodel'),
   httpUrl: z.string().default('https://openspeech.bytedance.com/api/v1/auc'),
 });
 
@@ -138,6 +138,87 @@ const MineruSchema = z.object({
   modelVersion: z.string().default('vlm'),
 });
 
+// VLM 视觉语言模型配置（图片翻译为文字描述，用于多模态入库）
+// 默认关闭，启用后需要配置 API Key
+// 走 OpenAI 兼容协议，可接入 Qwen3-VL / GLM-4.6V / SiliconFlow 等任何兼容服务
+const VlmSchema = z.object({
+  enabled: zBoolFromString(false),
+  // OpenAI 兼容 API Base URL
+  apiBase: z.string().default(''),
+  // API Key
+  apiKey: z.string().default(''),
+  // 主模型名称（如 qwen3-vl-32b）
+  primaryModel: z.string().default('qwen3-vl-32b'),
+  // 单次调用超时（毫秒）- 单张图片的 VLM 调用超时
+  timeoutMs: z.coerce.number().int().positive().default(60000),
+  // 并发上限（同时处理的图片数）
+  concurrency: z.coerce.number().int().positive().default(3),
+  // 单文档 VLM 调用上限（超过则走元数据兜底，避免成本失控）
+  maxCallsPerDoc: z.coerce.number().int().positive().default(50),
+  // 备用模型名称（主模型连续失败时降级，如 glm-4.6v）
+  fallbackModel: z.string().default(''),
+  // 备用模型 API Base（为空则复用主模型 apiBase）
+  fallbackApiBase: z.string().default(''),
+  // 备用模型 API Key（为空则复用主模型 apiKey）
+  fallbackApiKey: z.string().default(''),
+  // 文档级总超时容错时间（毫秒）
+  // 文档总超时 = timeoutMs × 图片数 + docTimeoutToleranceMs
+  // 超过总超时后，未处理的图片直接走 Layer 4 元数据兜底
+  docTimeoutToleranceMs: z.coerce.number().int().positive().default(30000),
+});
+
+// 图片存储配置（多模态入库的原图落盘）
+const ImageStorageSchema = z.object({
+  // 原图存储根目录（相对项目根）
+  dir: z.string().default('./storage/images'),
+  // 单图最大尺寸（字节，超过则跳过，避免异常大文件）
+  maxSizeBytes: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 1024 * 1024),
+});
+
+// OCR 配置（Layer 3 降级：VLM 全部不可用时用 tesseract.js 提取图片文字）
+// 需要安装 tesseract.js：pnpm --filter jerry-llm-server add tesseract.js
+// 未安装时自动跳过 OCR 降级，直接走 Layer 4 元数据兜底
+const OcrSchema = z.object({
+  enabled: zBoolFromString(false),
+  // OCR 语言（如 chi_sim+eng）
+  lang: z.string().default('chi_sim+eng'),
+});
+
+// 图片异步重试配置（定时任务扫描 failed 记录重试）
+const ImageRetrySchema = z.object({
+  // 重试间隔（分钟），默认 10 分钟
+  intervalMin: z.coerce.number().int().positive().default(10),
+  // 最大重试次数（超过则标记为 skipped）
+  maxRetry: z.coerce.number().int().positive().default(3),
+});
+
+// 公式解释配置（LaTeX → 自然语言描述，提高公式检索质量）
+const FormulaSchema = z.object({
+  enabled: zBoolFromString(false),
+  // 用于生成解释的 LLM 模型 ID（复用 model-provider 的 AVAILABLE_MODELS）
+  modelId: z.string().default('ollama:qwen3.5-2b'),
+  // 单次调用超时（毫秒）
+  timeoutMs: z.coerce.number().int().positive().default(30000),
+  // 单文档公式解释调用上限
+  maxCallsPerDoc: z.coerce.number().int().positive().default(30),
+});
+
+// 扫描件检测配置（pdfjs 降级路径）
+const ScannedPdfSchema = z.object({
+  // 启用扫描件检测
+  enabled: zBoolFromString(true),
+  // 每页字符数阈值：低于此值认为是扫描件页面
+  charsPerPageThreshold: z.coerce.number().int().positive().default(50),
+  // 扫描件页面渲染的 DPI
+  // 注意：当前 pdfjs 降级路径使用 getOperatorList 提取嵌入图片，未使用 canvas 渲染方案，
+  // 此配置项暂未生效。保留供未来 canvas 渲染方案使用。
+  renderDpi: z.coerce.number().int().positive().default(150),
+});
+
 // ==================== 顶层 Schema ====================
 
 const RootSchema = z.object({
@@ -149,7 +230,10 @@ const RootSchema = z.object({
   chromaUrl: z.string().min(1).default('http://localhost:8000'),
   serverBaseUrl: z.string().min(1).default('http://localhost:3000'),
   deepseekBaseUrl: z.string().min(1).default('https://api.deepseek.com'),
-  zhipuBaseUrl: z.string().min(1).default('https://open.bigmodel.cn/api/paas/v4'),
+  zhipuBaseUrl: z
+    .string()
+    .min(1)
+    .default('https://open.bigmodel.cn/api/paas/v4'),
   dashscopeBaseUrl: z.string().min(1).default('https://dashscope.aliyuncs.com'),
   dashscopeApiKey: z.string().default(''),
 
@@ -163,7 +247,9 @@ const RootSchema = z.object({
   lokiHost: z.string().default(''),
 
   /** CORS 来源原始字符串，对外通过 corsOrigins getter 暴露数组 */
-  corsOriginsRaw: z.string().default('http://localhost:5173,http://localhost:3000'),
+  corsOriginsRaw: z
+    .string()
+    .default('http://localhost:5173,http://localhost:3000'),
 
   db: DbSchema,
   notify: NotifySchema,
@@ -173,6 +259,12 @@ const RootSchema = z.object({
   volcAsr: VolcAsrSchema,
   rateLimit: RateLimitSchema,
   mineru: MineruSchema,
+  vlm: VlmSchema,
+  imageStorage: ImageStorageSchema,
+  ocr: OcrSchema,
+  imageRetry: ImageRetrySchema,
+  formula: FormulaSchema,
+  scannedPdf: ScannedPdfSchema,
 });
 
 // ==================== 解析 process.env ====================
@@ -270,6 +362,42 @@ function buildRawConfig() {
       timeoutMs: env.MINERU_TIMEOUT_MS,
       modelVersion: env.MINERU_MODEL_VERSION,
     },
+    vlm: {
+      enabled: env.VLM_ENABLED,
+      apiBase: env.VLM_API_BASE,
+      apiKey: env.VLM_API_KEY,
+      primaryModel: env.VLM_PRIMARY_MODEL,
+      timeoutMs: env.VLM_TIMEOUT_MS,
+      concurrency: env.VLM_CONCURRENCY,
+      maxCallsPerDoc: env.VLM_MAX_CALLS_PER_DOC,
+      fallbackModel: env.VLM_FALLBACK_MODEL,
+      fallbackApiBase: env.VLM_FALLBACK_API_BASE,
+      fallbackApiKey: env.VLM_FALLBACK_API_KEY,
+      docTimeoutToleranceMs: env.VLM_DOC_TIMEOUT_TOLERANCE_MS,
+    },
+    imageStorage: {
+      dir: env.IMAGE_STORAGE_DIR,
+      maxSizeBytes: env.IMAGE_MAX_SIZE_BYTES,
+    },
+    ocr: {
+      enabled: env.OCR_ENABLED,
+      lang: env.OCR_LANG,
+    },
+    imageRetry: {
+      intervalMin: env.IMAGE_RETRY_INTERVAL_MIN,
+      maxRetry: env.IMAGE_RETRY_MAX_RETRY,
+    },
+    formula: {
+      enabled: env.FORMULA_ENABLED,
+      modelId: env.FORMULA_MODEL_ID,
+      timeoutMs: env.FORMULA_TIMEOUT_MS,
+      maxCallsPerDoc: env.FORMULA_MAX_CALLS_PER_DOC,
+    },
+    scannedPdf: {
+      enabled: env.SCANNED_PDF_ENABLED,
+      charsPerPageThreshold: env.SCANNED_PDF_CHARS_THRESHOLD,
+      renderDpi: env.SCANNED_PDF_RENDER_DPI,
+    },
   };
 }
 
@@ -292,7 +420,10 @@ const parsed = parseConfig();
 // ==================== 派生字段 ====================
 
 function parseList(raw: string): string[] {
-  return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 function safeUrlPart<T>(url: string, fn: (u: URL) => T, fallback: T): T {
@@ -366,6 +497,12 @@ export const config = {
   volcAsr: parsed.volcAsr,
   rateLimit: parsed.rateLimit,
   mineru: parsed.mineru,
+  vlm: parsed.vlm,
+  imageStorage: parsed.imageStorage,
+  ocr: parsed.ocr,
+  imageRetry: parsed.imageRetry,
+  formula: parsed.formula,
+  scannedPdf: parsed.scannedPdf,
 } as const;
 
 export type AppConfig = typeof config;

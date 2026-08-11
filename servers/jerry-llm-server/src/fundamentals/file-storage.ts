@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { logger } from './logger';
+import { config } from './config.js';
 
 // 基础上传目录
 const BASE_UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads', 'documents');
@@ -166,6 +167,41 @@ export function deleteDocumentFiles(documentId: number): boolean {
     return false;
   } catch (error: any) {
     logger.error('删除文档文件失败', { module: 'FileStorageService', documentId, error: error.message });
+    return false;
+  }
+}
+
+/**
+ * 删除文档图片目录
+ *
+ * 多模态入库时原图存储在 storage/images/{docId}/ 下，删除文档时需要同步清理，
+ * 否则 image_description 表记录删除后图片文件会变成无引用的孤儿文件。
+ */
+export function deleteDocumentImageFiles(documentId: number): boolean {
+  try {
+    // 使用 config.imageStorage.dir 与 persistImage / loadImageBuffer 保持一致，
+    // 避免用户通过环境变量修改存储目录后删除路径不匹配导致孤儿文件
+    const imageDir = path.resolve(
+      process.cwd(),
+      config.imageStorage.dir,
+      String(documentId),
+    );
+    if (fs.existsSync(imageDir)) {
+      fs.rmSync(imageDir, { recursive: true, force: true });
+      logger.info('文档图片目录已删除', {
+        module: 'FileStorageService',
+        documentId,
+        imageDir,
+      });
+      return true;
+    }
+    return false;
+  } catch (error: any) {
+    logger.error('删除文档图片目录失败', {
+      module: 'FileStorageService',
+      documentId,
+      error: error.message,
+    });
     return false;
   }
 }

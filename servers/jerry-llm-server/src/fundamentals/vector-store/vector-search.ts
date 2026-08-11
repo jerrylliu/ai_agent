@@ -164,6 +164,8 @@ export async function searchKnowledgeBase(
  * @param vectorWeight 向量检索权重 (0-1)，默认 0.7
  * @param bm25Weight BM25 检索权重 (0-1)，默认 0.3
  * @param filter 元数据过滤条件
+ * @param cacheKeyOverride 缓存 key 覆盖
+ * @param minSimilarity 向量检索最小相似度阈值（cosine 距离，越小越相似），默认 0.55
  */
 export async function hybridSearchKnowledgeBase(
   query: string,
@@ -175,7 +177,8 @@ export async function hybridSearchKnowledgeBase(
    *  FC 模式下查询会被改写，改写结果每次不同导致缓存永远命中不了，
    *  传入原始查询作为 cacheKeyOverride 可确保同一用户输入命中缓存。 */
   cacheKeyOverride?: string,
-): Promise<Array<{ content: string; metadata: any; score: number; vectorScore: number; sources: string[] }>> {
+  minSimilarity: number = 0.55,
+): Promise<Array<{ content: string; metadata: any; score: number; vectorScore?: number; sources: string[] }>> {
   logger.info('混合搜索知识库', { module: 'VectorStore', query: query.substring(0, 100), vectorWeight, bm25Weight, cacheKeyOverride: cacheKeyOverride?.substring(0, 100) });
 
   // 缓存查询：优先用 cacheKeyOverride 生成 key（FC 模式下确保同一用户输入命中缓存）
@@ -200,7 +203,7 @@ export async function hybridSearchKnowledgeBase(
   // 并行执行向量检索和 BM25 检索
   // 向量检索内部也有缓存，传入 cacheKeyOverride 保持一致
   const [vectorResults, bm25Results] = await Promise.all([
-    searchKnowledgeBase(query, topK * 2, 0.55, filter, cacheKeyOverride),
+    searchKnowledgeBase(query, topK * 2, minSimilarity, filter, cacheKeyOverride),
     bm25Search(query, topK * 2, filter),
   ]);
 
@@ -214,7 +217,9 @@ export async function hybridSearchKnowledgeBase(
   // 每个文档的融合分数 = 向量权重 / (k + 向量排名) + BM25权重 / (k + BM25排名)
   // k=60 是 RRF 论文中的经验值，防止排名靠前的文档权重过大
   const K = 60;
-  const fusedScores = new Map<string, { content: string; metadata: any; vectorRank?: number; bm25Rank?: number; score: number }>();
+  // vectorScore 保留原始向量相似度分数（ChromaDB cosine 距离，越小越相似），
+  // 与 RRF 融合分数 score 区分开，供上层调试/重排使用
+  const fusedScores = new Map<string, { content: string; metadata: any; vectorRank?: number; bm25Rank?: number; score: number; vectorScore?: number }>();
 
   // 向量检索结果
   vectorResults.forEach((result, rank) => {
@@ -224,12 +229,16 @@ export async function hybridSearchKnowledgeBase(
 
     if (existing) {
       existing.vectorRank = rank + 1;
+      // result.score 是 searchKnowledgeBase 返回的原始 cosine 距离，此处保留供上层使用
+      existing.vectorScore = result.score;
       existing.score += rrfScore;
     } else {
       fusedScores.set(key, {
         content: result.content,
         metadata: result.metadata,
         vectorRank: rank + 1,
+        // result.score 是 searchKnowledgeBase 返回的原始 cosine 距离，此处保留供上层使用
+        vectorScore: result.score,
         score: rrfScore,
       });
     }
@@ -271,6 +280,7 @@ export async function hybridSearchKnowledgeBase(
       module: 'VectorStore',
       index: i + 1,
       score: result.score.toFixed(6),
+      vectorScore: result.vectorScore?.toFixed(4) ?? '-',
       vectorRank: result.vectorRank || '-',
       bm25Rank: result.bm25Rank || '-',
       content: result.content.substring(0, 50),
@@ -281,8 +291,9 @@ export async function hybridSearchKnowledgeBase(
     content: result.content,
     metadata: result.metadata,
     score: result.score,
-    // 向量检索分数（用于调试，RRF 融合后为融合分数）
-    vectorScore: result.vectorRank ? result.score : 0,
+    // 原始向量相似度分数（ChromaDB cosine 距离，越小越相似）。
+    // undefined 表示该结果未命中向量检索（仅 BM25 命中），上层可据此区分检索来源。
+    vectorScore: result.vectorScore,
     // 来源列表（从 metadata.source 提取）
     sources: result.metadata?.source ? [result.metadata.source] : [],
   }));
