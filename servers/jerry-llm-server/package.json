@@ -23,7 +23,11 @@
     "migration:run": "pnpm build && pnpm typeorm migration:run",
     "migration:revert": "pnpm build && pnpm typeorm migration:revert",
     "migration:show": "pnpm build && pnpm typeorm migration:show",
-    "probe": "ts-node scripts/probe-model-capabilities.ts"
+    "probe": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/probe-model-capabilities.ts",
+    "dedup:cleanup": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/cleanup-duplicate-chunks.ts",
+    "eval:generate": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/eval/generate-dataset.ts",
+    "eval:run": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/eval/run-eval.ts",
+    "eval:analyze": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/eval/analyze-queries.ts"
   },
   "dependencies": {
     "@langchain/classic": "^1.0.29",

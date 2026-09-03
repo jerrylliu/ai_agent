@@ -14,8 +14,10 @@ import * as fs from 'fs';
 import type { Response } from 'express';
 import { logger } from './logger';
 import { config } from './config.js';
+import { calculateChecksum, computeContentHash } from './file-storage.js';
 import { SemanticCache } from './semantic-cache.js';
 import { embeddings } from './vector-store/store-state.js';
+import { UNTRUSTED_CONTEXT_INSTRUCTION } from './prompt-injection-guard.js';
 import mysql from 'mysql2/promise';
 
 // 配置
@@ -37,7 +39,7 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 //   - 仅缓存默认参数（topK=3, 无 filter）的检索结果，非默认参数跳过缓存
 //   - 嵌入计算依赖 Ollama，不可用时降级为"始终 miss"
 //   - 缓存条目上限 100，TTL 1 小时，相似度阈值 0.92
-type RagSearchResult = Array<{ content: string; metadata: any; score: number }>;
+type RagSearchResult = Array<{ content: string; metadata: any; score: number; vectorScore?: number }>;
 
 const ragSemanticCache = new SemanticCache<RagSearchResult>(
   {
@@ -45,6 +47,10 @@ const ragSemanticCache = new SemanticCache<RagSearchResult>(
     maxEntries: 100,
     ttlSec: 3600,
     similarityThreshold: 0.92,
+    // v2：vectorScore 语义从 cosine 距离（越小越相似）改为相似度（= 1 - 距离，越大越相似）。
+    // 版本号使旧语义条目在 get 时直接失效，避免新旧语义混存。
+    // 当前为纯内存缓存（重启即清空），此防护面向未来引入持久化后端（如 Redis）的场景
+    version: 2,
   },
   (text: string) => embeddings.embedQuery(text),
 );
@@ -70,7 +76,7 @@ export function buildContextFromResults(
   let docIdx = 0;
   let imgIdx = 0;
 
-  return results
+  const context = results
     .map((r) => {
       // 兼容 metadata 为 unknown 的类型（RagRetrievalResult 中 metadata: unknown）
       const meta = (r.metadata || {}) as Record<string, any>;
@@ -99,6 +105,12 @@ export function buildContextFromResults(
       return `【文档 ${docIdx}】\n${cleanedContent}`;
     })
     .join('\n\n');
+
+  // 检索内容属于不可信上下文：附加隔离指令，防止文档中的恶意指令覆盖系统规则（提示词注入纵深防御）
+  if (context.trim().length > 0) {
+    return context + UNTRUSTED_CONTEXT_INSTRUCTION;
+  }
+  return context;
 }
 
 /**
@@ -172,6 +184,30 @@ export async function handleDocumentUpload(file: any): Promise<{
       };
     }
 
+    // ==================== 入库前查重（内容级文档去重） ====================
+    // 本路径历史上无任何查重，是知识库重复内容的主要来源：
+    //   1. 文件级命中（同一文件已在文档版本管理中）-> 拒绝，避免双路径重复入库
+    //   2. 内容级命中（同内容不同格式）-> 放行但在结果中警告
+    // 同文件重复上传（legacy 内部重复）由 addDocuments 的 chunk_hash 幂等去重兜底
+    const fileChecksum = calculateChecksum(file.buffer);
+    const contentHash = computeContentHash(textContent);
+    const dupCheck = await checkLegacyUploadDuplicates(fileChecksum, contentHash);
+    if (dupCheck.fileDuplicate) {
+      if (tempFilePath !== filePath) {
+        fs.unlinkSync(tempFilePath);
+      }
+      logger.warn('legacy 上传被文件级查重拦截', {
+        module: 'RagService',
+        fileName: originalName,
+        duplicateDoc: dupCheck.fileDuplicate.docTitle,
+        duplicateVersion: dupCheck.fileDuplicate.versionNumber,
+      });
+      return {
+        success: false,
+        message: `该文件已作为文档《${dupCheck.fileDuplicate.docTitle}》v${dupCheck.fileDuplicate.versionNumber} 上传过，请勿重复入库`,
+      };
+    }
+
     logger.info('文档解析完成', {
       module: 'RagService',
       charCount: textContent.length,
@@ -215,6 +251,20 @@ export async function handleDocumentUpload(file: any): Promise<{
       };
     }
 
+    // 内容级查重命中：放行但在结果消息中警告（用户可能有意重复入库不同格式文件）
+    if (dupCheck.contentDuplicate) {
+      logger.warn('legacy 上传内容与已有文档重复（已放行并警告）', {
+        module: 'RagService',
+        fileName: originalName,
+        duplicateDoc: dupCheck.contentDuplicate,
+      });
+      return {
+        success: true,
+        message: `成功上传文档 "${originalName}"，已提取 ${docCount} 个文本块到知识库。⚠️ 警告：检测到文档《${dupCheck.contentDuplicate}》的内容与此文件相同（可能仅格式不同），请确认是否需要重复入库`,
+        documentCount: docCount,
+      };
+    }
+
     return {
       success: true,
       message: `成功上传文档 "${originalName}"，已提取 ${docCount} 个文本块到知识库`,
@@ -234,8 +284,92 @@ export async function handleDocumentUpload(file: any): Promise<{
 
 // ==================== 图片补查（解决文本块占位符无 URL 问题） ====================
 
-/** MySQL 连接池（懒加载，只在需要补查图片时创建） */
-let imageQueryPool: mysql.Pool | null = null;
+/** MySQL 连接池（懒加载，供图片补查、上传查重等只读查询共用） */
+let ragQueryPool: mysql.Pool | null = null;
+
+/** 获取共享只读查询连接池（图片补查与上传查重共用，避免重复建池） */
+function getRagQueryPool(): mysql.Pool {
+  if (!ragQueryPool) {
+    ragQueryPool = mysql.createPool({
+      host: config.db.host,
+      port: config.db.port,
+      user: config.db.username,
+      password: config.db.password,
+      database: config.db.database,
+      connectionLimit: 2,
+      waitForConnections: true,
+      queueLimit: 10,
+    });
+  }
+  return ragQueryPool;
+}
+
+/**
+ * legacy 上传路径的入库前查重
+ *
+ * 背景：本路径（/knowledge/upload）不经过文档版本管理，历史上无任何查重，
+ * 是知识库内容重复的主要来源。补两层检查：
+ *   - 文件级：同一文件已作为文档版本上传过 -> 调用方应拒绝（知识库与文档管理双份入库）
+ *   - 内容级：规范化内容与已有文档相同（可能仅格式不同）-> 调用方给警告
+ *
+ * 查询失败时不阻塞上传（打日志放行）：查重是增强能力，DB 抖动不应影响主流程
+ */
+async function checkLegacyUploadDuplicates(
+  fileChecksum: string,
+  contentHash: string | null,
+): Promise<{
+  fileDuplicate: { docTitle: string; versionNumber: number } | null;
+  contentDuplicate: string | null;
+}> {
+  const result: {
+    fileDuplicate: { docTitle: string; versionNumber: number } | null;
+    contentDuplicate: string | null;
+  } = { fileDuplicate: null, contentDuplicate: null };
+
+  try {
+    const pool = getRagQueryPool();
+
+    // 文件级：document_versions.checksum 命中即视为重复（legacy 无版本记录，
+    // 命中的一定来自文档版本管理路径，属于跨路径重复）
+    const [versionRows] = await pool.execute(
+      `SELECT dv.document_id, dv.version_number, d.title
+       FROM document_versions dv
+       LEFT JOIN documents d ON d.id = dv.document_id
+       WHERE dv.checksum = ?
+       LIMIT 1`,
+      [fileChecksum],
+    );
+    if (Array.isArray(versionRows) && versionRows.length > 0) {
+      const row = versionRows[0] as {
+        document_id: number;
+        version_number: number;
+        title: string | null;
+      };
+      result.fileDuplicate = {
+        docTitle: row.title ?? String(row.document_id ?? '未知文档'),
+        versionNumber: row.version_number,
+      };
+    }
+
+    // 内容级：documents.content_hash 命中说明已有相同内容的文档（可能仅格式不同）
+    if (contentHash) {
+      const [docRows] = await pool.execute(
+        `SELECT title FROM documents WHERE content_hash = ? LIMIT 1`,
+        [contentHash],
+      );
+      if (Array.isArray(docRows) && docRows.length > 0) {
+        result.contentDuplicate = (docRows[0] as { title: string }).title;
+      }
+    }
+  } catch (err: any) {
+    logger.warn('legacy 上传查重查询失败（放行，不影响上传）', {
+      module: 'RagService',
+      error: err.message,
+    });
+  }
+
+  return result;
+}
 
 /**
  * 查询指定文档的所有图片描述记录
@@ -257,21 +391,10 @@ async function queryImageDescriptionsByDocId(
   if (docIds.length === 0) return [];
 
   try {
-    if (!imageQueryPool) {
-      imageQueryPool = mysql.createPool({
-        host: config.db.host,
-        port: config.db.port,
-        user: config.db.username,
-        password: config.db.password,
-        database: config.db.database,
-        connectionLimit: 2,
-        waitForConnections: true,
-        queueLimit: 10,
-      });
-    }
+    const pool = getRagQueryPool();
 
     const placeholders = docIds.map(() => '?').join(',');
-    const [rows] = await imageQueryPool.execute(
+    const [rows] = await pool.execute(
       `SELECT doc_id, source_index, image_path, description, caption
        FROM image_description
        WHERE doc_id IN (${placeholders}) AND status = 'completed'

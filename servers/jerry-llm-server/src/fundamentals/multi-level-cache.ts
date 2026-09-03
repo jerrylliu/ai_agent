@@ -40,6 +40,7 @@
 
 import { logger } from './logger';
 import { getRedis, isRedisReady } from './redis-client';
+import { metrics } from './metrics';
 
 /** 单条 L1 缓存条目 */
 interface L1Entry<V> {
@@ -148,12 +149,17 @@ export class MultiLevelCache<V> {
    *   4. L2 miss / 不可用 / 异常 → 返回 null（让业务决定是否回源）
    */
   async get(rawKey: string): Promise<V | null> {
+    const startTime = performance.now();
     // ===== L1 =====
     const l1Entry = this.l1.get(rawKey);
     if (l1Entry) {
       if (l1Entry.expireAt > Date.now()) {
         this.l1Hits++;
         this.touchL1(rawKey, l1Entry);
+        metrics.cacheGetDuration.observe(
+          { namespace: this.namespace, layer: 'L1' },
+          (performance.now() - startTime) / 1000,
+        );
         if (this.debug) {
           logger.debug('MultiLevelCache: L1 命中', {
             module: 'MultiLevelCache',
@@ -181,6 +187,10 @@ export class MultiLevelCache<V> {
             expireAt: Date.now() + this.ttlSec * 1000,
           });
           this.evictL1IfNeeded();
+          metrics.cacheGetDuration.observe(
+            { namespace: this.namespace, layer: 'L2' },
+            (performance.now() - startTime) / 1000,
+          );
           if (this.debug) {
             logger.debug('MultiLevelCache: L2 命中', {
               module: 'MultiLevelCache',
@@ -203,6 +213,10 @@ export class MultiLevelCache<V> {
     }
 
     this.misses++;
+    metrics.cacheGetDuration.observe(
+      { namespace: this.namespace, layer: 'miss' },
+      (performance.now() - startTime) / 1000,
+    );
     return null;
   }
 

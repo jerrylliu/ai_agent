@@ -17,6 +17,8 @@ import { rerankResults, type RerankedResult } from '../vector-store/result-reran
 import { logger } from '../logger';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 import { enrichWithImageDescriptions } from '../rag-service';
+import { buildNormalizedCacheKey } from '../cache-key-normalizer';
+import { evaluateRewriteQuality } from '../query-rewriter-fallback';
 
 // ==================== Zod Schema（仅暴露给 LLM 的字段）====================
 
@@ -116,7 +118,7 @@ export interface SearchKnowledgeBaseResult {
 
 export async function executeSearchKnowledgeBase(
   params: unknown,
-  context?: { originalQuery?: string },
+  context?: { originalQuery?: string; sessionId?: string },
 ): Promise<SearchKnowledgeBaseResult> {
   const totalStartTime = Date.now();
   const timings: NonNullable<SearchKnowledgeBaseResult['meta']>['timings'] = { total: 0 };
@@ -199,17 +201,44 @@ export async function executeSearchKnowledgeBase(
   let searchResult: MultiHopResult;
   const searchStart = Date.now();
 
-  // 缓存 key 用用户原始输入（context.originalQuery），而非 LLM 生成的工具参数（query）
-  // 因为 LLM 每次生成的 query 可能有微小差异（如多一个空格），导致缓存 key 不一致
-  const cacheKeyOverride = context?.originalQuery || query;
+  // 缓存 key 选择 + 归一化（两层保障提升命中率）：
+  // 第 1 层（query-rewriter-fallback）：评估改写质量，比较改写输入 query 与改写输出 mainQuery
+  //   的语义偏差。偏差检测必须基于 query（改写的输入），而非 context.originalQuery
+  //   （用户原始输入），因为改写是基于 query 做的，只有 query vs mainQuery 才能反映改写偏差
+  // 第 2 层（cache-key-normalizer）：对选定的源文本归一化（分词、去停用词、排序拼接），
+  //   使不同措辞的相同语义查询命中同一缓存
+  const rewriteEvaluation = evaluateRewriteQuality(query, rewrittenQuery);
+  // cache key 源选择（优先级：keywords > mainQuery > 原始输入）：
+  // - 改写合理且有 keywords → 用 keywords 拼接（核心实体提取，最稳定，不受 LLM 随机同义词影响）
+  // - 改写合理但无 keywords → 回退到改写后 mainQuery
+  // - 改写失败/偏差大 → 优先用用户原始输入（更稳定），无原始输入时用 query
+  //
+  // 为什么不用 mainQuery 作 cache key 源？
+  // 改写后 mainQuery 含 LLM 随机补充的英文同义词（如 "ability" vs "skill"），
+  // 导致相同语义的查询归一化后 key 不同，缓存无法命中。
+  // keywords 是 LLM 提取的核心实体（如 ["干员","液氮","技能"]），稳定可复现。
+  const cacheKeySource = rewriteEvaluation.useRewritten
+    ? (rewrittenQuery!.keywords.length > 0
+        ? rewrittenQuery!.keywords.join(' ')
+        : rewrittenQuery!.mainQuery)
+    : (context?.originalQuery || query);
+  const normalizedFingerprint = buildNormalizedCacheKey(cacheKeySource);
+  // 归一化可能返回空（如查询全是停用词），此时回退到原始文本作 key
+  const cacheKeyOverride = normalizedFingerprint || cacheKeySource;
 
   logger.info('FC工具 [search_knowledge_base] 进入检索阶段', {
     module: 'Tool:SearchKnowledgeBase',
     originalQuery: query.substring(0, 100),
+    userOriginalQuery: context?.originalQuery?.substring(0, 100),
     rewrittenMainQuery: rewrittenQuery?.mainQuery?.substring(0, 100),
     enableMultiHop,
     cacheKeyOverride: cacheKeyOverride.substring(0, 100),
-    cacheKeyOverrideSource: context?.originalQuery ? 'context.originalQuery(用户原始输入)' : 'params.query(LLM生成)',
+    cacheKeySource: rewriteEvaluation.useRewritten
+      ? 'rewritten(mainQuery)'
+      : `fallback(${rewriteEvaluation.fallbackReason})`,
+    useRewritten: rewriteEvaluation.useRewritten,
+    similarity: rewriteEvaluation.similarity ? Number(rewriteEvaluation.similarity.toFixed(3)) : undefined,
+    usedNormalizedKey: normalizedFingerprint.length > 0,
   });
 
   try {
@@ -228,8 +257,8 @@ export async function executeSearchKnowledgeBase(
       );
     } else {
       // 单跳：直接用改写后的查询检索
-      // 传入 cacheKeyOverride = 用户原始输入，确保同一用户输入命中缓存
-      // （改写后的查询每次可能不同，导致缓存 key 不一致）
+      // 传入 cacheKeyOverride = 归一化 keywords 指纹，确保相同语义查询命中缓存
+      // 传入 keywords + sessionId：Level 1 miss 时走 Level 2 模糊匹配
       const effectiveQuery = rewrittenQuery?.mainQuery ?? query;
       const rawResults = await hybridSearchKnowledgeBase(
         effectiveQuery,
@@ -238,6 +267,10 @@ export async function executeSearchKnowledgeBase(
         0.3,
         Object.keys(filter).length > 0 ? filter : undefined,
         cacheKeyOverride,
+        0.55,
+        // Level 2/3 参数：keywords 用于 Jaccard 模糊匹配，sessionId 用于按会话索引
+        rewrittenQuery?.keywords,
+        context?.sessionId,
       );
       searchResult = {
         results: rawResults.map(r => ({ ...r, hop: 1 })),

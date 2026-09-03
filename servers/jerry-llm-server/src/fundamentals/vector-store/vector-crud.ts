@@ -10,6 +10,7 @@
 
 import { Document } from '@langchain/core/documents';
 import { ChromaClient } from 'chromadb';
+import crypto from 'crypto';
 import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { eventBus } from '../event-bus.js';
@@ -43,6 +44,136 @@ import {
 } from './text-splitter.js';
 
 // ==================== 文档添加 ====================
+
+/**
+ * 计算文本块内容 SHA-256（内容级幂等去重键）
+ *
+ * 用途：同一文件重复入库时（legacy 上传路径无版本管理，重复上传同名文件
+ * 不会触发 ChromaDB 清理），按内容 hash 识别并删除旧块，实现入库幂等。
+ * hash 基于 chunk 原文（切分器确定性：同一文本切出相同块），不做归一化 --
+ * 跨格式的内容比对是 documents.contentHash（文件级去重）的职责
+ */
+export function computeChunkHash(text: string): string {
+  return crypto.createHash('sha256').update(text, 'utf-8').digest('hex');
+}
+
+/**
+ * 文本块内容级幂等去重：删除与本次待入库块内容相同的旧块
+ *
+ * 作用域（关键设计决策）：versionId + source + chunk_hash
+ *   - 必须包含 versionId：发布新版本时旧版本向量仅被标记为 archived 并保留
+ *     （供回滚），若按 documentId 作用域去重会删掉旧版本的归档块，
+ *     回滚时 updateVersionVectorStatus 匹配不到向量，导致内容从检索中消失
+ *   - legacy 路径 versionId 恒为 'legacy'，实际靠 source（文件名）区分不同文件
+ *   - 知识源路径无 versionId，退化为 source（页面 URL）+ chunk_hash
+ *
+ * 失败容忍：任何去重异常只打日志，不阻塞入库主流程（与图片块去重一致）
+ */
+export async function deduplicateTextChunks(
+  store: Awaited<ReturnType<typeof initializeVectorStore>>,
+  chunks: Array<{ text: string; metaIndex: number }>,
+  metadata: Record<string, any>[],
+): Promise<void> {
+  const collection = store.collection;
+  if (!collection || chunks.length === 0) return;
+
+  // 按 (versionId, source) 分组收集 hash，减少 ChromaDB 查询次数
+  const groups = new Map<string, { versionId?: string; source: string; hashes: Set<string> }>();
+  for (const chunk of chunks) {
+    const meta = metadata[chunk.metaIndex] || {};
+    const versionId = meta.versionId !== undefined ? String(meta.versionId) : undefined;
+    const source = meta.source || 'unknown';
+    const key = `${versionId ?? ''}__${source}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = { versionId, source, hashes: new Set<string>() };
+      groups.set(key, group);
+    }
+    group.hashes.add(computeChunkHash(chunk.text));
+  }
+
+  // 1. 清理 ChromaDB 中的同内容旧块
+  let chromaDeletedCount = 0;
+  for (const group of groups.values()) {
+    try {
+      // 元素类型与 chromadb 的 Where 子句结构兼容（字段等值 / $in 操作符）
+      const whereClauses: Array<Record<string, string | { $in: string[] }>> = [
+        { source: group.source },
+        { chunk_hash: { $in: Array.from(group.hashes) } },
+      ];
+      // versionId 存在时纳入过滤（版本管理路径）；知识源路径无 versionId，
+      // 按 source（页面 URL）+ hash 去重即可
+      if (group.versionId !== undefined) {
+        whereClauses.push({ versionId: group.versionId });
+      }
+      const existing = await collection.get({
+        where: { $and: whereClauses },
+      });
+      if (existing.ids.length > 0) {
+        await collection.delete({ ids: existing.ids });
+        chromaDeletedCount += existing.ids.length;
+      }
+    } catch (err: any) {
+      logger.warn('ChromaDB 文本块去重失败（不影响入库）', {
+        module: 'VectorStore',
+        source: group.source,
+        versionId: group.versionId,
+        error: err.message,
+      });
+    }
+  }
+
+  // 2. 清理 BM25 索引中的同内容旧块（与 ChromaDB 保持一致，防止双端数据漂移）
+  let bm25DeletedCount = 0;
+  try {
+    await initializeBM25Index();
+    const bm25Index = getBM25Index();
+    const bm25DocumentStore = getBM25DocumentStore();
+
+    if (bm25Index) {
+      const idsToRemove: string[] = [];
+      for (const [id, doc] of bm25DocumentStore.entries()) {
+        const meta = doc.metadata;
+        if (!meta?.chunk_hash) continue;
+        const versionId =
+          meta.versionId !== undefined ? String(meta.versionId) : undefined;
+        const source = meta.source || 'unknown';
+        const group = groups.get(`${versionId ?? ''}__${source}`);
+        if (group && group.hashes.has(meta.chunk_hash)) {
+          idsToRemove.push(id);
+        }
+      }
+
+      for (const id of idsToRemove) {
+        try {
+          bm25Index.remove(id);
+          bm25DocumentStore.delete(id);
+          bm25DeletedCount++;
+        } catch {
+          /* 旧条目可能已不存在 */
+        }
+      }
+
+      if (idsToRemove.length > 0) {
+        await saveBM25Index();
+      }
+    }
+  } catch (err: any) {
+    logger.warn('BM25 文本块去重失败（不影响入库）', {
+      module: 'VectorStore',
+      error: err.message,
+    });
+  }
+
+  if (chromaDeletedCount > 0 || bm25DeletedCount > 0) {
+    logger.info('文本块内容级去重清理', {
+      module: 'VectorStore',
+      chromaDeletedCount,
+      bm25DeletedCount,
+      groupCount: groups.size,
+    });
+  }
+}
 
 /**
  * 添加文档到知识库
@@ -206,6 +337,11 @@ export async function addDocuments(
         : undefined,
   });
 
+  // 1.5 内容级幂等去重：删除与本次待入库块内容相同的旧块
+  // （legacy 路径重复上传的历史遗留 + 任何重试场景的兜底；作用域含 versionId，
+  //   不会触碰其他版本的归档向量，回滚功能不受影响，详见函数注释）
+  await deduplicateTextChunks(store, allChunks, metadata);
+
   // 2. 批量写入 ChromaDB（通过信号量控制并发，避免 Ollama 嵌入请求堆积）
   let addedCount = 0;
   const semaphore = getEmbeddingSemaphore();
@@ -217,6 +353,8 @@ export async function addDocuments(
         chunk_index: chunk.chunkIndexInDoc,
         source: metadata[chunk.metaIndex]?.source || 'unknown',
         doc_type: metadata[chunk.metaIndex]?.docType || 'general',
+        // 内容级去重键（见 computeChunkHash 注释）
+        chunk_hash: computeChunkHash(chunk.text),
       };
 
       // Parent-Child 模式：添加关联元数据
@@ -297,6 +435,8 @@ export async function addDocuments(
         chunk_index: chunk.chunkIndexInDoc,
         source: metadata[chunk.metaIndex]?.source || 'unknown',
         doc_type: metadata[chunk.metaIndex]?.docType || 'general',
+        // 内容级去重键：与 ChromaDB 侧 baseMeta 保持一致，双端用同一把幂等键
+        chunk_hash: computeChunkHash(chunk.text),
       };
 
       // Parent-Child 模式：BM25 索引也需要 chunk_role/parent_id/parent_content

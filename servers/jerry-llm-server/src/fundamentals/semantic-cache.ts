@@ -30,6 +30,8 @@ interface CacheEntry<V> {
   value: V;
   /** 过期时间戳（毫秒） */
   expireAt: number;
+  /** 写入时的值结构版本（值语义变更后用于使旧条目失效） */
+  version: number;
 }
 
 export interface SemanticCacheOptions {
@@ -41,6 +43,10 @@ export interface SemanticCacheOptions {
   ttlSec: number;
   /** 余弦相似度命中阈值（0~1，越高越严格） */
   similarityThreshold: number;
+  /** 缓存值结构版本（默认 1）。缓存值的语义/结构变更时递增，
+   *  旧版本条目在 get 时直接清除并视为 miss，防止新旧语义数据混存。
+   *  当前为纯内存缓存（重启即清空），此防护面向未来引入持久化后端（如 Redis）的场景。 */
+  version?: number;
 }
 
 export interface SemanticCacheStats {
@@ -85,6 +91,7 @@ export class SemanticCache<V> {
   private readonly maxEntries: number;
   private readonly ttlSec: number;
   private readonly similarityThreshold: number;
+  private readonly version: number;
 
   /** 缓存条目数组（按插入顺序，最旧在前） */
   private entries: CacheEntry<V>[] = [];
@@ -105,6 +112,7 @@ export class SemanticCache<V> {
     this.maxEntries = options.maxEntries;
     this.ttlSec = options.ttlSec;
     this.similarityThreshold = options.similarityThreshold;
+    this.version = options.version ?? 1;
     this.embedFn = embedFn;
   }
 
@@ -139,9 +147,9 @@ export class SemanticCache<V> {
       return null;
     }
 
-    // 清理过期条目
+    // 清理过期条目与旧版本条目（值语义变更后旧缓存直接失效，防止新旧数据混存）
     const now = Date.now();
-    this.entries = this.entries.filter((e) => e.expireAt > now);
+    this.entries = this.entries.filter((e) => e.expireAt > now && e.version === this.version);
 
     // 暴力遍历找最相似
     let bestScore = -1;
@@ -199,6 +207,7 @@ export class SemanticCache<V> {
       embedding,
       value,
       expireAt: Date.now() + this.ttlSec * 1000,
+      version: this.version,
     });
 
     // 淘汰最旧条目

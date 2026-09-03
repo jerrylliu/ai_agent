@@ -9,6 +9,7 @@ import { crawlWebsite, type WebCrawlConfig, type CrawlResult, type CrawlPage } f
 import { fetchFeishuContent, type FeishuConfig, type FeishuFetchResult, type FeishuPage } from '../fundamentals/feishu-connector';
 import { addDocuments, deleteDocuments } from '../fundamentals/vector-store';
 import { logger } from '../fundamentals/logger';
+import { DocumentScanService } from './document-scan.service.js';
 
 function computeContentHash(content: string): string {
   return createHash('md5').update(content).digest('hex').substring(0, 32);
@@ -21,6 +22,21 @@ interface PageItem {
   url: string;
 }
 
+/** 增量同步结果（含注入扫描拦截统计），供同步日志留痕 */
+interface IncrementalSyncResult {
+  pagesFetched: number;
+  chunksAdded: number;
+  chunksUpdated: number;
+  pagesNew: number;
+  pagesUpdated: number;
+  pagesDeleted: number;
+  updatedPageDetails: Array<{ title: string; url: string }>;
+  /** 被注入扫描拦截、跳过向量化入库的页面数 */
+  pagesSkippedByScan: number;
+  /** 被拦截页面明细（标题/链接/拦截原因） */
+  skippedPageDetails: Array<{ title: string; url: string; reason: string }>;
+}
+
 @Injectable()
 export class KnowledgeSourceService {
   constructor(
@@ -29,7 +45,8 @@ export class KnowledgeSourceService {
     @InjectRepository(KnowledgeSourceSyncLog)
     private syncLogRepo: Repository<KnowledgeSourceSyncLog>,
     @InjectRepository(KnowledgeSourcePage)
-    private pageRepo: Repository<KnowledgeSourcePage>,
+    private readonly pageRepo: Repository<KnowledgeSourcePage>,
+    private readonly documentScanService: DocumentScanService,
   ) {}
 
   async create(data: {
@@ -176,6 +193,8 @@ export class KnowledgeSourceService {
       let pagesUpdated = 0;
       let pagesDeleted = 0;
       let updatedPageDetails: Array<{ title: string; url: string }> = [];
+      let pagesSkippedByScan = 0;
+      let skippedPageDetails: Array<{ title: string; url: string; reason: string }> = [];
 
       switch (source.type) {
         case SourceType.WEB: {
@@ -187,6 +206,8 @@ export class KnowledgeSourceService {
           pagesUpdated = result.pagesUpdated;
           pagesDeleted = result.pagesDeleted;
           updatedPageDetails = result.updatedPageDetails;
+          pagesSkippedByScan = result.pagesSkippedByScan;
+          skippedPageDetails = result.skippedPageDetails;
           break;
         }
         case SourceType.FEISHU: {
@@ -198,6 +219,8 @@ export class KnowledgeSourceService {
           pagesUpdated = result.pagesUpdated;
           pagesDeleted = result.pagesDeleted;
           updatedPageDetails = result.updatedPageDetails;
+          pagesSkippedByScan = result.pagesSkippedByScan;
+          skippedPageDetails = result.skippedPageDetails;
           break;
         }
         default:
@@ -214,6 +237,9 @@ export class KnowledgeSourceService {
       syncLog.pagesUpdated = pagesUpdated;
       syncLog.pagesDeleted = pagesDeleted;
       syncLog.updatedPageDetails = updatedPageDetails.length > 0 ? updatedPageDetails : null;
+      // 注入扫描拦截统计：便于在同步日志中追溯哪些页面因安全扫描未入库
+      syncLog.pagesSkippedByScan = pagesSkippedByScan;
+      syncLog.skippedPageDetails = skippedPageDetails.length > 0 ? skippedPageDetails : null;
       syncLog.finishedAt = new Date();
 
       source.lastSyncStatus = SyncStatus.SUCCESS;
@@ -231,6 +257,7 @@ export class KnowledgeSourceService {
         pagesNew,
         pagesUpdated,
         pagesDeleted,
+        pagesSkippedByScan,
         hasContentUpdate,
       });
     } catch (error: any) {
@@ -255,7 +282,7 @@ export class KnowledgeSourceService {
     return syncLog;
   }
 
-  private async incrementalSync(source: KnowledgeSource, pages: PageItem[]): Promise<{ pagesFetched: number; chunksAdded: number; chunksUpdated: number; pagesNew: number; pagesUpdated: number; pagesDeleted: number; updatedPageDetails: Array<{ title: string; url: string }> }> {
+  private async incrementalSync(source: KnowledgeSource, pages: PageItem[]): Promise<IncrementalSyncResult> {
     const existingPages = await this.pageRepo.find({ where: { sourceId: source.id } });
     const existingMap = new Map(existingPages.map(p => [p.pageKey, p]));
     const activeMap = new Map(existingPages.filter(p => !p.isDeleted).map(p => [p.pageKey, p]));
@@ -306,27 +333,47 @@ export class KnowledgeSourceService {
       }
     }
 
-    if (updatedPages.length > 0) {
-      for (const page of updatedPages) {
-        try {
-          await deleteDocuments({ source: page.url, sourceId: source.id });
-          logger.info('已删除更新页面的旧向量', { module: 'KnowledgeSourceService', sourceId: source.id, pageUrl: page.url });
-        } catch (e: any) {
-          logger.warn('删除更新页面的旧向量失败', { module: 'KnowledgeSourceService', pageUrl: page.url, error: e.message });
-        }
-      }
+    const pagesToVectorize = [...newPages, ...updatedPages];
+
+    // 注入扫描门禁（fail-closed）：静态规则 + LLM chunk 级检测，
+    // 可疑/恶意页面跳过向量化入库，拦截原因随同步日志留痕。
+    // 被跳过的页面仍会持久化 hash（见下方），内容不变则下次同步持续拒绝。
+    //
+    // 时序约定（先扫后删）：必须先扫描、再删除更新页面的旧向量。
+    // 若先删后扫，页面一旦被拦截（含误报），将"旧向量已删、新内容未入库"，
+    // 从知识库彻底消失且无回退；先扫后删则保证被拦截页面保留旧的可信内容，
+    // 仅当新内容通过扫描后才用新向量替换旧向量。
+    const { passed: safePages, skipped: skippedByScan } =
+      await this.documentScanService.scanKnowledgePages(pagesToVectorize);
+    if (skippedByScan.length > 0) {
+      logger.warn('知识源页面被注入扫描拦截，跳过向量化入库', {
+        module: 'KnowledgeSourceService',
+        sourceId: source.id,
+        skippedCount: skippedByScan.length,
+        skippedPages: skippedByScan.map(p => ({ title: p.title, url: p.url, reason: p.reason })),
+      });
     }
 
-    const pagesToVectorize = [...newPages, ...updatedPages];
+    // 仅对通过扫描的更新页面删除旧向量（对象引用比对：
+    // scanKnowledgePages 原样透传页面对象，safePages 元素与 updatedPages 同源）
+    const safeUpdatedPages = safePages.filter(p => updatedPages.includes(p));
+    for (const page of safeUpdatedPages) {
+      try {
+        await deleteDocuments({ source: page.url, sourceId: source.id });
+        logger.info('已删除更新页面的旧向量', { module: 'KnowledgeSourceService', sourceId: source.id, pageUrl: page.url });
+      } catch (e: any) {
+        logger.warn('删除更新页面的旧向量失败', { module: 'KnowledgeSourceService', pageUrl: page.url, error: e.message });
+      }
+    }
 
     let chunksAdded = 0;
     let chunksUpdated = 0;
 
-    if (pagesToVectorize.length > 0) {
+    if (safePages.length > 0) {
       const texts: string[] = [];
       const metadataList: Array<{ source: string; docType: string; sourceType: string; sourceId: number; sourceName: string; crawledAt: string; [key: string]: any }> = [];
 
-      for (const page of pagesToVectorize) {
+      for (const page of safePages) {
         const content = `# ${page.title}\n\n来源: ${page.url}\n\n${page.content}`;
         texts.push(content);
         metadataList.push({
@@ -346,7 +393,9 @@ export class KnowledgeSourceService {
       const chunkCount = await addDocuments(texts, metadataList, {
         chunkingStrategy: 'parent-child',
       });
-      chunksAdded = newPages.length > 0 ? Math.round(chunkCount * (newPages.length / pagesToVectorize.length)) : 0;
+      // 按通过扫描的新增页面比例估算 added/updated
+      const safeNewCount = safePages.filter(p => newPages.includes(p)).length;
+      chunksAdded = safeNewCount > 0 ? Math.round(chunkCount * (safeNewCount / safePages.length)) : 0;
       chunksUpdated = chunkCount - chunksAdded;
     }
 
@@ -399,10 +448,12 @@ export class KnowledgeSourceService {
       pagesUpdated: updatedPages.length,
       pagesDeleted: deletedKeys.length,
       updatedPageDetails,
+      pagesSkippedByScan: skippedByScan.length,
+      skippedPageDetails: skippedByScan,
     };
   }
 
-  private async syncWebSource(source: KnowledgeSource): Promise<{ pagesFetched: number; chunksAdded: number; chunksUpdated: number; pagesNew: number; pagesUpdated: number; pagesDeleted: number; updatedPageDetails: Array<{ title: string; url: string }> }> {
+  private async syncWebSource(source: KnowledgeSource): Promise<IncrementalSyncResult> {
     const config: WebCrawlConfig = {
       startUrl: source.config?.startUrl || source.config?.url,
       maxDepth: source.maxDepth,
@@ -421,7 +472,7 @@ export class KnowledgeSourceService {
 
     if (crawlResult.pages.length === 0) {
       logger.warn('Web 爬取未获取到有效页面', { module: 'KnowledgeSourceService', sourceId: source.id });
-      return { pagesFetched: 0, chunksAdded: 0, chunksUpdated: 0, pagesNew: 0, pagesUpdated: 0, pagesDeleted: 0, updatedPageDetails: [] };
+      return { pagesFetched: 0, chunksAdded: 0, chunksUpdated: 0, pagesNew: 0, pagesUpdated: 0, pagesDeleted: 0, updatedPageDetails: [], pagesSkippedByScan: 0, skippedPageDetails: [] };
     }
 
     const pages: PageItem[] = crawlResult.pages.map((p: CrawlPage) => ({
@@ -434,7 +485,7 @@ export class KnowledgeSourceService {
     return this.incrementalSync(source, pages);
   }
 
-  private async syncFeishuSource(source: KnowledgeSource): Promise<{ pagesFetched: number; chunksAdded: number; chunksUpdated: number; pagesNew: number; pagesUpdated: number; pagesDeleted: number; updatedPageDetails: Array<{ title: string; url: string }> }> {
+  private async syncFeishuSource(source: KnowledgeSource): Promise<IncrementalSyncResult> {
     const config: FeishuConfig = {
       appId: source.config?.appId,
       appSecret: source.config?.appSecret,
@@ -457,7 +508,7 @@ export class KnowledgeSourceService {
 
     if (fetchResult.pages.length === 0) {
       logger.warn('飞书未获取到有效页面', { module: 'KnowledgeSourceService', sourceId: source.id });
-      return { pagesFetched: 0, chunksAdded: 0, chunksUpdated: 0, pagesNew: 0, pagesUpdated: 0, pagesDeleted: 0, updatedPageDetails: [] };
+      return { pagesFetched: 0, chunksAdded: 0, chunksUpdated: 0, pagesNew: 0, pagesUpdated: 0, pagesDeleted: 0, updatedPageDetails: [], pagesSkippedByScan: 0, skippedPageDetails: [] };
     }
 
     const pages: PageItem[] = fetchResult.pages.map((p: FeishuPage) => ({

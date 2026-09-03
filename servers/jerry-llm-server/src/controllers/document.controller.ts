@@ -12,6 +12,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { DocumentService } from '../services/document.service';
+import { DocumentScanService } from '../services/document-scan.service';
 import { DocumentSchedulerService } from '../services/document-scheduler.service';
 import { VersionStatus, DocumentVersion } from '../entities/document-version.entity';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
@@ -32,6 +33,7 @@ export class DocumentController {
   constructor(
     private readonly documentService: DocumentService,
     private readonly schedulerService: DocumentSchedulerService,
+    private readonly documentScanService: DocumentScanService,
   ) {}
 
   /**
@@ -306,13 +308,77 @@ export class DocumentController {
     }
   }
 
+  // ==================== 注入扫描人工复核 ====================
+
+  /**
+   * GET /documents/scan/pending-reviews
+   * 查询待人工复核的版本列表（扫描判定为可疑）
+   *
+   * 注意：字面量路由必须声明在 :id 参数路由之前，避免被参数路由吞掉
+   */
+  @Get('scan/pending-reviews')
+  async getPendingScanReviews() {
+    try {
+      const items = await this.documentScanService.listPendingReviews();
+      return {
+        success: true,
+        items: items.map((item) => ({
+          version: serializeVersion(item.version),
+          documentTitle: item.documentTitle,
+        })),
+      };
+    } catch (error: any) {
+      logger.error('获取待复核列表失败', { module: 'DocumentController', error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * POST /documents/scan/:versionId/approve
+   * 复核通过：校验内容未被篡改后发布该版本到知识库
+   */
+  @Post('scan/:versionId/approve')
+  async approveScanReview(
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Body('operator') operator?: string,
+  ) {
+    try {
+      const version = await this.documentScanService.approveVersion(versionId, operator || 'anonymous');
+      return { success: true, version: serializeVersion(version) };
+    } catch (error: any) {
+      logger.error('复核通过失败', { module: 'DocumentController', versionId, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
+  /**
+   * POST /documents/scan/:versionId/reject
+   * 复核拒绝：该版本不允许发布
+   */
+  @Post('scan/:versionId/reject')
+  async rejectScanReview(
+    @Param('versionId', ParseIntPipe) versionId: number,
+    @Body('operator') operator?: string,
+    @Body('reason') reason?: string,
+  ) {
+    try {
+      const version = await this.documentScanService.rejectVersion(versionId, operator || 'anonymous', reason);
+      return { success: true, version: serializeVersion(version) };
+    } catch (error: any) {
+      logger.error('复核拒绝失败', { module: 'DocumentController', versionId, error: error.message });
+      throw new HttpException(error.message, error.status || 500);
+    }
+  }
+
   /**
    * POST /documents/:id/versions/:versionId/publish
-   * 发布版本到知识库（向量化 + 激活）
+   * 发布版本到知识库（先经过注入扫描门禁，再向量化 + 激活）
    *
    * 用户在编辑器中编辑文档后，手动触发将编辑后的内容入向量库。
-   * - DRAFT 版本：向量化 → 激活（DRAFT → ACTIVE）
-   * - ACTIVE 版本：删除旧向量 → 重新向量化（重新发布）
+   * - 扫描通过：向量化入库（DRAFT → 激活；ACTIVE → 删旧向量重新入库）
+   * - 待人工复核：不入库，返回 scanGate.verdict = needs_review
+   * - 命中拦截：不入库，返回 scanGate.verdict = blocked
+   * - 扫描门禁关闭（DOC_SCAN_ENABLED=false）：scanGate = null，行为与旧版一致
    */
   @Post(':id/versions/:versionId/publish')
   async publishToVectorStore(
@@ -321,8 +387,8 @@ export class DocumentController {
     @Body('operator') operator?: string,
   ) {
     try {
-      const version = await this.documentService.publishToVectorStore(versionId, operator || 'anonymous');
-      return { success: true, version: serializeVersion(version) };
+      const result = await this.documentScanService.publishWithScanGate(versionId, operator || 'anonymous');
+      return { success: true, version: serializeVersion(result.version), scanGate: result.scanGate };
     } catch (error: any) {
       logger.error('发布到知识库失败', { module: 'DocumentController', versionId, error: error.message });
       throw new HttpException(error.message, error.status || 500);

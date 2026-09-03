@@ -347,7 +347,12 @@ export function setDeepseekApiKey(apiKey: string): void {
 }
 
 export function getDeepseekApiKey(): string {
-  if (!deepseekApiKey) return '';
+  // 优先使用 Redis 恢复的 Key，降级读 .env（脚本场景或 Redis 不可用时）
+  if (!deepseekApiKey) {
+    const envKey = process.env.DEEPSEEK_API_KEY;
+    if (envKey) return envKey;
+    return '';
+  }
   // 兼容历史明文：存储的值不是密文格式时直接返回
   if (!isEncrypted(deepseekApiKey)) return deepseekApiKey;
   return decrypt(deepseekApiKey);

@@ -33,11 +33,13 @@ import { KnowledgeSourcePage } from './entities/knowledge-source-page.entity.js'
 import { LlmUsage } from './entities/llm-usage.entity.js';
 import { MessageFeedback } from './entities/message-feedback.entity.js';
 import { AutoEvaluation } from './entities/auto-evaluation.entity.js';
+import { SearchFeedback } from './entities/search-feedback.entity.js';
 import { ToolUsage } from './entities/tool-usage.entity.js';
 import { GeneratedDocument } from './entities/generated-document.entity.js';
 import { FeishuChatSession } from './entities/feishu-chat-session.entity.js';
 import { ImageDescription } from './entities/image-description.entity.js';
 import { DocumentService } from './services/document.service.js';
+import { DocumentScanService } from './services/document-scan.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
 import { ImageRetrySchedulerService } from './services/image-retry-scheduler.service.js';
 import { KnowledgeSourceService } from './services/knowledge-source.service.js';
@@ -97,6 +99,7 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
         LlmUsage,
         MessageFeedback,
         AutoEvaluation,
+        SearchFeedback,
         ToolUsage,
         GeneratedDocument,
         FeishuChatSession,
@@ -126,6 +129,7 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
       LlmUsage,
       MessageFeedback,
       AutoEvaluation,
+      SearchFeedback,
       ToolUsage,
       GeneratedDocument,
       FeishuChatSession,
@@ -156,6 +160,8 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     UsageService,
     EvaluationService,
     DocumentService,
+    // 文档安全扫描服务（入库前注入扫描门禁 + 人工复核）
+    DocumentScanService,
     DocumentSchedulerService,
     ImageRetrySchedulerService,
     KnowledgeSourceService,

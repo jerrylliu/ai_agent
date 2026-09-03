@@ -7,7 +7,7 @@ import { useState } from 'react';
 import {
   RotateCcw, Trash2, Archive, GitCompare, UploadCloud,
   CheckCircle, AlertCircle, Clock, Loader2, FileText,
-  Download, Pencil, FileCode, FileType,
+  Download, Pencil, FileCode, FileType, ShieldCheck, ShieldAlert, ShieldX,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
@@ -80,6 +80,24 @@ export function VersionTimeline({
     }
   };
 
+  // 注入扫描状态徽标：pending（未扫描）不展示，其余状态给出中文标签与配色
+  const scanBadge = (scanStatus: string | undefined) => {
+    switch (scanStatus) {
+      case 'scanning':
+        return { label: '扫描中', icon: <Loader2 className="h-3 w-3 animate-spin" />, className: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200' };
+      case 'passed':
+        return { label: '扫描通过', icon: <ShieldCheck className="h-3 w-3" />, className: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' };
+      case 'approved':
+        return { label: '复核通过', icon: <ShieldCheck className="h-3 w-3" />, className: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' };
+      case 'needs_review':
+        return { label: '待人工复核', icon: <ShieldAlert className="h-3 w-3" />, className: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200' };
+      case 'rejected':
+        return { label: '扫描拒绝', icon: <ShieldX className="h-3 w-3" />, className: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200' };
+      default:
+        return null;
+    }
+  };
+
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -130,6 +148,7 @@ export function VersionTimeline({
             {sortedVersions.map((version) => {
               const isSelected = selectedForDiff.includes(version.id);
               const isActive = version.status === 'active';
+              const scan = scanBadge(version.scanStatus);
 
               // 构建省略号菜单项：编辑/下载(md/txt/docx)/归档/回滚/删除
               const menuItems: PopupMenuItem[] = [];
@@ -220,6 +239,12 @@ export function VersionTimeline({
                           {parsingIcon(version.parsingStatus)}
                           <span className="text-[10px] text-muted-foreground">{version.parsingStatus}</span>
                         </div>
+                        {scan && (
+                          <Badge className={`text-[10px] ${scan.className}`}>
+                            {scan.icon}
+                            <span className="ml-0.5">{scan.label}</span>
+                          </Badge>
+                        )}
                       </div>
                       <span className="text-xs text-muted-foreground">
                         {new Date(version.createdAt).toLocaleString()}

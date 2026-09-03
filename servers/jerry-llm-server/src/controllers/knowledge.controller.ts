@@ -9,6 +9,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { DocumentService } from '../services/document.service';
 import { KnowledgeSourceService } from '../services/knowledge-source.service.js';
 import { logger } from '../fundamentals/logger';
+import { UNTRUSTED_CONTEXT_INSTRUCTION } from '../fundamentals/prompt-injection-guard.js';
 
 @Controller('knowledge')
 export class KnowledgeController {
@@ -258,9 +259,12 @@ export class KnowledgeController {
         finalResults = rerankCandidates.slice(0, topK);
       }
 
-      const context = finalResults
+      const rawContext = finalResults
         .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
         .join('\n\n');
+      // 检索内容属于不可信上下文：附加隔离指令，防止文档中的恶意指令覆盖系统规则
+      const context =
+        rawContext.trim().length > 0 ? rawContext + UNTRUSTED_CONTEXT_INSTRUCTION : rawContext;
 
       logger.info('知识库搜索完成（增强管线）', {
         module: 'KnowledgeController',

@@ -96,6 +96,24 @@ export function calculateChecksum(buffer: Buffer): string {
 }
 
 /**
+ * 计算文本内容的规范化内容 hash（用于内容级文档去重）
+ *
+ * 与文件 checksum（calculateChecksum）的区别：
+ *   - 文件 hash 对字节敏感：同一份内容导出为 PDF 和 DOCX 后 hash 不同
+ *   - 内容 hash 先做规范化（去除全部空白字符）再计算，
+ *     可识别"同文不同格式 / 换行重排"的重复
+ *
+ * 返回 null 表示文本为空（空内容不参与去重比对）
+ */
+export function computeContentHash(text: string | null | undefined): string | null {
+  if (!text || text.trim().length === 0) return null;
+  // 去除全部空白（空格/换行/制表符等），消除排版差异，只比较实际字符序列
+  const normalized = text.replace(/\s+/g, '');
+  if (normalized.length === 0) return null;
+  return crypto.createHash('sha256').update(normalized, 'utf-8').digest('hex');
+}
+
+/**
  * 校验文件大小
  */
 export function validateFileSize(fileSize: number): { valid: boolean; message?: string } {

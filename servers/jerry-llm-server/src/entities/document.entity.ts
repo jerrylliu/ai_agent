@@ -48,6 +48,15 @@ export class Document {
   contentUpdatedAt: Date | null;
 
   /**
+   * 规范化文本内容 hash（computeContentHash 计算，去空白后 SHA-256）
+   * 用于内容级文档去重：识别"同文不同格式"的重复上传。
+   * 所有 contentText 写入点（上传解析/编辑器保存/草稿保存）都必须同步重算
+   */
+  @Column({ name: 'content_hash', type: 'varchar', length: 64, nullable: true })
+  @Index()
+  contentHash: string | null;
+
+  /**
    * 文档中的图片总数（解析阶段统计）
    * 用于前端展示图片处理进度
    */

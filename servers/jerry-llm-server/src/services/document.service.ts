@@ -35,6 +35,7 @@ import {
   validateFileSize,
   validateFileType,
   calculateChecksum,
+  computeContentHash,
   deleteVersionFile,
   deleteDocumentFiles,
   deleteDocumentImageFiles,
@@ -216,6 +217,18 @@ export class DocumentService {
     const sizeCheck = validateFileSize(file.size);
     if (!sizeCheck.valid) throw new BadRequestException(sizeCheck.message);
 
+    // 跨文档文件级查重（与 uploadDocument 规则一致；本方法总是新建文档，任何命中都拒绝）
+    const checksum = calculateChecksum(file.buffer);
+    const dupVersion = await this.versionRepo.findOne({ where: { checksum } });
+    if (dupVersion) {
+      const dupDoc = await this.documentRepo.findOne({
+        where: { id: dupVersion.documentId },
+      });
+      throw new BadRequestException(
+        `该文件已作为文档《${dupDoc?.title ?? dupVersion.documentId}》v${dupVersion.versionNumber} 上传过，请勿重复入库`,
+      );
+    }
+
     return this.dataSource.transaction(async (manager) => {
       // 1. 创建文档记录
       let document = manager.create(Document, {
@@ -238,6 +251,8 @@ export class DocumentService {
         const contentJson = textToTiptapJson(parsedText);
         document.contentJson = JSON.stringify(contentJson);
         document.contentText = parsedText;
+        // 内容级去重键：所有 contentText 写入点都必须同步重算
+        document.contentHash = computeContentHash(parsedText);
         document.contentUpdatedAt = new Date();
         document = await manager.save(document);
       }
@@ -359,6 +374,8 @@ export class DocumentService {
     const changed = doc.contentJson !== nextJson;
     doc.contentJson = nextJson;
     doc.contentText = payload.contentText ?? '';
+    // 内容级去重键：所有 contentText 写入点都必须同步重算
+    doc.contentHash = computeContentHash(payload.contentText ?? '');
     if (changed) {
       doc.contentUpdatedAt = new Date();
     }
@@ -453,6 +470,8 @@ export class DocumentService {
       // 写入 contentJson / contentText
       document.contentJson = JSON.stringify(contentJson);
       document.contentText = contentText;
+      // 内容级去重键：所有 contentText 写入点都必须同步重算
+      document.contentHash = computeContentHash(contentText);
       document.contentUpdatedAt = new Date();
       document = await manager.save(document);
 
@@ -501,6 +520,71 @@ export class DocumentService {
   }
 
   /**
+   * 解析用于发布到向量存储的文档文本
+   *
+   * 优先读取 document.contentText（用户编辑后的最终文本），
+   * 为空时兜底解析原文件（图片落盘按 imageHash 幂等，重复调用安全）。
+   *
+   * 为什么独立成公共方法：安全扫描器与发布者必须使用完全相同的文本，
+   * 否则攻击者可利用"扫描文本 ≠ 入库文本"的差异绕过检测。
+   */
+  async resolvePublishableText(version: DocumentVersion): Promise<string> {
+    const doc = await this.getDocument(version.documentId);
+    let textContent = doc.contentText;
+
+    // contentText 为空时兜底解析原文件
+    if (!textContent || textContent.trim().length === 0) {
+      logger.warn('contentText 为空，回退到解析原文件', {
+        module: 'DocumentService',
+        versionId: version.id,
+      });
+      // parseDocument 接受文件路径而非 buffer，用 getAbsoluteTempPath 获取可读路径
+      const tempInfo = this.getAbsoluteTempPath(
+        version.fileUrl,
+        version.fileType,
+      );
+      try {
+        const mimeType = this.getMimeTypeByExt(version.fileType);
+        const parsed = await parseDocument(tempInfo.filePath, mimeType);
+        textContent = parsed.text;
+        // 兜底解析时如果有图片，需要落盘 + 创建 pending 记录
+        if (parsed.images.length > 0) {
+          try {
+            const persistedCount = await this.persistImagesOnUpload(
+              parsed.images,
+              version.documentId,
+            );
+            // Bug 2 修复：兜底解析提取到图片后必须修正 imageTotal，
+            // 否则 REINDEX 重试时检查 imageTotal > 0 会跳过图片处理
+            if (persistedCount > 0) {
+              await this.documentRepo.increment(
+                { id: version.documentId },
+                'imageTotal',
+                persistedCount,
+              );
+              logger.info('兜底解析：修正 imageTotal', {
+                module: 'DocumentService',
+                documentId: version.documentId,
+                persistedCount,
+              });
+            }
+          } catch (err: any) {
+            logger.error('兜底解析图片落盘失败', {
+              module: 'DocumentService',
+              versionId: version.id,
+              error: err.message,
+            });
+          }
+        }
+      } finally {
+        if (tempInfo.isTemp) this.cleanupTempFile(tempInfo.filePath);
+      }
+    }
+
+    return textContent || '';
+  }
+
+  /**
    * 发布文档到知识库（向量化 + 激活）
    *
    * 核心流程：
@@ -512,10 +596,14 @@ export class DocumentService {
    *
    * 并发控制：通过 parsingStatus=PARSING 做版本级锁，
    * 正在处理的版本会拒绝重复触发。
+   *
+   * @param preResolvedText 可选，调用方（如安全扫描服务）已解析好的文本；
+   *                        传入后跳过内部解析，保证扫描与入库使用同一份文本
    */
   async publishToVectorStore(
     versionId: number,
     operator: string = 'anonymous',
+    preResolvedText?: string,
   ): Promise<DocumentVersion> {
     const version = await this.versionRepo.findOne({
       where: { id: versionId },
@@ -541,58 +629,10 @@ export class DocumentService {
     });
 
     try {
-      // 读取编辑后的 contentText
       const doc = await this.getDocument(version.documentId);
-      let textContent = doc.contentText;
-
-      // contentText 为空时兜底解析原文件
-      if (!textContent || textContent.trim().length === 0) {
-        logger.warn('contentText 为空，回退到解析原文件', {
-          module: 'DocumentService',
-          versionId,
-        });
-        // parseDocument 接受文件路径而非 buffer，用 getAbsoluteTempPath 获取可读路径
-        const tempInfo = this.getAbsoluteTempPath(
-          version.fileUrl,
-          version.fileType,
-        );
-        try {
-          const mimeType = this.getMimeTypeByExt(version.fileType);
-          const parsed = await parseDocument(tempInfo.filePath, mimeType);
-          textContent = parsed.text;
-          // 兜底解析时如果有图片，需要落盘 + 创建 pending 记录
-          if (parsed.images.length > 0) {
-            try {
-              const persistedCount = await this.persistImagesOnUpload(
-                parsed.images,
-                version.documentId,
-              );
-              // Bug 2 修复：兜底解析提取到图片后必须修正 imageTotal，
-              // 否则 REINDEX 重试时检查 imageTotal > 0 会跳过图片处理
-              if (persistedCount > 0) {
-                await this.documentRepo.increment(
-                  { id: version.documentId },
-                  'imageTotal',
-                  persistedCount,
-                );
-                logger.info('兜底解析：修正 imageTotal', {
-                  module: 'DocumentService',
-                  documentId: version.documentId,
-                  persistedCount,
-                });
-              }
-            } catch (err: any) {
-              logger.error('兜底解析图片落盘失败', {
-                module: 'DocumentService',
-                versionId,
-                error: err.message,
-              });
-            }
-          }
-        } finally {
-          if (tempInfo.isTemp) this.cleanupTempFile(tempInfo.filePath);
-        }
-      }
+      // 优先使用调用方预解析的文本（安全扫描门禁场景），保证扫描与入库同源
+      const textContent =
+        preResolvedText ?? (await this.resolvePublishableText(version));
 
       if (!textContent || textContent.trim().length === 0) {
         throw new Error('文档内容为空，无法发布到知识库');
@@ -1204,7 +1244,12 @@ export class DocumentService {
       tags?: string[];
       operator?: string;
     },
-  ): Promise<{ document: Document; version: DocumentVersion }> {
+  ): Promise<{
+    document: Document;
+    version: DocumentVersion;
+    /** 文本级重复警告（同内容不同格式时不拒绝入库，仅提示） */
+    duplicateWarning?: string;
+  }> {
     const operator = options.operator || 'anonymous';
 
     // 1. 校验文件
@@ -1216,6 +1261,19 @@ export class DocumentService {
 
     // 2. 计算 checksum
     const checksum = calculateChecksum(file.buffer);
+
+    // 2.5 跨文档文件级查重：同一文件已作为"其他文档"的版本上传时拒绝
+    // （同一文档允许重新上传历史版本的文件：重新入库旧内容是合法操作，
+    //   该场景由事务内"与活跃版本比对"的既有检查覆盖）
+    const dupVersion = await this.versionRepo.findOne({ where: { checksum } });
+    if (dupVersion && dupVersion.documentId !== options.documentId) {
+      const dupDoc = await this.documentRepo.findOne({
+        where: { id: dupVersion.documentId },
+      });
+      throw new BadRequestException(
+        `该文件已作为文档《${dupDoc?.title ?? dupVersion.documentId}》v${dupVersion.versionNumber} 上传过，请勿重复入库`,
+      );
+    }
 
     // 3. 使用事务保证数据一致性
     const result = await this.dataSource.transaction(async (manager) => {
@@ -1270,6 +1328,8 @@ export class DocumentService {
       // 失败不阻塞上传流程（仅打日志），保证向量化和审计仍能完成
       /** 解析阶段提取的图片资源（在 try 块外声明，供事务返回值使用） */
       let parsedImages: ImageAsset[] = [];
+      /** 文本级重复警告（内容与其他文档相同但不拒绝入库） */
+      let duplicateWarning: string | undefined;
       try {
         // parseDocument 接受文件路径而非 buffer，需先写到临时文件
         const tempDir = path.join(__dirname, '..', '..', 'uploads', 'temp');
@@ -1302,11 +1362,30 @@ export class DocumentService {
 
           document.contentJson = JSON.stringify(contentJson);
           document.contentText = fullText;
+          // 内容级去重键：所有 contentText 写入点都必须同步重算（见 entity 注释）
+          document.contentHash = computeContentHash(fullText);
           document.contentUpdatedAt = new Date();
           // 记录解析阶段提取的图片数量（VLM 翻译在发布到知识库时执行）
           document.imageTotal = parsed.images.length;
           document.imageProcessed = 0;
           document = await manager.save(document);
+
+          // 文本级查重：规范化内容与其他文档相同时给警告（不拒绝，
+          // 用户可能有意以不同格式分文档维护同一份内容）
+          if (document.contentHash) {
+            const dupDoc = await manager.findOne(Document, {
+              where: { contentHash: document.contentHash },
+            });
+            if (dupDoc && dupDoc.id !== document.id) {
+              duplicateWarning = `检测到文档《${dupDoc.title}》的内容与此文件相同（可能仅格式不同），请确认是否需要重复入库`;
+              logger.warn('上传内容与已有文档重复', {
+                module: 'DocumentService',
+                documentId: document.id,
+                duplicateOf: dupDoc.id,
+                duplicateTitle: dupDoc.title,
+              });
+            }
+          }
 
           logger.info('文档内容已解析并写入 contentJson', {
             module: 'DocumentService',
@@ -1361,7 +1440,7 @@ export class DocumentService {
       });
 
       // 返回 images 供事务外落盘（避免图片 IO 影响事务）
-      return { document, version: savedVersion, images: parsedImages };
+      return { document, version: savedVersion, images: parsedImages, duplicateWarning };
     });
 
     // 事务外：落盘图片 + 创建 pending 记录（失败不阻塞上传流程）
@@ -1404,11 +1483,15 @@ export class DocumentService {
       }
     }
 
-    return { document: result.document, version: result.version };
+    return {
+      document: result.document,
+      version: result.version,
+      duplicateWarning: result.duplicateWarning,
+    };
   }
 
   /**
-   * 激活版本：旧 active → archived，新版本 → active
+   * 激活版本：旧 active -> archived，新版本 -> active
    */
   async activateVersion(
     versionId: number,

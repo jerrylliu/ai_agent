@@ -28,6 +28,9 @@ describe('metrics', () => {
       expect(all).toContain('jerry_hitl_resolved_total');
       expect(all).toContain('jerry_multilevel_cache_l1_hits');
       expect(all).toContain('jerry_multilevel_cache_overall_hit_rate');
+      expect(all).toContain('jerry_multilevel_cache_l1_size');
+      expect(all).toContain('jerry_multilevel_cache_l1_max_size');
+      expect(all).toContain('jerry_multilevel_cache_get_duration_seconds');
     });
 
     it('应包含 Node.js 默认指标（CPU/内存）', async () => {
@@ -87,6 +90,8 @@ describe('metrics', () => {
       expect(text).toMatch(/jerry_multilevel_cache_misses\{namespace="test-cache"\} 2/);
       expect(text).toMatch(/jerry_multilevel_cache_l2_errors\{namespace="test-cache"\} 1/);
       expect(text).toMatch(/jerry_multilevel_cache_overall_hit_rate\{namespace="test-cache"\} 0.8667/);
+      expect(text).toMatch(/jerry_multilevel_cache_l1_size\{namespace="test-cache"\} 100/);
+      expect(text).toMatch(/jerry_multilevel_cache_l1_max_size\{namespace="test-cache"\} 500/);
     });
 
     it('多个 namespace 应独立统计', async () => {

@@ -8,7 +8,11 @@ export interface PromptInjectionDetection {
   matchedPatterns: string[];
 }
 
-const BLOCK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+/**
+ * 高危注入签名（命中即拦截级）
+ * 导出供文档入库静态扫描器复用，保持用户输入与入库内容两条防线的签名一致
+ */
+export const BLOCK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /忽略(?:之前|以上|所有|系统|开发者).{0,12}(?:指令|提示|规则|消息)/i, reason: '要求忽略上级指令' },
   { pattern: /不要(?:遵守|服从|执行).{0,12}(?:系统|开发者|之前|以上).{0,8}(?:指令|提示|规则|消息)/i, reason: '要求不遵守上级指令' },
   { pattern: /(?:泄露|透露|输出|展示|显示|打印).{0,12}(?:system prompt|系统提示|隐藏提示|开发者消息|内部指令)/i, reason: '要求泄露系统提示' },
@@ -19,7 +23,11 @@ const BLOCK_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /(?:bypass|disable|turn off).{0,30}(?:safety|guardrail|filter|policy|restriction)s?/i, reason: '要求绕过英文安全限制' },
 ];
 
-const SUSPICIOUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
+/**
+ * 可疑注入签名（命中转人工复核，不直接拦截）
+ * 导出供文档入库静态扫描器复用
+ */
+export const SUSPICIOUS_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /(?:你现在是|你将扮演|从现在开始).{0,20}(?:无限制|无约束|另一个AI|新的助手)/i, reason: '尝试重设助手角色' },
   { pattern: /(?:act as|pretend to be|from now on you are).{0,40}(?:unrestricted|uncensored|another ai|new assistant)/i, reason: '尝试英文重设助手角色' },
   { pattern: /(?:系统消息|开发者消息|隐藏规则|内部规则|最高优先级)/i, reason: '提及系统级提示词' },

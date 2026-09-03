@@ -116,15 +116,42 @@ export async function rerankResults(
     if (originalScoreWeight > 0) {
       const maxOriginal = Math.max(...reranked.map(r => r.originalScore));
       const minOriginal = Math.min(...reranked.map(r => r.originalScore));
-      const range = maxOriginal - minOriginal || 1;
 
-      for (const r of reranked) {
-        const normalizedOriginal = (r.originalScore - minOriginal) / range;
-        r.score = (1 - originalScoreWeight) * r.rerankScore + originalScoreWeight * normalizedOriginal;
+      if (maxOriginal === minOriginal) {
+        // 所有原始分数相同：原始信号无区分度，直接采用 rerankScore。
+        // 显式处理避免 min-max 除零后走 `range || 1` 兜底，把所有候选错误归一化成 0
+        for (const r of reranked) {
+          r.score = r.rerankScore;
+        }
+      } else {
+        // rank-based 归一化：按 originalScore 降序排名线性映射到 [1, 0]。
+        // 不用 min-max：RRF 融合分数分布扁平且密集（典型差距 <0.001），
+        // min-max 会把毫厘级噪声放大成数量级差异，扭曲第 1 名与其后结果的相对距离；
+        // rank-based 只保留检索序信息，对分数幅度不敏感
+        const n = reranked.length;
+        const sortedIndices = reranked
+          .map((_, i) => i)
+          .sort((a, b) => reranked[b].originalScore - reranked[a].originalScore);
+        const normalizedByIndex = new Array<number>(n).fill(0);
+        sortedIndices.forEach((idx, rank) => {
+          normalizedByIndex[idx] = 1 - rank / (n - 1);
+        });
+
+        for (let i = 0; i < n; i++) {
+          reranked[i].score =
+            (1 - originalScoreWeight) * reranked[i].rerankScore +
+            originalScoreWeight * normalizedByIndex[i];
+        }
       }
 
       // 按混合分数重新排序
       reranked.sort((a, b) => b.score - a.score);
+    } else {
+      // originalScoreWeight === 0：纯重排模式，score 字段同步为 rerankScore。
+      // 否则消费方（如 knowledge.controller）拿到的 r.score 仍是原始检索分数而非重排分数
+      for (const r of reranked) {
+        r.score = r.rerankScore;
+      }
     }
 
     logger.info('结果重排完成', {
@@ -356,14 +383,22 @@ async function llmRerank(
   // 按 rerankScore 降序排序
   reranked.sort((a, b) => b.rerankScore - a.rerankScore);
 
-  // 追加未参与 LLM 重排的文档（保持原始顺序）
-  for (const r of remainingDocs) {
+  // 追加未参与 LLM 重排的文档：用关键词匹配度兜底打分并乘 0.5 衰减系数。
+  // 此前固定给 0.1，在 originalScoreWeight=0.3 混合下 final ≤ 0.4，
+  // 尾部文档被一刀切压死（等价于硬截断 10 条）；
+  // keyword 兜底让高质量尾部文档仍有机会进入 topK，
+  // 0.5 衰减保证它们整体排在 LLM 评估为高分的文档之后
+  const keywordScoredRemaining = keywordRerank(query, remainingDocs);
+  for (const r of keywordScoredRemaining) {
     reranked.push({
       ...r,
-      originalScore: r.score,
-      rerankScore: 0.1, // 未经 LLM 评估的文档给低分
+      rerankScore: r.rerankScore * 0.5,
     });
   }
+
+  // 尾部文档可能获得较高 keyword 分（最高 0.5），需要重新排序。
+  // dashscopeRerank 不需要这一步：其 tail 固定 0.0 分自然垫底
+  reranked.sort((a, b) => b.rerankScore - a.rerankScore);
 
   return reranked;
 }
@@ -387,11 +422,18 @@ function keywordRerank(
       if (contentTerms.has(term)) {
         matchCount++;
       } else {
-        // 模糊匹配：查询词是内容词的子串
-        for (const ct of contentTerms) {
-          if (ct.includes(term) || term.includes(ct)) {
-            matchCount += 0.5;
-            break;
+        // 模糊匹配：查询词与内容词互为子串。
+        // 权重 0.2（原 0.5 过高：子串误触率高，如英文 "data"⊂"database"、
+        // 中文单字"图"⊂"试图/图像/地图"，过高会稀释精确匹配信号）；
+        // 英文仅对长度 ≥ 3 的词启用，避免 "of/the" 等短词大量误触；
+        // 中文词项（bigram/单字退化）长度天然短，不设长度门槛
+        const isChineseTerm = /[\u4e00-\u9fff]/.test(term);
+        if (isChineseTerm || term.length >= 3) {
+          for (const ct of contentTerms) {
+            if (ct.includes(term) || term.includes(ct)) {
+              matchCount += 0.2;
+              break;
+            }
           }
         }
       }
@@ -426,14 +468,16 @@ function extractTerms(text: string): Set<string> {
     terms.add(w.toLowerCase());
   }
 
-  // 中文二元组（bigram）
+  // 中文二元组（bigram）：中文单字歧义大（"中"会误匹配"中间/中心/中文"），
+  // 默认只用 bigram；仅当整段文本只含单个汉字时退化为单字，
+  // 保证极短查询（如"图"）仍有词项可参与匹配（借助子串匹配命中 bigram）
   const chineseChars = text.match(/[\u4e00-\u9fff]/g) || [];
-  for (let i = 0; i < chineseChars.length - 1; i++) {
-    terms.add(chineseChars[i] + chineseChars[i + 1]);
-  }
-  // 单字也加入
-  for (const c of chineseChars) {
-    terms.add(c);
+  if (chineseChars.length === 1) {
+    terms.add(chineseChars[0]);
+  } else {
+    for (let i = 0; i < chineseChars.length - 1; i++) {
+      terms.add(chineseChars[i] + chineseChars[i + 1]);
+    }
   }
 
   return terms;

@@ -26,6 +26,8 @@ import { logger } from '../fundamentals/logger';
 import { acquireLock, type DistributedLock } from '../fundamentals/distributed-lock';
 import { isRedisReady } from '../fundamentals/redis-client';
 import { inspectPromptInjection, logPromptInjectionDetection } from '../fundamentals/prompt-injection-guard.js';
+import { z } from 'zod';
+import { ZodValidationPipe } from '../fundamentals/zod-validation.pipe.js';
 import {
   deleteFeishuChatSessionBySessionId,
   findFeishuChatSessionBySessionId,
@@ -825,6 +827,78 @@ export class ChatController {
   ) {
     const daysNum = parseInt(days, 10) || 7;
     return this.evaluationService.getEvaluationStats(req.userId, daysNum);
+  }
+
+  // ==================== 检索隐式反馈接口 ====================
+
+  /** 隐式反馈上报 zod schema */
+  private static readonly SearchFeedbackSchema = z.object({
+    sessionId: z.string().min(1).describe('会话 ID'),
+    query: z.string().min(1).max(500).describe('用户原始查询'),
+    action: z.enum(['regenerate', 'followup', 'abandon', 'positive', 'negative']).describe('用户行为类型'),
+    retrievedDocIds: z.array(z.string()).optional().describe('检索到的文档 ID 列表'),
+    responseTimeMs: z.number().int().min(0).optional().describe('检索到回答的总耗时（ms）'),
+    resultCount: z.number().int().min(0).optional().describe('检索结果数量'),
+    modelId: z.string().optional().describe('使用的模型 ID'),
+    searchType: z.string().optional().describe('检索方式：hybrid / vector / bm25'),
+    metadata: z.record(z.string(), z.any()).optional().describe('额外元数据'),
+  });
+
+  /**
+   * POST /chat/search-feedback
+   * 上报检索隐式反馈（用户行为信号）
+   *
+   * 前端在检测到以下行为时调用：
+   * - regenerate：用户点击"重新生成"
+   * - followup：用户追问
+   * - abandon：用户离开会话
+   * - positive/negative：与人工反馈交叉关联
+   */
+  @Post('search-feedback')
+  async submitSearchFeedback(
+    @Body(new ZodValidationPipe(ChatController.SearchFeedbackSchema, { label: 'SearchFeedback' }))
+    body: z.infer<typeof ChatController.SearchFeedbackSchema>,
+    @Req() req: any,
+  ) {
+    return this.evaluationService.recordSearchFeedback({
+      userId: req.userId,
+      ...body,
+    });
+  }
+
+  /**
+   * GET /chat/implicit-feedback-stats?days=7
+   * 获取隐式反馈统计
+   */
+  @Get('implicit-feedback-stats')
+  async getImplicitFeedbackStats(
+    @Query('days') days: string = '7',
+    @Req() req: any,
+  ) {
+    const daysNum = parseInt(days, 10) || 7;
+    return this.evaluationService.getImplicitFeedbackStats(req.userId, daysNum);
+  }
+
+  /**
+   * GET /chat/low-satisfaction-queries?days=7&minSamples=2&limit=20
+   * 获取低满意度查询列表（用于定位检索质量差的查询模式）
+   */
+  @Get('low-satisfaction-queries')
+  async getLowSatisfactionQueries(
+    @Query('days') days: string = '7',
+    @Query('minSamples') minSamples: string = '2',
+    @Query('limit') limit: string = '20',
+    @Req() req: any,
+  ) {
+    const daysNum = parseInt(days, 10) || 7;
+    const minSamplesNum = parseInt(minSamples, 10) || 2;
+    const limitNum = parseInt(limit, 10) || 20;
+    return this.evaluationService.getLowSatisfactionQueries(
+      req.userId,
+      daysNum,
+      minSamplesNum,
+      limitNum,
+    );
   }
 
   // ==================== 工具使用统计接口 ====================

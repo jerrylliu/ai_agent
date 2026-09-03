@@ -102,7 +102,7 @@ const sendNotificationAttachmentSchema = z.object({
     .string()
     .optional()
     .describe(
-      '附件文件的 URL。接受：generate_image 返回的 images[].url、generate_chart 返回的 imageUrl、create_mindmap 返回的 imageUrl，或任意 http/https URL / base64 data URI',
+      '附件文件的 URL。接受：generate_image 返回的 images[].url、generate_chart 返回的 imageUrl、create_mindmap 返回的 imageUrl、search_knowledge_base 结果中 ![图片 N](http://...) 的图片 URL，或任意 http/https URL / base64 data URI',
     ),
   content: z
     .string()
@@ -189,6 +189,86 @@ export interface SendNotificationResult {
     /** LLM 可直接据此构造下一次调用的参数提示 */
     hint: string;
   };
+}
+
+// ==================== 正文 Markdown 图片处理 ====================
+//
+// 背景：知识库检索结果中的图片以 `![图片 N](http://.../images/...)` Markdown 语法
+// 进入 AI 回复。模型调用本工具时通常只把整段文本复制进 content，
+// 不会主动把图片 URL 填进 attachments —— 导致图片在邮件/飞书中丢失。
+// 因此发送前由服务端自动提取正文图片 URL 转为附件，保证"图随文走"（不赌模型行为）。
+
+/**
+ * 提取正文中的 Markdown 图片语法（alt + url）
+ * 仅匹配 http/https URL；fc:// 内部协议与 data URI 不会出现在正文中，无需处理
+ */
+function extractMarkdownImages(content: string): Array<{ alt: string; url: string }> {
+  // 每次调用创建新正则，避免 /g 正则 lastIndex 共享状态陷阱
+  const regex = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+  const results: Array<{ alt: string; url: string }> = [];
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null) {
+    results.push({ alt: match[1], url: match[2] });
+  }
+  return results;
+}
+
+/**
+ * 为自动提取的图片推断附件文件名：
+ * 优先取 URL path 最后一段（含合法图片扩展名时采纳），否则用序号兜底命名
+ */
+function inferImageFilenameFromUrl(url: string, index: number): string {
+  try {
+    const basename = new URL(url).pathname.split('/').filter(Boolean).pop() || '';
+    if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(basename)) {
+      return basename;
+    }
+  } catch {
+    // URL 解析失败走兜底命名
+  }
+  return `image_${index + 1}.png`;
+}
+
+/**
+ * 自动提取正文中的 Markdown 图片 URL，补充到 attachments
+ * 去重规则：
+ *   - 已在 attachments 中出现的 URL 不重复添加
+ *   - 同一 URL 在正文中出现多次只提取一次
+ */
+function mergeContentImagesIntoAttachments(params: SendNotificationParams): void {
+  const images = extractMarkdownImages(params.content);
+  if (images.length === 0) return;
+
+  const existingUrls = new Set(
+    (params.attachments || []).map((a) => a.url).filter((u): u is string => !!u),
+  );
+  const autoAttachments = images
+    .filter((img) => !existingUrls.has(img.url))
+    .filter((img, idx, arr) => arr.findIndex((x) => x.url === img.url) === idx)
+    .map((img, i) => ({
+      filename: inferImageFilenameFromUrl(img.url, i),
+      url: img.url,
+    }));
+  if (autoAttachments.length === 0) return;
+
+  params.attachments = [...(params.attachments || []), ...autoAttachments];
+  logger.info('send_notification：从正文自动提取图片转为附件', {
+    module: 'Tool:SendNotification',
+    count: autoAttachments.length,
+    urls: autoAttachments.map((a) => a.url),
+  });
+}
+
+/**
+ * 将正文中的 Markdown 图片语法替换为占位文字
+ * 用于邮件 HTML / 飞书卡片等不支持 Markdown 图片渲染的通道，
+ * 图片本体已作为附件单独发送，正文保留占位提示即可
+ */
+function replaceMarkdownImagesWithPlaceholder(content: string): string {
+  return content.replace(
+    /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g,
+    (_match, alt: string) => `[${alt || '图片'}：见下方附件]`,
+  );
 }
 
 // ==================== 飞书通道 ====================
@@ -358,7 +438,8 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
 
   const card = buildCardJson({
     title: params.title,
-    content: params.content,
+    // lark_md 不支持 Markdown 图片语法，替换为占位文字（图片会作为独立图片消息发出）
+    content: replaceMarkdownImagesWithPlaceholder(params.content),
     headerColor: 'blue',
     fields: cardFields.length > 0 ? cardFields : undefined,
   });
@@ -474,8 +555,9 @@ function buildEmailHtml(
   inlineImages: Array<{ cid: string; filename: string; sizeBytes: number; sourceUrl?: string }>,
   fileAttachments: Array<{ filename: string; sizeBytes: number }>,
 ): string {
-  // 将 Markdown 换行转为 <br/>，基本字符转义
-  const bodyHtml = content
+  // 正文中的 Markdown 图片语法（![图片 N](url)）在邮件客户端无法渲染，
+  // 先替换为占位文字（图片本体已作为内嵌附件展示在下方），再做 HTML 转义
+  const bodyHtml = replaceMarkdownImagesWithPlaceholder(content)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -904,6 +986,9 @@ export async function executeSendNotification(rawParams: unknown): Promise<SendN
     };
   }
   const params = parsed.data;
+
+  // 自动提取正文 Markdown 图片转附件（保证"图随文走"，不依赖模型主动传 attachments）
+  mergeContentImagesIntoAttachments(params);
 
   logger.info('send_notification：开始发送', {
     module: 'Tool:SendNotification',

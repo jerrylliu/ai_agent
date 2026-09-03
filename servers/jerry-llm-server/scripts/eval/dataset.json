@@ -1,0 +1,2014 @@
+{
+  "version": "1.0",
+  "description": "离线评估数据集 - 从知识库自动生成，共 207 条样本",
+  "generatedAt": "2026-08-12T13:29:19.684Z",
+  "totalCount": 207,
+  "kValues": [
+    1,
+    3,
+    5,
+    10
+  ],
+  "samples": [
+    {
+      "id": "q001",
+      "query": "高级前端专家如何做性能优化？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q002",
+      "query": "飞书应用优化细节的超详细内培版在哪里可以观看？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q003",
+      "query": "第一弹直播回放的链接是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q004",
+      "query": "第二弹的飞书文档密码是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q005",
+      "query": "两个培训内容的飞书链接分别是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q006",
+      "query": "第一弹和第二弹的直播回放链接有何不同？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q007",
+      "query": "飞书文档的访问密码分别是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q008",
+      "query": "如果我想查看飞书应用优化细节的第一弹文档，需要做什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q009",
+      "query": "字节大佬细数了什么的优化细节？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q010",
+      "query": "第二弹是哪个版本的培训？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q011",
+      "query": "如何获取飞书应用优化细节的详细资料？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q012",
+      "query": "第一弹的飞书链接和密码是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q013",
+      "query": "两个直播回放的URL分别是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q014",
+      "query": "比较第一弹和第二弹的标题，有什么相同点？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q015",
+      "query": "第二弹的直播回放地址是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q016",
+      "query": "飞书文档的密码为什么有两个？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q017",
+      "query": "第一弹的飞书文档链接是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q018",
+      "query": "培训视频的回放在哪里？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q019",
+      "query": "第一弹和第二弹的密码分别是什么？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q020",
+      "query": "如何访问超详细内培版的飞书文档？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q021",
+      "query": "两个飞书文档的密码哪个包含特殊字符？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q022",
+      "query": "飞书应用优化细节的内部培训版是第几弹？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q023",
+      "query": "文档中一共提供了几个直播回放链接和几个飞书链接？",
+      "expectedDocIds": [
+        "63"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 63"
+    },
+    {
+      "id": "q024",
+      "query": "迟到是怎么定义的？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q025",
+      "query": "早退是怎么定义的？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q026",
+      "query": "迟到或早退10分钟以内会扣多少绩效奖金？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q027",
+      "query": "迟到或早退超过30分钟按什么处理？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q028",
+      "query": "旷工一天会有什么处罚？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q029",
+      "query": "连续旷工几天属于严重违纪？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q030",
+      "query": "公司会议室需要提前通过什么系统预订？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q031",
+      "query": "普通武器使用规范的章节编号是多少？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q032",
+      "query": "员工比规定时间晚到20分钟，会影响多少收入？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q033",
+      "query": "如果员工有事提前离开且没有经过批准，算什么行为？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q034",
+      "query": "员工晚到半小时以上，公司会怎么处理？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q035",
+      "query": "临时想找个开会的地方，公司有什么要求？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q036",
+      "query": "一个月里有五天没来上班，会有什么后果？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q037",
+      "query": "迟到和早退的扣款规则一样吗？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q038",
+      "query": "迟到超过30分钟后，除了扣绩效奖金，基础工资会被扣吗？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q039",
+      "query": "连续旷工三天和月累计旷工五天分别属于什么情况？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q040",
+      "query": "如果员工既晚到超过30分钟，又有整天没来上班，工资和绩效分别会怎么扣？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q041",
+      "query": "迟到10分钟以内和迟到超过30分钟的处罚有哪些不同？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q042",
+      "query": "旷工扣发工资的方式与迟到扣绩效奖金的方式有什么本质区别？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q043",
+      "query": "如果一次晚到55分钟，这次考勤会怎么扣钱？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q044",
+      "query": "用内部系统预订开会房间是可选还是必须的？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "semantic",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q045",
+      "query": "员工无故整天未到岗，公司除了扣钱还会给什么处理？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q046",
+      "query": "假如一个员工连续旷工3天，公司有没有权解除劳动合同？",
+      "expectedDocIds": [
+        "64"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 64"
+    },
+    {
+      "id": "q047",
+      "query": "RM277 是什么类型的武器？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q048",
+      "query": "SVCH 的定位是什么？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q049",
+      "query": "「裂变」赛季的上线时间是什么时候？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q050",
+      "query": "RM277 适合什么作战距离？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q051",
+      "query": "SVCH 是什么类型的武器？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q052",
+      "query": "RM277 采用什么样的设计？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q053",
+      "query": "RM277 的射击手感怎么样？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q054",
+      "query": "我想找一把中近距离突击作战的步枪，有什么推荐？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q055",
+      "query": "有没有适合中远距离精准点射的武器？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q056",
+      "query": "新赛季的两把武器里，哪一把更适合作为战术小队的火力支援？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q057",
+      "query": "如果我是突击手，应该选择哪一把新武器？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q058",
+      "query": "为什么说这把新枪能填补突击步枪和狙击步枪之间的空白？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q059",
+      "query": "我玩的是支援位，需要一把在中等距离上提供精准输出的武器，怎么选？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q060",
+      "query": "这把新枪为什么能成为战术小队中不可或缺的火力支援武器？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q061",
+      "query": "我喜欢稳定射击手感，又需要中近距离压制力，哪把枪适合我？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q062",
+      "query": "新赛季新增了哪两把武器？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q063",
+      "query": "RM277 和 SVCH 分别适合什么战斗距离？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q064",
+      "query": "突击步枪和精确射手步枪的定位有什么不同？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q065",
+      "query": "RM277 的模块化设计和 SVCH 的精准点射分别适合什么战术？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q066",
+      "query": "如果一个小队既要中近距离突击，又要中远距离支援，应该如何搭配新赛季的武器？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q067",
+      "query": "为什么 RM277 是突击主力而 SVCH 是火力支援武器？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q068",
+      "query": "结合 RM277 和 SVCH 的特点，说说新赛季武器如何覆盖不同作战距离？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q069",
+      "query": "新赛季新增的武器里，哪一把更适合单独行动，哪一把更适合团队协作？",
+      "expectedDocIds": [
+        "65"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 65"
+    },
+    {
+      "id": "q070",
+      "query": "新赛季「裂变」的上线时间是什么时候？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q071",
+      "query": "RM277是什么类型的步枪？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q072",
+      "query": "SVCH的定位是什么？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q073",
+      "query": "RM277的射击手感怎么样？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q074",
+      "query": "RM277支持配件改装吗？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q075",
+      "query": "新赛季推出了哪些新武器？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q076",
+      "query": "RM277的图片链接能发一下吗？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "image",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q077",
+      "query": "这篇武器介绍是什么时候生成的？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q078",
+      "query": "SVCH是什么类型的步枪？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q079",
+      "query": "我想找一把中近距离突击作战的步枪，应该选哪把？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q080",
+      "query": "远距离精准打击该选哪把枪？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q081",
+      "query": "RM277为什么能适应不同作战场景？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q082",
+      "query": "RM277和SVCH在作战距离上有什么区别？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q083",
+      "query": "RM277的图片中展示的是什么武器？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "image",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q084",
+      "query": "SVCH有图片吗？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "image",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q085",
+      "query": "RM277有哪些特点？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q086",
+      "query": "RM277和SVCH有哪些区别？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q087",
+      "query": "赛季上线时间和武器介绍生成时间，哪个更晚？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q088",
+      "query": "为什么RM277能成为中近距离突击作战的主力？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q089",
+      "query": "如果要进行远距离精准打击，RM277合适吗？为什么？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q090",
+      "query": "文档中包含几张图片？链接分别是什么？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "image",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q091",
+      "query": "SVCH适合近距离战斗吗？",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q092",
+      "query": "请从定位和类型两方面对比RM277和SVCH。",
+      "expectedDocIds": [
+        "66"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 66"
+    },
+    {
+      "id": "q093",
+      "query": "三角洲行动新赛季叫什么？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q094",
+      "query": "赛季上线时间是什么时候？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q095",
+      "query": "RM277是哪一类武器？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q096",
+      "query": "SVCH是哪一类武器？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q097",
+      "query": "RM277的定位是什么？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q098",
+      "query": "SVCH的定位是什么？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q099",
+      "query": "RM277在设计中采用了什么？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q100",
+      "query": "RM277支持配件改装吗？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q101",
+      "query": "裂变赛季新增了哪些武器？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q102",
+      "query": "新版本有没有新的突击步枪？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q103",
+      "query": "我想找一把适合中近距离作战的枪，有什么推荐？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q104",
+      "query": "哪把枪适合中远距离精准打击？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "semantic",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q105",
+      "query": "新赛季有哪些武器可以玩？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q106",
+      "query": "请介绍一下裂变赛季的新武器。",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q107",
+      "query": "RM277和SVCH分别是什么类型的武器？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "multi-entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q108",
+      "query": "RM277和SVCH的定位有什么不同？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q109",
+      "query": "裂变赛季新增的两把武器各自的特点是什么？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q110",
+      "query": "比较RM277和SVCH的适用场景。",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q111",
+      "query": "如果需要中距离压制敌人，应该选哪把枪？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q112",
+      "query": "突击步枪和精确射手步枪在赛季中分别对应哪些武器？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q113",
+      "query": "为什么RM277适合中近距离作战？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q114",
+      "query": "为什么SVCH适合中远距离精准打击？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q115",
+      "query": "RM277和SVCH的战术定位分别是什么？",
+      "expectedDocIds": [
+        "67"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 67"
+    },
+    {
+      "id": "q116",
+      "query": "三角洲行动新赛季叫什么名字？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q117",
+      "query": "RM277突击步枪的定位是什么？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q118",
+      "query": "SVCH是什么类型的武器？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q119",
+      "query": "CSV-35运输直升机的定位是什么？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q120",
+      "query": "三角洲行动新赛季什么时候上线？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q121",
+      "query": "新赛季更新了什么载具？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q122",
+      "query": "图片1展示的是什么武器？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "image",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q123",
+      "query": "有SVCH的图片吗？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "image",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q124",
+      "query": "CSV-35的图片是哪一个？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "image",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q125",
+      "query": "RM277为什么适合中近距离作战？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q126",
+      "query": "想找一把中远距离精确打击的枪，推荐哪个？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q127",
+      "query": "SVCH填补了什么火力空白？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q128",
+      "query": "RM277的模块化设计有什么好处？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q129",
+      "query": "为什么SVCH适合中等距离精确点射？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q130",
+      "query": "SVCH为什么是战术小队中不可或缺的火力支援武器？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q131",
+      "query": "RM277和SVCH在作战距离上有何不同？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q132",
+      "query": "新赛季新增的武器和载具分别是什么？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q133",
+      "query": "新赛季的文档生成时间是什么时候？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q134",
+      "query": "新赛季的上线时间和文档生成时间分别是多少？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q135",
+      "query": "如何实现快速部署和战术运输？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q136",
+      "query": "这赛季新增了哪些作战单位？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q137",
+      "query": "SVCH相比突击步枪和狙击步枪有什么特点？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q138",
+      "query": "新赛季新增内容中，哪些适合中近距离作战，哪些适合中远距离作战？",
+      "expectedDocIds": [
+        "69"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 69"
+    },
+    {
+      "id": "q139",
+      "query": "妃寒的定位是什么？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q140",
+      "query": "妃寒的伙伴叫什么名字？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q141",
+      "query": "妃寒的伴生皮肤叫什么？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q142",
+      "query": "妃寒属于哪个小队？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q143",
+      "query": "艾尔登法环中鲜血君王的领地是什么？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q144",
+      "query": "雪山通往哪个巨人的领地？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q145",
+      "query": "妃寒是什么时候上线的？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q146",
+      "query": "妃寒的冰雪造型有什么特点？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q147",
+      "query": "为什么说妃寒是少有的输出法师？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q148",
+      "query": "最近王者荣耀世界出了什么新英雄？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q149",
+      "query": "我想了解一下妃寒的外形设计。",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "semantic",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q150",
+      "query": "哪个角色和昭君有老乡关系？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q151",
+      "query": "艾尔登法环有哪些地下区域？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q152",
+      "query": "王昭君和妃寒一起上场效果如何？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q153",
+      "query": "妃寒这个角色有什么背景故事？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q154",
+      "query": "妃寒和大白是什么关系？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q155",
+      "query": "妃寒与王昭君是什么关系？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "multi-entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q156",
+      "query": "为什么妃寒的皮肤颜色和本体相反？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q157",
+      "query": "妃寒作为输出法师，她的搭配伙伴是谁？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q158",
+      "query": "妃寒和昭君的双冰阵容有什么优势？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q159",
+      "query": "妃寒的形象图片展现了什么？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "image",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q160",
+      "query": "妃寒和大白的图片里有什么？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "image",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q161",
+      "query": "蛉鸣幻象皮肤图片是什么色调？",
+      "expectedDocIds": [
+        "78"
+      ],
+      "category": "image",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 78"
+    },
+    {
+      "id": "q162",
+      "query": "妃寒是谁？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q163",
+      "query": "妃寒的伙伴叫什么？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q164",
+      "query": "妃寒的定位是什么？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q165",
+      "query": "妃寒的伴生皮肤叫什么？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q166",
+      "query": "艾尔登法环中地下城市是谁的领地？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q167",
+      "query": "冰雪造型的角色是谁？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "semantic",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q168",
+      "query": "有没有妃寒和大白的图片？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "image",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q169",
+      "query": "妃寒的皮肤有图片吗？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "image",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q170",
+      "query": "妃寒来自哪里？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q171",
+      "query": "妃寒属于哪个小队？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q172",
+      "query": "妃寒什么时候上线？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q173",
+      "query": "妃寒的伙伴大白是什么动物？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q174",
+      "query": "王者荣耀世界新出的法师英雄有什么特点？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q175",
+      "query": "有没有和王昭君搭配的英雄？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q176",
+      "query": "在艾尔登法环中，独眼巨人在哪张地图？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q177",
+      "query": "鲜血君王的领地在哪？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q178",
+      "query": "为什么妃寒和王昭君能组成双冰阵容？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q179",
+      "query": "妃寒的皮肤和原始形象有什么区别？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q180",
+      "query": "为什么说妃寒是少有的输出法师？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q181",
+      "query": "从文档看，王者荣耀世界里有哪些角色来自北荒？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q182",
+      "query": "艾尔登法环中，地下城市和雪山分别关联哪些敌人？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q183",
+      "query": "妃寒与王昭君之间有哪些联系？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q184",
+      "query": "文档中提到了哪些艾尔登法环地图？它们分别是谁的领地？",
+      "expectedDocIds": [
+        "79"
+      ],
+      "category": "multi-entity",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 79"
+    },
+    {
+      "id": "q185",
+      "query": "《王者荣耀世界》S1赛季下半程上线的新英雄是谁？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q186",
+      "query": "妃寒的定位是什么？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q187",
+      "query": "妃寒身边的雪兔叫什么名字？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q188",
+      "query": "妃寒的伴生皮肤叫什么？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q189",
+      "query": "妃寒是哪个小队的成员？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q190",
+      "query": "鲜血君王的领地在艾尔登法环的哪张地图？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q191",
+      "query": "艾尔登法环的雪山地图通往谁的领地？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "entity",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q192",
+      "query": "艾尔登法环经典地图一共有哪几张？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "entity",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q193",
+      "query": "这个新角色的外观风格是什么样的？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "semantic",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q194",
+      "query": "她在游戏里的战斗定位有什么特别之处？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q195",
+      "query": "她的动物伙伴在战斗中起什么作用？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q196",
+      "query": "这个新角色在故事里是什么来头？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "semantic",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q197",
+      "query": "从这篇文档能了解到这个新角色的哪些完整设定？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "semantic",
+      "difficulty": "hard",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q198",
+      "query": "有没有这个新角色和动物伙伴一起出现的图片？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "image",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q199",
+      "query": "这个新角色的森林主题皮肤外观对应哪张图片？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "image",
+      "difficulty": "easy",
+      "note": "自动生成，来源文档 80"
+    },
+    {
+      "id": "q200",
+      "query": "这篇文章里出现了多少张关于这个新角色的图片？",
+      "expectedDocIds": [
+        "80"
+      ],
+      "category": "image",
+      "difficulty": "medium",
+      "note": "自动生成，来源文档 80"
+    }
+  ]
+}

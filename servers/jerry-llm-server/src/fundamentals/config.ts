@@ -219,6 +219,19 @@ const ScannedPdfSchema = z.object({
   renderDpi: z.coerce.number().int().positive().default(150),
 });
 
+// 文档入库注入扫描配置（发布门禁：静态签名 + LLM chunk 级判定 + 人工复核）
+// 默认关闭；关闭时发布链路完全透传原有逻辑，扫描相关字段保持初始值
+const DocScanSchema = z.object({
+  // 是否启用注入扫描门禁
+  enabled: zBoolFromString(false),
+  // 是否启用 LLM chunk 级判定（捕捉静态签名之外的语义注入）；关闭时仅用静态签名裁决
+  llmJudgeEnabled: zBoolFromString(true),
+  // 单文档最大扫描 chunk 数，超出部分截断，防止超大文档拖垮模型调用成本
+  maxChunksPerDocument: z.coerce.number().int().positive().default(100),
+  // suspicious 级别处置方式：'review' = 转人工复核（默认）；'block' = 直接拒绝
+  suspiciousAction: z.enum(['review', 'block']).default('review'),
+});
+
 // ==================== 顶层 Schema ====================
 
 const RootSchema = z.object({
@@ -265,6 +278,7 @@ const RootSchema = z.object({
   imageRetry: ImageRetrySchema,
   formula: FormulaSchema,
   scannedPdf: ScannedPdfSchema,
+  docScan: DocScanSchema,
 });
 
 // ==================== 解析 process.env ====================
@@ -398,6 +412,12 @@ function buildRawConfig() {
       charsPerPageThreshold: env.SCANNED_PDF_CHARS_THRESHOLD,
       renderDpi: env.SCANNED_PDF_RENDER_DPI,
     },
+    docScan: {
+      enabled: env.DOC_SCAN_ENABLED,
+      llmJudgeEnabled: env.DOC_SCAN_LLM_JUDGE_ENABLED,
+      maxChunksPerDocument: env.DOC_SCAN_MAX_CHUNKS_PER_DOC,
+      suspiciousAction: env.DOC_SCAN_SUSPICIOUS_ACTION,
+    },
   };
 }
 
@@ -503,6 +523,7 @@ export const config = {
   imageRetry: parsed.imageRetry,
   formula: parsed.formula,
   scannedPdf: parsed.scannedPdf,
+  docScan: parsed.docScan,
 } as const;
 
 export type AppConfig = typeof config;

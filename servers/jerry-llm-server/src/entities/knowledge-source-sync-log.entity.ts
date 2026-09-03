@@ -39,6 +39,14 @@ export class KnowledgeSourceSyncLog {
   @Column({ type: 'simple-json', nullable: true })
   updatedPageDetails: Array<{ title: string; url: string }> | null;
 
+  /** 本次同步中被注入扫描拦截（跳过向量化入库）的页面数 */
+  @Column({ default: 0 })
+  pagesSkippedByScan: number;
+
+  /** 被注入扫描拦截的页面明细（追溯拦截原因用；页面仍会持久化 hash，内容不变则持续拒绝） */
+  @Column({ type: 'simple-json', nullable: true })
+  skippedPageDetails: Array<{ title: string; url: string; reason: string }> | null;
+
   @Column({ type: 'text', nullable: true })
   errorMessage: string | null;
 

@@ -35,7 +35,7 @@
  *     原因：MultiLevelCache 已经内部维护命中计数，重复计数浪费
  */
 
-import { Counter, Gauge, Registry, collectDefaultMetrics } from 'prom-client';
+import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 
 /**
  * 缓存实例的最小接口（避免循环依赖直接 import MultiLevelCache 类型）
@@ -108,6 +108,27 @@ const cacheOverallHitRate = new Gauge({
   labelNames: ['namespace'] as const,
   registers: [metricsRegistry],
 });
+const cacheL1Size = new Gauge({
+  name: 'jerry_multilevel_cache_l1_size',
+  help: '多级缓存 L1 当前条目数',
+  labelNames: ['namespace'] as const,
+  registers: [metricsRegistry],
+});
+const cacheL1MaxSize = new Gauge({
+  name: 'jerry_multilevel_cache_l1_max_size',
+  help: '多级缓存 L1 最大容量',
+  labelNames: ['namespace'] as const,
+  registers: [metricsRegistry],
+});
+
+/** 缓存读取耗时分布（Histogram：P50/P99 延迟） */
+const cacheGetDuration = new Histogram({
+  name: 'jerry_multilevel_cache_get_duration_seconds',
+  help: '多级缓存读取耗时（秒）',
+  labelNames: ['namespace', 'layer'] as const,
+  buckets: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5],
+  registers: [metricsRegistry],
+});
 
 /** 注册的缓存实例集合（用 Map<namespace, instance> 防止重复注册） */
 const registeredCaches = new Map<string, CacheStatsProvider>();
@@ -135,6 +156,8 @@ function refreshCacheGauges(): void {
     cacheMisses.set(labels, stats.misses);
     cacheL2Errors.set(labels, stats.l2Errors);
     cacheOverallHitRate.set(labels, stats.overallHitRate);
+    cacheL1Size.set(labels, stats.l1Size);
+    cacheL1MaxSize.set(labels, stats.l1MaxSize);
   }
 }
 
@@ -143,6 +166,8 @@ export const metrics = {
   hitlResolved,
   registerCacheInstance,
   refreshCacheGauges,
+  /** 缓存读取耗时 Histogram（供 MultiLevelCache 在 get 方法中 observe） */
+  cacheGetDuration,
   /** 仅测试用：清空注册的缓存引用 */
   __resetForTest(): void {
     registeredCaches.clear();

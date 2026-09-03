@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   FileText, Upload, Trash2,
   Clock, RefreshCw, X, AlertTriangle, Play, XCircle,
-  Pencil,
+  Pencil, ShieldCheck,
 } from 'lucide-react';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Button } from '../ui/button';
@@ -28,6 +28,7 @@ import {
   retrySingleVectorOp,
   deletePendingVectorOp,
   retryAllFailedOps,
+  getScanPendingReviews,
   type DocumentItem,
   type DocumentVersionItem,
   type DocumentAuditLogItem,
@@ -36,6 +37,7 @@ import {
 import { DocumentUploadDialog } from './DocumentUploadDialog';
 import { VersionTimeline } from './VersionTimeline';
 import { VersionDiff } from './VersionDiff';
+import { ScanReviewQueue } from './ScanReviewQueue';
 import { openEditorWindow } from '../../lib/window';
 
 interface DocumentManagerProps {
@@ -58,6 +60,9 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
   const [pendingOps, setPendingOps] = useState<PendingVectorOpItem[]>([]);
   const [retrying, setRetrying] = useState<number | null>(null);
   const [publishingVersionId, setPublishingVersionId] = useState<number | null>(null);
+  // 注入扫描人工复核队列：角标计数 + 队列弹窗开关
+  const [pendingReviewCount, setPendingReviewCount] = useState(0);
+  const [reviewQueueOpen, setReviewQueueOpen] = useState(false);
 
   // 确认弹窗状态
   const [deleteDocConfirmOpen, setDeleteDocConfirmOpen] = useState(false);
@@ -127,9 +132,20 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
     }
   }, [showFeedback]);
 
+  // 拉取待人工复核数量，用于"安全复核"按钮角标（失败静默，不影响主流程）
+  const loadPendingReviewCount = useCallback(async () => {
+    try {
+      const items = await getScanPendingReviews();
+      setPendingReviewCount(items.length);
+    } catch {
+      // silent
+    }
+  }, []);
+
   useEffect(() => {
     handleRefresh();
-  }, []);
+    loadPendingReviewCount();
+  }, [handleRefresh, loadPendingReviewCount]);
 
   useEffect(() => {
     if (selectedDocId) {
@@ -206,15 +222,25 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
     }
   };
 
-  /** 发布版本到知识库（向量化 + 激活） */
+  /** 发布版本到知识库（先过注入扫描门禁，再向量化 + 激活） */
   const handlePublishVersion = async (versionId: number) => {
     if (!selectedDocId) return;
     setPublishingVersionId(versionId);
     try {
-      await publishToVectorStore(selectedDocId, versionId);
-      showFeedback(true, '已发布到知识库');
+      const result = await publishToVectorStore(selectedDocId, versionId);
+      // 扫描门禁关闭时 scanGate 为 null，保持旧行为提示
+      const verdict = result.scanGate?.verdict;
+      if (verdict === 'needs_review') {
+        showFeedback(false, '安全扫描发现可疑内容，已暂扣等待人工复核');
+        // 有新版本进入复核队列，刷新角标
+        loadPendingReviewCount();
+      } else if (verdict === 'blocked') {
+        showFeedback(false, '安全扫描命中高危内容，该版本已被拒绝入库');
+      } else {
+        showFeedback(true, '已发布到知识库');
+        onRefreshKnowledgeBase?.();
+      }
       loadVersions(selectedDocId);
-      onRefreshKnowledgeBase?.();
     } catch (err: any) {
       showFeedback(false, err.message || '发布失败');
     } finally {
@@ -318,6 +344,7 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
 
   const actionLabel: Record<string, string> = {
     upload: '上传', activate: '激活', archive: '归档', rollback: '回滚', delete: '删除',
+    scan_hold: '扫描暂扣', scan_reject: '扫描拒绝', review_approve: '复核通过', review_reject: '复核拒绝',
   };
 
   return (
@@ -331,6 +358,21 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          </Button>
+          {/* 安全复核入口：注入扫描判定为可疑的版本在此人工处置，角标显示待复核数量 */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="relative"
+            onClick={() => setReviewQueueOpen(true)}
+          >
+            <ShieldCheck className="h-4 w-4 mr-1" />
+            安全复核
+            {pendingReviewCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-orange-500 text-white text-[10px] leading-4 text-center">
+                {pendingReviewCount}
+              </span>
+            )}
           </Button>
           <Button size="sm" onClick={() => setShowUpload(true)}>
             <Upload className="h-4 w-4 mr-1" />
@@ -371,6 +413,19 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
           documents={documents}
           onSuccess={handleUploadSuccess}
           onClose={() => setShowUpload(false)}
+        />
+      )}
+
+      {/* 注入扫描人工复核队列 */}
+      {reviewQueueOpen && (
+        <ScanReviewQueue
+          onClose={() => setReviewQueueOpen(false)}
+          onQueueChanged={(remaining: number) => setPendingReviewCount(remaining)}
+          onPublished={() => {
+            // 复核通过会发布入库：刷新知识库与当前文档的版本状态
+            onRefreshKnowledgeBase?.();
+            if (selectedDocId) loadVersions(selectedDocId);
+          }}
         />
       )}
 

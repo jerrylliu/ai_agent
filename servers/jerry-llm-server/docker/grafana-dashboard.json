@@ -207,7 +207,7 @@
     {
       "type": "bargauge",
       "title": "L1/L2/Miss 分布（chart-option）",
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 19 },
+      "gridPos": { "h": 8, "w": 4, "x": 12, "y": 19 },
       "id": 11,
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -232,7 +232,7 @@
     {
       "type": "bargauge",
       "title": "L1/L2/Miss 分布（mindmap-code）",
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 19 },
+      "gridPos": { "h": 8, "w": 4, "x": 16, "y": 19 },
       "id": 12,
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -255,16 +255,85 @@
       "options": { "orientation": "horizontal", "displayMode": "gradient" }
     },
     {
+      "type": "bargauge",
+      "title": "L1/L2/Miss 分布（rag-search）",
+      "description": "RAG 向量检索结果缓存，纯内存 LRU（无 L2）",
+      "gridPos": { "h": 8, "w": 4, "x": 20, "y": 19 },
+      "id": 18,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jerry_multilevel_cache_l1_hits{namespace=\"rag-search\"}",
+          "legendFormat": "L1 命中"
+        },
+        {
+          "refId": "B",
+          "expr": "jerry_multilevel_cache_l2_hits{namespace=\"rag-search\"}",
+          "legendFormat": "L2 命中"
+        },
+        {
+          "refId": "C",
+          "expr": "jerry_multilevel_cache_misses{namespace=\"rag-search\"}",
+          "legendFormat": "未命中"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
+      "type": "timeseries",
+      "title": "缓存读取耗时 P95（L1 vs L2 vs Miss）",
+      "description": "各层级缓存读取的 P95 延迟，L1 应在 0.1ms 级别，L2 在 1ms 级别",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
+      "id": 16,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, layer) (rate(jerry_multilevel_cache_get_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{layer}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "L1 缓存容量使用（按 namespace）",
+      "description": "各 namespace 的 L1 当前条目数与上限对比",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
+      "id": 17,
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "jerry_multilevel_cache_l1_size",
+          "legendFormat": "{{namespace}} 当前"
+        },
+        {
+          "refId": "B",
+          "expr": "jerry_multilevel_cache_l1_max_size",
+          "legendFormat": "{{namespace}} 上限"
+        }
+      ],
+      "options": { "orientation": "horizontal", "displayMode": "gradient" }
+    },
+    {
       "type": "row",
       "title": "🟪 Node.js 系统指标",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
       "id": 13,
       "collapsed": false
     },
     {
       "type": "timeseries",
       "title": "堆内存使用",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 36 },
       "id": 14,
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -285,7 +354,7 @@
       "type": "timeseries",
       "title": "事件循环延迟",
       "description": "事件循环 lag，应该接近 0。超过 100ms 说明 CPU 阻塞严重",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 36 },
       "id": 15,
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -319,6 +388,6 @@
   "timezone": "browser",
   "title": "Jerry LLM Server 监控大盘",
   "uid": "jerry-llm-server",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

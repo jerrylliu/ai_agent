@@ -19,6 +19,7 @@ import { createHash } from 'crypto';
 import { logger } from './logger.js';
 import { eventBus } from './event-bus.js';
 import { getRuntimeConfig, updateRuntimeConfig } from './runtime-config.js';
+import { metrics } from './metrics.js';
 
 // ==================== 缓存条目 ====================
 
@@ -87,6 +88,8 @@ export class LRUCache<V> {
     private maxItemSize: number = 5 * 1024,
     /** 默认 TTL（毫秒），0 表示永不过期，默认 5 分钟 */
     private defaultTTL: number = 5 * 60 * 1000,
+    /** 缓存命名空间，用于 Prometheus 指标区分不同缓存实例 */
+    private namespace: string = 'rag-search',
   ) {
     // 监听知识库更新事件，自动清缓存
     eventBus.on('knowledge-base-updated', (reason: string) => {
@@ -110,10 +113,15 @@ export class LRUCache<V> {
    * 命中时将条目移到 Map 末尾（LRU 特性：最近访问的排后面）
    */
   get(key: string): V | undefined {
+    const startTime = performance.now();
     const entry = this.cache.get(key);
 
     if (!entry) {
       this.misses++;
+      metrics.cacheGetDuration.observe(
+        { namespace: this.namespace, layer: 'miss' },
+        (performance.now() - startTime) / 1000,
+      );
       logger.debug('缓存未命中', {
         module: 'LRUCache',
         key,
@@ -129,6 +137,10 @@ export class LRUCache<V> {
       this.cache.delete(key);
       this.totalSize -= entry.size;
       this.misses++;
+      metrics.cacheGetDuration.observe(
+        { namespace: this.namespace, layer: 'miss' },
+        (performance.now() - startTime) / 1000,
+      );
       const ageMs = Date.now() - entry.createdAt;
       logger.debug('缓存条目已过期', {
         module: 'LRUCache',
@@ -146,6 +158,10 @@ export class LRUCache<V> {
     this.cache.set(key, entry);
 
     this.hits++;
+    metrics.cacheGetDuration.observe(
+      { namespace: this.namespace, layer: 'L1' },
+      (performance.now() - startTime) / 1000,
+    );
     const ageMs = Date.now() - entry.createdAt;
     logger.debug('缓存命中', {
       module: 'LRUCache',
@@ -265,6 +281,27 @@ export class LRUCache<V> {
   }
 
   /**
+   * 获取 Prometheus 指标兼容的统计数据
+   * 与 MultiLevelCache 的 CacheStatsProvider 接口对齐，
+   * 供 metrics.registerCacheInstance 采集命中率/容量等 Gauge
+   */
+  getMetricsStats() {
+    const total = this.hits + this.misses;
+    return {
+      namespace: this.namespace,
+      l1Hits: this.hits,
+      l2Hits: 0, // 纯内存缓存，无 L2
+      misses: this.misses,
+      l2Errors: 0,
+      total,
+      l1HitRate: total > 0 ? +(this.hits / total).toFixed(4) : 0,
+      overallHitRate: total > 0 ? +(this.hits / total).toFixed(4) : 0,
+      l1Size: this.cache.size,
+      l1MaxSize: this.maxEntries,
+    };
+  }
+
+  /**
    * 重置统计计数器
    */
   resetStats(): void {
@@ -341,6 +378,11 @@ export const searchCache = new LRUCache<any>(
   _rc.maxItemSizeKB * 1024,
   _rc.defaultTTLMinutes * 60 * 1000,
 );
+
+// 注册到 Prometheus 指标系统，每次 scrape /api/metrics 时自动采集命中率
+metrics.registerCacheInstance('rag-search', {
+  getStats: () => searchCache.getMetricsStats(),
+});
 
 /**
  * 获取缓存统计信息（供 API 接口调用）

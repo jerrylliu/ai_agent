@@ -1243,6 +1243,31 @@ export interface DocumentItem {
   updatedAt: string;
 }
 
+/** 注入扫描发现项（与后端 ScanFinding 对应） */
+export interface ScanFindingItem {
+  /** 产生阶段：静态签名扫描 / LLM chunk 级判定 */
+  stage: "static" | "llm";
+  /** 严重级别：拦截（直接拒绝）/ 可疑（需人工复核）/ 仅记录 */
+  severity: "blocked" | "suspicious" | "info";
+  /** 发现项类型标识（如 block-pattern / zero-width / llm-judge） */
+  type: string;
+  /** 发现项描述（中文） */
+  detail: string;
+  /** 命中 chunk 的序号（LLM 判定阶段） */
+  chunkIndex?: number;
+  /** 命中位置附近的原文片段（溯源用） */
+  evidence?: string;
+}
+
+/** 版本注入扫描状态 */
+export type VersionScanStatus =
+  | "pending"
+  | "scanning"
+  | "passed"
+  | "needs_review"
+  | "approved"
+  | "rejected";
+
 export interface DocumentVersionItem {
   id: number;
   documentId: number;
@@ -1253,16 +1278,43 @@ export interface DocumentVersionItem {
   checksum: string | null;
   status: "draft" | "active" | "archived";
   parsingStatus: "pending" | "parsing" | "success" | "failed";
+  /** 注入扫描门禁状态 */
+  scanStatus: VersionScanStatus;
+  /** 扫描发现项明细（复核界面展示） */
+  scanFindings: ScanFindingItem[] | null;
+  /** 最近一次扫描完成时间 */
+  scannedAt: string | null;
   uploadedBy: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 发布接口的扫描门禁结果（扫描关闭时为 null） */
+export interface ScanGateResult {
+  verdict: "passed" | "needs_review" | "blocked";
+  findings: ScanFindingItem[];
+}
+
+/** 待人工复核条目 */
+export interface PendingScanReviewItem {
+  version: DocumentVersionItem;
+  documentTitle: string;
 }
 
 export interface DocumentAuditLogItem {
   id: number;
   documentId: number;
   versionId: number | null;
-  action: "upload" | "activate" | "archive" | "rollback" | "delete";
+  action:
+    | "upload"
+    | "activate"
+    | "archive"
+    | "rollback"
+    | "delete"
+    | "scan_hold"
+    | "scan_reject"
+    | "review_approve"
+    | "review_reject";
   operator: string;
   detail: string | null;
   createdAt: string;
@@ -1388,12 +1440,71 @@ export async function saveDocumentDraft(
 export async function publishToVectorStore(
   documentId: number,
   versionId: number,
-): Promise<{ success: boolean; version: DocumentVersionItem }> {
+): Promise<{
+  success: boolean;
+  version: DocumentVersionItem;
+  /** 扫描门禁结果；后端关闭注入扫描（DOC_SCAN_ENABLED=false）时为 null */
+  scanGate: ScanGateResult | null;
+}> {
   const response = await fetch(
     `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}/publish`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    },
+  );
+  return handleResponse<{
+    success: boolean;
+    version: DocumentVersionItem;
+    scanGate: ScanGateResult | null;
+  }>(response);
+}
+
+/** 获取待人工复核的版本列表（注入扫描判定为可疑） */
+export async function getScanPendingReviews(): Promise<
+  PendingScanReviewItem[]
+> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/scan/pending-reviews`,
+    {
+      headers: getAuthHeaders(),
+    },
+  );
+  const data = await handleResponse<{
+    success: boolean;
+    items: PendingScanReviewItem[];
+  }>(response);
+  return data.items ?? [];
+}
+
+/** 复核通过：后端校验内容未被篡改后发布入库 */
+export async function approveScanReview(
+  versionId: number,
+): Promise<{ success: boolean; version: DocumentVersionItem }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/scan/${versionId}/approve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+      body: JSON.stringify({ operator: "reviewer" }),
+    },
+  );
+  return handleResponse<{ success: boolean; version: DocumentVersionItem }>(
+    response,
+  );
+}
+
+/** 复核拒绝：该版本不允许发布入库 */
+export async function rejectScanReview(
+  versionId: number,
+  reason?: string,
+): Promise<{ success: boolean; version: DocumentVersionItem }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/scan/${versionId}/reject`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+      body: JSON.stringify({ operator: "reviewer", reason }),
     },
   );
   return handleResponse<{ success: boolean; version: DocumentVersionItem }>(
