@@ -1,0 +1,43 @@
+# =============================================================================
+# Docker 构建上下文排除清单（位于 monorepo 根，配合 servers/jerry-llm-server/Dockerfile）
+# 目标：上下文只含构建所需文件 —— 更小的上传量，且确保 .env 等机密永不进入构建上下文
+# =============================================================================
+
+# ---- Git 与 IDE ----
+.git
+.idea
+.vscode
+**/.vscode
+
+# ---- 依赖与构建产物（容器内自行安装/编译） ----
+**/node_modules
+**/dist
+**/coverage
+**/src-tauri/target
+**/*.tsbuildinfo
+
+# ---- 机密与环境文件（最高优先级：绝不进入镜像或构建上下文） ----
+**/.env
+**/.env.*
+!**/.env.example
+**/runtime-config.json
+
+# ---- 运行时数据（由宿主机卷挂载，不属于镜像） ----
+**/logs
+**/uploads
+**/storage
+**/tmp
+**/chromadb_data
+**/chroma-data
+**/docker/data
+
+# ---- 文档与测试（不影响运行） ----
+**/*.md
+**/docs
+**/test
+**/*.spec.ts
+
+# ---- 前端桌面应用源码（服务端镜像不需要，仅保留 package.json 供 workspace 解析） ----
+clients/**
+!clients/jerry-ai-app/package.json
+frontend/**
