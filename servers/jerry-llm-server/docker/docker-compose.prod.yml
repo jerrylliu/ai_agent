@@ -26,7 +26,8 @@ services:
   app:
     build:
       # 上下文必须是 monorepo 根（pnpm-lock.yaml / .dockerignore 均在根目录）
-      context: ../..
+      # 本文件位于 servers/jerry-llm-server/docker/ 下，上跳三级才是仓库根
+      context: ../../..
       dockerfile: servers/jerry-llm-server/Dockerfile
     image: jerry-llm-server:latest
     container_name: jerry-app
@@ -105,18 +106,19 @@ services:
       - backend
 
   # ==================== ChromaDB（不暴露公网） ====================
+  # 注意：chromadb/chroma:latest(v1.5.7) 官方镜像构建缺 curl 和 python（上游 bug
+  # chroma-core/chroma#6855，修复 PR #6856 未合并），健康检查只能用镜像自带的
+  # apt-helper（下载成功=退出码 0，失败=非 0，等价于 curl -f）；数据目录默认 /data
   chroma:
     image: chromadb/chroma:latest
     container_name: jerry-chroma
     restart: unless-stopped
     environment:
-      IS_PERSISTENT: "TRUE"
-      ANONYMIZED_TELEMETRY: "FALSE"
+      CHROMA_ANONYMIZED_TELEMETRY: "FALSE"
     volumes:
-      - chroma-data:/chroma/chroma
+      - chroma-data:/data
     healthcheck:
-      # chromadb 镜像无 wget/curl，用镜像自带的 python 探测心跳接口
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v2/heartbeat')\""]
+      test: ["CMD-SHELL", "/usr/lib/apt/apt-helper download-file http://localhost:8000/api/v2/heartbeat /tmp/health"]
       interval: 15s
       timeout: 5s
       retries: 10
