@@ -4,6 +4,7 @@
 
 // 从 @nestjs/common 导入控制器所需的装饰器
 import { Controller, Get, Head, Post, Put, Delete, Patch, Body, Query, Param, Res, UseGuards, Req } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import * as crypto from 'crypto';
 import { AppService } from '../app.service';
@@ -41,6 +42,15 @@ import { splitMarkdownImages } from '../fundamentals/feishu/feishu-markdown-imag
 
 // @Controller('chat') 声明该类为 NestJS 控制器，路由前缀为 /chat
 // 即该控制器下所有路由都以 /chat 开头
+//
+// 限流放宽说明（同 knowledge-source.controller.ts 的先例）：
+// 全局 ThrottlerGuard 默认 10 次/60 秒（见 auth.module.ts），但聊天页面会
+// 每 4.5~18 秒轮询 sessions/messages，再加上用户消息与 AI 回复的保存请求，
+// 默认配额必然耗尽 → 助手消息保存被 429 拒绝 → 数据库没有回复记录，
+// 前端轮询刷新后 AI 回复气泡"消失"。这里放宽到 60 次/60 秒；
+// POST /chat/prompt 另有 RateLimitGuard（Redis 滑动窗口，30 次/分/用户）保护 LLM，
+// 不受本装饰器影响。
+@Throttle({ default: { ttl: 60000, limit: 60 } })
 @Controller('chat')
 @UseGuards(OptionalAuthGuard) // 所有接口使用可选认证，登录用户使用真实 userId
 export class ChatController {
