@@ -4,7 +4,7 @@
  * 职责：
  * 1. 调用 VLM 模型（OpenAI 兼容协议）将图片翻译为文字描述
  * 2. 失败时按分层降级策略兜底
- *    - Layer 1: VLM 主模型（带 3 次重试，应对偶发超时/限流）
+ *    - Layer 1: VLM 主模型（偶发超时/限流最多重试 3 次；配额耗尽等永久性错误立即降级，不重试）
  *    - Layer 2: VLM 备用模型（主模型全部失败时降级，2 次重试）
  *    - Layer 3: tesseract.js OCR（VLM 全部不可用时提取图片内文字）
  *    - Layer 4: 元数据兜底（无描述质量，仅靠 caption/上下文命中检索）
@@ -141,7 +141,7 @@ export async function translateImage(
     return buildFallbackResult(asset, imagePath, imageHash, 'VLM 与 OCR 均未启用');
   }
 
-  // 2. Layer 1：VLM 主模型调用（带 3 次重试，应对偶发超时/限流）
+  // 2. Layer 1：VLM 主模型调用（临时错误重试 3 次；永久性错误立即降级）
   if (isVlmAvailable()) {
     const primaryResult = await tryVlmWithRetry({
       asset,
@@ -421,7 +421,36 @@ async function buildTimeoutFallbackResult(
 // ==================== VLM 调用（带重试 + 降级） ====================
 
 /**
+ * 判断 VLM 调用错误是否为「永久性错误」（重试不可能成功）
+ *
+ * 永久性错误包括：API Key 失效（401）、配额耗尽 / 无权限（403）、
+ * 模型不存在（404）、请求格式非法（400）。这类错误由账号计费或配置决定，
+ * 在数秒的退避窗口内不可能自愈，重试只是空转。
+ *
+ * 临时性错误（429 限流、5xx 服务异常、超时、网络抖动）仍需按指数退避重试。
+ *
+ * 之所以要区分：配额耗尽时每张图片会白跑 3 次调用 + 6 秒退避，
+ * 批量入库时按图片数线性放大（50 张图 / 并发 2 ≈ 多等 150 秒）。
+ *
+ * @param err VLM 调用抛出的错误
+ * @returns true 表示不应重试，应立即降级到下一层
+ */
+function isPermanentVlmError(err: unknown): boolean {
+  // LangChain 的 APIError 会带 status 字段，优先用它精确判定
+  const status = (err as { status?: number })?.status;
+  if (typeof status === 'number') {
+    return status === 400 || status === 401 || status === 403 || status === 404;
+  }
+  // 退化到 message 匹配：ChatOpenAI 抛出的文案以状态码开头，
+  // 如 "403 Free quota exhausted. To continue accessing the model ..."
+  const message = err instanceof Error ? err.message : String(err);
+  return /\b(400|401|403|404)\b/.test(message);
+}
+
+/**
  * 尝试用 VLM（主模型或备用模型）翻译图片，带重试
+ *
+ * 仅对临时性错误重试；配额耗尽、Key 失效等永久性错误立即返回 null 交由上层降级。
  *
  * @returns 成功返回 TranslationResult，全部失败返回 null（由上层继续降级）
  */
@@ -482,6 +511,23 @@ async function tryVlmWithRetry(params: {
         model: modelLabel,
         error: lastError,
       });
+
+      // 永久性错误（配额耗尽 / Key 失效 / 模型不存在 / 请求非法）立即停止重试并降级。
+      // 这类错误由账号计费或配置决定，退避几秒后不可能自愈，继续重试只会
+      // 让每张图片白等 6 秒，批量入库时按图片数线性放大。
+      if (isPermanentVlmError(err)) {
+        logger.warn(`VLM 永久性错误，跳过剩余重试直接降级（Layer ${layer}）`, {
+          module: 'VisionTranslator',
+          docId,
+          imageIndex: asset.sourceIndex,
+          imageHash,
+          attempt,
+          skippedRetries: maxRetries - attempt,
+          model: modelLabel,
+          error: lastError,
+        });
+        return null;
+      }
 
       // 指数退避：2s -> 4s -> 8s（应对偶发超时/限流，给 VLM 服务恢复时间）
       if (attempt < maxRetries) {

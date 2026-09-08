@@ -16,7 +16,7 @@ import { logger } from './logger';
 import { config } from './config.js';
 import { calculateChecksum, computeContentHash } from './file-storage.js';
 import { SemanticCache } from './semantic-cache.js';
-import { embeddings } from './vector-store/store-state.js';
+import { getEmbeddings } from './vector-store/store-state.js';
 import { UNTRUSTED_CONTEXT_INSTRUCTION } from './prompt-injection-guard.js';
 import mysql from 'mysql2/promise';
 
@@ -52,7 +52,7 @@ const ragSemanticCache = new SemanticCache<RagSearchResult>(
     // 当前为纯内存缓存（重启即清空），此防护面向未来引入持久化后端（如 Redis）的场景
     version: 2,
   },
-  (text: string) => embeddings.embedQuery(text),
+  (text: string) => getEmbeddings().embedQuery(text),
 );
 
 /**

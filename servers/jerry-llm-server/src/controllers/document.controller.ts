@@ -286,11 +286,21 @@ export class DocumentController {
     }
   }
 
+  /**
+   * POST /documents/pending-ops/:id/retry
+   * 手动重试单条待处理向量操作
+   *
+   * reason=source-unavailable 表示源文件已丢失，重试无效，需重新上传文档。
+   */
   @Post('pending-ops/:id/retry')
   async retrySingleOp(@Param('id', ParseIntPipe) id: number) {
     try {
       const result = await this.documentService.retrySingleVectorOp(id);
-      return { success: result.success, error: result.error };
+      return {
+        success: result.success,
+        error: result.error,
+        reason: result.reason,
+      };
     } catch (error: any) {
       logger.error('单条重试失败', { module: 'DocumentController', opId: id, error: error.message });
       throw new HttpException(error.message, error.status || 500);

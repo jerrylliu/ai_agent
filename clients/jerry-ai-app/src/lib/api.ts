@@ -6,10 +6,15 @@ import {
   handleSSEEvents,
   type ConfirmationRequestEvent,
   type FileCardEvent,
+  type WorkflowEvent,
 } from "./sse-parser";
 
 // 重新导出 SSE 类型，供其他模块使用
-export type { ConfirmationRequestEvent, FileCardEvent } from "./sse-parser";
+export type {
+  ConfirmationRequestEvent,
+  FileCardEvent,
+  WorkflowEvent,
+} from "./sse-parser";
 
 // 类型定义
 export interface ChatHistoryItem {
@@ -19,6 +24,8 @@ export interface ChatHistoryItem {
   images?: string[];
   /** 用户消息携带的文档卡片（聊天上传文档时附加） */
   documentCards?: unknown[];
+  /** 助手消息携带的工作流进度卡片（execute_workflow 执行摘要，可回看） */
+  workflowCards?: unknown[];
 }
 
 export interface ChatHistoryRecord extends ChatHistoryItem {
@@ -194,6 +201,7 @@ export async function getAIResponse(
     imageModel?: string;
     onToolStatus?: ((event: ToolStatusEvent) => void) | null;
     onConfirmationRequest?: ((event: ConfirmationRequestEvent) => void) | null;
+    onWorkflowEvent?: ((event: WorkflowEvent) => void) | null;
     onConfirmationResolved?:
       | ((event: {
           id: string;
@@ -220,6 +228,7 @@ export async function getAIResponse(
   let sessionAction: SessionAction | null = null;
   const toolStatusCallback = options?.onToolStatus ?? null;
   const confirmationCallback = options?.onConfirmationRequest ?? null;
+  const workflowEventCallback = options?.onWorkflowEvent ?? null;
   const confirmationResolvedCallback = options?.onConfirmationResolved ?? null;
   const fileCardCallback = options?.onFileCard ?? null;
   const fileCards: FileCardEvent[] = [];
@@ -250,6 +259,11 @@ export async function getAIResponse(
             onToolStatus: (event) => {
               if (toolStatusCallback) {
                 toolStatusCallback(event);
+              }
+            },
+            onWorkflowEvent: (event) => {
+              if (workflowEventCallback) {
+                workflowEventCallback(event);
               }
             },
             onConfirmationRequest: (event) => {
@@ -2399,4 +2413,244 @@ export async function updateRateLimiterConfig(
     body: JSON.stringify(config),
   });
   return handleResponse<{ success: boolean; message: string }>(response);
+}
+
+// ============================================
+// 知识库嵌入模型配置 API（本地 Ollama / 云端双模式）
+// ============================================
+
+/** 嵌入生效模式：本地 Ollama 或云端（运行时解析结果，不持久化） */
+export type EmbeddingMode = "ollama" | "cloud";
+
+/** 云端嵌入供应商（与后端 CloudEmbeddingProviderSchema 对应） */
+export type CloudEmbeddingProvider = "siliconflow" | "custom";
+
+/** 本地 Ollama 嵌入配置 */
+export interface EmbeddingOllamaConfig {
+  baseUrl: string;
+  model: string;
+}
+
+/** 云端预设模型选项（下拉框使用） */
+export interface EmbeddingModelOption {
+  value: string;
+  label: string;
+}
+
+/** 云端嵌入供应商预设（后端 /embedding/config 返回的 presets） */
+export interface EmbeddingProviderPreset {
+  label: string;
+  baseUrl: string;
+  defaultModel: string;
+  description?: string;
+  /** 云端批量嵌入的批大小（透传给 OpenAIEmbeddings） */
+  batchSize: number;
+  /** 预设可选模型列表（custom 为空数组，需手填） */
+  models: EmbeddingModelOption[];
+}
+
+/** 当前嵌入配置快照（apiKey 只暴露 hasApiKey，后端不返回密文） */
+export interface EmbeddingConfigResponse {
+  success: boolean;
+  config: {
+    /** 本地总开关：开=本地优先+自动降级云端，关=只用云端 */
+    localEnabled: boolean;
+    /** 运行时生效模式（localEnabled=true 但本地不可用时为 cloud） */
+    mode: EmbeddingMode;
+    /** 本地降级原因（生效模式为 cloud 且 localEnabled=true 时有值） */
+    fallbackReason: string | null;
+    /** 当前生效的嵌入模型名 */
+    activeModel: string;
+    activeCollection: string;
+    ollama: EmbeddingOllamaConfig;
+    cloud: {
+      provider: CloudEmbeddingProvider;
+      baseUrl: string;
+      model: string;
+      hasApiKey: boolean;
+    };
+    /** 供应商预设（仅内置供应商有，custom 需手填） */
+    presets: Partial<Record<CloudEmbeddingProvider, EmbeddingProviderPreset>>;
+  };
+}
+
+/** 保存 / 验证嵌入配置的请求体（支持部分更新） */
+export interface SaveEmbeddingConfigPayload {
+  /** 本地总开关（持久化字段，替代旧的 mode） */
+  localEnabled?: boolean;
+  ollama?: { baseUrl?: string; model?: string };
+  cloud?: {
+    provider?: CloudEmbeddingProvider;
+    baseUrl?: string;
+    /** 明文 API Key，服务端加密后存储，任何响应中都不会返回 */
+    apiKey?: string;
+    model?: string;
+  };
+}
+
+/** 试嵌入验证结果 */
+export interface EmbeddingTestResult {
+  success: boolean;
+  ok: boolean;
+  dimensions?: number;
+  latencyMs?: number;
+  error?: string;
+}
+
+/** 模式切换 / 配置保存结果（切换失败时 success=false 且保持原模式） */
+export interface EmbeddingSwitchResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+  config?: EmbeddingConfigResponse["config"];
+}
+
+/** 获取当前嵌入配置（模式 / Ollama / 云端 / 供应商预设） */
+export async function getEmbeddingConfig(): Promise<EmbeddingConfigResponse> {
+  const response = await fetch(API_ENDPOINTS.EMBEDDING_CONFIG, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<EmbeddingConfigResponse>(response);
+}
+
+/**
+ * 试嵌入验证：用给定配置真实生成一次向量，验证地址 / Key / 模型是否可用
+ * mode 指定要验证的具体路径（ollama / cloud），不影响总开关语义
+ * 不会保存任何配置；未提供的字段回退到后端已保存的配置
+ */
+export async function testEmbeddingConfig(payload: {
+  mode: EmbeddingMode;
+  ollama?: SaveEmbeddingConfigPayload["ollama"];
+  cloud?: SaveEmbeddingConfigPayload["cloud"];
+}): Promise<EmbeddingTestResult> {
+  const response = await fetch(API_ENDPOINTS.EMBEDDING_TEST, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<EmbeddingTestResult>(response);
+}
+
+/**
+ * 保存嵌入配置（支持部分更新）
+ * 后端先做试嵌入验证（localEnabled=false 只验证云端；=true 先本地，本地不可用再验证云端兜底），
+ * 所有可能生效的路径都不可用时拒绝保存
+ */
+export async function saveEmbeddingConfig(
+  payload: SaveEmbeddingConfigPayload,
+): Promise<EmbeddingSwitchResult> {
+  const response = await fetch(API_ENDPOINTS.EMBEDDING_CONFIG, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<EmbeddingSwitchResult>(response);
+}
+
+/**
+ * 切换本地嵌入总开关（前端开关专用）
+ * 开=本地优先+自动降级云端；关=只用云端。后端验证后切换并重新解析生效模式
+ */
+export async function toggleLocalEmbedding(
+  localEnabled: boolean,
+): Promise<EmbeddingSwitchResult> {
+  const response = await fetch(API_ENDPOINTS.EMBEDDING_SWITCH, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ localEnabled }),
+  });
+  return handleResponse<EmbeddingSwitchResult>(response);
+}
+
+/**
+ * 全量重建失败原因分类（与后端 ReindexFailureReason 对齐）
+ *
+ * - source-unavailable：源文件丢失或解析为空。永久性失败，重试与排查 ChromaDB
+ *   都无效，只能删除该文档后重新上传。
+ * - service-error：向量库 / 嵌入服务类临时故障，可通过重试或服务恢复解决。
+ */
+export type ReindexFailureReason = 'source-unavailable' | 'service-error';
+
+/** 全量重建中单条失败详情（与后端 ReindexFailureItem 对齐） */
+export interface ReindexFailureItem {
+  opId: number;
+  versionId: number;
+  documentTitle: string;
+  error: string;
+  /** 失败原因分类，决定提示文案；后端未返回时按服务类故障处理 */
+  reason?: ReindexFailureReason;
+}
+
+/**
+ * 全量重建进度快照（与后端 ReindexProgress 对齐）
+ *
+ * done / failed 均为终态计数，failed 仅在重试轮数用尽后才非 0，
+ * 故 (done + failed) / total 可直接作为进度条百分比且不超过 100%。
+ */
+export interface ReindexProgress {
+  /** 是否仍在后台执行 */
+  running: boolean;
+  /** 本次重建的文档版本总数 */
+  total: number;
+  /** 已成功完成数 */
+  done: number;
+  /** 最终失败数（轮数用尽后统计） */
+  failed: number;
+  /** 上一轮失败、本轮仍将重试的数量（仅用于文案） */
+  retrying: number;
+  /** 当前重试轮次 */
+  round: number;
+  /** 最大重试轮次 */
+  maxRound: number;
+  /** 目标集合名 */
+  collection: string;
+  /** 开始时间戳（ms） */
+  startedAt: number;
+  /** 结束时间戳（ms），未完成时为 undefined */
+  finishedAt?: number;
+  /** 最终失败条目详情 */
+  errors: ReindexFailureItem[];
+}
+
+/**
+ * 全量重建当前模式集合的向量索引（可选：把数据库文档同步到当前模式集合）
+ *
+ * 后端入队后立即在进程内后台异步执行，本请求不阻塞，返回初始进度快照；
+ * 随后通过 getRebuildProgress() 轮询进度。
+ */
+export async function rebuildEmbeddingIndex(): Promise<{
+  success: boolean;
+  message?: string;
+  enqueued?: number;
+  progress?: ReindexProgress;
+}> {
+  const response = await fetch(API_ENDPOINTS.EMBEDDING_REBUILD, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{
+    success: boolean;
+    message?: string;
+    enqueued?: number;
+    progress?: ReindexProgress;
+  }>(response);
+}
+
+/**
+ * 查询全量重建进度（供前端轮询）
+ * 从未触发过重建时 progress 为 null。
+ */
+export async function getRebuildProgress(): Promise<{
+  success: boolean;
+  progress: ReindexProgress | null;
+}> {
+  const response = await fetch(API_ENDPOINTS.EMBEDDING_REBUILD_STATUS, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{
+    success: boolean;
+    progress: ReindexProgress | null;
+  }>(response);
 }

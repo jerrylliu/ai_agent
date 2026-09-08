@@ -239,7 +239,7 @@ export class ChatController {
    */
   @Post('history') // 映射 POST 请求到 /chat/history
   async saveChatHistory(
-    @Body() body: { sessionId: string; role: string; content: string; documentCards?: unknown[] },
+    @Body() body: { sessionId: string; role: string; content: string; documentCards?: unknown[]; workflowCards?: unknown[] },
     @Req() req: any,
   ) {
     const saved = await this.sessionService.saveChatHistory(
@@ -248,6 +248,8 @@ export class ChatController {
       body.content,
       req.userId,
       body.documentCards,
+      'web',
+      body.workflowCards,
     );
 
     void this.syncWebMessageToFeishu(body.sessionId, body.role, body.content, req.userId).catch((error) => {

@@ -22,6 +22,13 @@ jest.mock('./runtime-config', () => ({
   getRuntimeConfig: () => ({
     cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
     rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    // store-state.ts 在模块加载时会读取 embedding.localEnabled 推导初始生效模式，
+    // mock 必须提供该字段；测试环境无 Ollama，置为 false 直接走云端分支，避免网络探测
+    embedding: {
+      localEnabled: false,
+      ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
+      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+    },
   }),
   updateRuntimeConfig: jest.fn(),
   loadRuntimeConfig: jest.fn(),
@@ -29,6 +36,11 @@ jest.mock('./runtime-config', () => ({
   DEFAULT_RUNTIME_CONFIG: {
     cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
     rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    embedding: {
+      localEnabled: false,
+      ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
+      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+    },
   },
 }));
 
@@ -45,8 +57,8 @@ jest.mock('./vector-store/store-state', () => ({
   getBM25DocumentStore: jest.fn(() => new Map()),
   getEmbeddingSemaphore: jest.fn(() => ({ acquire: jest.fn().mockResolvedValue('id'), release: jest.fn() })),
   BATCH_SIZE: 100,
-  COLLECTION_NAME: 'test',
-  embeddings: {},
+  getActiveCollectionName: jest.fn(() => 'test'),
+  getEmbeddings: jest.fn(() => ({})),
 }));
 
 jest.mock('./vector-store/bm25-index', () => ({

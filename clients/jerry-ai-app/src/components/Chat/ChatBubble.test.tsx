@@ -16,7 +16,7 @@ import ChatBubble from './ChatBubble';
 /* =====================================================================
  * Mock MarkdownRenderer — 简单透出 children
  * ==================================================================*/
-vi.mock('../MarkdownRenderer', () => ({
+vi.mock('./MarkdownRenderer', () => ({
   default: ({ children }: { children: string }) => <span data-testid="md">{children}</span>,
 }));
 

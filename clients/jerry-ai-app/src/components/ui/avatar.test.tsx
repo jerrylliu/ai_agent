@@ -5,7 +5,6 @@
  * 覆盖：Avatar/AvatarImage/AvatarFallback/AvatarBadge/AvatarGroup/AvatarGroupCount
  */
 
-import React from 'react';
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import {
@@ -78,7 +77,7 @@ describe('Avatar', () => {
     it('应渲染 AvatarImage 不报错', () => {
       // Radix AvatarImage 在 jsdom 中（无真实图片加载）可能不产出 DOM
       // 验证渲染不抛错即可
-      const { container } = render(
+      render(
         <Avatar>
           <AvatarImage src="test.jpg" alt="alt text" />
           <AvatarFallback>FB</AvatarFallback>

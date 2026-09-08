@@ -193,6 +193,7 @@ const ChatAgent: React.FC = () => {
     isLoading,
     isMessagesLoading,
     toolStatuses,
+    workflowStatus,
     messagesEndRef,
     knowledgeBaseStatus,
     pendingImages,
@@ -550,6 +551,7 @@ const ChatAgent: React.FC = () => {
                   messages={messages}
                   isTyping={isTyping}
                   toolStatuses={toolStatuses}
+                  workflowStatus={workflowStatus}
                   messagesEndRef={messagesEndRef}
                   currentSessionId={currentSessionId}
                   feedbackState={toast.feedbackState}

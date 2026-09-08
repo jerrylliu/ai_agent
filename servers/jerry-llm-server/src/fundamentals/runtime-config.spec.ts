@@ -18,6 +18,14 @@ jest.mock('./logger', () => ({
   },
 }));
 
+// Mock 全局配置：runtime-config 仅用 config.ollamaBaseUrl 作为嵌入默认地址，
+// 避免测试环境缺少 JWT_SECRET 等环境变量时 config.ts fail-fast 导致套件无法加载
+jest.mock('./config', () => ({
+  config: {
+    ollamaBaseUrl: 'http://localhost:11434',
+  },
+}));
+
 // Mock fs 模块
 jest.mock('fs', () => ({
   readFileSync: jest.fn(),

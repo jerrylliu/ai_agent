@@ -6,7 +6,7 @@
  * - formatTime / formatDate: 日期格式化
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { generateId, generateSessionId, formatTime, formatDate } from './utils';
 
 describe('lib/utils', () => {

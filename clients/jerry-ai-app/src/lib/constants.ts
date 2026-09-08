@@ -28,6 +28,12 @@ export const API_ENDPOINTS = {
   RATE_LIMITER_STATUS: `${API_BASE_URL}/rate-limiter/status`,
   RATE_LIMITER_CONFIG: `${API_BASE_URL}/rate-limiter/config`,
   SPEECH_TRANSCRIBE: `${API_BASE_URL}/speech/transcribe`,
+  // 嵌入模型双模式（本地 Ollama / 云端）配置与切换
+  EMBEDDING_CONFIG: `${API_BASE_URL}/embedding/config`,
+  EMBEDDING_TEST: `${API_BASE_URL}/embedding/test`,
+  EMBEDDING_SWITCH: `${API_BASE_URL}/embedding/switch`,
+  EMBEDDING_REBUILD: `${API_BASE_URL}/embedding/rebuild`,
+  EMBEDDING_REBUILD_STATUS: `${API_BASE_URL}/embedding/rebuild/status`,
 } as const;
 
 export const MAX_HISTORY_ITEMS = 10;

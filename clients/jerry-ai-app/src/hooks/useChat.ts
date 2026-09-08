@@ -26,11 +26,83 @@ import type {
   AvailableModel,
   ToolStatusEvent,
   ConfirmationRequestEvent,
+  WorkflowEvent,
 } from "../lib/api";
 import type { AppSettings } from "../stores/settings-store";
 import { generateId, generateSessionId } from "../lib/utils";
 import { ERROR_MESSAGE } from "../lib/constants";
-import { Session, Message, HistoryItem } from "../types/session";
+import { Session, Message, HistoryItem, WorkflowProgress } from "../types/session";
+
+// 类型来源已迁移到 types/session（Message.workflowCards 需引用），此处 re-export 保持兼容
+export type { WorkflowProgress };
+
+/**
+ * 将 workflow_* SSE 事件归并为下一个进度状态（纯函数，便于测试）
+ * @param prev 当前快照（可能为 null）
+ * @returns null 表示无进行中的工作流（complete 后由调用方清空）
+ */
+function applyWorkflowEvent(
+  prev: WorkflowProgress | null,
+  event: WorkflowEvent,
+): WorkflowProgress | null {
+  switch (event.type) {
+    case "workflow_start":
+      return {
+        workflowId: event.workflowId,
+        name: event.name,
+        totalSteps: event.totalSteps,
+        steps: [],
+        status: "running",
+      };
+    case "workflow_step_start": {
+      // 兜底：未收到 start 事件时先初始化骨架
+      const base: WorkflowProgress = prev ?? {
+        workflowId: event.workflowId,
+        name: "工作流",
+        totalSteps: event.totalSteps,
+        steps: [],
+        status: "running",
+      };
+      return {
+        ...base,
+        steps: [
+          ...base.steps,
+          {
+            stepId: event.stepId,
+            stepIndex: event.stepIndex,
+            description: event.description,
+            tool: event.tool,
+            status: "running",
+          },
+        ],
+      };
+    }
+    case "workflow_step_done": {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        steps: prev.steps.map((s) =>
+          s.stepId === event.stepId
+            ? {
+                ...s,
+                status: event.status,
+                durationMs: event.durationMs,
+                error: event.error,
+              }
+            : s,
+        ),
+      };
+    }
+    case "workflow_complete": {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        status: event.status,
+        totalDurationMs: event.totalDurationMs,
+      };
+    }
+  }
+}
 
 /**
  * 待发送文档：上传后未实际发出的文档
@@ -110,6 +182,11 @@ export function useChat(
   const [hasZhipuApiKey, setHasZhipuApiKey] = useState(false);
   const [supportsVision, setSupportsVision] = useState(true);
   const [toolStatuses, setToolStatuses] = useState<ToolStatusEvent[]>([]);
+  // 当前正在执行的工作流进度（workflow_* SSE 事件归并结果，无工作流时为 null）
+  const [workflowStatus, setWorkflowStatus] =
+    useState<WorkflowProgress | null>(null);
+  // 与 workflowStatus 同步的 ref：SSE 回调里同步读取/重置，避免依赖异步 updater
+  const workflowStatusRef = useRef<WorkflowProgress | null>(null);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   // 记录哪些会话曾经有过内容（卸载所有消息后也不回欢迎页）
   const [sessionHasContent, setSessionHasContent] = useState<Set<string>>(
@@ -337,6 +414,10 @@ export function useChat(
           // 还原持久化的文档卡片（后端以 JSON 字符串存储，已由 service 反序列化为数组）
           documentCards: Array.isArray(msg.documentCards)
             ? msg.documentCards
+            : undefined,
+          // 还原持久化的工作流进度卡片（后端已反序列化为数组）
+          workflowCards: Array.isArray(msg.workflowCards)
+            ? msg.workflowCards
             : undefined,
         }));
         setMessages(formattedMessages);
@@ -648,6 +729,8 @@ export function useChat(
 
       // 创建一个临时的助手消息 ID
       const assistantMessageId = generateId();
+      // 本轮响应中已完成的工作流快照（workflow_complete 时收集，随助手消息持久化）
+      const workflowCardsCollected: WorkflowProgress[] = [];
       const tempAssistantMessage: Message = {
         id: assistantMessageId,
         content: "",
@@ -681,6 +764,30 @@ export function useChat(
               }
               return [...prev, event];
             });
+          },
+          onWorkflowEvent: (event: WorkflowEvent) => {
+            // 以 ref 为当前值同步计算下一个状态，再写入 state（updater 保持纯净）
+            const next = applyWorkflowEvent(workflowStatusRef.current, event);
+            workflowStatusRef.current = next;
+            setWorkflowStatus(next);
+
+            // 工作流执行完成：把最终快照挂到正在生成的 AI 消息上（可回看），
+            // 随消息保存持久化，并清空实时进度面板（由消息卡片接管展示）
+            if (event.type === "workflow_complete" && next) {
+              workflowCardsCollected.push(next);
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? {
+                        ...msg,
+                        workflowCards: [...(msg.workflowCards || []), next],
+                      }
+                    : msg,
+                ),
+              );
+              workflowStatusRef.current = null;
+              setWorkflowStatus(null);
+            }
           },
           onConfirmationRequest: onConfirmationRequest || undefined,
           onConfirmationResolved: onConfirmationResolved || undefined,
@@ -753,14 +860,17 @@ export function useChat(
         });
       }
 
-      // 流式响应完成，清除工具状态
+      // 流式响应完成，清除工具状态与工作流进度
       setToolStatuses([]);
+      setWorkflowStatus(null);
 
-      // 保存完整的响应
+      // 保存完整的响应（工作流快照一并持久化，重启后可回看）
       const savedAssistantMsg = await saveChatHistory({
         sessionId: currentSessionId,
         role: "assistant",
         content: fullResponse,
+        workflowCards:
+          workflowCardsCollected.length > 0 ? workflowCardsCollected : undefined,
       });
 
       isTypingRef.current = false;
@@ -821,6 +931,8 @@ export function useChat(
       isTypingRef.current = false;
       activeGeneratingSessionIdRef.current = null;
       setToolStatuses([]);
+      setWorkflowStatus(null);
+      workflowStatusRef.current = null;
       abortControllerRef.current = null;
 
       // 清理空的 AI 回复（连接断开或取消时，AI 可能没有输出任何内容）
@@ -1195,6 +1307,7 @@ export function useChat(
     isLoading,
     isMessagesLoading,
     toolStatuses,
+    workflowStatus,
     messagesEndRef,
     knowledgeBaseStatus,
     pendingImages,

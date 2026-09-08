@@ -3,12 +3,14 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Avatar, AvatarFallback, AvatarImage } from "../ui/avatar";
 import ChatBubble from "./ChatBubble";
 import type { Message } from "../../types/session";
+import type { WorkflowProgress } from "../../hooks/useChat";
 import { DEFAULT_AI_AVATAR_URL } from "../../lib/constants";
 
 interface MessageListProps {
   messages: Message[];
   isTyping: boolean;
   toolStatuses: { status: string; label: string }[];
+  workflowStatus: WorkflowProgress | null;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
   currentSessionId: string | null;
   feedbackState: Record<string, "positive" | "negative" | null>;
@@ -26,6 +28,7 @@ const MessageList: React.FC<MessageListProps> = ({
   messages,
   isTyping,
   toolStatuses,
+  workflowStatus,
   messagesEndRef,
   currentSessionId,
   feedbackState,
@@ -156,6 +159,40 @@ const MessageList: React.FC<MessageListProps> = ({
               <AvatarFallback>AI</AvatarFallback>
             </Avatar>
             <div className="bg-card border border-gray-200 dark:border-slate-600 rounded-lg p-3 cyberpunk-ai-msg">
+              {workflowStatus && (
+                <div className="mb-2 rounded-md border border-border bg-muted/40 p-2">
+                  <div className="flex items-center gap-1.5 text-xs font-medium">
+                    <span>{workflowStatus.name}</span>
+                    <span className="text-muted-foreground">
+                      {workflowStatus.steps.filter(s => s.status !== 'running').length}/{workflowStatus.totalSteps}
+                    </span>
+                    {workflowStatus.status !== 'running' && (
+                      <span className="text-muted-foreground">
+                        （{workflowStatus.status === 'completed' ? '已完成' : workflowStatus.status === 'partial' ? '部分成功' : '已失败'}）
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex flex-col space-y-1">
+                    {workflowStatus.steps.map((step) => (
+                      <div key={step.stepId} className="flex items-center space-x-2 text-xs text-muted-foreground">
+                        {step.status === 'running' ? (
+                          <svg className="animate-spin h-3 w-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                        ) : (
+                          <span className={step.status === 'success' ? 'text-green-500' : 'text-red-500'}>
+                            {step.status === 'success' ? '✓' : '✗'}
+                          </span>
+                        )}
+                        <span title={step.error}>
+                          {step.description || step.tool || step.stepId}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {toolStatuses.length > 0 && toolStatuses.some(s => s.status !== 'done') ? (
                 <div className="flex flex-col space-y-1 text-sm text-muted-foreground">
                   {toolStatuses.filter(s => s.status !== 'done').map((ts, idx) => (

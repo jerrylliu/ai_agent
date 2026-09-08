@@ -14,7 +14,7 @@
  *   - 插入引用时使用 editor.chain().focus().insertContent()，保持光标聚焦
  */
 
-import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, Loader2, Quote, FileText, BookOpen, AlertCircle } from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import { Button } from '@/components/ui/button';
@@ -575,7 +575,7 @@ export function KnowledgePanel({ editor, documentId }: KnowledgePanelProps) {
           const keywords = extractKeywords(query);
           const sortedResults = sortResultsByKeywordMatch(results, query);
 
-          return sortedResults.map((result, displayIndex) => {
+          return sortedResults.map((result) => {
           // 检测当前结果是否命中关键词（用于显示"命中关键词"标记）
           const lowerContent = result.content.toLowerCase();
           const isKeywordMatched =

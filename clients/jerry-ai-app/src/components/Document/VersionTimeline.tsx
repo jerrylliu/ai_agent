@@ -7,7 +7,7 @@ import { useState } from 'react';
 import {
   RotateCcw, Trash2, Archive, GitCompare, UploadCloud,
   CheckCircle, AlertCircle, Clock, Loader2, FileText,
-  Download, Pencil, FileCode, FileType, ShieldCheck, ShieldAlert, ShieldX,
+  FileCode, FileType, ShieldCheck, ShieldAlert, ShieldX,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
@@ -31,7 +31,6 @@ interface VersionTimelineProps {
 
 export function VersionTimeline({
   versions,
-  documentId,
   onRollback,
   onDelete,
   onArchive,

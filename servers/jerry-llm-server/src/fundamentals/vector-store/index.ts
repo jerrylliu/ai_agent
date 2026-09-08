@@ -22,11 +22,22 @@ export {
   initializeVectorStore,
   resetVectorStore,
   isVectorStoreMemoryMode,
-  COLLECTION_NAME,
-  EMBEDDING_MODEL,
+  COLLECTION_NAME_PREFIX,
+  collectionFingerprint,
   PERSIST_DIR,
-  embeddings,
+  getEmbeddings,
+  getEmbeddingMode,
+  getLocalFallbackReason,
+  getActiveModelName,
+  getActiveCollectionName,
+  resolveEffectiveMode,
+  probeOllamaAvailability,
+  clearOllamaProbeCache,
+  applyEmbeddingConfigChange,
+  getEmbeddingSemaphore,
 } from './store-state.js';
+
+export type { OllamaProbeResult } from './store-state.js';
 
 // ==================== 文本切分 ====================
 export {

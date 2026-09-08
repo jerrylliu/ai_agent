@@ -16,8 +16,7 @@ import { config } from '../config.js';
 import { eventBus } from '../event-bus.js';
 import {
   BATCH_SIZE,
-  COLLECTION_NAME,
-  embeddings,
+  getActiveCollectionName,
   initializeVectorStore,
   getBM25Index,
   getBM25DocumentStore,
@@ -270,9 +269,12 @@ export async function addDocuments(
         const parentId = `parent_${i}_${pc.parent.index}`;
 
         // 注意：不将父块写入 ChromaDB，原因：
-        // 1. 父块（默认 1500 字符）超过 bge-large 嵌入模型的上下文长度（512 tokens）
-        // 2. 检索靠子块精准匹配，父块内容已存储在子块的 parent_content 元数据中
-        // 3. 命中子块后自动展开返回父块内容，无需单独检索父块
+        // 1. 检索靠子块精准匹配：父块（默认 1500 字符）语义覆盖面过宽，
+        //    直接向量化会稀释语义焦点、降低相似度区分度
+        // 2. 父块内容已存储在子块的 parent_content 元数据中，
+        //    命中子块后自动展开返回父块内容，无需单独检索父块
+        // 3. 少写一份向量可降低 ChromaDB 存储与嵌入调用开销
+        //    （当前默认 bge-m3 支持 8192 tokens，父块长度已不构成上下文限制）
 
         // 只添加子块（用于精准检索，携带 parentId 和 parent_content 关联到父块）
         for (const child of pc.children) {
@@ -336,6 +338,21 @@ export async function addDocuments(
           }
         : undefined,
   });
+
+  // 一块都没切出来：说明入参文本为空或解析结果为空（常见于源文件丢失）。
+  // 必须在此提前失败，否则 addedCount 恒为 0，会被函数末尾的兜底判断
+  // 误报成「ChromaDB 可能未启动或不可用」，把问题引向完全错误的方向。
+  if (allChunks.length === 0) {
+    logger.error('文档未切分出任何文本块', {
+      module: 'VectorStore',
+      textCount: texts.length,
+      textLengths: texts.map((t) => t.length),
+      chunkingStrategy,
+    });
+    throw new Error(
+      '文档未切分出任何文本块：内容为空或解析结果为空，请检查源文件是否存在且可正常解析',
+    );
+  }
 
   // 1.5 内容级幂等去重：删除与本次待入库块内容相同的旧块
   // （legacy 路径重复上传的历史遗留 + 任何重试场景的兜底；作用域含 versionId，
@@ -419,7 +436,10 @@ export async function addDocuments(
   eventBus.emit('knowledge-base-updated', '文档添加');
 
   if (addedCount === 0) {
-    throw new Error('所有文本块添加失败，ChromaDB 可能未启动或不可用');
+    // 走到这里说明块已切出来但全部写入失败，才是真正的向量库不可用
+    throw new Error(
+      `全部 ${allChunks.length} 个文本块写入失败，ChromaDB 可能未启动或不可用`,
+    );
   }
 
   // 3. 同步写入 BM25 索引（失败不影响主流程）
@@ -630,7 +650,7 @@ export async function getAllDocuments(): Promise<
       host: config.chromaHost,
       port: config.chromaPort,
     });
-    const collection = await client.getCollection({ name: COLLECTION_NAME });
+    const collection = await client.getCollection({ name: getActiveCollectionName() });
     const results = await collection.get();
 
     const documents = results.documents.map((doc, i) => ({

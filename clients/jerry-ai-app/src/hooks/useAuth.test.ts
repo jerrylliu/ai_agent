@@ -28,13 +28,6 @@ const mockUser = {
   updatedAt: '2025-01-01',
 };
 
-function mockApiFunction<T extends (...args: any[]) => any>(
-  fn: T,
-  response: Awaited<ReturnType<T>>,
-) {
-  return vi.spyOn(api, fn.name as any).mockResolvedValue(response);
-}
-
 describe('useAuth', () => {
   beforeEach(() => {
     localStorage.clear();

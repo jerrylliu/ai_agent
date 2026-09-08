@@ -5,7 +5,7 @@ import MarkdownRenderer from "./MarkdownRenderer";
 import { FileCard } from "./FileCard";
 import { PopupMenu, type PopupMenuItem } from "../ui/popup-menu";
 import { formatTime } from "../../lib/utils";
-import type { Message, MessageAttachment, MessageDocumentCard } from "../../types/session";
+import type { Message, MessageAttachment, MessageDocumentCard, WorkflowProgress } from "../../types/session";
 import { submitFeedback, getDocumentVersions, exportVersion, getDocumentByTitle } from "../../lib/api";
 import { openEditorWithContent } from "../../lib/window";
 
@@ -287,6 +287,86 @@ function UserDocumentCard({ card }: { card: MessageDocumentCard }) {
   );
 }
 
+/**
+ * 工作流执行结果卡片（只读回看）
+ * execute_workflow 完成后随助手消息持久化，重启后仍可查看各步骤执行情况
+ */
+function WorkflowResultCard({ workflow }: { workflow: WorkflowProgress }) {
+  const [expanded, setExpanded] = useState(false);
+  const doneCount = workflow.steps.filter(
+    (s) => s.status === "success" || s.status === "failed",
+  ).length;
+  const statusLabel =
+    workflow.status === "completed"
+      ? "已完成"
+      : workflow.status === "partial"
+        ? "部分成功"
+        : "已失败";
+  const statusColor =
+    workflow.status === "completed"
+      ? "text-green-600 dark:text-green-400"
+      : workflow.status === "partial"
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-red-600 dark:text-red-400";
+
+  return (
+    <div className="rounded-md border border-border bg-muted/40 p-2 text-xs">
+      <button
+        type="button"
+        className="flex w-full items-center gap-1.5 text-left"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <Database className="h-3 w-3 flex-shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="font-medium">{workflow.name}</span>
+        <span className="text-muted-foreground">
+          {doneCount}/{workflow.totalSteps}
+        </span>
+        <span className={statusColor}>{statusLabel}</span>
+        {workflow.totalDurationMs !== undefined && (
+          <span className="text-muted-foreground">
+            （{(workflow.totalDurationMs / 1000).toFixed(1)}s）
+          </span>
+        )}
+        <span className="ml-auto text-muted-foreground">
+          {expanded ? "收起" : "展开"}
+        </span>
+      </button>
+      {expanded && (
+        <div className="mt-1.5 flex flex-col space-y-1 border-t border-border pt-1.5">
+          {workflow.steps.map((step) => (
+            <div
+              key={step.stepId}
+              className="flex items-center gap-2 text-muted-foreground"
+            >
+              <span
+                className={
+                  step.status === "success"
+                    ? "text-green-500"
+                    : step.status === "failed"
+                      ? "text-red-500"
+                      : ""
+                }
+              >
+                {step.status === "success" ? "✓" : step.status === "failed" ? "✗" : "○"}
+              </span>
+              <span>{step.description || step.tool || step.stepId}</span>
+              {step.durationMs !== undefined && (
+                <span>{(step.durationMs / 1000).toFixed(1)}s</span>
+              )}
+              {step.error && (
+                <span className="truncate text-red-500" title={step.error}>
+                  {step.error}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ChatBubbleProps {
   message: Message;
   prevMessage: Message | undefined;
@@ -369,6 +449,14 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
             {message.role === "assistant" ? (
               <div className="min-w-0" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
                 <MarkdownRenderer>{message.content}</MarkdownRenderer>
+                {/* 工作流执行进度卡片（execute_workflow 完成后持久化，可回看） */}
+                {message.workflowCards && message.workflowCards.length > 0 && (
+                  <div className="mt-2 space-y-2">
+                    {message.workflowCards.map((wf, wfIdx) => (
+                      <WorkflowResultCard key={`${wf.workflowId}-${wfIdx}`} workflow={wf} />
+                    ))}
+                  </div>
+                )}
                 {/* 文件附件卡片（generate_document 等工具产物） */}
                 {attachments && attachments.length > 0 && (
                   <div className="mt-2 space-y-2">

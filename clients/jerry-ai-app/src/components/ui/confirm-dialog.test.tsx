@@ -5,15 +5,14 @@
  * 覆盖：默认文案 / 自定义按钮文案 / destructive 样式 / onConfirm 触发 / 取消关闭
  */
 
-import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi } from 'vitest';
 import { ConfirmDialog } from './confirm-dialog';
 
 // Mock alert-dialog（shadcn Radix 组件）
 vi.mock('@/components/ui/alert-dialog', () => ({
-  AlertDialog: ({ children, open, onOpenChange }: any) =>
+  AlertDialog: ({ children, open }: any) =>
     open ? <div data-testid="alert-dialog">{children}</div> : null,
   AlertDialogContent: ({ children }: any) => <div>{children}</div>,
   AlertDialogHeader: ({ children }: any) => <div>{children}</div>,
@@ -105,7 +104,7 @@ describe('ConfirmDialog', () => {
   it('description 应包含 whitespace-pre-line 样式', () => {
     render(<ConfirmDialog {...makeProps({ description: '行1\n行2' })} />);
     // 使用文本匹配函数（textContent 包含换行符）
-    const desc = screen.getByText((content, element) => {
+    const desc = screen.getByText((_content, element) => {
       return element?.className?.includes('whitespace-pre-line') || false;
     });
     expect(desc).toBeInTheDocument();

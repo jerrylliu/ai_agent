@@ -28,6 +28,14 @@ export class ChatHistory {
   @Column({ type: 'longtext', nullable: true })
   documentCards: string | null;
 
+  /**
+   * 助手消息携带的工作流进度卡片（JSON 数组）
+   * execute_workflow 执行完成后由前端随消息保存，UI 渲染为可回看的步骤进度卡片
+   * 仅 role=assistant 的消息会有此字段
+   */
+  @Column({ type: 'longtext', nullable: true })
+  workflowCards: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

@@ -27,7 +27,9 @@ docker exec jerry-ollama-dev ollama pull minicpm
 docker exec jerry-ollama-dev ollama pull qwen3.5:2b
 
 # 嵌入模型（RAG 知识库必需）
-docker exec jerry-ollama-dev ollama pull bge-large
+# bge-m3：1024 维、8192 token 上下文，与云端 BAAI/bge-m3 同权重同向量空间，
+# 本地/云端切换可共用同一 ChromaDB 集合，无需重建索引
+docker exec jerry-ollama-dev ollama pull bge-m3
 ```
 
 ### 3. 配置环境变量

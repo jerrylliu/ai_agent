@@ -19,8 +19,8 @@ import { logger } from '../logger.js';
 import { config } from '../config.js';
 import { eventBus } from '../event-bus.js';
 import {
-  COLLECTION_NAME,
-  embeddings,
+  getActiveCollectionName,
+  getEmbeddings,
   initializeVectorStore,
   resetVectorStore,
   getBM25Index,
@@ -69,20 +69,21 @@ export async function getKnowledgeBaseStats(): Promise<{
   documentCount: number;
   collectionName: string;
 }> {
+  const collectionName = getActiveCollectionName();
   try {
     const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
-    const collection = await client.getCollection({ name: COLLECTION_NAME });
+    const collection = await client.getCollection({ name: collectionName });
     const results = await collection.get();
     const documentCount = results.documents?.length || 0;
 
     return {
       documentCount,
-      collectionName: COLLECTION_NAME,
+      collectionName,
     };
   } catch (error) {
     return {
       documentCount: 0,
-      collectionName: COLLECTION_NAME,
+      collectionName,
     };
   }
 }
@@ -100,14 +101,15 @@ export async function clearKnowledgeBase(): Promise<void> {
 
   try {
     const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
+    const collectionName = getActiveCollectionName();
 
     // 检查集合是否存在并删除
     try {
-      await client.deleteCollection({ name: COLLECTION_NAME });
-      logger.info('知识库集合已删除', { module: 'VectorStore' });
+      await client.deleteCollection({ name: collectionName });
+      logger.info('知识库集合已删除', { module: 'VectorStore', collection: collectionName });
     } catch (error: any) {
       if (error.message && error.message.includes('not found')) {
-        logger.info('知识库集合不存在，无需删除', { module: 'VectorStore' });
+        logger.info('知识库集合不存在，无需删除', { module: 'VectorStore', collection: collectionName });
       } else {
         throw error;
       }
@@ -115,9 +117,9 @@ export async function clearKnowledgeBase(): Promise<void> {
 
     // 重新创建空集合（指定嵌入函数）
     await client.createCollection({
-      name: COLLECTION_NAME,
+      name: collectionName,
       metadata: { "hnsw:space": "cosine" },
-      embeddingFunction: embeddings as any,
+      embeddingFunction: getEmbeddings() as any,
     });
     logger.info('已创建新的空知识库集合', { module: 'VectorStore' });
 
@@ -162,7 +164,7 @@ export async function previewEmbedding(text: string): Promise<{
   sample: number[];
   fullLength: number;
 }> {
-  const fullEmbedding = await embeddings.embedQuery(text);
+  const fullEmbedding = await getEmbeddings().embedQuery(text);
   return {
     text: text.substring(0, 100) + (text.length > 100 ? '...' : ''),
     dimensions: fullEmbedding.length,
@@ -424,6 +426,21 @@ export async function reindexVersion(
   versionStatus: string,
   fileInfo: { source: string; fileType: string; mimeType?: string; documentTitle?: string },
 ): Promise<number> {
+  // 空文本守卫：必须置于 removeDocumentVersion 之前。
+  // 否则会先把该版本的旧向量删干净、再因切不出块而写入失败，
+  // 结果是把「重建失败」升级成「知识库数据被清空」，比重建失败严重得多。
+  if (!textContent || !textContent.trim()) {
+    logger.error('重新向量化被拒绝：文本内容为空', {
+      module: 'VectorStore',
+      versionId,
+      documentId,
+      source: fileInfo.source,
+    });
+    throw new Error(
+      `版本 ${versionId} 的文本内容为空，已跳过重建以保护现有向量数据（源文件：${fileInfo.source || '未知'}）`,
+    );
+  }
+
   logger.info('开始重新向量化版本', { module: 'VectorStore', versionId, documentId, versionStatus, textLength: textContent.length });
 
   // 1. 先清理旧向量

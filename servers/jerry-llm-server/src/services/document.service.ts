@@ -7,6 +7,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  OnApplicationBootstrap,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In, Not } from 'typeorm';
@@ -50,6 +51,7 @@ import {
   reindexVersion,
   resetVectorStore,
   isVectorStoreMemoryMode,
+  getActiveCollectionName,
 } from '../fundamentals/vector-store';
 import type { ImageChunkInput } from '../fundamentals/vector-store';
 import type { ImageAsset } from '../fundamentals/image-extractor';
@@ -60,6 +62,87 @@ import {
   computeImageHashExport,
 } from '../fundamentals/vision-translator';
 import { markdownToDocx } from '../fundamentals/document-generator';
+
+// ==================== 全量重建进度 ====================
+
+/**
+ * 全量重建的最大执行轮数（首轮 + 自动重试轮）
+ *
+ * 单条任务失败后会在后续轮次自动重试，轮数用尽仍失败才计入 errors 上报，
+ * 避免 Chroma 短暂抖动或 Ollama 冷启动导致整批重建被判失败。
+ */
+const FULL_REINDEX_MAX_ROUNDS = 3;
+
+/** 进程重启后延迟恢复重建的等待时间（毫秒），避免与启动期其他初始化争抢资源 */
+const REINDEX_RESUME_DELAY_MS = 10_000;
+
+/**
+ * 重建失败原因分类
+ *
+ * 前端据此给出不同处置指引：source-unavailable 必须由用户重新上传文档，
+ * 重试与检查 ChromaDB 都无济于事；service-error 才需要排查向量库/嵌入服务。
+ */
+export type ReindexFailureReason =
+  /** 源文件丢失或解析为空：永久性失败，重试不可能成功 */
+  | 'source-unavailable'
+  /** 向量库 / 嵌入服务等临时故障：可通过重试或服务恢复解决 */
+  | 'service-error';
+
+/**
+ * 源文件不可用导致的重建失败
+ *
+ * 单独定义错误类型的目的：让 runFullReindex 能识别出「重试也没用」的条目，
+ * 立即计入终态失败并跳过剩余轮次，同时把准确原因透传到前端提示。
+ */
+export class SourceUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SourceUnavailableError';
+  }
+}
+
+/** 重建失败明细：定位到具体文档，便于用户判断是否需要人工干预 */
+export interface ReindexFailureItem {
+  opId: number;
+  versionId: number;
+  documentTitle: string;
+  error: string;
+  /** 失败原因分类，决定前端提示文案 */
+  reason: ReindexFailureReason;
+}
+
+/**
+ * 全量重建进度快照（进程内状态，通过 GET /embedding/rebuild/status 暴露）
+ *
+ * 进度语义：
+ * - done / failed 均为「终态」计数，failed 只在轮数用尽后才非 0
+ * - 因此 (done + failed) / total 可直接作为进度条百分比，不会超过 100%
+ * - retrying 表示上一轮失败、本轮仍将重试的数量，仅用于文案提示
+ */
+export interface ReindexProgress {
+  /** 是否正在后台执行 */
+  running: boolean;
+  /** 本次入队的任务总数 */
+  total: number;
+  /** 已成功完成数 */
+  done: number;
+  /** 自动重试用尽仍失败数 */
+  failed: number;
+  /** 上一轮失败、本轮待重试的数量 */
+  retrying: number;
+  /** 当前执行轮次（从 1 开始） */
+  round: number;
+  /** 最大轮数 */
+  maxRound: number;
+  /** 目标集合名（按嵌入模型指纹隔离） */
+  collection: string;
+  /** 开始时间戳（毫秒） */
+  startedAt: number;
+  /** 结束时间戳（毫秒），未完成时缺省 */
+  finishedAt?: number;
+  /** 最终失败明细 */
+  errors: ReindexFailureItem[];
+}
 
 /**
  * 把纯文本转换为 Tiptap JSONContent 格式
@@ -82,7 +165,16 @@ function textToTiptapJson(text: string): unknown {
 }
 
 @Injectable()
-export class DocumentService {
+export class DocumentService implements OnApplicationBootstrap {
+  /**
+   * 全量重建进度（进程内状态，不持久化）
+   *
+   * 不落库的原因：进度是秒级高频更新的瞬态数据，写 MySQL 会产生大量无意义写入；
+   * 真正的任务状态真相源是 pending_vector_ops 表，进程重启后由
+   * resumeInterruptedReindex() 从表中重建进度快照。
+   */
+  private reindexProgress: ReindexProgress | null = null;
+
   constructor(
     @InjectRepository(Document)
     private documentRepo: Repository<Document>,
@@ -96,6 +188,17 @@ export class DocumentService {
     private imageDescriptionRepo: Repository<ImageDescription>,
     private dataSource: DataSource,
   ) {}
+
+  /**
+   * 应用启动后恢复被进程重启中断的全量重建
+   *
+   * 延迟触发：避开向量库连接池初始化与其他 bootstrap 任务的资源争抢。
+   */
+  onApplicationBootstrap(): void {
+    setTimeout(() => {
+      void this.resumeInterruptedReindex();
+    }, REINDEX_RESUME_DELAY_MS);
+  }
 
   // ==================== 文档操作 ====================
 
@@ -1026,7 +1129,8 @@ export class DocumentService {
         // 6. 构造图片描述块入库参数
         // 核心策略：content = VLM description + caption（文档标题标签）
         // caption 来自文档中图片前面的标题文本（如"地下城市：鲜血君王的领地"），
-        // 让 BM25 检索能通过标题关键词找到图片，同时不超过 embedding 的 512 tokens 限制
+        // 让 BM25 检索能通过标题关键词找到图片；同时保持文本精炼，
+        // 避免语义焦点被稀释（当前 bge-m3 支持 8192 tokens，长度已不构成限制）
         for (let idx = 0; idx < translationResults.length; idx++) {
           const result = translationResults[idx];
           const record = validRecords[idx];
@@ -2231,16 +2335,77 @@ export class DocumentService {
       .join('\n');
   }
 
+  /**
+   * 加载 REINDEX 所需的版本文本，并校验其是否真的可用于重建
+   *
+   * 为什么不能直接用 parseVersionText：该方法服务于 diff / 导出等只读场景，
+   * 文件缺失时静默返回空串是合理的；但重建索引拿空串往下走会先删掉旧向量、
+   * 再因切不出块而失败，最终被误报成「ChromaDB 不可用」。这里把三种不可用
+   * 情形（文件丢失 / 内容为空 / 解析异常）统一转成 SourceUnavailableError，
+   * 让用户看到准确原因与处置方式。
+   *
+   * @param version     待重建的版本记录
+   * @param queuedText  入队时快照的文本内容（存在则优先使用，跳过文件解析）
+   * @throws SourceUnavailableError 源文件不可用，重试无法恢复
+   */
+  private async loadReindexText(
+    version: DocumentVersion,
+    queuedText?: string,
+  ): Promise<string> {
+    let textContent = queuedText;
+
+    if (!textContent) {
+      textContent = await this.parseVersionText(version);
+    }
+
+    if (!textContent || !textContent.trim()) {
+      // 走到这里才回读文件，用于区分「文件丢失」和「文件存在但内容为空」，
+      // 正常路径不产生额外 IO
+      const fileExists = readVersionFile(version.fileUrl) !== null;
+      const detail = fileExists
+        ? '源文件存在但解析出的内容为空'
+        : '源文件已丢失（磁盘上找不到该文件）';
+      logger.error('REINDEX 中止：版本文本不可用', {
+        module: 'DocumentService',
+        versionId: version.id,
+        documentId: version.documentId,
+        fileUrl: version.fileUrl,
+        fileExists,
+      });
+      throw new SourceUnavailableError(
+        `${detail}：${version.fileUrl}，无法重建索引，请删除该文档后重新上传`,
+      );
+    }
+
+    // parseVersionText 在解析异常时返回占位文本，这类内容写入向量库只会污染检索结果
+    if (textContent.startsWith('[解析失败:')) {
+      logger.error('REINDEX 中止：源文件解析失败', {
+        module: 'DocumentService',
+        versionId: version.id,
+        fileUrl: version.fileUrl,
+        detail: textContent,
+      });
+      throw new SourceUnavailableError(
+        `源文件无法解析：${version.fileUrl}（${textContent}），请删除该文档后重新上传`,
+      );
+    }
+
+    return textContent;
+  }
+
   // ==================== 数据一致性保障 ====================
 
   /**
    * 写入向量操作重试队列（向量操作失败时调用）
+   *
+   * @returns 成功入队返回该操作记录的 id；写库失败返回 null。
+   *          全量重建的后台执行器依赖此返回值逐条追踪进度。
    */
   async enqueueVectorOp(
     versionId: number,
     operation: VectorOpType,
     params?: Record<string, any>,
-  ): Promise<void> {
+  ): Promise<number | null> {
     try {
       const op = this.pendingVectorOpRepo.create({
         versionId,
@@ -2256,6 +2421,7 @@ export class DocumentService {
         operation,
         status: VectorOpStatus.PENDING,
       });
+      return op.id;
     } catch (error: any) {
       logger.error('写入重试队列失败', {
         module: 'DocumentService',
@@ -2263,13 +2429,21 @@ export class DocumentService {
         operation,
         error: error.message,
       });
+      return null;
     }
   }
 
   /**
    * 重试失败的向量操作（定时任务调用）
+   *
+   * @param maxRetry 单条操作允许的最大重试次数，超过则跳过
+   * @param limit    本次最多处理的条目数（兜底定时任务限量，避免长阻塞）；
+   *                 不传则处理全部待处理条目
    */
-  async retryFailedVectorOps(maxRetry: number = 3): Promise<{
+  async retryFailedVectorOps(
+    maxRetry: number = 3,
+    limit?: number,
+  ): Promise<{
     retried: number;
     total: number;
     results: Array<{
@@ -2290,6 +2464,7 @@ export class DocumentService {
     const pendingOps = await this.pendingVectorOpRepo.find({
       where: { status: In([VectorOpStatus.PENDING, VectorOpStatus.FAILED]) },
       order: { createdAt: 'ASC' },
+      ...(limit && limit > 0 ? { take: limit } : {}),
     });
 
     const results: Array<{
@@ -2375,23 +2550,27 @@ export class DocumentService {
               where: { id: op.versionId },
             });
             if (version) {
-              let textContent = op.params?.textContent;
-              if (!textContent) {
-                try {
-                  textContent = await this.parseVersionText(version);
-                  logger.info('REINDEX 重试：从文件重新解析获取文本内容', {
-                    module: 'DocumentService',
-                    versionId: op.versionId,
-                    textLength: textContent.length,
-                  });
-                } catch (parseError: any) {
-                  logger.error('REINDEX 重试：重新解析文件失败', {
-                    module: 'DocumentService',
-                    versionId: op.versionId,
-                    error: parseError.message,
-                  });
-                  throw new Error(`重新解析文件失败: ${parseError.message}`);
-                }
+              // 统一走 loadReindexText：源文件丢失 / 内容为空 / 解析异常都会
+              // 抛 SourceUnavailableError，不会拿空文本去删旧向量再重建
+              let textContent: string;
+              try {
+                textContent = await this.loadReindexText(
+                  version,
+                  op.params?.textContent,
+                );
+                logger.info('REINDEX 重试：已获取可用文本内容', {
+                  module: 'DocumentService',
+                  versionId: op.versionId,
+                  textLength: textContent.length,
+                });
+              } catch (parseError: any) {
+                if (parseError instanceof SourceUnavailableError) throw parseError;
+                logger.error('REINDEX 重试：重新解析文件失败', {
+                  module: 'DocumentService',
+                  versionId: op.versionId,
+                  error: parseError.message,
+                });
+                throw new Error(`重新解析文件失败: ${parseError.message}`);
               }
               // DRAFT 版本重试时直接以 ACTIVE 状态入库，避免再次依赖 updateVersionVectorStatus
               // ARCHIVED 版本保持原状态（用户手动归档的，不应自动激活）
@@ -2487,6 +2666,293 @@ export class DocumentService {
     return { retried, total: pendingOps.length, results };
   }
 
+  /**
+   * 全量重建当前嵌入模式集合的向量索引
+   *
+   * 用于切换嵌入模式后，把数据库中所有 ACTIVE 版本重新向量化入库
+   * 到当前模式对应的集合（按模式隔离，见 store-state.ts）。
+   *
+   * 实现方式：为每个 ACTIVE 版本写入一条 REINDEX 待处理操作，随后在
+   * **进程内后台异步**逐条执行（重新解析文件 → 切片 → 嵌入 → 入库），
+   * HTTP 请求立即返回进度快照，不阻塞。执行进度实时更新到
+   * this.reindexProgress，供 GET /embedding/rebuild/status 轮询。
+   *
+   * @returns 入队的版本数量与当前进度快照
+   */
+  async enqueueFullReindex(): Promise<{
+    enqueued: number;
+    progress: ReindexProgress;
+  }> {
+    // 防重入：已有重建在跑则直接返回当前进度，不重复入队
+    const current = this.reindexProgress;
+    if (current?.running) {
+      logger.warn('全量重建向量索引：已有重建任务进行中，忽略本次请求', {
+        module: 'DocumentService',
+        total: current.total,
+        done: current.done,
+      });
+      return { enqueued: 0, progress: current };
+    }
+
+    const activeVersions = await this.versionRepo.find({
+      where: { status: VersionStatus.ACTIVE },
+      select: ['id'],
+    });
+
+    logger.info('全量重建向量索引：开始入队', {
+      module: 'DocumentService',
+      versionCount: activeVersions.length,
+    });
+
+    const opIds: number[] = [];
+    for (const version of activeVersions) {
+      const opId = await this.enqueueVectorOp(version.id, VectorOpType.REINDEX);
+      if (opId !== null) opIds.push(opId);
+    }
+
+    // 初始化进程内进度快照（真相源仍是 pending_vector_ops 表）
+    this.reindexProgress = {
+      running: true,
+      total: opIds.length,
+      done: 0,
+      failed: 0,
+      retrying: 0,
+      round: 0,
+      maxRound: FULL_REINDEX_MAX_ROUNDS,
+      collection: getActiveCollectionName(),
+      startedAt: Date.now(),
+      errors: [],
+    };
+
+    // 后台异步执行，不阻塞 HTTP 响应
+    void this.runFullReindex(opIds);
+
+    return { enqueued: opIds.length, progress: this.reindexProgress };
+  }
+
+  /**
+   * 后台执行全量重建：按本次入队的 opId 集合逐条处理，最多
+   * FULL_REINDEX_MAX_ROUNDS 轮。每轮把上一轮失败的条目收集起来下轮重试；
+   * 轮数用尽仍失败的条目计入 failed 与 errors。
+   *
+   * 例外：源文件丢失/解析为空（reason=source-unavailable）属于永久性失败，
+   * 首轮即计入 failed 并从后续轮次剔除——重试不可能让文件凭空出现，
+   * 继续重试只会浪费时间并把真实原因淹没在重复日志里。
+   *
+   * 进度实时写入 this.reindexProgress。
+   */
+  private async runFullReindex(opIds: number[]): Promise<void> {
+    const progress = this.reindexProgress;
+    if (!progress) return;
+
+    let pendingIds = [...opIds];
+    /** 永久性失败的 opId（源文件不可用），已计入 failed，不再参与后续轮次 */
+    const permanentFailedIds: number[] = [];
+    /** 各失败条目最近一次的原因分类，供最终上报时透传给前端 */
+    const failureReasons = new Map<number, ReindexFailureReason>();
+
+    try {
+      for (let round = 1; round <= FULL_REINDEX_MAX_ROUNDS; round++) {
+        if (pendingIds.length === 0) break;
+
+        progress.round = round;
+        // retrying 仅用于文案：上一轮失败、本轮仍将重试的数量
+        progress.retrying = round > 1 ? pendingIds.length : 0;
+        logger.info('全量重建：开始新一轮', {
+          module: 'DocumentService',
+          round,
+          maxRound: FULL_REINDEX_MAX_ROUNDS,
+          pending: pendingIds.length,
+          permanentFailed: permanentFailedIds.length,
+        });
+
+        const stillFailed: number[] = [];
+        for (const opId of pendingIds) {
+          const result = await this.retrySingleVectorOp(opId).catch(
+            (err: any) => ({
+              success: false,
+              error: err?.message || String(err),
+              reason: 'service-error' as ReindexFailureReason,
+            }),
+          );
+
+          if (result.success) {
+            progress.done += 1;
+            continue;
+          }
+
+          const reason: ReindexFailureReason = result.reason || 'service-error';
+          failureReasons.set(opId, reason);
+
+          if (reason === 'source-unavailable') {
+            permanentFailedIds.push(opId);
+            progress.failed += 1;
+          } else {
+            stillFailed.push(opId);
+          }
+        }
+
+        pendingIds = stillFailed;
+        // 仅在最后一轮把仍失败的条目计入 failed，保证 (done+failed)/total ≤ 100%
+        if (round === FULL_REINDEX_MAX_ROUNDS) {
+          progress.failed += stillFailed.length;
+        }
+      }
+
+      // 收集失败详情用于上报：永久性失败 + 轮数用尽仍失败的
+      for (const opId of [...permanentFailedIds, ...pendingIds]) {
+        const detail = await this.describeOpFailure(
+          opId,
+          failureReasons.get(opId) ?? 'service-error',
+        );
+        if (detail) progress.errors.push(detail);
+      }
+
+      // 源文件丢失需要用户重新上传才能恢复，单独打一条 warn 便于运维排查
+      if (permanentFailedIds.length > 0) {
+        logger.warn('全量重建：存在因源文件丢失而无法重建的文档', {
+          module: 'DocumentService',
+          count: permanentFailedIds.length,
+          opIds: permanentFailedIds,
+        });
+      }
+    } catch (error: any) {
+      logger.error('全量重建：执行器异常中断', {
+        module: 'DocumentService',
+        error: error.message,
+        stack: error.stack,
+      });
+    } finally {
+      progress.running = false;
+      progress.retrying = 0;
+      progress.finishedAt = Date.now();
+      logger.info('全量重建：结束', {
+        module: 'DocumentService',
+        total: progress.total,
+        done: progress.done,
+        failed: progress.failed,
+        sourceUnavailable: permanentFailedIds.length,
+        durationMs: progress.finishedAt - progress.startedAt,
+      });
+    }
+  }
+
+  /**
+   * 获取当前全量重建进度快照（供 GET /embedding/rebuild/status 轮询）。
+   * 无进行中或历史重建时返回 null。
+   */
+  getReindexProgress(): ReindexProgress | null {
+    return this.reindexProgress;
+  }
+
+  /**
+   * 是否已有全量重建任务进行中（供调度器兜底定时任务避让）。
+   */
+  isReindexRunning(): boolean {
+    return this.reindexProgress?.running === true;
+  }
+
+  /**
+   * 进程启动后恢复被重启中断的全量重建。
+   *
+   * 内存进度随进程重启丢失，但 pending_vector_ops 表中可能仍有未完成的
+   * REINDEX 条目（PENDING/PROCESSING/FAILED）。REINDEX 的唯一入队点是
+   * enqueueFullReindex，故"队列中存在 REINDEX 待处理"⟺"有一次全量重建未完成"，
+   * 据此重建进度快照并继续后台执行。
+   */
+  private async resumeInterruptedReindex(): Promise<void> {
+    try {
+      if (this.reindexProgress?.running) return;
+
+      const ops = await this.pendingVectorOpRepo.find({
+        where: {
+          operation: VectorOpType.REINDEX,
+          status: In([
+            VectorOpStatus.PENDING,
+            VectorOpStatus.PROCESSING,
+            VectorOpStatus.FAILED,
+          ]),
+        },
+        order: { createdAt: 'ASC' },
+      });
+
+      if (ops.length === 0) return;
+
+      logger.info('检测到未完成的全量重建，自动恢复', {
+        module: 'DocumentService',
+        pending: ops.length,
+      });
+
+      this.reindexProgress = {
+        running: true,
+        total: ops.length,
+        done: 0,
+        failed: 0,
+        retrying: 0,
+        round: 0,
+        maxRound: FULL_REINDEX_MAX_ROUNDS,
+        collection: getActiveCollectionName(),
+        startedAt: Date.now(),
+        errors: [],
+      };
+
+      void this.runFullReindex(ops.map((op) => op.id));
+    } catch (error: any) {
+      logger.error('恢复中断的全量重建失败', {
+        module: 'DocumentService',
+        error: error.message,
+      });
+    }
+  }
+
+  /**
+   * 查询单条失败操作的详情（文档标题 + 错误信息 + 原因分类），
+   * 用于重建完成后的失败上报。
+   *
+   * @param reason 由调用方传入的原因分类（pending_vector_ops 表未持久化该字段，
+   *               执行期已判定，直接透传避免二次推断出错）
+   */
+  private async describeOpFailure(
+    opId: number,
+    reason: ReindexFailureReason,
+  ): Promise<ReindexFailureItem | null> {
+    try {
+      const op = await this.pendingVectorOpRepo.findOne({ where: { id: opId } });
+      if (!op) return null;
+
+      let documentTitle = `版本 ${op.versionId}`;
+      try {
+        const version = await this.versionRepo.findOne({
+          where: { id: op.versionId },
+          select: ['id', 'documentId'],
+        });
+        if (version) {
+          const doc = await this.getDocument(version.documentId).catch(
+            () => null,
+          );
+          if (doc?.title) documentTitle = doc.title;
+        }
+      } catch {
+        // 标题查询失败不影响错误上报，回退到默认标题
+      }
+
+      return {
+        opId,
+        versionId: op.versionId,
+        documentTitle,
+        error: op.errorMessage || '未知错误',
+        reason,
+      };
+    } catch (error: any) {
+      logger.error('查询失败操作详情出错', {
+        module: 'DocumentService',
+        opId,
+        error: error.message,
+      });
+      return null;
+    }
+  }
+
   async getPendingVectorOps(): Promise<PendingVectorOp[]> {
     return this.pendingVectorOpRepo.find({
       where: {
@@ -2500,9 +2966,20 @@ export class DocumentService {
     });
   }
 
+  /**
+   * 重试单条待处理向量操作（REMOVE / UPDATE_STATUS / REINDEX）
+   *
+   * @returns success=false 时附带 reason：source-unavailable 表示源文件丢失或
+   *          解析为空，属于永久性失败（重试与检查 ChromaDB 都无效，必须重新
+   *          上传文档）；service-error 表示向量库/嵌入服务类临时故障，可重试。
+   */
   async retrySingleVectorOp(
     opId: number,
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{
+    success: boolean;
+    error?: string;
+    reason?: ReindexFailureReason;
+  }> {
     if (isVectorStoreMemoryMode()) {
       resetVectorStore();
       logger.info('检测到向量存储为内存模式，已重置，将重新连接 ChromaDB', {
@@ -2563,10 +3040,12 @@ export class DocumentService {
             where: { id: op.versionId },
           });
           if (version) {
-            let textContent = op.params?.textContent;
-            if (!textContent) {
-              textContent = await this.parseVersionText(version);
-            }
+            // 统一走 loadReindexText：源文件丢失 / 内容为空 / 解析异常都会
+            // 抛 SourceUnavailableError，避免空文本触发「先删旧向量再写入失败」
+            const textContent = await this.loadReindexText(
+              version,
+              op.params?.textContent,
+            );
             const currentStatus = version.status;
             // 查文档标题用于 metadata
             const docInfo = await this.getDocument(version.documentId).catch(
@@ -2652,6 +3131,11 @@ export class DocumentService {
       });
       return { success: true };
     } catch (error: any) {
+      // 源文件丢失/解析为空属于永久性失败，单独分类以便上层跳过无意义的重试
+      const reason: ReindexFailureReason =
+        error instanceof SourceUnavailableError
+          ? 'source-unavailable'
+          : 'service-error';
       op.status = VectorOpStatus.FAILED;
       op.errorMessage = error.message;
       await this.pendingVectorOpRepo.save(op);
@@ -2659,9 +3143,10 @@ export class DocumentService {
         module: 'DocumentService',
         opId,
         versionId: op.versionId,
+        reason,
         error: error.message,
       });
-      return { success: false, error: error.message };
+      return { success: false, error: error.message, reason };
     }
   }
 

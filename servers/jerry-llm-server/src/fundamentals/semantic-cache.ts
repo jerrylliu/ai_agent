@@ -134,7 +134,8 @@ export class SemanticCache<V> {
       queryEmbedding = await this.embedFn(query);
     } catch (e: any) {
       this.errors++;
-      // 嵌入计算失败用 warn 级别，便于排查（Ollama 未启动 / bge-large 未拉取时会出现）
+      // 嵌入计算失败用 warn 级别，便于排查
+      // （本地：Ollama 未启动 / bge-m3 未拉取；云端：API Key 未配置或端点不可达）
       logger.warn('语义缓存：嵌入计算失败，降级为 miss', {
         module: 'SemanticCache',
         namespace: this.namespace,

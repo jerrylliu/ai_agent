@@ -42,6 +42,7 @@ export class SessionService {
     userId: string = 'default',
     documentCards?: unknown[],
     source: 'web' | 'feishu' = 'web',
+    workflowCards?: unknown[],
   ) {
     logger.debug('保存聊天记录', { module: 'SessionService', sessionId, role, contentLength: content.length });
     const chatHistory = this.chatHistoryRepository.create({
@@ -52,6 +53,10 @@ export class SessionService {
       // documentCards 以 JSON 字符串形式持久化，仅 user 消息携带
       documentCards: documentCards && documentCards.length > 0
         ? JSON.stringify(documentCards)
+        : null,
+      // workflowCards 以 JSON 字符串形式持久化，仅 assistant 消息携带（工作流执行摘要）
+      workflowCards: workflowCards && workflowCards.length > 0
+        ? JSON.stringify(workflowCards)
         : null,
     });
     const savedHistory = await this.chatHistoryRepository.save(chatHistory);
@@ -116,6 +121,8 @@ export class SessionService {
         attachments: [] as any[],
         // documentCards 从 JSON 字符串反序列化为对象
         documentCards: m.documentCards ? JSON.parse(m.documentCards) : undefined,
+        // workflowCards 从 JSON 字符串反序列化为对象
+        workflowCards: m.workflowCards ? JSON.parse(m.workflowCards) : undefined,
       }));
     }
 
@@ -124,6 +131,7 @@ export class SessionService {
       ...m,
       attachments: [] as any[],
       documentCards: m.documentCards ? JSON.parse(m.documentCards) : undefined,
+      workflowCards: m.workflowCards ? JSON.parse(m.workflowCards) : undefined,
     }));
     const assistantIdxList = enriched
       .map((m, idx) => ({ idx, role: m.role, createdAt: new Date(m.createdAt as any) }))

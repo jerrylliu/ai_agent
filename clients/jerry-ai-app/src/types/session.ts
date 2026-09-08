@@ -23,6 +23,28 @@ export interface MessageAttachment {
   favorited?: boolean;
 }
 
+/**
+ * 工作流进度卡片：由后端 workflow_* SSE 事件流实时归并而成
+ * 生成过程中在输入气泡展示实时进度（useChat.workflowStatus），
+ * 完成后随助手消息持久化（Message.workflowCards），可回看
+ */
+export interface WorkflowProgress {
+  workflowId: string;
+  name: string;
+  totalSteps: number;
+  steps: Array<{
+    stepId: string;
+    stepIndex: number;
+    description?: string;
+    tool?: string;
+    status: "running" | "success" | "failed" | "skipped";
+    durationMs?: number;
+    error?: string;
+  }>;
+  status: "running" | "completed" | "failed" | "partial";
+  totalDurationMs?: number;
+}
+
 export interface Message {
   id: string;
   content: string;
@@ -38,6 +60,8 @@ export interface Message {
    * UI 渲染时把它们展示成卡片，不在 message.content 里堆全文
    */
   documentCards?: MessageDocumentCard[];
+  /** AI 消息携带的工作流进度卡片（execute_workflow 执行摘要，完成后可回看） */
+  workflowCards?: WorkflowProgress[];
   /**
    * @deprecated 请使用 documentCards
    * 历史字段：单一文档的 contentJson，保留兼容

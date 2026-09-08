@@ -32,8 +32,9 @@ jest.mock('chromadb', () => ({
 // 只测试 deduplicateTextChunks 自身的分组与删除逻辑
 jest.mock('./store-state', () => ({
   BATCH_SIZE: 20,
-  COLLECTION_NAME: 'knowledge_base',
-  embeddings: { embedQuery: jest.fn() },
+  // 集合名 = 前缀 + 嵌入模型指纹（默认 bge-m3 → bgem3），与 store-state 的真实命名保持一致
+  getActiveCollectionName: jest.fn(() => 'knowledge_base_bgem3'),
+  getEmbeddings: jest.fn(() => ({ embedQuery: jest.fn() })),
   initializeVectorStore: jest.fn(),
   getBM25Index: jest.fn(),
   getBM25DocumentStore: jest.fn(),

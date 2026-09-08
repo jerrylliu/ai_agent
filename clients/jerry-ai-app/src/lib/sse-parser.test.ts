@@ -232,6 +232,100 @@ describe('sse-parser', () => {
       expect(onToolStatus).not.toHaveBeenCalled();
     });
 
+    it('应调用 onWorkflowEvent 回调（workflow_start）', () => {
+      const onWorkflowEvent = vi.fn();
+      const data = JSON.stringify({ workflowId: 'wf1', name: '搜索流水线', totalSteps: 2 });
+      const events = [{ eventType: 'workflow_start', eventData: data }];
+
+      handleSSEEvents(events, { onWorkflowEvent });
+
+      expect(onWorkflowEvent).toHaveBeenCalledWith({
+        type: 'workflow_start',
+        workflowId: 'wf1',
+        name: '搜索流水线',
+        totalSteps: 2,
+      });
+    });
+
+    it('应调用 onWorkflowEvent 回调（workflow_step_start）', () => {
+      const onWorkflowEvent = vi.fn();
+      const data = JSON.stringify({
+        workflowId: 'wf1',
+        stepId: 's1',
+        stepIndex: 1,
+        totalSteps: 2,
+        description: '搜索资料',
+        tool: 'search_web',
+      });
+      const events = [{ eventType: 'workflow_step_start', eventData: data }];
+
+      handleSSEEvents(events, { onWorkflowEvent });
+
+      expect(onWorkflowEvent).toHaveBeenCalledWith({
+        type: 'workflow_step_start',
+        workflowId: 'wf1',
+        stepId: 's1',
+        stepIndex: 1,
+        totalSteps: 2,
+        description: '搜索资料',
+        tool: 'search_web',
+      });
+    });
+
+    it('应调用 onWorkflowEvent 回调（workflow_step_done）', () => {
+      const onWorkflowEvent = vi.fn();
+      const data = JSON.stringify({
+        workflowId: 'wf1',
+        stepId: 's1',
+        status: 'success',
+        durationMs: 1200,
+      });
+      const events = [{ eventType: 'workflow_step_done', eventData: data }];
+
+      handleSSEEvents(events, { onWorkflowEvent });
+
+      expect(onWorkflowEvent).toHaveBeenCalledWith({
+        type: 'workflow_step_done',
+        workflowId: 'wf1',
+        stepId: 's1',
+        status: 'success',
+        durationMs: 1200,
+      });
+    });
+
+    it('应调用 onWorkflowEvent 回调（workflow_complete）', () => {
+      const onWorkflowEvent = vi.fn();
+      const data = JSON.stringify({
+        workflowId: 'wf1',
+        status: 'partial',
+        totalSteps: 3,
+        successCount: 2,
+        failedCount: 1,
+        totalDurationMs: 5400,
+      });
+      const events = [{ eventType: 'workflow_complete', eventData: data }];
+
+      handleSSEEvents(events, { onWorkflowEvent });
+
+      expect(onWorkflowEvent).toHaveBeenCalledWith({
+        type: 'workflow_complete',
+        workflowId: 'wf1',
+        status: 'partial',
+        totalSteps: 3,
+        successCount: 2,
+        failedCount: 1,
+        totalDurationMs: 5400,
+      });
+    });
+
+    it('workflow 事件 JSON 解析失败时不应崩溃', () => {
+      const onWorkflowEvent = vi.fn();
+      const events = [{ eventType: 'workflow_start', eventData: '{invalid' }];
+
+      expect(() => handleSSEEvents(events, { onWorkflowEvent })).not.toThrow();
+      expect(onWorkflowEvent).not.toHaveBeenCalled();
+    });
+
     it('未知事件类型应被忽略', () => {
       const onContent = vi.fn();
       const events = [{ eventType: 'unknown_event', eventData: '"test"' }];

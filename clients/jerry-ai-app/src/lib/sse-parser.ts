@@ -41,6 +41,44 @@ export interface ConfirmationRequestEvent {
 }
 
 /**
+ * 工作流执行进度事件（workflow-engine 推送的 4 种事件的 discriminated union）
+ * 前端在 AI 正在输入的气泡里渲染流水线步骤进度面板
+ */
+export type WorkflowEvent =
+  | {
+      type: 'workflow_start';
+      workflowId: string;
+      name: string;
+      totalSteps: number;
+    }
+  | {
+      type: 'workflow_step_start';
+      workflowId: string;
+      stepId: string;
+      stepIndex: number;
+      totalSteps: number;
+      description?: string;
+      tool?: string;
+    }
+  | {
+      type: 'workflow_step_done';
+      workflowId: string;
+      stepId: string;
+      status: 'success' | 'failed';
+      durationMs?: number;
+      error?: string;
+    }
+  | {
+      type: 'workflow_complete';
+      workflowId: string;
+      status: 'completed' | 'failed' | 'partial';
+      totalSteps: number;
+      successCount: number;
+      failedCount: number;
+      totalDurationMs: number;
+    };
+
+/**
  * generate_document 工具产出的文件卡片事件
  * 前端在 AI 消息下方渲染下载/预览卡片
  */
@@ -107,6 +145,7 @@ export function handleSSEEvents(
     onConfirmationRequest?: (event: ConfirmationRequestEvent) => void;
     onConfirmationResolved?: (event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void;
     onFileCard?: (event: FileCardEvent) => void;
+    onWorkflowEvent?: (event: WorkflowEvent) => void;
     onContent?: (text: string) => void;
     onHeartbeat?: () => void;
   },
@@ -164,6 +203,22 @@ export function handleSSEEvents(
           callbacks.onFileCard?.(fileEvent);
         } catch (e) {
           console.warn('解析 file_card 事件失败:', e);
+        }
+        break;
+      }
+      // 工作流进度事件：workflow_start / workflow_step_start / workflow_step_done / workflow_complete
+      case 'workflow_start':
+      case 'workflow_step_start':
+      case 'workflow_step_done':
+      case 'workflow_complete': {
+        try {
+          const workflowEvent = JSON.parse(event.eventData) as Omit<
+            Extract<WorkflowEvent, { type: typeof event.eventType }>,
+            'type'
+          >;
+          callbacks.onWorkflowEvent?.({ ...workflowEvent, type: event.eventType } as WorkflowEvent);
+        } catch (e) {
+          console.warn(`解析 ${event.eventType} 事件失败:`, e);
         }
         break;
       }

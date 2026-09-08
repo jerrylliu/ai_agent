@@ -6,6 +6,7 @@ import { ChatController } from './controllers/chat.controller.js';
 import { MemoryController } from './controllers/memory.controller.js';
 import { KnowledgeController } from './controllers/knowledge.controller.js';
 import { ModelController } from './controllers/model.controller.js';
+import { EmbeddingController } from './controllers/embedding.controller.js';
 import { UploadController } from './controllers/upload.controller.js';
 import { DocumentController } from './controllers/document.controller.js';
 import { KnowledgeSourceController } from './controllers/knowledge-source.controller.js';
@@ -143,6 +144,7 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     MemoryController,
     KnowledgeController,
     ModelController,
+    EmbeddingController,
     UploadController,
     DocumentController,
     KnowledgeSourceController,

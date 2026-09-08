@@ -4,6 +4,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
+import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { DocumentVersion, VersionStatus, ParsingStatus } from '../entities/document-version.entity.js';
@@ -13,8 +14,17 @@ import { DocumentService } from './document.service';
 import { cleanOrphanVectors, fixDraftVectors } from '../fundamentals/vector-store';
 import { logger } from '../fundamentals/logger';
 
+/** 兜底定时任务单次最多处理的条目数，避免长时间阻塞事件循环 */
+const FALLBACK_OPS_BATCH_SIZE = 10;
+
+/** 兜底定时任务间隔（毫秒）：5 分钟 */
+const FALLBACK_OPS_INTERVAL_MS = 5 * 60 * 1000;
+
 @Injectable()
 export class DocumentSchedulerService {
+  /** 防止兜底定时任务与手动"全部重试"并发消费同一批队列条目 */
+  private isRetryRunning = false;
+
   constructor(
     @InjectRepository(DocumentVersion)
     private versionRepo: Repository<DocumentVersion>,
@@ -105,11 +115,43 @@ export class DocumentSchedulerService {
 
   /**
    * 重试 PendingVectorOp 中失败的向量操作
+   *
+   * @param limit 本次最多处理的条目数；不传则处理全部（HTTP 手动"全部重试"走此路径）
    */
-  async retryFailedOps(): Promise<{ retried: number; total: number; results: Array<{ id: number; versionId: number; operation: string; success: boolean; error?: string }> }> {
-    const result = await this.documentService.retryFailedVectorOps();
-    logger.info('重试向量操作完成', { module: 'DocumentScheduler', retriedCount: result.retried, totalCount: result.total });
-    return result;
+  async retryFailedOps(limit?: number): Promise<{ retried: number; total: number; results: Array<{ id: number; versionId: number; operation: string; success: boolean; error?: string }> }> {
+    // 全量重建进行中时避让：REINDEX 条目正由 DocumentService.runFullReindex 逐条处理，
+    // 并发消费会导致同一版本被重复嵌入入库
+    if (this.documentService.isReindexRunning()) {
+      logger.info('全量重建进行中，跳过本次重试队列处理', { module: 'DocumentScheduler' });
+      return { retried: 0, total: 0, results: [] };
+    }
+
+    // 防重入：兜底定时任务与手动重试不并发
+    if (this.isRetryRunning) {
+      logger.info('重试队列任务已在执行中，跳过本次触发', { module: 'DocumentScheduler' });
+      return { retried: 0, total: 0, results: [] };
+    }
+
+    this.isRetryRunning = true;
+    try {
+      const result = await this.documentService.retryFailedVectorOps(3, limit);
+      logger.info('重试向量操作完成', { module: 'DocumentScheduler', retriedCount: result.retried, totalCount: result.total });
+      return result;
+    } finally {
+      this.isRetryRunning = false;
+    }
+  }
+
+  /**
+   * 兜底定时任务：定期处理重试队列中残留的失败/待处理向量操作。
+   *
+   * 正常情况下 REINDEX 由 enqueueFullReindex 触发的后台执行器处理，
+   * REMOVE/UPDATE_STATUS 由业务失败时入队并被本任务重试。此定时任务是
+   * 宕机/漏触发兜底，限量处理避免长阻塞，并在全量重建进行中时避让。
+   */
+  @Interval(FALLBACK_OPS_INTERVAL_MS)
+  async scheduledRetryFailedOps(): Promise<void> {
+    await this.retryFailedOps(FALLBACK_OPS_BATCH_SIZE);
   }
 
   /**
