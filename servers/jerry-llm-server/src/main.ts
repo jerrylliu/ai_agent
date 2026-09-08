@@ -22,6 +22,13 @@ import { stopDeadLetterCompensation } from './fundamentals/feishu-notify.service
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bodyParser: false });
 
+  // 信任 nginx 反代的第一层代理：生产环境请求经 nginx 转发，不设置此项时
+  // req.ip 恒为 nginx 容器 IP → ThrottlerGuard（按 IP 限流）会把所有用户
+  // 算进同一个配额桶，一人超限全体遭殃。设置后 req.ip 取 X-Forwarded-For
+  // 的真实客户端 IP，按 IP 限流才符合预期。
+  // 注意：trust proxy 是 Express 实例的方法，需从 NestJS 壳中取出底层实例
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
   // 全局启用输入验证管道
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 

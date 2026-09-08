@@ -59,6 +59,9 @@ pids
 # Uploads (user-generated files)
 /uploads
 
+# Runtime image storage (知识库图片等用户生成内容)
+/storage
+
 # ASR audio temp files
 /tmp
 
