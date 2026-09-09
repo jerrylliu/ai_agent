@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "jerry-ai-app",
+  "productName": "以太忆核",
   "version": "0.1.0",
   "identifier": "com.jerry.jerry-ai-app",
   "build": {
