@@ -326,6 +326,10 @@
     .bento-1 .bento-illust svg,
     .bento-5 .bento-illust svg { max-height: 148px; }
 
+    /* 大卡插画垂直居中：空间充裕时图案居中而非贴底 */
+    .bento-1 .bento-illust,
+    .bento-5 .bento-illust { margin-top: auto; margin-bottom: auto; }
+
     /* 插画托底金色微光，与暗底融合 */
     .bento-illust::after {
       content: "";
