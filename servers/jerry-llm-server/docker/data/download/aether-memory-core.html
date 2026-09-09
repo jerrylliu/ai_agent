@@ -305,6 +305,40 @@
     
     .bento-content { position: relative; z-index: 2; }
 
+    /* Bento 卡片插画：文字下方的线稿视觉（统一金线蓝图风格） */
+    .bento-illust {
+      margin-top: auto;
+      padding-top: 26px;
+      position: relative;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .bento-illust svg {
+      display: block;
+      width: 100%;
+      max-height: 104px;
+      height: auto;
+      opacity: 0.92;
+    }
+
+    /* 大卡（认知增强引擎 / 全域知识同步）给更高的插画空间 */
+    .bento-1 .bento-illust svg,
+    .bento-5 .bento-illust svg { max-height: 148px; }
+
+    /* 插画托底金色微光，与暗底融合 */
+    .bento-illust::after {
+      content: "";
+      position: absolute;
+      left: 14%;
+      right: 14%;
+      bottom: -12px;
+      height: 34px;
+      background: radial-gradient(ellipse at center, var(--accent-gold-dim) 0%, transparent 70%);
+      filter: blur(10px);
+      z-index: -1;
+    }
+
     .visual-grid {
       background-image: 
         linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
@@ -954,6 +988,29 @@
             <h3 class="bento-title">认知增强引擎</h3>
             <p class="bento-desc">融合向量检索与 BM25 混合算法，配合 Multi-hop 多跳检索与 Reranker 重排，精准捕捉深层语义关联，让机器真正理解您的意图。</p>
           </div>
+          <div class="bento-illust" aria-hidden="true">
+            <svg viewBox="0 0 340 150" preserveAspectRatio="xMidYMax meet" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <!-- 周边知识节点与暗色关联边 -->
+              <g stroke="#71717a" stroke-opacity="0.55" stroke-width="1">
+                <path d="M60,55 L105,85"/><path d="M60,55 L150,32"/><path d="M150,32 L105,85"/>
+                <path d="M150,32 L255,52"/><path d="M285,25 L255,52"/><path d="M230,130 L185,110"/>
+                <path d="M230,130 L300,120"/><path d="M300,120 L318,78"/>
+              </g>
+              <g stroke="#71717a" stroke-opacity="0.7" stroke-width="1.3">
+                <circle cx="60" cy="55" r="3.5"/><circle cx="150" cy="32" r="3.5"/>
+                <circle cx="230" cy="130" r="3.5"/><circle cx="300" cy="120" r="3.5"/><circle cx="285" cy="25" r="3.5"/>
+              </g>
+              <!-- 多跳检索主路径（金色高亮） -->
+              <polyline points="22,118 105,85 185,110 255,52 318,78" stroke="#c5a059" stroke-width="1.6" stroke-opacity="0.9"/>
+              <g stroke="#c5a059" stroke-width="1.5">
+                <circle cx="105" cy="85" r="4.5"/><circle cx="185" cy="110" r="4.5"/><circle cx="255" cy="52" r="4.5"/>
+              </g>
+              <circle cx="22" cy="118" r="5" stroke="#c5a059" stroke-width="1.8"/>
+              <circle cx="22" cy="118" r="1.8" fill="#c5a059"/>
+              <circle cx="318" cy="78" r="5" stroke="#c5a059" stroke-width="1.8"/>
+              <circle cx="318" cy="78" r="1.8" fill="#c5a059"/>
+            </svg>
+          </div>
         </div>
 
         <div class="bento-card bento-2">
@@ -989,6 +1046,26 @@
           <div class="bento-content">
             <h3 class="bento-title">本地化隐私架构</h3>
             <p class="bento-desc">基于 Tauri v2 本地构建，ChromaDB 独立向量存储；开源版支持 Ollama 本地推理，数据主权完全归您。</p>
+          </div>
+          <div class="bento-illust" aria-hidden="true">
+            <svg viewBox="0 0 340 100" preserveAspectRatio="xMidYMax meet" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <!-- 数据主权边界（虚线） -->
+              <rect x="24" y="12" width="206" height="86" rx="12" stroke="#71717a" stroke-opacity="0.4" stroke-width="1" stroke-dasharray="4 6"/>
+              <!-- 本地设备 -->
+              <rect x="44" y="26" width="166" height="54" rx="8" stroke="#71717a" stroke-width="1.3"/>
+              <path d="M127,80 V87" stroke="#71717a" stroke-width="1.3"/>
+              <path d="M104,87 H150" stroke="#71717a" stroke-width="1.3"/>
+              <!-- 独立向量库 -->
+              <g stroke="#71717a" stroke-width="1.3">
+                <ellipse cx="90" cy="40" rx="14" ry="4.5"/>
+                <path d="M76,40 V56"/><path d="M104,40 V56"/>
+                <path d="M76,56 A14,4.5 0 0 0 104,56"/>
+              </g>
+              <!-- 本地锁（金色） -->
+              <path d="M138,44 A7,7 0 0 1 152,44" stroke="#c5a059" stroke-width="1.5"/>
+              <rect x="135" y="44" width="20" height="16" rx="3" stroke="#c5a059" stroke-width="1.5"/>
+              <circle cx="145" cy="52" r="2" fill="#c5a059"/>
+            </svg>
           </div>
         </div>
       </div>
