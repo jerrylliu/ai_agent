@@ -379,6 +379,16 @@
       justify-content: center;
     }
 
+    /* 功能块实拍视频：完整显示不裁剪（屏幕录制含 UI，用 contain），留边融入深色底 */
+    .feature-video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: rgba(22, 22, 26, 0.9);
+    }
+
     .abstract-art {
       width: 100%;
       height: 100%;
@@ -629,57 +639,205 @@
       color: var(--text-tertiary);
     }
 
-    /* ========== Search Section ========== */
+    /* ========== Product Showcase（产品模拟窗口，替代搜索框） ========== */
     .search-section {
       padding: 80px 0 120px;
       text-align: center;
     }
 
-    .search-box {
-      max-width: 640px;
+    /* 窗口外壳：仿桌面客户端深色窗口 */
+    .app-window {
+      max-width: 860px;
       margin: 0 auto;
-      position: relative;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      text-align: left;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+      transition: border-color 0.3s var(--ease-out-expo);
     }
+    .app-window:hover { border-color: var(--border-hover); }
 
-    .search-input-wrap {
+    /* 标题栏：三点 + 标题，仿 macOS/Windows 窗口 chrome */
+    .app-titlebar {
       display: flex;
       align-items: center;
-      background: rgba(22, 22, 26, 0.6);
-      backdrop-filter: blur(10px);
+      gap: 8px;
+      padding: 12px 16px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .app-titlebar .dot { width: 11px; height: 11px; border-radius: 50%; }
+    .app-titlebar .dot:nth-child(1) { background: #ff5f57; }
+    .app-titlebar .dot:nth-child(2) { background: #febc2e; }
+    .app-titlebar .dot:nth-child(3) { background: #28c840; }
+    .app-titlebar .bar-title {
+      flex: 1;
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--text-tertiary);
+      letter-spacing: 0.05em;
+      /* 居中补偿：右侧预留与三点等宽空间，保持视觉居中 */
+      margin-right: 49px;
+    }
+
+    /* 主体：侧栏 + 对话区；窄屏降为单列隐藏侧栏 */
+    .app-body {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      min-height: 380px;
+    }
+    .app-sidebar {
+      border-right: 1px solid var(--border-subtle);
+      padding: 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      background: var(--bg-card);
+    }
+    .app-sidebar .side-label {
+      font-size: 0.7rem;
+      color: var(--text-tertiary);
+      letter-spacing: 0.1em;
+      padding: 4px 10px 10px;
+    }
+    .app-sidebar .side-item {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .app-sidebar .side-item.active {
+      background: var(--accent-gold-dim);
+      color: var(--accent-gold);
+    }
+
+    /* 对话区：三幕场景叠放（grid 同格堆叠）+ 底部输入条 */
+    .app-chat {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      row-gap: 18px;
+      padding: 24px;
+    }
+    .scene {
+      grid-row: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      /* 基础态隐藏：动画未启动（延迟期）时靠它保持不可见 */
+      opacity: 0;
+      animation: scene-cycle 30s infinite;
+    }
+    .scene-2 { animation-delay: 10s; }
+    .scene-3 { animation-delay: 20s; }
+
+    .chat-msg { display: flex; flex-direction: column; gap: 6px; max-width: 85%; }
+    .chat-msg .msg-role {
+      font-size: 0.7rem;
+      color: var(--text-tertiary);
+      letter-spacing: 0.08em;
+    }
+    .chat-msg .msg-bubble {
+      width: fit-content;
+      max-width: 100%;
+      font-size: 0.85rem;
+      line-height: 1.7;
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-card);
+      color: var(--text-secondary);
+    }
+    .chat-msg.user { align-self: flex-end; align-items: flex-end; }
+    .chat-msg.user .msg-bubble {
+      background: rgba(228, 228, 231, 0.08);
+      color: var(--text-primary);
+      border-color: transparent;
+    }
+    .chat-msg.ai .msg-bubble { border-left: 2px solid var(--accent-gold); }
+
+    /* 打字机：clip-path 裁剪基于元素自身盒模型，无需 JS 测量文字宽度 */
+    .demo-q, .demo-a { display: inline-block; }
+
+    /* 问题打字：0-3% 等待，3-13% 逐字显现（约 3 秒） */
+    @keyframes type-q {
+      0%, 3% { clip-path: inset(0 100% 0 0); }
+      13%, 100% { clip-path: inset(0 0 0 0); }
+    }
+    /* 回答打字：15-30% 逐字显现（约 4.5 秒），随后停留约 1 秒切幕 */
+    @keyframes type-a {
+      0%, 15% { clip-path: inset(0 100% 0 0); }
+      30%, 100% { clip-path: inset(0 0 0 0); }
+    }
+    /* 三幕轮换：每幕可见 0-33.2%（约 10 秒），30s 完整循环 */
+    @keyframes scene-cycle {
+      0%, 33.2% { opacity: 1; }
+      33.4%, 99.8% { opacity: 0; }
+      100% { opacity: 1; }
+    }
+    .scene .demo-q { animation: type-q 30s infinite; }
+    .scene .demo-a { animation: type-a 30s infinite; }
+    .scene-2 .demo-q { animation-delay: 10s; }
+    .scene-2 .demo-a { animation-delay: 10s; }
+    .scene-3 .demo-q { animation-delay: 20s; }
+    .scene-3 .demo-a { animation-delay: 20s; }
+
+    /* 流式光标：随回答文字末端闪烁（装饰） */
+    .typing-cursor {
+      display: inline-block;
+      width: 2px;
+      height: 1em;
+      background: var(--accent-gold);
+      vertical-align: text-bottom;
+      margin-left: 2px;
+      animation: cursor-blink 0.8s steps(1) infinite;
+    }
+    @keyframes cursor-blink { 50% { opacity: 0; } }
+
+    /* 底部输入条（纯装饰） */
+    .app-inputbar {
+      grid-row: 2;
+      display: flex;
+      align-items: center;
+      gap: 10px;
       border: 1px solid var(--border-subtle);
       border-radius: 100px;
-      padding: 8px 8px 8px 24px;
-      transition: all 0.3s var(--ease-out-expo);
+      padding: 10px 18px;
+      font-size: 0.8rem;
+      color: var(--text-tertiary);
     }
-
-    .search-input-wrap:focus-within {
-      border-color: var(--accent-gold);
-      box-shadow: 0 0 0 4px var(--accent-gold-dim);
-    }
-
-    .search-input {
-      flex: 1;
-      background: transparent;
-      border: none;
-      outline: none;
-      font-size: 1rem;
-      color: var(--text-primary);
-      font-family: inherit;
-    }
-    .search-input::placeholder { color: var(--text-tertiary); }
-
-    .search-btn {
-      width: 44px;
-      height: 44px;
+    .app-inputbar .send-dot {
+      width: 26px;
+      height: 26px;
       border-radius: 50%;
-      background: var(--text-primary);
-      color: var(--bg-base);
+      background: var(--accent-gold-dim);
+      color: var(--accent-gold);
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: transform 0.3s;
+      margin-left: auto;
     }
-    .search-btn:hover { transform: scale(1.05); }
+
+    /* 无障碍：用户偏好减少动效时，静态展示第一幕完整内容 */
+    @media (prefers-reduced-motion: reduce) {
+      .scene { animation: none; opacity: 1; }
+      .scene-2, .scene-3 { display: none; }
+      .demo-q, .demo-a { animation: none !important; }
+      .typing-cursor { display: none; }
+    }
+
+    /* 窄屏：侧栏隐藏，关闭打字动画（保留整幕淡入淡出），避免换行裁剪突兀 */
+    @media (max-width: 768px) {
+      .app-body { grid-template-columns: 1fr; min-height: 340px; }
+      .app-sidebar { display: none; }
+      .app-titlebar .bar-title { margin-right: 0; }
+      .scene .demo-q, .scene .demo-a { animation: none; }
+      .typing-cursor { display: none; }
+    }
 
     /* ========== Footer ========== */
     .footer {
@@ -868,7 +1026,9 @@
 
       <div class="feature-block reverse">
         <div class="feature-visual-wrap">
-          <div class="abstract-art art-stream">
+          <!-- 实拍演示：知识库混合检索流程（加载失败时回退为抽象动画） -->
+          <video class="feature-video" src="demo-knowledge-search.mp4" muted autoplay loop playsinline preload="metadata"></video>
+          <div class="abstract-art art-stream" style="position:absolute; inset:0; z-index:-1;">
             <div class="line"></div>
             <div class="line"></div>
             <div class="line"></div>
@@ -889,7 +1049,9 @@
 
       <div class="feature-block">
         <div class="feature-visual-wrap">
-          <div class="abstract-art art-editor">
+          <!-- 实拍演示：PDF 文档生成流程（加载失败时回退为抽象动画） -->
+          <video class="feature-video" src="demo-doc-generation.mp4" muted autoplay loop playsinline preload="metadata"></video>
+          <div class="abstract-art art-editor" style="position:absolute; inset:0; z-index:-1;">
             <div class="block"></div>
             <div class="block"></div>
             <div class="block"></div>
@@ -975,15 +1137,60 @@
     </div>
   </section>
 
-  <!-- Search Section -->
+  <!-- Product Showcase（产品模拟窗口） -->
   <section id="search" class="search-section">
     <div class="container">
-      <div class="search-box">
-        <div class="search-input-wrap">
-          <input type="text" class="search-input" placeholder="搜索知识、概念或灵感片段... (Cmd+K)">
-          <button class="search-btn">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
-          </button>
+      <div class="app-window" aria-label="产品界面演示窗口">
+        <div class="app-titlebar">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          <span class="bar-title">ETHERCORE · 知识库平台</span>
+        </div>
+        <div class="app-body">
+          <aside class="app-sidebar">
+            <span class="side-label">会话列表</span>
+            <span class="side-item active">季度经营分析</span>
+            <span class="side-item">产品文档库</span>
+            <span class="side-item">技术方案评审</span>
+            <span class="side-item">行业研报摘要</span>
+          </aside>
+          <div class="app-chat">
+            <div class="scene scene-1">
+              <div class="chat-msg user">
+                <span class="msg-role">用户</span>
+                <span class="msg-bubble"><span class="demo-q">帮我检索上季度的销售数据并生成图表</span></span>
+              </div>
+              <div class="chat-msg ai">
+                <span class="msg-role">以太忆核</span>
+                <span class="msg-bubble"><span class="demo-a">已命中 3 份文档：Q3 销售环比增长 23%，图表已生成如下</span><span class="typing-cursor"></span></span>
+              </div>
+            </div>
+            <div class="scene scene-2" aria-hidden="true">
+              <div class="chat-msg user">
+                <span class="msg-role">用户</span>
+                <span class="msg-bubble"><span class="demo-q">这份技术方案里有哪些风险点？</span></span>
+              </div>
+              <div class="chat-msg ai">
+                <span class="msg-role">以太忆核</span>
+                <span class="msg-bubble"><span class="demo-a">识别出 2 处高风险：依赖版本冲突与迁移窗口不足</span><span class="typing-cursor"></span></span>
+              </div>
+            </div>
+            <div class="scene scene-3" aria-hidden="true">
+              <div class="chat-msg user">
+                <span class="msg-role">用户</span>
+                <span class="msg-bubble"><span class="demo-q">总结行业研报的核心结论</span></span>
+              </div>
+              <div class="chat-msg ai">
+                <span class="msg-role">以太忆核</span>
+                <span class="msg-bubble"><span class="demo-a">已生成 5 条摘要：市场集中度提升，头部效应加剧</span><span class="typing-cursor"></span></span>
+              </div>
+            </div>
+            <div class="app-inputbar">
+              <span>输入消息，体验完整检索与对话能力…</span>
+              <span class="send-dot">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+              </span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
