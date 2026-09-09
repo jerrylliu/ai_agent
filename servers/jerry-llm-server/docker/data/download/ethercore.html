@@ -1147,15 +1147,10 @@
           <span class="dot"></span><span class="dot"></span><span class="dot"></span>
           <span class="bar-title">ETHERCORE · 知识库平台</span>
         </div>
-        <div class="app-body">
-          <aside class="app-sidebar">
-            <span class="side-label">会话列表</span>
-            <span class="side-item active">季度经营分析</span>
-            <span class="side-item">产品文档库</span>
-            <span class="side-item">技术方案评审</span>
-            <span class="side-item">行业研报摘要</span>
-          </aside>
-          <div class="app-chat">
+        <div class="app-body" style="grid-template-columns: 1fr; position: relative;">
+          <!-- 实机演示视频：与 03 编辑器同源（加载失败时回退为模拟对话动画） -->
+          <video class="feature-video" src="demo-doc-editor.mp4" muted autoplay loop playsinline preload="metadata" style="position:static; border-radius:0; background:transparent;"></video>
+          <div class="app-chat" style="grid-row:auto; position:absolute; inset:0; z-index:-1;">
             <div class="scene scene-1">
               <div class="chat-msg user">
                 <span class="msg-role">用户</span>
