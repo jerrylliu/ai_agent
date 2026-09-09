@@ -31,6 +31,8 @@
 
     /* ========== Reset & Base ========== */
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
     
     body {
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "PingFang SC", "Helvetica Neue", sans-serif;
@@ -550,6 +552,83 @@
     .art-layers .layer:nth-child(2) { transform: rotateX(45deg) rotateZ(-15deg) translateZ(30px); opacity: 0.6; }
     .art-layers .layer:nth-child(3) { transform: rotateX(45deg) rotateZ(-15deg) translateZ(60px); opacity: 1; border-color: var(--accent-gold); }
 
+    /* ========== Download Section ========== */
+    .download-section {
+      padding: 40px 0 120px;
+      text-align: center;
+    }
+
+    .download-card {
+      max-width: 720px;
+      margin: 0 auto;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 64px 40px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.3s var(--ease-out-expo);
+    }
+
+    .download-card:hover {
+      border-color: var(--border-hover);
+    }
+
+    /* 顶部金色渐变装饰线，呼应页面金色点缀语言 */
+    .download-card::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 60%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent-gold), transparent);
+      opacity: 0.6;
+    }
+
+    .download-title {
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+    }
+
+    .download-desc {
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+      max-width: 480px;
+      margin: 0 auto 36px;
+    }
+
+    .download-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 40px;
+      border-radius: 100px;
+      font-size: 1rem;
+      font-weight: 600;
+      background: var(--text-primary);
+      color: var(--bg-base);
+      transition: transform 0.3s var(--ease-out-expo), box-shadow 0.3s;
+    }
+
+    .download-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 30px rgba(255, 255, 255, 0.1);
+    }
+
+    .download-meta {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      flex-wrap: wrap;
+      margin-top: 28px;
+      font-size: 0.8rem;
+      color: var(--text-tertiary);
+    }
+
     /* ========== Search Section ========== */
     .search-section {
       padding: 80px 0 120px;
@@ -679,8 +758,9 @@
         <a href="#advantages" class="nav-link">核心优势</a>
         <a href="#modules" class="nav-link">功能模块</a>
         <a href="#search" class="nav-link">检索</a>
+        <a href="#download" class="nav-link">下载</a>
       </div>
-      <button class="nav-cta">开始使用</button>
+      <a href="#download" class="nav-cta">开始使用</a>
     </div>
   </nav>
 
@@ -695,8 +775,8 @@
         以太忆核不仅仅是一个存储库，它是您思想的延伸。基于向量语义与知识图谱技术，将碎片化信息转化为结构化智慧。
       </p>
       <div class="hero-actions">
-        <button class="btn-primary">开启智慧之旅</button>
-        <button class="btn-secondary">观看演示</button>
+        <a href="#download" class="btn-primary">开启智慧之旅</a>
+        <a href="https://www.bilibili.com/video/BV1H4Td6mErg/?share_source=copy_web&vd_source=dc3111b3c7bf0cdd2b317ef0b12bc7e1" target="_blank" rel="noopener" class="btn-secondary">观看演示</a>
       </div>
     </div>
   </section>
@@ -904,6 +984,26 @@
           <button class="search-btn">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
           </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download Section -->
+  <section id="download" class="download-section">
+    <div class="container">
+      <div class="download-card">
+        <p class="eyebrow">Get Started</p>
+        <h2 class="download-title">下载 <strong>以太忆核</strong> 桌面客户端</h2>
+        <p class="download-desc">完整的知识库管理、混合检索与 AI 对话体验，均在本地桌面应用中。</p>
+        <a href="/download/jerry-ai-app_0.1.0_x64-setup.exe" download class="download-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          Windows 版下载
+        </a>
+        <div class="download-meta">
+          <span>v0.1.0</span>
+          <span>Windows 10+ / 64 位</span>
+          <span>约 3.8 MB</span>
         </div>
       </div>
     </div>
