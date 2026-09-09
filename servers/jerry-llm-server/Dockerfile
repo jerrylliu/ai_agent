@@ -43,6 +43,11 @@ FROM node:22-alpine AS runner
 ENV NODE_ENV=production
 # 嵌入模式为云端（硅基流动），容器内无 Ollama 时探测失败会自动降级，无需额外处理
 RUN apk add --no-cache wget
+# 图表 PNG 渲染 / 网页爬虫依赖 Chromium（Alpine musl 版）；
+# font-noto-cjk 提供中文字体，缺字体会导致图表中文渲染成方块
+RUN apk add --no-cache chromium font-noto-cjk \
+  && ln -sf /usr/bin/chromium-browser /usr/bin/google-chrome
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 WORKDIR /app
 
 # pnpm workspace 布局：根 node_modules/.pnpm 为真实存储，子包 node_modules 是符号链接，
