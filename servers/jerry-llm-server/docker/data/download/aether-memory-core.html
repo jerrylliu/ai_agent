@@ -934,10 +934,46 @@
 
     @media (max-width: 768px) {
       .nav-links { display: none; }
-      section { padding: 80px 0; }
+      section { padding: 72px 0; }
       .bento-grid { grid-template-columns: 1fr; }
       .bento-1, .bento-2, .bento-3, .bento-4, .bento-5, .bento-6 { grid-column: span 1; }
       .hero-actions { flex-direction: column; align-items: center; }
+
+      /* ---------- 导航：极简 Logo + 下载 CTA ---------- */
+      .nav-inner { height: 56px; }
+      .nav-cta { padding: 10px 16px; font-size: 0.8rem; }
+
+      /* ---------- Hero：字号收缩、按钮全宽 ---------- */
+      .hero { padding-top: 120px; padding-bottom: 72px; }
+      .hero .display-title { font-size: clamp(2rem, 9vw, 2.75rem); }
+      .hero .body-large { font-size: 1rem; margin-bottom: 40px; }
+      .hero-actions { width: 100%; }
+      .hero-actions .btn-primary,
+      .hero-actions .btn-secondary { width: 100%; max-width: 320px; text-align: center; }
+
+      /* ---------- Bento 卡片：内边距收窄、插画缩小 ---------- */
+      .bento-card { padding: 24px; min-height: 0; }
+      .bento-illust svg { max-height: 88px; }
+      .bento-1 .bento-illust svg,
+      .bento-5 .bento-illust svg { max-height: 120px; }
+      .bento-title { font-size: 1.1rem; }
+
+      /* ---------- 功能模块：视频限高、标题收缩 ---------- */
+      .feature-block { gap: 32px; margin-bottom: 72px; }
+      .feature-title { font-size: 1.5rem; margin-bottom: 14px; }
+      .feature-desc { font-size: 0.9rem; }
+      .feature-visual-wrap { aspect-ratio: auto; height: 240px; }
+
+      /* ---------- 下载卡：按钮全宽 + 提示文案 ---------- */
+      .download-card { padding: 48px 20px; }
+      .download-btn { width: 100%; justify-content: center; }
+      .download-note { margin-top: 16px; font-size: 0.8rem; color: var(--text-tertiary); text-align: center; }
+    }
+
+    /* ---------- 触屏设备：禁用悬停位移动效，避免点击后"粘住" ---------- */
+    @media (hover: none) {
+      .bento-card:hover { transform: none; }
+      .btn-primary:hover, .btn-secondary:hover, .nav-cta:hover, .download-btn:hover { transform: none; }
     }
   </style>
 </head>
@@ -949,7 +985,7 @@
   <!-- Navigation -->
   <nav class="nav">
     <div class="nav-inner">
-      <a href="#" class="nav-logo">ETHER<span>CORE</span></a>
+      <a href="#" class="nav-logo">Aether<span> Memory Core</span></a>
       <div class="nav-links">
         <a href="#advantages" class="nav-link">核心优势</a>
         <a href="#modules" class="nav-link">功能模块</a>
@@ -1329,6 +1365,7 @@
           <span>Windows 10+ / 64 位</span>
           <span>约 3.8 MB</span>
         </div>
+        <p class="download-note">安装包需在 Windows 电脑上运行，手机端请用电脑下载后传输安装</p>
       </div>
     </div>
   </section>
@@ -1503,6 +1540,35 @@
         }
       });
     });
+
+    // ========== 移动端：演示视频改为点击播放（省流量，避免自动播放消耗用户数据） ==========
+    (function () {
+      const mobileMQ = window.matchMedia('(max-width: 768px)');
+
+      function setupMobileVideos() {
+        document.querySelectorAll('video.feature-video').forEach(v => {
+          if (mobileMQ.matches) {
+            // 手机：取消自动播放，显示系统控制条，用户点击才加载播放
+            v.removeAttribute('autoplay');
+            v.pause();
+            v.controls = true;
+            v.preload = 'metadata';
+          } else {
+            // 桌面：恢复自动循环播放
+            v.controls = false;
+            v.setAttribute('autoplay', '');
+            const p = v.play();
+            if (p) p.catch(() => {});
+          }
+        });
+      }
+
+      setupMobileVideos();
+      // 断点切换（旋转屏幕/拉伸窗口）时重新适配
+      if (mobileMQ.addEventListener) {
+        mobileMQ.addEventListener('change', setupMobileVideos);
+      }
+    })();
   </script>
 </body>
 </html>
