@@ -37,6 +37,26 @@ import { Session, Message, HistoryItem, WorkflowProgress } from "../types/sessio
 export type { WorkflowProgress };
 
 /**
+ * 保存聊天记录（带一次重试）
+ *
+ * 为什么需要重试：助手回复保存发生在 SSE 流刚结束的时点，弱网/丢包环境下
+ * 该请求可能瞬时失败（浏览器常误报为 CORS 预检失败或 fetch failed）。
+ * 若不重试，回复气泡会因未入库而被会话刷新抹掉，用户看到"回复闪现后消失"。
+ */
+async function saveChatHistoryWithRetry(
+  data: Parameters<typeof saveChatHistory>[0],
+): Promise<{ id: number }> {
+  try {
+    return await saveChatHistory(data);
+  } catch (error) {
+    console.warn("保存聊天记录失败，2 秒后重试一次:", error);
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // 重试仍失败则抛出，由调用方兜底
+    return saveChatHistory(data);
+  }
+}
+
+/**
  * 将 workflow_* SSE 事件归并为下一个进度状态（纯函数，便于测试）
  * @param prev 当前快照（可能为 null）
  * @returns null 表示无进行中的工作流（complete 后由调用方清空）
@@ -689,7 +709,7 @@ export function useChat(
     abortControllerRef.current = abortController;
 
     try {
-      const savedUserMsg = await saveChatHistory({
+      const savedUserMsg = await saveChatHistoryWithRetry({
         sessionId: currentSessionId,
         role: "user",
         content: displayContent,
@@ -864,46 +884,26 @@ export function useChat(
       setToolStatuses([]);
       setWorkflowStatus(null);
 
-      // 保存完整的响应（工作流快照一并持久化，重启后可回看）
-      const savedAssistantMsg = await saveChatHistory({
-        sessionId: currentSessionId,
-        role: "assistant",
-        content: fullResponse,
-        workflowCards:
-          workflowCardsCollected.length > 0 ? workflowCardsCollected : undefined,
-      });
+      // 助手回复由服务端在 SSE 流结束时直接落库（数据完整性不依赖客户端网络），
+      // 前端不再常规保存，避免网络抖动导致"回复已展示但未入库→被刷新抹掉"。
+      // 仅当本条消息携带工作流卡片时补一次富化保存——
+      // 服务端 saveChatHistory 的幂等保护会把同内容重复保存转为卡片字段更新
+      if (workflowCardsCollected.length > 0) {
+        void saveChatHistoryWithRetry({
+          sessionId: currentSessionId,
+          role: "assistant",
+          content: fullResponse,
+          workflowCards: workflowCardsCollected,
+        }).catch((saveError) => {
+          console.warn("工作流卡片富化保存失败（不影响回复展示）:", saveError);
+        });
+      }
 
       isTypingRef.current = false;
       activeGeneratingSessionIdRef.current = null;
 
-      // 用数据库返回的 ID 更新前端消息 ID，确保删除时能匹配
-      if (savedAssistantMsg?.id) {
-        setMessages((prev) => {
-          const exists = prev.some((msg) => msg.id === assistantMessageId);
-          const next = exists
-            ? prev.map((msg) =>
-                msg.id === assistantMessageId
-                  ? {
-                      ...msg,
-                      id: savedAssistantMsg.id.toString(),
-                      content: fullResponse,
-                    }
-                  : msg,
-              )
-            : [
-                ...prev,
-                {
-                  ...tempAssistantMessage,
-                  id: savedAssistantMsg.id.toString(),
-                  content: fullResponse,
-                  fromKnowledgeBase: usedKnowledgeBase,
-                  contextCount,
-                },
-              ];
-          messagesCacheRef.current.set(currentSessionId, next);
-          return next;
-        });
-      }
+      // 数据库侧的真实消息 ID 由服务端落库后通过实时事件/周期刷新同步回前端，
+      // 删除/反馈操作在刷新完成前对临时 ID 的操作由既有刷新机制自愈
 
       // 重新加载会话列表以更新会话标题和时间
       await loadSessions(true);
