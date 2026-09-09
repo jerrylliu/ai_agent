@@ -45,6 +45,26 @@ export class SessionService {
     workflowCards?: unknown[],
   ) {
     logger.debug('保存聊天记录', { module: 'SessionService', sessionId, role, contentLength: content.length });
+
+    // ==================== 幂等保护 ====================
+    // 为什么需要：助手回复已改为服务端在 SSE 流结束后自动落库（ChatController 回调），
+    // 但旧版客户端 / 工作流卡片富化保存仍会 POST /chat/history 提交同一条内容，
+    // 前端保存重试也可能造成重复提交。
+    // 规则：与会话最后一条消息同角色且内容完全一致时视为重复：
+    //   - 若新保存携带 workflowCards 且已有记录缺失 → 视为客户端富化，仅补充卡片字段
+    //   - 否则直接返回已有记录，不再插入
+    const lastMessage = await this.chatHistoryRepository.findOne({
+      where: { sessionId },
+      order: { id: 'DESC' },
+    });
+    if (lastMessage && lastMessage.role === role && lastMessage.content === content) {
+      if (workflowCards && workflowCards.length > 0 && !lastMessage.workflowCards) {
+        lastMessage.workflowCards = JSON.stringify(workflowCards);
+        await this.chatHistoryRepository.save(lastMessage);
+      }
+      return lastMessage;
+    }
+
     const chatHistory = this.chatHistoryRepository.create({
       userId,
       sessionId,
