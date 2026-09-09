@@ -164,6 +164,35 @@ export class ChatController {
       await this.appService.prompt(
         body.message, body.images, body.history, res, body.sessionId, () => cancelled, req.userId,
         body.memoryEnabled, body.summaryEnabled, body.injectMemory, llmAbortController, body.imageModel,
+        // 服务端自动落库：SSE 流结束时由服务端直接保存助手完整回复。
+        // 为什么：此前助手回复依赖客户端流结束后调 POST /chat/history 保存，
+        // 客户端网络抖动会导致回复已展示但未入库，随后被会话刷新"抹掉"（消失）。
+        // 改为服务端内网落库后，数据完整性不再依赖客户端网络。
+        // 幂等性：SessionService.saveChatHistory 对同角色同内容的重复保存会去重，
+        // 旧版客户端的 /chat/history 保存与此处不会产生双写重复。
+        (reply: string) => {
+          if (!body.sessionId) return;
+          const sessionId = body.sessionId;
+          const uid = req.userId;
+          this.sessionService
+            .saveChatHistory(sessionId, 'assistant', reply, uid)
+            .then((saved) => {
+              logger.info('服务端已自动落库助手回复', {
+                module: 'ChatController', sessionId, messageId: saved?.id, length: reply.length,
+              });
+            })
+            .catch((error: any) => {
+              logger.error('服务端自动保存助手回复失败', {
+                module: 'ChatController', sessionId, error: error?.message || String(error),
+              });
+            });
+          // 飞书同步与 /chat/history 入口保持同一通道（uuid 幂等，重复同步会被飞书侧去重）
+          void this.syncWebMessageToFeishu(sessionId, 'assistant', reply, uid).catch((error) => {
+            logger.warn('自动落库后飞书同步失败', {
+              module: 'ChatController', sessionId, error: error?.message || String(error),
+            });
+          });
+        },
       );
     } finally {
       // 必须在 finally 释放：业务异常 / 客户端断开 / 正常完成都要释放锁

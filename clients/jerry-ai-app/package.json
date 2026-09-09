@@ -8,6 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:local": "set \"VITE_API_BASE_URL=http://localhost:3000\" && pnpm tauri dev",
+    "tauri:cloud": "set \"VITE_API_BASE_URL=http://124.223.169.223\" && pnpm tauri dev",
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage"

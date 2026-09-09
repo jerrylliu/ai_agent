@@ -149,6 +149,49 @@ describe('SessionService', () => {
       expect(mockSummaryService.checkAndUpdateSummary).toHaveBeenCalledWith('s1', 'u1');
       expect(mockMemoryService.checkAndExtractMemories).toHaveBeenCalledWith('s1', 'u1');
     });
+
+    it('与最后一条消息同角色同内容时应去重（服务端自动落库 + 旧客户端双写保护）', async () => {
+      const service = createService();
+      const existing = { id: 7, sessionId: 's1', role: 'assistant', content: '同一条回复', workflowCards: null };
+      chatRepo.findOne.mockResolvedValue(existing);
+
+      const result = await service.saveChatHistory('s1', 'assistant', '同一条回复', 'u1');
+
+      // 不应插入新记录，直接返回已有消息
+      expect(chatRepo.create).not.toHaveBeenCalled();
+      expect(result).toBe(existing);
+    });
+
+    it('重复保存携带 workflowCards 且已有记录缺失卡片时应富化更新而非插入', async () => {
+      const service = createService();
+      const existing = { id: 7, sessionId: 's1', role: 'assistant', content: '同一条回复', workflowCards: null };
+      chatRepo.findOne.mockResolvedValue(existing);
+      chatRepo.save.mockImplementation(async (entity: any) => entity);
+      const cards = [{ workflowId: 'wf-1', name: '工作流', status: 'completed', steps: [] }];
+
+      const result = await service.saveChatHistory('s1', 'assistant', '同一条回复', 'u1', undefined, 'web', cards);
+
+      // 不插入新记录，仅把卡片字段补充到已有消息上
+      expect(chatRepo.create).not.toHaveBeenCalled();
+      expect(chatRepo.save).toHaveBeenCalledWith(expect.objectContaining({
+        id: 7,
+        workflowCards: JSON.stringify(cards),
+      }));
+      expect(result.workflowCards).toBe(JSON.stringify(cards));
+    });
+
+    it('内容不同时不应误判为重复', async () => {
+      const service = createService();
+      chatRepo.findOne.mockResolvedValue({ id: 7, sessionId: 's1', role: 'assistant', content: '上一条回复', workflowCards: null });
+      chatRepo.create.mockReturnValue({ id: 8 });
+      chatRepo.save.mockResolvedValue({ id: 8 });
+      sessionRepo.findOne.mockResolvedValue({ sessionId: 's1' });
+
+      await service.saveChatHistory('s1', 'assistant', '新回复', 'u1');
+
+      expect(chatRepo.create).toHaveBeenCalled();
+      expect(chatRepo.save).toHaveBeenCalled();
+    });
   });
 
   /* ====================================================================
