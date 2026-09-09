@@ -191,6 +191,11 @@ async function tryFetchMarkdownVersion(htmlUrl: string, timeoutMs: number = DEFA
  */
 function findSystemChrome(): string | undefined {
   const paths = [
+    // Linux（Docker 容器 / CI）：Alpine 的 chromium 与 Debian 系常见路径
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
     // Windows Chrome
     process.env.PROGRAMFILES && `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`,
     process.env['PROGRAMFILES(X86)'] && `${process.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`,
