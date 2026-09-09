@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ETHERCORE | 重塑思维的數字记忆中枢</title>
+  <style>
+    /* ========== Design Tokens ========== */
+    :root {
+      --bg-base: #09090b;
+      --bg-elevated: #111114;
+      --bg-card: #16161a;
+      
+      --border-subtle: rgba(255, 255, 255, 0.06);
+      --border-hover: rgba(255, 255, 255, 0.15);
+      
+      --text-primary: #fafafa;
+      --text-secondary: #a1a1aa;
+      --text-tertiary: #71717a;
+      
+      --accent-platinum: #e4e4e7;
+      --accent-gold: #c5a059;
+      --accent-gold-dim: rgba(197, 160, 89, 0.15);
+      
+      --radius-sm: 8px;
+      --radius-md: 16px;
+      --radius-lg: 24px;
+      
+      --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* ========== Reset & Base ========== */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, "PingFang SC", "Helvetica Neue", sans-serif;
+      background-color: var(--bg-base);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ========== Neural Network Background ========== */
+    #neural-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -2;
+      pointer-events: none;
+      background: var(--bg-base);
+    }
+
+    /* Global Noise Texture for Premium Feel */
+    body::after {
+      content: "";
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+      opacity: 0.035;
+      pointer-events: none;
+      z-index: 9999;
+      mix-blend-mode: overlay;
+    }
+
+    a { text-decoration: none; color: inherit; }
+    button { font-family: inherit; cursor: pointer; border: none; background: none; }
+
+    /* ========== Typography ========== */
+    .eyebrow {
+      font-size: 0.75rem;
+      font-weight: 500;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent-gold);
+      margin-bottom: 16px;
+    }
+
+    .display-title {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 200;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      color: var(--text-primary);
+    }
+
+    .display-title strong {
+      font-weight: 600;
+      background: linear-gradient(135deg, #fff 0%, var(--accent-platinum) 50%, var(--accent-gold) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .body-large {
+      font-size: 1.125rem;
+      font-weight: 300;
+      color: var(--text-secondary);
+      line-height: 1.7;
+      max-width: 600px;
+    }
+
+    /* ========== Layout ========== */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    section {
+      padding: 120px 0;
+      position: relative;
+    }
+
+    /* ========== Navigation ========== */
+    .nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      background: rgba(9, 9, 11, 0.6);
+      backdrop-filter: blur(20px) saturate(180%);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .nav-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .nav-logo {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      color: var(--text-primary);
+    }
+    .nav-logo span { color: var(--accent-gold); }
+
+    .nav-links {
+      display: flex;
+      gap: 32px;
+    }
+
+    .nav-link {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      transition: color 0.3s;
+    }
+    .nav-link:hover { color: var(--text-primary); }
+
+    .nav-cta {
+      padding: 8px 20px;
+      border-radius: 100px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      background: var(--text-primary);
+      color: var(--bg-base);
+      transition: transform 0.3s var(--ease-out-expo), opacity 0.3s;
+    }
+    .nav-cta:hover { transform: scale(1.02); opacity: 0.9; }
+
+    /* ========== Hero ========== */
+    .hero {
+      padding-top: 180px;
+      padding-bottom: 120px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero .display-title {
+      margin-bottom: 24px;
+    }
+
+    .hero .body-large {
+      margin: 0 auto 48px;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+    }
+
+    .btn-primary {
+      padding: 14px 32px;
+      border-radius: 100px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      background: var(--text-primary);
+      color: var(--bg-base);
+      transition: all 0.3s var(--ease-out-expo);
+    }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 30px rgba(255,255,255,0.1); }
+
+    .btn-secondary {
+      padding: 14px 32px;
+      border-radius: 100px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      border: 1px solid var(--border-hover);
+      color: var(--text-primary);
+      transition: all 0.3s var(--ease-out-expo);
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.3); }
+
+    /* ========== Section Headers ========== */
+    .section-header {
+      margin-bottom: 64px;
+      max-width: 600px;
+    }
+    .section-header.center {
+      margin-left: auto;
+      margin-right: auto;
+      text-align: center;
+    }
+
+    /* ========== Bento Grid (Core Advantages) ========== */
+    .bento-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: auto;
+      gap: 16px;
+    }
+
+    .bento-card {
+      background: rgba(22, 22, 26, 0.6);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 32px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.4s var(--ease-out-expo), transform 0.4s var(--ease-out-expo), background 0.4s;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 280px;
+    }
+
+    .bento-card:hover {
+      border-color: var(--border-hover);
+      transform: translateY(-4px);
+      background: rgba(22, 22, 26, 0.8);
+    }
+
+    .bento-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: radial-gradient(600px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255,255,255,0.06), transparent 40%);
+      opacity: 0;
+      transition: opacity 0.4s;
+      pointer-events: none;
+      z-index: 1;
+    }
+    .bento-card:hover::before { opacity: 1; }
+
+    .bento-1 { grid-column: span 2; grid-row: span 2; }
+    .bento-2 { grid-column: span 2; }
+    .bento-3 { grid-column: span 2; }
+    .bento-4 { grid-column: span 2; }
+    .bento-5 { grid-column: span 2; grid-row: span 2; }
+    .bento-6 { grid-column: span 2; }
+
+    .bento-title {
+      font-size: 1.25rem;
+      font-weight: 500;
+      margin-bottom: 8px;
+      color: var(--text-primary);
+      position: relative;
+      z-index: 2;
+    }
+
+    .bento-desc {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+      position: relative;
+      z-index: 2;
+    }
+
+    .bento-visual {
+      position: absolute;
+      bottom: 0;
+      right: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      opacity: 0.4;
+      z-index: 0;
+    }
+    
+    .bento-content { position: relative; z-index: 2; }
+
+    .visual-grid {
+      background-image: 
+        linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+      background-size: 40px 40px;
+      mask-image: radial-gradient(circle at 70% 70%, black 20%, transparent 70%);
+    }
+
+    .visual-flow {
+      background: 
+        radial-gradient(circle at 80% 80%, var(--accent-gold-dim) 0%, transparent 50%),
+        radial-gradient(circle at 20% 20%, rgba(139, 92, 246, 0.1) 0%, transparent 50%);
+    }
+
+    /* ========== Alternating Features (Functional Modules) ========== */
+    .feature-block {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 80px;
+      align-items: center;
+      margin-bottom: 120px;
+    }
+
+    .feature-block:last-child { margin-bottom: 0; }
+
+    .feature-block.reverse .feature-visual-wrap { order: 2; }
+    .feature-block.reverse .feature-content { order: 1; }
+
+    .feature-content .eyebrow { margin-bottom: 12px; }
+    
+    .feature-title {
+      font-size: 2rem;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      margin-bottom: 20px;
+      color: var(--text-primary);
+    }
+
+    .feature-desc {
+      font-size: 1rem;
+      color: var(--text-secondary);
+      line-height: 1.8;
+      margin-bottom: 24px;
+    }
+
+    .feature-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tag {
+      padding: 6px 14px;
+      border-radius: 100px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      background: rgba(255,255,255,0.05);
+      color: var(--text-secondary);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .feature-visual-wrap {
+      aspect-ratio: 4/3;
+      border-radius: var(--radius-lg);
+      background: rgba(22, 22, 26, 0.5);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border-subtle);
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .abstract-art {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    .art-nodes::before, .art-nodes::after {
+      content: "";
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(40px);
+    }
+    .art-nodes::before {
+      width: 200px; height: 200px;
+      background: var(--accent-gold);
+      opacity: 0.2;
+      top: 20%; left: 20%;
+      animation: float 8s ease-in-out infinite;
+    }
+    .art-nodes::after {
+      width: 150px; height: 150px;
+      background: #8b5cf6;
+      opacity: 0.2;
+      bottom: 20%; right: 20%;
+      animation: float 10s ease-in-out infinite reverse;
+    }
+    .art-nodes .core {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 80px; height: 80px;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 50%;
+      box-shadow: 0 0 40px rgba(255,255,255,0.05);
+    }
+    .art-nodes .ring {
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 50%;
+    }
+    .art-nodes .ring-1 { width: 160px; height: 160px; }
+    .art-nodes .ring-2 { width: 240px; height: 240px; }
+
+    .art-stream {
+      background: linear-gradient(135deg, rgba(197, 160, 89, 0.05) 0%, transparent 50%);
+    }
+    .art-stream .line {
+      position: absolute;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--accent-gold), transparent);
+      opacity: 0.3;
+      animation: stream 4s linear infinite;
+    }
+    .art-stream .line:nth-child(1) { top: 30%; width: 60%; left: 20%; animation-delay: 0s; }
+    .art-stream .line:nth-child(2) { top: 50%; width: 80%; left: 10%; animation-delay: 1s; }
+    .art-stream .line:nth-child(3) { top: 70%; width: 40%; left: 40%; animation-delay: 2s; }
+
+    .art-editor {
+      padding: 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .art-editor .block {
+      height: 12px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 4px;
+    }
+    .art-editor .block:nth-child(1) { width: 80%; }
+    .art-editor .block:nth-child(2) { width: 60%; background: rgba(197, 160, 89, 0.15); border: 1px solid rgba(197, 160, 89, 0.2); }
+    .art-editor .block:nth-child(3) { width: 90%; }
+    .art-editor .block:nth-child(4) { width: 40%; }
+    .art-editor .cursor {
+      position: absolute;
+      bottom: 40px;
+      right: 40px;
+      width: 2px;
+      height: 20px;
+      background: var(--accent-gold);
+      animation: blink 1s step-end infinite;
+    }
+
+    .art-sync {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 60px;
+    }
+    .art-sync .node {
+      width: 60px;
+      height: 60px;
+      border-radius: 16px;
+      border: 1px solid var(--border-hover);
+      background: var(--bg-elevated);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      color: var(--text-secondary);
+      position: relative;
+    }
+    .art-sync .bridge {
+      width: 80px;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent-gold), transparent, var(--accent-gold));
+      position: relative;
+    }
+    .art-sync .bridge::after {
+      content: "";
+      position: absolute;
+      top: -3px;
+      left: 0;
+      width: 8px;
+      height: 8px;
+      background: var(--accent-gold);
+      border-radius: 50%;
+      animation: move-bridge 2s linear infinite;
+    }
+
+    .art-shield {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .art-shield .icon {
+      width: 100px;
+      height: 100px;
+      border: 2px solid rgba(255,255,255,0.1);
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    .art-shield .icon::before {
+      content: "";
+      width: 40px;
+      height: 40px;
+      background: var(--accent-gold-dim);
+      border-radius: 50%;
+      filter: blur(10px);
+    }
+    .art-shield .scan {
+      position: absolute;
+      width: 200px;
+      height: 200px;
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 50%;
+      animation: pulse-ring 3s ease-out infinite;
+    }
+
+    .art-layers {
+      perspective: 800px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .art-layers .layer {
+      position: absolute;
+      width: 160px;
+      height: 100px;
+      border: 1px solid var(--border-hover);
+      border-radius: 12px;
+      background: var(--bg-card);
+      transform: rotateX(45deg) rotateZ(-15deg);
+    }
+    .art-layers .layer:nth-child(1) { transform: rotateX(45deg) rotateZ(-15deg) translateZ(0px); opacity: 0.3; }
+    .art-layers .layer:nth-child(2) { transform: rotateX(45deg) rotateZ(-15deg) translateZ(30px); opacity: 0.6; }
+    .art-layers .layer:nth-child(3) { transform: rotateX(45deg) rotateZ(-15deg) translateZ(60px); opacity: 1; border-color: var(--accent-gold); }
+
+    /* ========== Search Section ========== */
+    .search-section {
+      padding: 80px 0 120px;
+      text-align: center;
+    }
+
+    .search-box {
+      max-width: 640px;
+      margin: 0 auto;
+      position: relative;
+    }
+
+    .search-input-wrap {
+      display: flex;
+      align-items: center;
+      background: rgba(22, 22, 26, 0.6);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border-subtle);
+      border-radius: 100px;
+      padding: 8px 8px 8px 24px;
+      transition: all 0.3s var(--ease-out-expo);
+    }
+
+    .search-input-wrap:focus-within {
+      border-color: var(--accent-gold);
+      box-shadow: 0 0 0 4px var(--accent-gold-dim);
+    }
+
+    .search-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-size: 1rem;
+      color: var(--text-primary);
+      font-family: inherit;
+    }
+    .search-input::placeholder { color: var(--text-tertiary); }
+
+    .search-btn {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--text-primary);
+      color: var(--bg-base);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.3s;
+    }
+    .search-btn:hover { transform: scale(1.05); }
+
+    /* ========== Footer ========== */
+    .footer {
+      border-top: 1px solid var(--border-subtle);
+      padding: 40px 0;
+      text-align: center;
+      position: relative;
+      z-index: 1;
+    }
+    .footer p {
+      font-size: 0.8rem;
+      color: var(--text-tertiary);
+      letter-spacing: 0.05em;
+    }
+
+    /* ========== Animations ========== */
+    @keyframes float {
+      0%, 100% { transform: translate(0, 0); }
+      50% { transform: translate(20px, -20px); }
+    }
+
+    @keyframes stream {
+      0% { transform: translateX(-100%); opacity: 0; }
+      50% { opacity: 0.5; }
+      100% { transform: translateX(100%); opacity: 0; }
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    @keyframes move-bridge {
+      0% { left: 0; }
+      100% { left: calc(100% - 8px); }
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.8); opacity: 0.5; }
+      100% { transform: scale(1.5); opacity: 0; }
+    }
+
+    /* ========== Responsive ========== */
+    @media (max-width: 1024px) {
+      .bento-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .bento-1, .bento-5 { grid-column: span 2; grid-row: span 1; }
+      
+      .feature-block {
+        grid-template-columns: 1fr;
+        gap: 40px;
+      }
+      .feature-block.reverse .feature-visual-wrap { order: -1; }
+    }
+
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+      section { padding: 80px 0; }
+      .bento-grid { grid-template-columns: 1fr; }
+      .bento-1, .bento-2, .bento-3, .bento-4, .bento-5, .bento-6 { grid-column: span 1; }
+      .hero-actions { flex-direction: column; align-items: center; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Neural Network Background -->
+  <canvas id="neural-bg"></canvas>
+
+  <!-- Navigation -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-logo">ETHER<span>CORE</span></a>
+      <div class="nav-links">
+        <a href="#advantages" class="nav-link">核心优势</a>
+        <a href="#modules" class="nav-link">功能模块</a>
+        <a href="#search" class="nav-link">检索</a>
+      </div>
+      <button class="nav-cta">开始使用</button>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="container">
+      <p class="eyebrow">Next-Generation Knowledge OS</p>
+      <h1 class="display-title">
+        重塑思维的<br/><strong>数字记忆中枢</strong>
+      </h1>
+      <p class="body-large">
+        以太忆核不仅仅是一个存储库，它是您思想的延伸。基于向量语义与知识图谱技术，将碎片化信息转化为结构化智慧。
+      </p>
+      <div class="hero-actions">
+        <button class="btn-primary">开启智慧之旅</button>
+        <button class="btn-secondary">观看演示</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Core Advantages (Bento Grid) -->
+  <section id="advantages">
+    <div class="container">
+      <div class="section-header center">
+        <p class="eyebrow">Core Advantages</p>
+        <h2 class="display-title" style="font-size: clamp(2rem, 4vw, 3rem);">为何选择 <strong>以太忆核</strong></h2>
+      </div>
+
+      <div class="bento-grid">
+        <div class="bento-card bento-1">
+          <div class="bento-visual visual-grid"></div>
+          <div class="bento-content">
+            <h3 class="bento-title">认知增强引擎</h3>
+            <p class="bento-desc">融合向量检索与 BM25 混合算法，配合 Multi-hop 多跳检索与 Reranker 重排，精准捕捉深层语义关联，让机器真正理解您的意图。</p>
+          </div>
+        </div>
+
+        <div class="bento-card bento-2">
+          <div class="bento-content">
+            <h3 class="bento-title">自主智能体矩阵</h3>
+            <p class="bento-desc">内置 Plan-Execute 规划能力，支持 NL2SQL 及 MCP 协议扩展，自动完成复杂任务闭环。</p>
+          </div>
+        </div>
+
+        <div class="bento-card bento-3">
+          <div class="bento-content">
+            <h3 class="bento-title">沉浸式 AI 创作</h3>
+            <p class="bento-desc">基于 Tiptap 3 打造，支持 AI 幽灵补全、选区润色及一键发布，让写作如呼吸般自然。</p>
+          </div>
+        </div>
+
+        <div class="bento-card bento-4">
+          <div class="bento-content">
+            <h3 class="bento-title">金融级安全护栏</h3>
+            <p class="bento-desc">Human-in-the-Loop 双通道审批机制，结合 Prompt 注入防御与审计日志，确保企业级数据安全。</p>
+          </div>
+        </div>
+
+        <div class="bento-card bento-5">
+          <div class="bento-visual visual-flow"></div>
+          <div class="bento-content">
+            <h3 class="bento-title">全域知识同步</h3>
+            <p class="bento-desc">打通飞书双向通道、Web 爬虫与本地文件系统，打破信息孤岛，实现跨平台、跨应用的知识自由流动与自动化沉淀。</p>
+          </div>
+        </div>
+
+        <div class="bento-card bento-6">
+          <div class="bento-content">
+            <h3 class="bento-title">本地化隐私架构</h3>
+            <p class="bento-desc">基于 Tauri v2 构建，支持 Ollama 本地推理与 ChromaDB 本地存储，数据主权完全归您。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Functional Modules (Alternating Layout) -->
+  <section id="modules">
+    <div class="container">
+      <div class="section-header center" style="margin-bottom: 100px;">
+        <p class="eyebrow">Functional Modules</p>
+        <h2 class="display-title" style="font-size: clamp(2rem, 4vw, 3rem);">六大核心 <strong>功能模块</strong></h2>
+      </div>
+
+      <div class="feature-block">
+        <div class="feature-visual-wrap">
+          <div class="abstract-art art-nodes">
+            <div class="ring ring-2"></div>
+            <div class="ring ring-1"></div>
+            <div class="core"></div>
+          </div>
+        </div>
+        <div class="feature-content">
+          <p class="eyebrow">01 / Dialogue</p>
+          <h3 class="feature-title">多模态智能对话</h3>
+          <p class="feature-desc">支持流式问答、多轮上下文及图文多模态输入。集成火山引擎流式 ASR 语音交互，支持 Ollama/DeepSeek 等多模型运行时无缝切换，打造极致流畅的对话体验。</p>
+          <div class="feature-tags">
+            <span class="tag">流式问答</span>
+            <span class="tag">多模态输入</span>
+            <span class="tag">ASR 语音</span>
+            <span class="tag">多模型切换</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature-block reverse">
+        <div class="feature-visual-wrap">
+          <div class="abstract-art art-stream">
+            <div class="line"></div>
+            <div class="line"></div>
+            <div class="line"></div>
+          </div>
+        </div>
+        <div class="feature-content">
+          <p class="eyebrow">02 / RAG & Memory</p>
+          <h3 class="feature-title">高阶 RAG 与记忆</h3>
+          <p class="feature-desc">采用向量+BM25 RRF 混合检索与 Multi-hop 多跳检索。内置用户记忆自动提取与去重合并，结合增量会话摘要，打造越用越懂你的专属大脑。</p>
+          <div class="feature-tags">
+            <span class="tag">混合检索</span>
+            <span class="tag">Multi-hop</span>
+            <span class="tag">记忆提取</span>
+            <span class="tag">会话摘要</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature-block">
+        <div class="feature-visual-wrap">
+          <div class="abstract-art art-editor">
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="block"></div>
+            <div class="cursor"></div>
+          </div>
+        </div>
+        <div class="feature-content">
+          <p class="eyebrow">03 / Editor</p>
+          <h3 class="feature-title">AI 沉浸式编辑器</h3>
+          <p class="feature-desc">基于 Tiptap 3 深度定制，支持 AI 幽灵补全、选区润色改写及全文指令。内置知识库面板，支持一键发布，让创作与知识沉淀无缝衔接。</p>
+          <div class="feature-tags">
+            <span class="tag">Tiptap 3</span>
+            <span class="tag">幽灵补全</span>
+            <span class="tag">选区润色</span>
+            <span class="tag">一键发布</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature-block reverse">
+        <div class="feature-visual-wrap">
+          <div class="abstract-art art-sync">
+            <div class="node">W</div>
+            <div class="bridge"></div>
+            <div class="node">F</div>
+          </div>
+        </div>
+        <div class="feature-content">
+          <p class="eyebrow">04 / Collaboration</p>
+          <h3 class="feature-title">飞书双向协同通道</h3>
+          <p class="feature-desc">打通 Web 与飞书双向聊天通道，支持图表/文档等富产物原生化推送。敏感操作支持 Web 弹窗与飞书卡片双通道审批，实现无缝办公协同。</p>
+          <div class="feature-tags">
+            <span class="tag">双向通道</span>
+            <span class="tag">富产物推送</span>
+            <span class="tag">双通道审批</span>
+            <span class="tag">无缝协同</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature-block">
+        <div class="feature-visual-wrap">
+          <div class="abstract-art art-shield">
+            <div class="scan"></div>
+            <div class="icon"></div>
+          </div>
+        </div>
+        <div class="feature-content">
+          <p class="eyebrow">05 / Agent</p>
+          <h3 class="feature-title">自主 Agent 工作流</h3>
+          <p class="feature-desc">内置 Plan-Execute 规划引擎，支持 NL2SQL 数据库查询、网页深度抓取及 MCP 协议扩展。提供丰富内置工具集，自动拆解并执行复杂任务。</p>
+          <div class="feature-tags">
+            <span class="tag">Plan-Execute</span>
+            <span class="tag">NL2SQL</span>
+            <span class="tag">MCP 协议</span>
+            <span class="tag">自动拆解</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="feature-block reverse">
+        <div class="feature-visual-wrap">
+          <div class="abstract-art art-layers">
+            <div class="layer"></div>
+            <div class="layer"></div>
+            <div class="layer"></div>
+          </div>
+        </div>
+        <div class="feature-content">
+          <p class="eyebrow">06 / Asset Management</p>
+          <h3 class="feature-title">知识资产与版本管理</h3>
+          <p class="feature-desc">提供文档多版本上传、Diff 对比与回滚审计。AI 生成文件支持 TTL 过期清理与收藏保护，结合 Web 爬虫与定时调度，实现知识源自动化同步。</p>
+          <div class="feature-tags">
+            <span class="tag">多版本管理</span>
+            <span class="tag">Diff 对比</span>
+            <span class="tag">TTL 清理</span>
+            <span class="tag">自动化同步</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Search Section -->
+  <section id="search" class="search-section">
+    <div class="container">
+      <div class="search-box">
+        <div class="search-input-wrap">
+          <input type="text" class="search-input" placeholder="搜索知识、概念或灵感片段... (Cmd+K)">
+          <button class="search-btn">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>&copy; 2024 ETHERCORE. Crafted with precision.</p>
+    </div>
+  </footer>
+
+  <script>
+    // ========== Neural Network Background System ==========
+    const canvas = document.getElementById('neural-bg');
+    const ctx = canvas.getContext('2d');
+    let width, height;
+    let nodes = [];
+    let mouse = { x: null, y: null, radius: 150 };
+
+    class Node {
+      constructor() {
+        this.x = Math.random() * width;
+        this.y = Math.random() * height;
+        this.vx = (Math.random() - 0.5) * 0.4;
+        this.vy = (Math.random() - 0.5) * 0.4;
+        this.baseRadius = Math.random() * 1.2 + 0.5;
+        this.radius = this.baseRadius;
+        this.color = 'rgba(197, 160, 89, 0.3)'; // Base dark champagne gold
+      }
+
+      update() {
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Bounce off edges
+        if (this.x < 0 || this.x > width) this.vx *= -1;
+        if (this.y < 0 || this.y > height) this.vy *= -1;
+
+        // Mouse interaction
+        if (mouse.x !== null && mouse.y !== null) {
+          let dx = mouse.x - this.x;
+          let dy = mouse.y - this.y;
+          let distance = Math.sqrt(dx * dx + dy * dy);
+          
+          if (distance < mouse.radius) {
+            let opacity = 1 - (distance / mouse.radius);
+            this.radius = this.baseRadius + (opacity * 2.5);
+            this.color = `rgba(197, 160, 89, ${0.3 + (opacity * 0.7)})`;
+          } else {
+            this.radius = this.baseRadius;
+            this.color = 'rgba(197, 160, 89, 0.3)';
+          }
+        } else {
+          this.radius = this.baseRadius;
+          this.color = 'rgba(197, 160, 89, 0.3)';
+        }
+      }
+
+      draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+      }
+    }
+
+    function init() {
+      width = canvas.width = window.innerWidth;
+      height = canvas.height = window.innerHeight;
+      nodes = [];
+      
+      // Calculate node density based on screen size
+      let numberOfNodes = Math.floor((width * height) / 18000);
+      if (window.innerWidth <= 768) {
+        numberOfNodes = Math.min(numberOfNodes, 40); // Limit for mobile performance
+      }
+
+      for (let i = 0; i < numberOfNodes; i++) {
+        nodes.push(new Node());
+      }
+    }
+
+    function connectNodes() {
+      const maxDist = 130;
+      for (let i = 0; i < nodes.length; i++) {
+        // Connect to other nodes
+        for (let j = i + 1; j < nodes.length; j++) {
+          let dx = nodes[i].x - nodes[j].x;
+          let dy = nodes[i].y - nodes[j].y;
+          let distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < maxDist) {
+            let opacity = (1 - (distance / maxDist)) * 0.15;
+            ctx.beginPath();
+            ctx.strokeStyle = `rgba(255, 255, 255, ${opacity})`;
+            ctx.lineWidth = 0.5;
+            ctx.moveTo(nodes[i].x, nodes[i].y);
+            ctx.lineTo(nodes[j].x, nodes[j].y);
+            ctx.stroke();
+          }
+        }
+
+        // Connect to mouse
+        if (mouse.x !== null && mouse.y !== null) {
+          let dx = mouse.x - nodes[i].x;
+          let dy = mouse.y - nodes[i].y;
+          let distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < mouse.radius) {
+            let opacity = (1 - (distance / mouse.radius)) * 0.6;
+            ctx.beginPath();
+            ctx.strokeStyle = `rgba(197, 160, 89, ${opacity})`;
+            ctx.lineWidth = 0.8;
+            ctx.moveTo(nodes[i].x, nodes[i].y);
+            ctx.lineTo(mouse.x, mouse.y);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, width, height);
+      
+      nodes.forEach(node => {
+        node.update();
+        node.draw();
+      });
+      
+      connectNodes();
+      requestAnimationFrame(animate);
+    }
+
+    // Event Listeners
+    window.addEventListener('mousemove', (e) => {
+      mouse.x = e.clientX;
+      mouse.y = e.clientY;
+    });
+
+    window.addEventListener('mouseout', () => {
+      mouse.x = null;
+      mouse.y = null;
+    });
+
+    window.addEventListener('resize', () => {
+      init();
+    });
+
+    // Initialize and start animation
+    init();
+    animate();
+
+    // ========== UI Interactions ==========
+    // Mouse tracking glow effect for Bento Cards
+    document.querySelectorAll('.bento-card').forEach(card => {
+      card.addEventListener('mousemove', (e) => {
+        const rect = card.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        card.style.setProperty('--mouse-x', `${x}px`);
+        card.style.setProperty('--mouse-y', `${y}px`);
+      });
+    });
+
+    // Smooth scroll for nav links
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+      anchor.addEventListener('click', function (e) {
+        e.preventDefault();
+        const target = document.querySelector(this.getAttribute('href'));
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
+    });
+  </script>
+</body>
+</html>
