@@ -305,6 +305,40 @@
     
     .bento-content { position: relative; z-index: 2; }
 
+    /* Bento 卡片插画：文字下方的线稿视觉（统一金线蓝图风格） */
+    .bento-illust {
+      margin-top: auto;
+      padding-top: 26px;
+      position: relative;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .bento-illust svg {
+      display: block;
+      width: 100%;
+      max-height: 104px;
+      height: auto;
+      opacity: 0.92;
+    }
+
+    /* 大卡（认知增强引擎 / 全域知识同步）给更高的插画空间 */
+    .bento-1 .bento-illust svg,
+    .bento-5 .bento-illust svg { max-height: 148px; }
+
+    /* 插画托底金色微光，与暗底融合 */
+    .bento-illust::after {
+      content: "";
+      position: absolute;
+      left: 14%;
+      right: 14%;
+      bottom: -12px;
+      height: 34px;
+      background: radial-gradient(ellipse at center, var(--accent-gold-dim) 0%, transparent 70%);
+      filter: blur(10px);
+      z-index: -1;
+    }
+
     .visual-grid {
       background-image: 
         linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
@@ -954,12 +988,45 @@
             <h3 class="bento-title">认知增强引擎</h3>
             <p class="bento-desc">融合向量检索与 BM25 混合算法，配合 Multi-hop 多跳检索与 Reranker 重排，精准捕捉深层语义关联，让机器真正理解您的意图。</p>
           </div>
+          <div class="bento-illust" aria-hidden="true">
+            <svg viewBox="0 0 340 150" preserveAspectRatio="xMidYMax meet" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <!-- 周边知识节点与暗色关联边 -->
+              <g stroke="#71717a" stroke-opacity="0.55" stroke-width="1">
+                <path d="M60,55 L105,85"/><path d="M60,55 L150,32"/><path d="M150,32 L105,85"/>
+                <path d="M150,32 L255,52"/><path d="M285,25 L255,52"/><path d="M230,130 L185,110"/>
+                <path d="M230,130 L300,120"/><path d="M300,120 L318,78"/>
+              </g>
+              <g stroke="#71717a" stroke-opacity="0.7" stroke-width="1.3">
+                <circle cx="60" cy="55" r="3.5"/><circle cx="150" cy="32" r="3.5"/>
+                <circle cx="230" cy="130" r="3.5"/><circle cx="300" cy="120" r="3.5"/><circle cx="285" cy="25" r="3.5"/>
+              </g>
+              <!-- 多跳检索主路径（金色高亮） -->
+              <polyline points="22,118 105,85 185,110 255,52 318,78" stroke="#c5a059" stroke-width="1.6" stroke-opacity="0.9"/>
+              <g stroke="#c5a059" stroke-width="1.5">
+                <circle cx="105" cy="85" r="4.5"/><circle cx="185" cy="110" r="4.5"/><circle cx="255" cy="52" r="4.5"/>
+              </g>
+              <circle cx="22" cy="118" r="5" stroke="#c5a059" stroke-width="1.8"/>
+              <circle cx="22" cy="118" r="1.8" fill="#c5a059"/>
+              <circle cx="318" cy="78" r="5" stroke="#c5a059" stroke-width="1.8"/>
+              <circle cx="318" cy="78" r="1.8" fill="#c5a059"/>
+            </svg>
+          </div>
         </div>
 
         <div class="bento-card bento-2">
           <div class="bento-content">
             <h3 class="bento-title">自主智能体矩阵</h3>
             <p class="bento-desc">内置 Plan-Execute 规划能力，支持 MCP 协议扩展与工具链生态，自动完成复杂任务闭环。</p>
+          </div>          <div class="bento-illust" aria-hidden="true">
+            <svg viewBox="0 0 340 100" preserveAspectRatio="xMidYMax meet" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="170" cy="26" r="14" stroke="#71717a" stroke-width="1.5"/><circle cx="170" cy="26" r="5.5" stroke="#c5a059" stroke-width="1.5"/>
+              <g stroke="#71717a" stroke-opacity="0.6" stroke-width="1"><path d="M170,5.5 L170,9.5"/><path d="M170,42.5 L170,46.5"/><path d="M149.5,26 L153.5,26"/><path d="M186.5,26 L190.5,26"/></g>
+              <g stroke="#71717a" stroke-opacity="0.55" stroke-width="1"><path d="M158,38 L68,74"/><path d="M170,40 L170,76"/><path d="M182,38 L272,74"/></g>
+              <circle cx="62" cy="82" r="8" stroke="#71717a" stroke-width="1.3"/><circle cx="62" cy="82" r="2" fill="#71717a"/>
+              <circle cx="170" cy="84" r="8" stroke="#c5a059" stroke-width="1.4"/><circle cx="170" cy="84" r="2" fill="#c5a059"/>
+              <circle cx="278" cy="82" r="8" stroke="#71717a" stroke-width="1.3"/><circle cx="278" cy="82" r="2" fill="#71717a"/>
+              <rect x="112" y="88" width="10" height="10" rx="2" stroke="#71717a" stroke-opacity="0.5" stroke-width="1.2"/><rect x="218" y="88" width="10" height="10" rx="2" stroke="#71717a" stroke-opacity="0.5" stroke-width="1.2"/>
+            </svg>
           </div>
         </div>
 
@@ -967,6 +1034,15 @@
           <div class="bento-content">
             <h3 class="bento-title">沉浸式 AI 创作</h3>
             <p class="bento-desc">基于 Tiptap 3 打造，支持 AI 幽灵补全、选区润色及一键发布，让写作如呼吸般自然。</p>
+          </div>          <div class="bento-illust" aria-hidden="true">
+            <svg viewBox="0 0 340 100" preserveAspectRatio="xMidYMax meet" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="48" y="10" width="244" height="80" rx="8" stroke="#52525b" stroke-opacity="0.7" stroke-width="1.2"/>
+              <g stroke="#52525b" stroke-width="6" stroke-opacity="0.8"><path d="M70,34 H210"/><path d="M70,54 H268"/><path d="M70,74 H170"/></g>
+              <path d="M174,74 H238" stroke="#c5a059" stroke-width="6" stroke-dasharray="1 9"/>
+              <path d="M246,66 V82" stroke="#c5a059" stroke-width="1.6"/>
+              <path d="M262,64 L265,71 L272,74 L265,77 L262,84 L259,77 L252,74 L259,71 Z" fill="#c5a059"/>
+              <path d="M285,48 L286.8,52.2 L291,54 L286.8,55.8 L285,60 L283.2,55.8 L279,54 L283.2,52.2 Z" fill="#e0bd7a" fill-opacity="0.85"/>
+            </svg>
           </div>
         </div>
 
@@ -974,6 +1050,15 @@
           <div class="bento-content">
             <h3 class="bento-title">金融级安全护栏</h3>
             <p class="bento-desc">Human-in-the-Loop 双通道审批机制，结合 Prompt 注入防御与审计日志，确保企业级数据安全。</p>
+          </div>          <div class="bento-illust" aria-hidden="true">
+            <svg viewBox="0 0 340 100" preserveAspectRatio="xMidYMax meet" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M170,14 L208,28 C208,60 192,76 170,84 C148,76 132,60 132,28 Z" stroke="#c5a059" stroke-width="1.8"/>
+              <path d="M156,48 L166,58 L186,38" stroke="#c5a059" stroke-width="2"/>
+              <circle cx="58" cy="74" r="11" stroke="#71717a" stroke-width="1.3"/><path d="M52,74 L56,79 L64,69" stroke="#71717a" stroke-width="1.5"/>
+              <circle cx="282" cy="74" r="11" stroke="#71717a" stroke-width="1.3"/><path d="M276,74 L280,79 L288,69" stroke="#71717a" stroke-width="1.5"/>
+              <g stroke="#71717a" stroke-opacity="0.5" stroke-width="1" stroke-dasharray="4 5"><path d="M69,69 L132,44"/><path d="M271,69 L208,44"/></g>
+              <path d="M100,94 H240" stroke="#71717a" stroke-opacity="0.4" stroke-width="1" stroke-dasharray="6 6"/>
+            </svg>
           </div>
         </div>
 
@@ -982,6 +1067,17 @@
           <div class="bento-content">
             <h3 class="bento-title">全域知识同步</h3>
             <p class="bento-desc">打通飞书双向通道与 Web 爬虫深度抓取，打破信息孤岛，实现跨平台、跨应用的知识自由流动与自动化沉淀。</p>
+          </div>          <div class="bento-illust" aria-hidden="true">
+            <svg viewBox="0 0 340 150" preserveAspectRatio="xMidYMax meet" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <g stroke="#71717a" stroke-width="1.3"><rect x="34" y="30" width="26" height="26" rx="6"/><rect x="34" y="62" width="26" height="26" rx="6"/><rect x="34" y="94" width="26" height="26" rx="6"/></g>
+              <g fill="#71717a"><circle cx="47" cy="43" r="2"/><circle cx="47" cy="75" r="2"/><circle cx="47" cy="107" r="2"/></g>
+              <g stroke="#71717a" stroke-opacity="0.55" stroke-width="1"><path d="M60,43 C110,43 135,66 171,71"/><path d="M60,75 H171"/><path d="M60,107 C110,107 135,84 171,79"/></g>
+              <circle cx="185" cy="75" r="14" stroke="#71717a" stroke-width="1.5"/><circle cx="185" cy="75" r="5.5" stroke="#c5a059" stroke-width="1.5"/>
+              <path d="M199,75 H281" stroke="#c5a059" stroke-width="1.6" stroke-dasharray="5 6"/>
+              <path d="M274,69 L282,75 L274,81" stroke="#c5a059" stroke-width="1.6"/>
+              <rect x="288" y="52" width="26" height="46" rx="5" stroke="#71717a" stroke-width="1.3"/>
+              <g stroke="#71717a" stroke-opacity="0.7" stroke-width="1.2"><path d="M295,64 H307"/><path d="M295,72 H307"/><path d="M295,80 H303"/></g>
+            </svg>
           </div>
         </div>
 
@@ -989,6 +1085,26 @@
           <div class="bento-content">
             <h3 class="bento-title">本地化隐私架构</h3>
             <p class="bento-desc">基于 Tauri v2 本地构建，ChromaDB 独立向量存储；开源版支持 Ollama 本地推理，数据主权完全归您。</p>
+          </div>
+          <div class="bento-illust" aria-hidden="true">
+            <svg viewBox="0 0 340 100" preserveAspectRatio="xMidYMax meet" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <!-- 数据主权边界（虚线） -->
+              <rect x="24" y="12" width="206" height="86" rx="12" stroke="#71717a" stroke-opacity="0.4" stroke-width="1" stroke-dasharray="4 6"/>
+              <!-- 本地设备 -->
+              <rect x="44" y="26" width="166" height="54" rx="8" stroke="#71717a" stroke-width="1.3"/>
+              <path d="M127,80 V87" stroke="#71717a" stroke-width="1.3"/>
+              <path d="M104,87 H150" stroke="#71717a" stroke-width="1.3"/>
+              <!-- 独立向量库 -->
+              <g stroke="#71717a" stroke-width="1.3">
+                <ellipse cx="90" cy="40" rx="14" ry="4.5"/>
+                <path d="M76,40 V56"/><path d="M104,40 V56"/>
+                <path d="M76,56 A14,4.5 0 0 0 104,56"/>
+              </g>
+              <!-- 本地锁（金色） -->
+              <path d="M138,44 A7,7 0 0 1 152,44" stroke="#c5a059" stroke-width="1.5"/>
+              <rect x="135" y="44" width="20" height="16" rx="3" stroke="#c5a059" stroke-width="1.5"/>
+              <circle cx="145" cy="52" r="2" fill="#c5a059"/>
+            </svg>
           </div>
         </div>
       </div>
