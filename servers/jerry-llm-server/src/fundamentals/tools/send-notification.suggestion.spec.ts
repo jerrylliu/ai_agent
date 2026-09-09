@@ -107,4 +107,20 @@ describe('send_notification 结构化错误反馈（suggestion）', () => {
       expect(result.suggestion?.hint).toContain('feishu');
     });
   });
+
+  describe('参数校验失败（schema 层）', () => {
+    it('recipients 传不可归一化的非法类型时应返回 suggestion=fix_params 供 self-healing 重试', async () => {
+      const result = await executeSendNotification({
+        channel: 'email',
+        title: '测试',
+        content: '内容',
+        // 对象形态无法归一化为数组，应走校验失败 + suggestion 路径
+        recipients: { to: 'a@b.com' } as any,
+      });
+      expect(result.success).toBe(false);
+      expect(result.suggestion).toBeDefined();
+      expect(result.suggestion?.action).toBe('fix_params');
+      expect(result.suggestion?.hint).toContain('数组');
+    });
+  });
 });

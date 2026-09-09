@@ -124,3 +124,62 @@ describe('sendNotificationParamsSchema 校验', () => {
     expect(r.success).toBe(false);
   });
 });
+
+// ==================== 字符串形态容错（生产事故回归） ====================
+// 背景：模型把 recipients/attachments 传成单个字符串导致校验失败、邮件静默丢失。
+// schema 层 preprocess 应自动归一化，保证送达。
+describe('sendNotificationParamsSchema 字符串形态容错', () => {
+  it('recipients 传单个字符串应归一化为数组', () => {
+    const r = sendNotificationParamsSchema.safeParse({
+      channel: 'email',
+      title: 't',
+      content: 'c',
+      recipients: 'user@qq.com',
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.recipients).toEqual(['user@qq.com']);
+  });
+
+  it('attachments 传单个 URL 字符串应归一化为对象数组并推断 filename', () => {
+    const r = sendNotificationParamsSchema.safeParse({
+      channel: 'email',
+      title: 't',
+      content: 'c',
+      attachments: 'https://x.com/files/chart.png',
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.attachments).toEqual([
+        { filename: 'chart.png', url: 'https://x.com/files/chart.png' },
+      ]);
+    }
+  });
+
+  it('attachments 传无扩展名 URL 应使用通用文件名', () => {
+    const r = sendNotificationParamsSchema.safeParse({
+      channel: 'feishu',
+      title: 't',
+      content: 'c',
+      attachments: 'fc://chart/abc123',
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.attachments).toEqual([{ filename: 'attachment', url: 'fc://chart/abc123' }]);
+    }
+  });
+
+  it('数组形态入参不受容错影响（原有行为不变）', () => {
+    const r = sendNotificationParamsSchema.safeParse({
+      channel: 'email',
+      title: 't',
+      content: 'c',
+      recipients: ['a@b.com', 'c@d.com'],
+      attachments: [{ filename: 'a.pdf', url: 'https://x.com/a.pdf' }],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.recipients).toEqual(['a@b.com', 'c@d.com']);
+      expect(r.data.attachments).toEqual([{ filename: 'a.pdf', url: 'https://x.com/a.pdf' }]);
+    }
+  });
+});

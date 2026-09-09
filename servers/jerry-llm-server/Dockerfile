@@ -41,8 +41,10 @@ RUN pnpm --filter jerry-llm-server install --frozen-lockfile --prod
 # ---------- 阶段 4：运行镜像 ----------
 FROM node:22-alpine AS runner
 ENV NODE_ENV=production
-# 嵌入模式为云端（硅基流动），容器内无 Ollama 时探测失败会自动降级，无需额外处理
-RUN apk add --no-cache wget
+# 国内服务器访问 Alpine 官方 CDN（Fastly）极慢，apk 下载会卡 20 分钟以上；
+# 腾讯云内网镜像免费且快（非腾讯云环境可换 mirrors.aliyun.com）
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.cloud.tencent.com/g' /etc/apk/repositories \
+  && apk add --no-cache wget
 # 图表 PNG 渲染 / 网页爬虫依赖 Chromium（Alpine musl 版）；
 # font-noto-cjk 提供中文字体，缺字体会导致图表中文渲染成方块
 RUN apk add --no-cache chromium font-noto-cjk \

@@ -90,6 +90,34 @@ export function isSendNotificationAvailable(): boolean {
 
 // ==================== 工具 Schema ====================
 
+/**
+ * 把 LLM 误传的字符串形态归一化为数组
+ * 背景：生产日志出现 recipients/attachments 被模型传成单个字符串
+ * （如 "user@qq.com"）导致 zod 校验失败、发送静默失败。
+ * 在 schema 层做兜底归一化，不赌模型永远传对数组。
+ */
+function coerceStringToArray(v: unknown): unknown {
+  return typeof v === 'string' ? [v] : v;
+}
+
+/**
+ * 单附件字符串形态归一化：视为一个 URL 引用（http/https/fc:///data URI 均适用），
+ * filename 必填故从 URL 推断（带扩展名的 basename 优先，否则用通用名）
+ */
+function coerceStringToAttachments(v: unknown): unknown {
+  if (typeof v !== 'string') return v;
+  const url = v.trim();
+  if (!url) return [];
+  let filename = 'attachment';
+  try {
+    const basename = new URL(url).pathname.split('/').filter(Boolean).pop() || '';
+    if (/\.[a-z0-9]{1,8}$/i.test(basename)) filename = basename;
+  } catch {
+    // URL 解析失败（如裸 fc:// 短引用解析异常）使用通用文件名
+  }
+  return [{ filename, url }];
+}
+
 // 单个附件 schema：filename 必填，url / content / cid 均可选
 const sendNotificationAttachmentSchema = z.object({
   filename: z
@@ -129,8 +157,7 @@ export const sendNotificationParamsSchema = z.object({
     .min(1)
     .describe('通知正文，支持 Markdown 文本。webhook 通道会原样作为 text 字段发送'),
   recipients: z
-    .array(z.string())
-    .optional()
+    .preprocess(coerceStringToArray, z.array(z.string()).optional())
     .describe(
       '接收人列表。feishu 通道支持四种 ID：① 邮箱（飞书绑定的邮箱）② open_id（ou_ 开头，个人）③ chat_id（oc_ 开头，群聊）④ user_id（企业内编号）；email 通道传邮箱地址；webhook 通道忽略此参数。\n' +
       '⚠️ 重要规则：\n' +
@@ -145,8 +172,7 @@ export const sendNotificationParamsSchema = z.object({
       'Webhook 地址，仅 channel=webhook 时必填，必须是 https 开头的外网地址',
     ),
   attachments: z
-    .array(sendNotificationAttachmentSchema)
-    .optional()
+    .preprocess(coerceStringToAttachments, z.array(sendNotificationAttachmentSchema).optional())
     .describe(
       '附件列表，**全部三个通道（feishu/email/webhook）均生效**。\n' +
       '- email 通道：图片自动内嵌正文，PDF/Word/Markdown 等作为邮件附件。\n' +
@@ -181,7 +207,7 @@ export interface SendNotificationResult {
    */
   suggestion?: {
     /** 建议的动作类型 */
-    action: 'switch_channel' | 'add_param' | 'fix_recipient';
+    action: 'switch_channel' | 'add_param' | 'fix_params' | 'fix_recipient';
     /** 建议切换到的目标通道（仅 switch_channel 时填） */
     to?: string;
     /** 用户可读的原因 */
@@ -983,6 +1009,16 @@ export async function executeSendNotification(rawParams: unknown): Promise<SendN
       channel: (rawParams as { channel?: string })?.channel || 'unknown',
       delivered: 0,
       errors: [`参数校验失败: ${parsed.error}`],
+      // 校验失败也要给结构化建议：self-healing 依赖 suggestion 字段才会追踪重试，
+      // 缺失时 LLM 拿到的是裸错误，不会自动改参重发（生产事故：静默丢邮件）
+      suggestion: {
+        action: 'fix_params',
+        reason: `工具入参不符合 schema 要求：${parsed.error}`,
+        hint:
+          '请修正参数类型后重新调用：' +
+          'recipients 必须是字符串数组（如 ["user@qq.com"]，单人也要包数组）；' +
+          'attachments 必须是对象数组（如 [{ "filename": "chart.png", "url": "https://..." }]）。',
+      },
     };
   }
   const params = parsed.data;
