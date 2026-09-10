@@ -118,6 +118,31 @@ function coerceStringToAttachments(v: unknown): unknown {
   return [{ filename, url }];
 }
 
+// ==================== 收件人归一化 ====================
+
+/**
+ * 收件人地址归一化：
+ * 生产退信案例（2026-09-09）：模型把邮箱传成 "2656280677"@qq.com（带引号），
+ * 引号穿透宽松校验直达 SMTP，服务器解析域名失败退信"所属域名不存在"。
+ * 在工具入口统一清洗，保证脏输入不再穿透到 SMTP 层。
+ */
+function normalizeRecipient(raw: string): string {
+  let r = raw.trim();
+  // 去除零宽字符（U+200B~U+200D）与 BOM（U+FEFF）：不可见字符会让域名 DNS 解析失败，且肉眼无法排查
+  r = r.replace(/[\u200B-\u200D\u2028\u2029\uFEFF]/g, '');
+  // 尖括号形态（Name <user@qq.com> / <user@qq.com>）：提取内层地址
+  const angle = r.match(/<([^<>]+)>/);
+  if (angle && angle[1].includes('@')) r = angle[1];
+  // 引号在邮箱地址中永远非法：双引号/中文弯引号直接移除；
+  // 直单引号仅剥离首尾包裹形态（避免误伤 O'Brien 类本地部分）
+  r = r.replace(/["“”‘’]/g, '');
+  r = r.replace(/^'+|'+$/g, '');
+  return r.trim();
+}
+
+/** 严格邮箱校验：引号、空格、中文标点等一律拒绝，作为归一化之后的最后防线 */
+const EMAIL_STRICT_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
+
 // 单个附件 schema：filename 必填，url / content / cid 均可选
 const sendNotificationAttachmentSchema = z.object({
   filename: z
@@ -163,7 +188,8 @@ export const sendNotificationParamsSchema = z.object({
       '⚠️ 重要规则：\n' +
       '- 用户明确指定接收人时（"发到 xx 群"/"发给 yy 用户"），**只**发给该指定接收人，不要额外追加其他记忆里的接收人。\n' +
       '- 用户提到群名称（如"测试群""超级群"）时，应使用群的 chat_id (oc_xxx)，不要把群名字符串当 recipient 传入。\n' +
-      '- 同一个通知**不要拆成多次工具调用**：所有需要发的接收人放进同一个 recipients 数组，一次调用完成。',
+      '- 同一个通知**不要拆成多次工具调用**：所有需要发的接收人放进同一个 recipients 数组，一次调用完成。\n' +
+      '- ⚠️ 邮箱地址必须传纯文本（如 user@qq.com），**禁止**用引号（"..."、“...”）、尖括号（<...>）包裹，或附加任何说明文字，否则会被 SMTP 服务器拒收退信。',
     ),
   webhookUrl: z
     .string()
@@ -781,8 +807,14 @@ async function sendEmail(params: SendNotificationParams): Promise<SendNotificati
     return { success: false, channel: 'email', delivered: 0, errors: ['recipients 不能为空'] };
   }
 
-  // 简单的邮箱格式校验：避免传入非邮箱地址被 SMTP 服务器拒绝整批
-  const validRecipients = params.recipients.filter((r) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(r));
+  // 邮箱格式校验：严格正则作为最后防线，拒绝引号/中文标点/空格等脏字符（退信案例见 EMAIL_STRICT_RE 注释）
+  const validRecipients = params.recipients.filter((r) => EMAIL_STRICT_RE.test(r));
+  if (validRecipients.length < params.recipients.length) {
+    logger.warn('邮件通道：以下收件人格式非法被剔除', {
+      module: 'SendNotification',
+      invalid: params.recipients.filter((r) => !EMAIL_STRICT_RE.test(r)),
+    });
+  }
   if (validRecipients.length === 0) {
     return {
       success: false,
@@ -1022,6 +1054,19 @@ export async function executeSendNotification(rawParams: unknown): Promise<SendN
     };
   }
   const params = parsed.data;
+
+  // 收件人归一化：清洗引号/尖括号/零宽字符（退信案例见 normalizeRecipient 注释），三通道统一生效
+  if (params.recipients && params.recipients.length > 0) {
+    const normalized = params.recipients.map(normalizeRecipient).filter((r) => r.length > 0);
+    if (normalized.length !== params.recipients.length) {
+      logger.warn('send_notification：部分收件人归一化后为空，已剔除', {
+        module: 'Tool:SendNotification',
+        before: params.recipients,
+        after: normalized,
+      });
+    }
+    params.recipients = normalized;
+  }
 
   // 自动提取正文 Markdown 图片转附件（保证"图随文走"，不依赖模型主动传 attachments）
   mergeContentImagesIntoAttachments(params);
