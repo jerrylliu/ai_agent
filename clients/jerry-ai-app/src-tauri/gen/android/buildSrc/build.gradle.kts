@@ -12,6 +12,10 @@ gradlePlugin {
 }
 
 repositories {
+    // 阿里云镜像优先（国内直连 google/mavenCentral 会超时），官方源兜底
+    maven("https://maven.aliyun.com/repository/google")
+    maven("https://maven.aliyun.com/repository/central")
+    maven("https://maven.aliyun.com/repository/gradle-plugin")
     google()
     mavenCentral()
 }

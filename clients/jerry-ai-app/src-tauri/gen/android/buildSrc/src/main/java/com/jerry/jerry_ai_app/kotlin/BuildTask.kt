@@ -52,7 +52,14 @@ open class BuildTask : DefaultTask() {
 
         project.exec {
             workingDir(File(project.projectDir, rootDirRel))
-            executable(executable)
+            if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+                // Windows 上 Java 无法直接启动 pnpm.bat/.cmd（CreateProcess 要求批处理经 cmd.exe 启动），
+                // 必须通过 cmd /c 间接调用，cmd 会按 PATHEXT 自动解析 pnpm
+                executable("cmd")
+                args(listOf("/c", executable))
+            } else {
+                executable(executable)
+            }
             args(args)
             if (project.logger.isEnabled(LogLevel.DEBUG)) {
                 args("-vv")
