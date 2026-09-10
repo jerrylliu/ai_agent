@@ -66,10 +66,10 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
 
     return (
         <>
-        <div className="bg-card  py-2 px-6 dark:border-slate-600">
-            <div className="flex items-center justify-between">
-                {/* 左侧：移动端汉堡按钮 + AI助手信息 */}
-                <div className="flex items-center space-x-3">
+        <div className="bg-card  py-2 px-4 max-md:px-3 dark:border-slate-600">
+            <div className="flex items-center justify-between max-md:gap-2">
+                {/* 左侧：移动端汉堡按钮 + AI助手信息（shrink-0 防止标题被挤换行） */}
+                <div className="flex items-center space-x-3 max-md:space-x-2 shrink-0">
                     {onOpenSidebar && (
                         <Button
                             variant="ghost"
@@ -82,21 +82,21 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                         </Button>
                     )}
                     <div>
-                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white cyberpunk-unauth">Aether MC</h2>
-                        <p className="text-sm text-gray-500 dark:text-gray-300 cyberpunk-header-online">在线</p>
+                        <h2 className="text-lg max-md:text-base font-semibold text-gray-900 dark:text-white whitespace-nowrap cyberpunk-unauth">Aether MC</h2>
+                        <p className="text-sm max-md:text-xs text-gray-500 dark:text-gray-300 whitespace-nowrap cyberpunk-header-online">在线</p>
                     </div>
                 </div>
                 {/* 右侧：知识库状态与操作按钮 */}
-                <div className="flex items-center space-x-2">
-                    {/* 知识库状态指示器 */}
-                    <div className="flex items-center space-x-1 px-3 py-1 rounded-full bg-gray-100 dark:bg-slate-700">
-                        <Database className="h-4 w-4 text-gray-500 dark:text-gray-300 cyberpunk-header-kb-label" />
-                        <span className="text-xs text-gray-600 dark:text-gray-300 cyberpunk-header-kb-label">知识库:</span>
+                <div className="flex items-center space-x-2 max-md:space-x-1 min-w-0">
+                    {/* 知识库状态指示器（移动端：隐藏"知识库:"文字标签和知识源页数后缀，只留图标+文档数，避免拥挤） */}
+                    <div className="flex items-center space-x-1 px-3 max-md:px-2 py-1 rounded-full bg-gray-100 dark:bg-slate-700 min-w-0">
+                        <Database className="h-4 w-4 shrink-0 text-gray-500 dark:text-gray-300 cyberpunk-header-kb-label" />
+                        <span className="text-xs text-gray-600 dark:text-gray-300 cyberpunk-header-kb-label max-md:hidden">知识库:</span>
                         {knowledgeBaseStatus.status === 'ready' && knowledgeBaseStatus.stats && (
-                            <span className="text-xs font-medium text-green-600 dark:text-green-400 cyberpunk-header-kb-count">
+                            <span className="text-xs font-medium text-green-600 dark:text-green-400 whitespace-nowrap cyberpunk-header-kb-count">
                                 {knowledgeBaseStatus.stats.documentCount} 个文档
                                 {knowledgeBaseStatus.stats.knowledgeSourcePageCount > 0 && (
-                                    <span className="text-gray-400 dark:text-gray-500 font-normal">
+                                    <span className="text-gray-400 dark:text-gray-500 font-normal max-md:hidden">
                                         {' '}(含{knowledgeBaseStatus.stats.knowledgeSourcePageCount}页知识源)
                                     </span>
                                 )}

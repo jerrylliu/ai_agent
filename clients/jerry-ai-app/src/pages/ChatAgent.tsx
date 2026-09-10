@@ -633,8 +633,8 @@ const ChatAgent: React.FC = () => {
                 className="flex items-center justify-center gap-1 mb-10 transition-opacity duration-500 ease-in-out"
                 style={{ opacity: inputMode === "center" ? 1 : 0 }}
               >
-                <Bot className="h-8 w-8 text-primary cyberpunk-header-title" />
-                <h2 className="text-2xl font-medium text-foreground cyberpunk-useremail">
+                <Bot className="h-8 w-8 max-md:h-6 max-md:w-6 text-primary cyberpunk-header-title" />
+                <h2 className="text-2xl max-md:text-lg font-medium text-foreground whitespace-nowrap cyberpunk-useremail">
                   你好，我是以太忆核
                 </h2>
               </div>
