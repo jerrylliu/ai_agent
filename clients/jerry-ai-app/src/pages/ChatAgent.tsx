@@ -29,6 +29,7 @@ import { useChat } from "../hooks/useChat";
 import { useAppRecovery } from "../hooks/useAppRecovery";
 import { useTheme } from "../hooks/useTheme";
 import { useAuth } from "../hooks/useAuth";
+import { useIsMobile } from "../hooks/useMediaQuery";
 
 import { AuthDialog } from "../components/Auth";
 import { clearKnowledgeBase, respondToConfirmation } from "../lib/api";
@@ -398,6 +399,33 @@ const ChatAgent: React.FC = () => {
 
   const { theme, setTheme } = useTheme();
 
+  // ==================== 移动端适配（P1） ====================
+  const isMobile = useIsMobile();
+
+  // 移动端软键盘适配：把 visualViewport 高度写入 CSS 变量，
+  // 键盘弹起时根容器随之收缩，输入框始终贴在键盘上方（桌面端 visualViewport 高度恒等于窗口高度，行为不变）
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const updateAppHeight = () => {
+      document.documentElement.style.setProperty(
+        "--app-height",
+        `${vv.height}px`,
+      );
+    };
+    updateAppHeight();
+    vv.addEventListener("resize", updateAppHeight);
+    return () => vv.removeEventListener("resize", updateAppHeight);
+  }, []);
+
+  // 移动端默认收起侧边栏（抽屉形态）；桌面端保持默认展开的行为不变
+  useEffect(() => {
+    if (isMobile) {
+      setShowSidebar(false);
+    }
+    // 仅在断点切换时触发，避免用户手动开合后被重置
+  }, [isMobile, setShowSidebar]);
+
   // 输入框位置模式：center = 欢迎页居中，bottom = 对话底部
   useEffect(() => {
     if (sessionHasContent.has(currentSessionId) || isMessagesLoading) {
@@ -410,13 +438,23 @@ const ChatAgent: React.FC = () => {
   // ==================== JSX 渲染区域 ====================
   return (
     <FavoriteDocProvider>
-      <div className="flex h-full bg-background relative">
+      <div
+        className="flex h-full bg-background relative"
+        style={{ height: "var(--app-height, 100%)" }}
+      >
         {/* ==================== 左侧边栏区域 ==================== */}
+        {/* 移动端遮罩：抽屉打开时覆盖聊天区，点击关闭 */}
+        {isMobile && showSidebar && (
+          <div
+            className="fixed inset-0 z-40 bg-black/50"
+            onClick={() => setShowSidebar(false)}
+          />
+        )}
         <div className="relative h-full">
           <button
             className={`absolute left-0 top-1/2 -translate-y-1/2 z-30 w-7 h-14 flex items-center justify-center bg-card border border-r-0 border-gray-200 dark:border-slate-600 rounded-r-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors shadow-sm ${
               showSidebar ? "translate-x-0" : "translate-x-0"
-            }`}
+            } ${isMobile ? "hidden" : ""}`}
             style={{ left: showSidebar ? "288px" : "0px" }}
             onClick={() => setShowSidebar(!showSidebar)}
             title={showSidebar ? "收起侧边栏" : "展开侧边栏"}
@@ -429,9 +467,13 @@ const ChatAgent: React.FC = () => {
           </button>
 
           <div
-            className={`h-full bg-card border-r border-gray-200 dark:border-slate-600 transition-all duration-300 ease-in-out overflow-hidden shadow-lg cyberpunk-border-glow ${
-              showSidebar ? "w-72" : "w-0"
-            }`}
+            className={`h-full bg-card border-r border-gray-200 dark:border-slate-600 overflow-hidden shadow-lg cyberpunk-border-glow ${
+              isMobile
+                ? // 移动端：固定定位抽屉，滑入/滑出
+                  "fixed inset-y-0 left-0 z-50 w-72 shadow-2xl transition-transform duration-300 ease-in-out"
+                : // 桌面端：保持原有的宽度展开/收起
+                  "transition-all duration-300 ease-in-out"
+            } ${showSidebar ? (isMobile ? "translate-x-0" : "w-72") : isMobile ? "-translate-x-full" : "w-0"}`}
           >
             {showSidebar && (
               <div className="w-72 h-full flex flex-col">
@@ -538,6 +580,9 @@ const ChatAgent: React.FC = () => {
               recovery.refreshNow("manual", { force: true })
             }
             isRecovering={recovery.isRecovering}
+            onOpenSidebar={
+              isMobile ? () => setShowSidebar(true) : undefined
+            }
           />
 
           <KbFeedbackToast feedback={toast.kbFeedback} />
@@ -546,7 +591,11 @@ const ChatAgent: React.FC = () => {
           <div className="flex-1 relative min-h-0">
             {/* 消息列表 */}
             {messages.length > 0 && (
-              <div className="absolute inset-0 bottom-[90px] flex flex-col overflow-hidden">
+              <div
+                className={`absolute inset-0 flex flex-col overflow-hidden ${
+                  isMobile ? "bottom-[104px]" : "bottom-[90px]"
+                }`}
+              >
                 <MessageList
                   messages={messages}
                   isTyping={isTyping}
@@ -581,9 +630,13 @@ const ChatAgent: React.FC = () => {
               style={{
                 width: inputMode === "center" ? "80%" : "95%",
                 // 底部模式：用 bottom 吸附，让容器随预览区高度自适应向上撑开
+                // env(safe-area-inset-bottom)：手势导航手机上避免被系统条遮挡（桌面端为 0，行为不变）
                 // 居中模式：保持 top 50% 居中显示
                 top: inputMode === "center" ? "43%" : "auto",
-                bottom: inputMode === "center" ? "auto" : "16px",
+                bottom:
+                  inputMode === "center"
+                    ? "auto"
+                    : "calc(16px + env(safe-area-inset-bottom))",
                 transform:
                   inputMode === "center"
                     ? "translate(-50%, -50%)"
@@ -687,7 +740,10 @@ const ChatAgent: React.FC = () => {
         onSettingsChange={updateSettings}
       />
       {showDocumentManager && (
-        <div className="fixed inset-0 z-50 bg-black/50" style={{ top: "25px" }}>
+        <div
+          className="fixed inset-0 z-50 bg-black/50"
+          style={{ top: isMobile ? 0 : "25px" }}
+        >
           <div className="absolute inset-0 bg-card shadow-2xl">
             <ErrorBoundary>
               <DocumentManager
@@ -701,7 +757,10 @@ const ChatAgent: React.FC = () => {
         </div>
       )}
       {showKnowledgeSourceManager && (
-        <div className="fixed inset-0 z-50 bg-black/50" style={{ top: "25px" }}>
+        <div
+          className="fixed inset-0 z-50 bg-black/50"
+          style={{ top: isMobile ? 0 : "25px" }}
+        >
           <div className="absolute inset-0 bg-card shadow-2xl">
             <ErrorBoundary>
               <KnowledgeSourceManager
