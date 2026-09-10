@@ -1,7 +1,11 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod commands;
 
+// Manager 仅桌面端 setup 使用（移动端跳过标题栏创建）
+#[cfg(desktop)]
 use tauri::Manager;
+// decorum 自定义标题栏仅桌面端使用（移动端主窗口由原生 Activity 承载）
+#[cfg(desktop)]
 use tauri_plugin_decorum::WebviewWindowExt;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -14,8 +18,12 @@ pub fn run() {
         .setup(|app| {
             // 创建自定义标题栏：Windows 上隐藏系统装饰并创建自定义窗口控制按钮
             // macOS 上使用 hiddenTitle + titleBarStyle: overlay
-            let main_window = app.get_webview_window("main").unwrap();
-            main_window.create_overlay_titlebar().unwrap();
+            // 移动端无系统窗口装饰概念，跳过
+            #[cfg(desktop)]
+            {
+                let main_window = app.get_webview_window("main").unwrap();
+                main_window.create_overlay_titlebar().unwrap();
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
