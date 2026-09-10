@@ -95,7 +95,7 @@ const MicButton: React.FC<{
         size="icon"
         onClick={handleClick}
         disabled={isConnecting}
-        className={`rounded-full h-8 w-8 transition-all duration-200 ${buttonClass}`}
+        className={`rounded-full h-8 w-8 max-md:h-11 max-md:w-11 transition-all duration-200 ${buttonClass}`}
         title={title}
       >
         {renderIcon()}
@@ -399,7 +399,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               variant="ghost"
               size="icon"
               onClick={() => setShowPlusMenu(!showPlusMenu)}
-              className="rounded-full h-8 w-8 hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-500 dark:text-gray-400 cyberpunk-plus-btn"
+              className="rounded-full h-8 w-8 max-md:h-11 max-md:w-11 hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-500 dark:text-gray-400 cyberpunk-plus-btn"
             >
               <Plus className="h-5 w-5" />
             </Button>
@@ -474,7 +474,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
             {isTyping ? (
               <Button
                 onClick={onStopGeneration}
-                className="rounded-full bg-red-500 hover:bg-red-600 text-white h-8 w-8 p-0 transition-all duration-200"
+                className="rounded-full bg-red-500 hover:bg-red-600 text-white h-8 w-8 max-md:h-11 max-md:w-11 p-0 transition-all duration-200"
                 title="停止生成"
               >
                 <div className="h-3 w-3 bg-white rounded-sm" />
@@ -483,7 +483,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
               <Button
                 onClick={onSend}
                 disabled={!inputValue.trim() && pendingImages.length === 0 && pendingDocuments.length === 0}
-                className="rounded-full bg-primary hover:bg-primary/90 text-white h-8 w-8 p-0 transition-all duration-200 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed cyberpunk-send-btn"
+                className="rounded-full bg-primary hover:bg-primary/90 text-white h-8 w-8 max-md:h-11 max-md:w-11 p-0 transition-all duration-200 disabled:bg-gray-300 dark:disabled:bg-slate-600 disabled:cursor-not-allowed cyberpunk-send-btn"
               >
                 <Send className="h-4 w-4" />
               </Button>

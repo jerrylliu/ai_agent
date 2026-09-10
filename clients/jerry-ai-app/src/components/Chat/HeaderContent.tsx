@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Button } from "../ui/button";
-import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star, Wrench, RefreshCw } from "lucide-react";
+import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star, Wrench, RefreshCw, Menu } from "lucide-react";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 
 interface KbFeedback {
@@ -28,10 +28,12 @@ interface HeaderContentProps {
     onOpenEvaluation?: () => void;
     onRefreshAppData?: () => void;
     isRecovering?: boolean;
+    /** 移动端：打开侧边栏抽屉（md 以下显示汉堡按钮） */
+    onOpenSidebar?: () => void;
 }
 
 const HeaderContent: React.FC<HeaderContentProps> = (props) => {
-    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager, onOpenTokenUsage, onOpenToolUsage, onOpenEvaluation, onRefreshAppData, isRecovering } = props;
+    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager, onOpenTokenUsage, onOpenToolUsage, onOpenEvaluation, onRefreshAppData, isRecovering, onOpenSidebar } = props;
 
     // 重置知识库确认弹窗状态
     const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
@@ -66,8 +68,19 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
         <>
         <div className="bg-card  py-2 px-6 dark:border-slate-600">
             <div className="flex items-center justify-between">
-                {/* 左侧：AI助手信息 */}
+                {/* 左侧：移动端汉堡按钮 + AI助手信息 */}
                 <div className="flex items-center space-x-3">
+                    {onOpenSidebar && (
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            className="md:hidden rounded-full h-9 w-9 text-gray-500 dark:text-gray-300"
+                            title="打开会话列表"
+                            onClick={onOpenSidebar}
+                        >
+                            <Menu className="h-5 w-5" />
+                        </Button>
+                    )}
                     <div>
                         <h2 className="text-lg font-semibold text-gray-900 dark:text-white cyberpunk-unauth">Aether MC</h2>
                         <p className="text-sm text-gray-500 dark:text-gray-300 cyberpunk-header-online">在线</p>
