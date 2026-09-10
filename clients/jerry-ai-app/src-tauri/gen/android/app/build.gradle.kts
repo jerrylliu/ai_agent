@@ -13,9 +13,27 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// 签名配置：从 keystore.properties 读取（该文件与 jks 均已 gitignore，密钥不进仓库）
+val keystoreProperties = Properties().apply {
+    val propFile = file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "com.jerry.jerry_ai_app"
+    signingConfigs {
+        if (keystoreProperties.isNotEmpty()) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["password"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["password"] as String
+            }
+        }
+    }
     defaultConfig {
         // HTTPS 域名就位前，后端走 http://124.223.169.223 明文，release 包必须允许明文否则全部请求失败；HTTPS 上线后改回 "false"
         manifestPlaceholders["usesCleartextTraffic"] = "true"
@@ -38,6 +56,10 @@ android {
             }
         }
         getByName("release") {
+            // keystore.properties 存在时使用正式签名，否则回退调试签（仅测试用）
+            if (keystoreProperties.isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }
