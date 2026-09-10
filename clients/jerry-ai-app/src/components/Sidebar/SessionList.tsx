@@ -219,7 +219,7 @@ const SessionList: React.FC<SessionListProps> = ({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4">
+    <div className="flex-1 min-h-0 overflow-y-auto p-4">
       {/* ==================== 对话历史标题栏 ==================== */}
       <div className="flex items-center justify-between mb-4 cyberpunk-history">
         <h4 className="font-medium text-gray-700 dark:text-gray-300 flex items-center">

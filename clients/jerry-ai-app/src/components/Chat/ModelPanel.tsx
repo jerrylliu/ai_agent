@@ -102,8 +102,8 @@ const ModelPanel: React.FC<ModelPanelProps> = ({
             </div>
           </div>
 
-          {/* 模型列表滚动区域 */}
-          <div className="flex-1 overflow-y-auto">
+          {/* 模型列表滚动区域（min-h-0：允许 flex 子项收缩，内容超高时内部滚动而不是把底部 footer 顶出面板） */}
+          <div className="flex-1 min-h-0 overflow-y-auto">
             {/* 本地模型列表（Ollama） */}
             {availableModels.filter((m) => m.provider === "ollama").length >
               0 && (
