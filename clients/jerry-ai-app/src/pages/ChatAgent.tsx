@@ -402,21 +402,9 @@ const ChatAgent: React.FC = () => {
   // ==================== 移动端适配（P1） ====================
   const isMobile = useIsMobile();
 
-  // 移动端软键盘适配：把 visualViewport 高度写入 CSS 变量，
-  // 键盘弹起时根容器随之收缩，输入框始终贴在键盘上方（桌面端 visualViewport 高度恒等于窗口高度，行为不变）
-  useEffect(() => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const updateAppHeight = () => {
-      document.documentElement.style.setProperty(
-        "--app-height",
-        `${vv.height}px`,
-      );
-    };
-    updateAppHeight();
-    vv.addEventListener("resize", updateAppHeight);
-    return () => vv.removeEventListener("resize", updateAppHeight);
-  }, []);
+  // 注：软键盘适配不在这里做——Android WebView 默认 adjustResize 会在键盘弹起时
+  // 自动收缩原生窗口，h-full 布局自然跟随。此前用 visualViewport 写 CSS 变量的
+  // 方案在「桌面加载后切设备模拟器」场景会残留过期高度，导致底部被裁出屏幕，已移除。
 
   // 移动端默认收起侧边栏（抽屉形态）；桌面端保持默认展开的行为不变
   useEffect(() => {
@@ -438,10 +426,7 @@ const ChatAgent: React.FC = () => {
   // ==================== JSX 渲染区域 ====================
   return (
     <FavoriteDocProvider>
-      <div
-        className="flex h-full bg-background relative"
-        style={{ height: "var(--app-height, 100%)" }}
-      >
+      <div className="flex h-full bg-background relative">
         {/* ==================== 左侧边栏区域 ==================== */}
         {/* 移动端遮罩：抽屉打开时覆盖聊天区，点击关闭 */}
         {isMobile && showSidebar && (
