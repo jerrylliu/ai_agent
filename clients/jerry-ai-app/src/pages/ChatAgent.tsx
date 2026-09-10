@@ -461,7 +461,8 @@ const ChatAgent: React.FC = () => {
             } ${showSidebar ? (isMobile ? "translate-x-0" : "w-72") : isMobile ? "-translate-x-full" : "w-0"}`}
           >
             {showSidebar && (
-              <div className="w-72 h-full flex flex-col">
+              // env(safe-area-inset-*)：沉浸式下侧边栏背景全屏延伸，内容用安全区间距避让系统栏（桌面端为 0，行为不变）
+              <div className="w-72 h-full flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
                 <SidebarHeader
                   createNewSession={createNewSession}
                   searchKeyword={searchKeyword}
@@ -729,7 +730,7 @@ const ChatAgent: React.FC = () => {
           className="fixed inset-0 z-50 bg-black/50"
           style={{ top: isMobile ? 0 : "25px" }}
         >
-          <div className="absolute inset-0 bg-card shadow-2xl">
+          <div className="absolute inset-0 bg-card shadow-2xl pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <ErrorBoundary>
               <DocumentManager
                 onClose={() => setShowDocumentManager(false)}
@@ -746,7 +747,7 @@ const ChatAgent: React.FC = () => {
           className="fixed inset-0 z-50 bg-black/50"
           style={{ top: isMobile ? 0 : "25px" }}
         >
-          <div className="absolute inset-0 bg-card shadow-2xl">
+          <div className="absolute inset-0 bg-card shadow-2xl pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]">
             <ErrorBoundary>
               <KnowledgeSourceManager
                 onClose={() => setShowKnowledgeSourceManager(false)}

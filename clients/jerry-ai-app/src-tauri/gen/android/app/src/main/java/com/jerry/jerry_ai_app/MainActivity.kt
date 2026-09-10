@@ -1,12 +1,14 @@
 package com.jerry.jerry_ai_app
 
 import android.os.Bundle
+import androidx.activity.enableEdgeToEdge
 
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
-    // 不启用 enableEdgeToEdge：启用后 WebView 内容会延伸到系统导航栏/手势条底下，
-    // 导致底部按钮（设置等）被遮挡误触。默认 fitsSystemWindows 让系统自动避让。
-    // 若将来要做沉浸式状态栏，需配合 WindowInsets 监听给 WebView 注入安全区 padding。
+    // 启用 edge-to-edge（沉浸式）：应用背景延伸到系统状态栏/导航栏底下，系统栏呈透明——
+    // 与 Android 15+（targetSdk 35+）的强制行为保持一致，旧系统上也统一观感。
+    // 内容不被遮挡的避让由 Web 层 env(safe-area-inset-*) 完成（侧边栏/模型面板/全屏弹窗均已加）。
+    enableEdgeToEdge()
     super.onCreate(savedInstanceState)
   }
 }
