@@ -61,17 +61,22 @@ class MainActivity : TauriActivity() {
   private fun applyToWeb() {
     val web = cachedWebView ?: findWebView(window.decorView)?.also { cachedWebView = it } ?: return
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      // 【必须做密度换算】WindowInsets 返回的是物理像素(px)，而 WebView 里 CSS 的 px 是
+      // 设备无关像素(dp)，两者相差 density 倍（手机 2.75~3.5、平板 1.5~2）。
+      // 不换算就直接注入，等于把安全区放大约 3 倍：状态栏 24dp 被写成 72px、
+      // 键盘 300dp 被写成 900px，页面被整体顶开挤成一团（issue：OPPO/一加 ACE 5、平板）。
+      val density = resources.displayMetrics.density
       ViewCompat.getRootWindowInsets(window.decorView)?.let { cur ->
         val bars = cur.getInsets(
           WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
         )
         val ime = cur.getInsets(WindowInsetsCompat.Type.ime())
-        lastTop = bars.top
+        lastTop = (bars.top / density).toInt()
         // 拆成两个变量：--safe-bottom 只承载系统栏（小而稳定，绝不会被键盘高度污染）；
         // 键盘单独走 --safe-keyboard。曾把 max(导航栏, 键盘) 合进一个变量，
         // 厂商 ROM 丢一次「键盘收起」事件就永久卡死（一加 ACE 5 收缩在一起、荣耀正常）
-        lastBottom = bars.bottom
-        lastKeyboard = maxOf(0, ime.bottom - bars.bottom)
+        lastBottom = (bars.bottom / density).toInt()
+        lastKeyboard = maxOf(0, ((ime.bottom - bars.bottom) / density).toInt())
       }
     }
     web.evaluateJavascript(
