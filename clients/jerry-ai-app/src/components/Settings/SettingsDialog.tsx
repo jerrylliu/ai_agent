@@ -6,6 +6,7 @@ import { Input } from '../ui/input';
 import type { ThemeMode } from '../../hooks/useTheme';
 
 import type { AppSettings } from '../../stores/settings-store';
+import type { UseUpdateCheckResult } from '../../hooks/useUpdateCheck';
 import {
   getCacheConfig,
   updateCacheConfig,
@@ -40,6 +41,8 @@ interface SettingsDialogProps {
   onThemeChange: (theme: ThemeMode) => void;
   settings: AppSettings;
   onSettingsChange: (settings: AppSettings) => void;
+  /** 版本更新检测（由 ChatAgent 持有的同一实例传入，弹窗状态全局唯一） */
+  updateCheck: UseUpdateCheckResult;
 }
 
 // 根据进度快照生成重建结束后的提示文案：源文件丢失需要单独强调，
@@ -75,6 +78,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   onThemeChange,
   settings,
   onSettingsChange,
+  updateCheck,
 }) => {
   // 缓存配置状态
   const [cacheConfig, setCacheConfig] = useState<CacheConfig | null>(null);
@@ -1022,10 +1026,26 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
             <div className="rounded-md bg-muted/50 px-3 py-2.5 flex items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-medium text-foreground">以太忆核</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Aether Memory Core · v0.1.1</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Aether Memory Core{updateCheck.currentVersion ? ` · v${updateCheck.currentVersion}` : ' · v0.1.2'}
+                </p>
               </div>
               <Cpu className="h-4 w-4 text-muted-foreground shrink-0" />
             </div>
+            {/* 检查更新：与主页共用同一检测状态，发现新版本时全局弹窗已由 ChatAgent 渲染 */}
+            <button
+              type="button"
+              onClick={() => void updateCheck.checkForUpdate(true)}
+              disabled={updateCheck.checking}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {updateCheck.checking ? '正在检查更新…' : '检查更新'}
+            </button>
+            {updateCheck.manualFeedback && (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                {updateCheck.manualFeedback}
+              </p>
+            )}
             <button
               type="button"
               onClick={openBeianSite}
