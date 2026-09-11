@@ -15,6 +15,7 @@ class MainActivity : TauriActivity() {
   private var cachedWebView: WebView? = null
   private var lastTop = 0
   private var lastBottom = 0
+  private var lastKeyboard = 0
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -27,13 +28,7 @@ class MainActivity : TauriActivity() {
       enableEdgeToEdge()
       WindowCompat.setDecorFitsSystemWindows(window, false)
       ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
-        val bars = insets.getInsets(
-          WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
-        )
-        val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-        lastTop = bars.top
-        // 键盘弹出时 bottom 取「导航栏 vs 键盘」更高者，输入框/侧边栏底部随之抬升，不被键盘遮挡
-        lastBottom = maxOf(bars.bottom, ime.bottom)
+        // 具体数值统一由 applyToWeb() 实时查询，监听器只负责触发注入
         applyToWeb()
         insets
       }
@@ -47,12 +42,42 @@ class MainActivity : TauriActivity() {
     // 键盘靠 manifest 的 adjustResize 自动压缩窗口；老机型放弃沉浸式换取稳定
   }
 
-  /** 把最近一次计算的 insets 以 CSS 变量形式注入页面根元素 */
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    // ColorOS 等厂商 ROM 偶发丢失「键盘收起」的 insets 分发事件，导致高度变量卡在
+    // 键盘值、输入框悬在屏幕中部（issue：一加 ACE 5）。键盘收起必然伴随窗口焦点
+    // 回归，此时主动重查当前 insets 并重注入，是可靠的自愈路径
+    if (hasFocus && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      applyToWeb()
+    }
+  }
+
+  /**
+   * 把当前 insets 以 CSS 变量形式注入页面根元素。
+   * 关键设计：不回放缓存旧值，而是每次实时查询系统「此刻」的 insets——
+   * 即使某次事件分发丢失，注入的也是真实状态，天然自愈；
+   * 缓存值仅作为 rootWindowInsets 查询失败时的兜底。
+   */
   private fun applyToWeb() {
     val web = cachedWebView ?: findWebView(window.decorView)?.also { cachedWebView = it } ?: return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      ViewCompat.getRootWindowInsets(window.decorView)?.let { cur ->
+        val bars = cur.getInsets(
+          WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+        )
+        val ime = cur.getInsets(WindowInsetsCompat.Type.ime())
+        lastTop = bars.top
+        // 拆成两个变量：--safe-bottom 只承载系统栏（小而稳定，绝不会被键盘高度污染）；
+        // 键盘单独走 --safe-keyboard。曾把 max(导航栏, 键盘) 合进一个变量，
+        // 厂商 ROM 丢一次「键盘收起」事件就永久卡死（一加 ACE 5 收缩在一起、荣耀正常）
+        lastBottom = bars.bottom
+        lastKeyboard = maxOf(0, ime.bottom - bars.bottom)
+      }
+    }
     web.evaluateJavascript(
       "document.documentElement.style.setProperty('--safe-top','${lastTop}px');" +
-        "document.documentElement.style.setProperty('--safe-bottom','${lastBottom}px');",
+        "document.documentElement.style.setProperty('--safe-bottom','${lastBottom}px');" +
+        "document.documentElement.style.setProperty('--safe-keyboard','${lastKeyboard}px');",
       null
     )
   }

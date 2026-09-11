@@ -474,7 +474,7 @@ const ChatAgent: React.FC = () => {
           >
             {showSidebar && (
               // env(safe-area-inset-*)：沉浸式下侧边栏背景全屏延伸，内容用安全区间距避让系统栏（桌面端为 0，行为不变）
-              <div className="w-72 h-full flex flex-col pt-[var(--safe-top)] pb-[var(--safe-bottom)]">
+              <div className="w-72 h-full flex flex-col pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))]">
                 <SidebarHeader
                   createNewSession={createNewSession}
                   searchKeyword={searchKeyword}
@@ -634,7 +634,7 @@ const ChatAgent: React.FC = () => {
                 bottom:
                   inputMode === "center"
                     ? "auto"
-                    : "calc(16px + var(--safe-bottom))",
+                    : "calc(16px + var(--safe-bottom) + var(--safe-keyboard))",
                 transform:
                   inputMode === "center"
                     ? "translate(-50%, -50%)"
@@ -752,7 +752,7 @@ const ChatAgent: React.FC = () => {
           className="fixed inset-0 z-50 bg-black/50"
           style={{ top: isMobile ? 0 : "25px" }}
         >
-          <div className="absolute inset-0 bg-card shadow-2xl pt-[var(--safe-top)] pb-[var(--safe-bottom)]">
+          <div className="absolute inset-0 bg-card shadow-2xl pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))]">
             <ErrorBoundary>
               <DocumentManager
                 onClose={() => setShowDocumentManager(false)}
@@ -769,7 +769,7 @@ const ChatAgent: React.FC = () => {
           className="fixed inset-0 z-50 bg-black/50"
           style={{ top: isMobile ? 0 : "25px" }}
         >
-          <div className="absolute inset-0 bg-card shadow-2xl pt-[var(--safe-top)] pb-[var(--safe-bottom)]">
+          <div className="absolute inset-0 bg-card shadow-2xl pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))]">
             <ErrorBoundary>
               <KnowledgeSourceManager
                 onClose={() => setShowKnowledgeSourceManager(false)}

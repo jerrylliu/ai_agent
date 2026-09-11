@@ -68,7 +68,7 @@ const ModelPanel: React.FC<ModelPanelProps> = ({
         }`}
       >
         {/* env(safe-area-inset-*)：沉浸式下面板背景全屏延伸，内容用安全区间距避让系统栏（桌面端为 0，行为不变） */}
-        <div className="w-64 h-full flex flex-col pt-[var(--safe-top)] pb-[var(--safe-bottom)]">
+        <div className="w-64 h-full flex flex-col pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))]">
           {/* 面板头部 */}
           <div className="px-4 py-3 border-b border-gray-200 dark:border-slate-600 flex items-center justify-between">
             <div className="flex items-center space-x-2">

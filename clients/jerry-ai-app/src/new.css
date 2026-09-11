@@ -61,9 +61,12 @@
   --radius: 0.625rem;                          /* 圆角基准值 = 10px，所有圆角基于此计算 */
 
   /* 安全区变量：默认取 env()（桌面端为 0）；安卓端由 MainActivity 原生 insets 桥动态覆写
-     （部分厂商 WebView/平板 env 恒 0，键盘高度 env 也拿不到），组件统一用 var(--safe-*) */
+     （部分厂商 WebView/平板 env 恒 0，键盘高度 env 也拿不到），组件统一用 var(--safe-*)。
+     --safe-bottom 只承载系统栏（导航栏/手势条），键盘高度单独走 --safe-keyboard：
+     合在一个变量里时，厂商 ROM 丢一次「键盘收起」事件就会永久卡在键盘高度 */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-keyboard: 0px;
 
   --background: oklch(1 0 0);                  /* 页面背景：纯白色 */
   --foreground: oklch(0.145 0 0);              /* 主文字：深灰/近黑色 */
