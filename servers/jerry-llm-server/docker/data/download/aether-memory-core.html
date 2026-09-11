@@ -1614,7 +1614,7 @@
         "功能模块": { tw: "功能模組", en: "Feature Modules", fr: "Modules fonctionnels", de: "Funktionsmodule", es: "Módulos funcionales", ja: "機能モジュール", ru: "Функциональные модули" },
         "检索": { tw: "檢索", en: "Search", fr: "Recherche", de: "Suche", es: "Búsqueda", ja: "検索", ru: "Поиск" },
         "下载": { tw: "下載", en: "Download", fr: "Télécharger", de: "Download", es: "Descargar", ja: "ダウンロード", ru: "Загрузить" },
-        "开始使用": { tw: "開始使用", fr: "Commencer", de: "Jetzt starten", es: "Comenzar", ja: "始める", ru: "Начать" },
+        "开始使用": { tw: "開啟智慧之旅", en: "Get Started", fr: "Commencer", de: "Jetzt starten", es: "Comenzar", ja: "始める", ru: "Начать" },
         "以太忆核不仅仅是一个存储库，它是您思想的延伸。基于向量语义与混合检索技术，将碎片化信息转化为结构化智慧。": {
           tw: "以太憶核不僅僅是一個儲存庫，它是您思想的延伸。基於向量語義與混合檢索技術，將碎片化資訊轉化為結構化智慧。",
           en: "Aether Memory Core is more than a repository — it is an extension of your mind. Built on vector semantics and hybrid retrieval, it turns fragmented information into structured wisdom.",
@@ -1810,34 +1810,50 @@
       };
       var LANGS = { tw: "zh-TW", en: "en", fr: "fr", de: "de", es: "es", ja: "ja", ru: "ru" };
       function norm(s) { return s.replace(/\s+/g, " ").trim(); }
-      function pick(lang) { return function (k) { return k === "zh" ? null : (lang === "zh-TW" ? k.tw : k[lang] !== undefined ? k[lang] : k.en); }; }
-      function applyLang(lang) {
-        var val = pick(lang);
-        // 叶子节点：纯文本替换
+      // 判断元素是否位于 h1/h2 内部：标题由 H 字典整体替换，内部节点不重复登记，避免二次处理
+      function inHeading(el) {
+        var p = el.parentElement;
+        while (p) {
+          if (p.tagName === "H1" || p.tagName === "H2") return true;
+          p = p.parentElement;
+        }
+        return false;
+      }
+
+      // ==================== 原文登记表（核心） ====================
+      // 首次运行时把所有可翻译元素连同「原文」快照进 REG，之后任何语言切换
+      // 都基于原文计算目标文案，绝不读取当前页面文本——反复切换互不污染，
+      // 切回简体中文即整体还原原文，中文永不丢失。
+      var REG = [];
+      (function snapshot() {
         var els = document.body.querySelectorAll("*");
         for (var i = 0; i < els.length; i++) {
           var el = els[i], tag = el.tagName;
-          if (tag === "SCRIPT" || tag === "STYLE" || tag === "SELECT") continue;
-          if (el.children.length === 0) {
-            var key = norm(el.textContent);
-            if (key && D[key]) {
-              var v = val(D[key]);
-              if (v) el.textContent = v;
-            }
+          if (tag === "SCRIPT" || tag === "STYLE" || tag === "SELECT" || tag === "OPTION") continue;
+          if (inHeading(el)) continue;
+          if (el.children.length === 0 && el.textContent && el.textContent.replace(/\s+/g, "")) {
+            REG.push({ el: el, orig: el.textContent, key: norm(el.textContent), html: false });
           }
         }
-        // 复合标题：整体 innerHTML 替换
         var heads = document.body.querySelectorAll("h1, h2");
         for (var j = 0; j < heads.length; j++) {
-          var hk = norm(heads[j].textContent);
-          if (H[hk]) {
-            var hv = val(H[hk]);
-            if (hv) heads[j].innerHTML = hv;
+          REG.push({ el: heads[j], orig: heads[j].innerHTML, key: norm(heads[j].textContent), html: true });
+        }
+      })();
+
+      function applyLang(lang) {
+        for (var i = 0; i < REG.length; i++) {
+          var e = REG[i], v = null;
+          if (lang !== "zh") {
+            var d = e.html ? H[e.key] : D[e.key];
+            if (d) v = lang === "tw" ? d.tw : (d[lang] !== undefined ? d[lang] : d.en);
           }
+          if (!v) v = e.orig; // 简体中文 / 字典未收录：一律还原原文
+          if (e.html) e.el.innerHTML = v; else e.el.textContent = v;
         }
         document.documentElement.lang = lang === "tw" ? "zh-TW" : (LANGS[lang] || "zh-CN");
-        document.title = "Aether Memory Core | " + (lang === "zh" ? "重塑思维的数字记忆中枢" : TSUF[lang]);
-        localStorage.setItem("aether-lang", lang);
+        document.title = "Aether Memory Core | " + (lang === "zh" ? "重塑思维的数字记忆中枢" : (TSUF[lang] || TSUF.en));
+        try { localStorage.setItem("aether-lang", lang); } catch (err) {}
         var sel = document.getElementById("lang-select");
         if (sel) sel.value = lang;
       }
