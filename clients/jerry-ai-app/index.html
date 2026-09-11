@@ -10,5 +10,38 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // 老机型 WebView 兼容检测：Tailwind v4 的样式全部包在 @layer 里，
+      // 不支持该语法的引擎（Chrome < 99，常见于国产手机出厂 WebView）会整块丢弃样式，
+      // 表现为「打开后样式全部消失」。无法在构建层完整兼容（Tailwind v4 官方最低要求 Chrome 111），
+      // 只能检测并引导用户升级系统 WebView。localStorage 防止重复打扰。
+      (function () {
+        try {
+          var stale = typeof CSSLayerBlockRule === 'undefined';
+          if (!stale || localStorage.getItem('aether-webview-banner') === 'dismissed') return;
+          var show = function () {
+            var bar = document.createElement('div');
+            bar.style.cssText =
+              'position:fixed;left:12px;right:12px;bottom:16px;z-index:2147483647;' +
+              'background:#1F111E;color:#5FF6FF;border:1px solid #5FF6FF66;border-radius:12px;' +
+              'padding:12px 14px;font-size:13px;line-height:1.6;box-shadow:0 4px 24px rgba(0,0,0,.5)';
+            bar.innerHTML =
+              '检测到当前系统 WebView 版本过旧，界面样式无法正常显示。<br>' +
+              '请到手机「设置 → 应用管理 → 安卓系统 WebView」（或应用商店搜索 Android System WebView）升级后重新打开本应用。' +
+              '<span id="aether-wv-close" style="float:right;padding:0 8px;cursor:pointer;font-size:16px">✕</span>';
+            document.body.appendChild(bar);
+            document.getElementById('aether-wv-close').onclick = function () {
+              bar.remove();
+              localStorage.setItem('aether-webview-banner', 'dismissed');
+            };
+          };
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', show);
+          } else {
+            show();
+          }
+        } catch (e) { /* 检测失败不影响正常启动 */ }
+      })();
+    </script>
   </body>
 </html>
