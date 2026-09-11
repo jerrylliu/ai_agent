@@ -39,6 +39,8 @@ jest.mock('../document-generator', () => ({
 import {
   executeGenerateDocument,
   initGenerateDocumentTool,
+  persistDocument,
+  type GenerateDocumentIntent,
 } from './generate-document';
 import * as docGen from '../document-generator';
 
@@ -126,5 +128,124 @@ describe('executeGenerateDocument —— md 输出端到端', () => {
     });
     expect(result.success).toBe(false);
     expect(docGen.markdownToMd).not.toHaveBeenCalled();
+  });
+});
+
+// ==================== P1：正文与格式分离（延迟落盘） ====================
+describe('P1 文档导出意图登记（content 可选）', () => {
+  const savedKey = 'p1key';
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  let saveSpy: jest.Mock;
+
+  beforeEach(() => {
+    (docGen.markdownToPdf as jest.Mock).mockClear();
+    (docGen.markdownToMd as jest.Mock).mockClear();
+    saveSpy = jest.fn(async () => ({ key: savedKey, expiresAt }));
+    initGenerateDocumentTool({ save: saveSpy, read: jest.fn() });
+  });
+
+  it('缺 content 时只登记意图：不落盘、返回 deferred、不调生成器', async () => {
+    const docIntents: GenerateDocumentIntent[] = [];
+    const result = await executeGenerateDocument(
+      { title: 'FDE 能力要求总结', format: 'pdf' },
+      { userId: 'u1', sessionId: 's1', docIntents, res: {} },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.type).toBe('document');
+    expect(result.deferred).toBe(true);
+    expect(result.format).toBe('pdf');
+    expect(result.filename).toBe('FDE 能力要求总结.pdf');
+    // 关键：此时不能落盘、不能有 fileUrl（否则前端会拿到不存在的文件）
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(docGen.markdownToPdf).not.toHaveBeenCalled();
+    expect(result.fileUrl).toBeUndefined();
+    expect(docIntents).toEqual([{ title: 'FDE 能力要求总结', format: 'pdf' }]);
+  });
+
+  it('content 为空字符串时同样按意图处理（不报参数校验失败）', async () => {
+    const docIntents: GenerateDocumentIntent[] = [];
+    const result = await executeGenerateDocument(
+      { title: '空正文', content: '   ', format: 'md' },
+      { docIntents, res: {} },
+    );
+    expect(result.success).toBe(true);
+    expect(result.deferred).toBe(true);
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(docIntents).toHaveLength(1);
+  });
+
+  it('缺 content 且上下文没有响应通道/docIntents：返回失败并给出可执行提示', async () => {
+    const result = await executeGenerateDocument({ title: 'x', format: 'pdf' }, { userId: 'u1' });
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('缺少文档正文');
+    expect(saveSpy).not.toHaveBeenCalled();
+
+    // 只有 docIntents 但没有 res（无处推文件卡片）时同样失败，避免"假成功"
+    const docIntents: GenerateDocumentIntent[] = [];
+    const noRes = await executeGenerateDocument(
+      { title: 'x', format: 'pdf' },
+      { docIntents },
+    );
+    expect(noRes.success).toBe(false);
+    expect(docIntents).toHaveLength(0);
+  });
+
+  it('有 content 时行为不变：立即落盘并返回 fileUrl', async () => {
+    const docIntents: GenerateDocumentIntent[] = [];
+    const result = await executeGenerateDocument(
+      { title: '周报', content: '# 周报\n\n完成 3 件事', format: 'md' },
+      { userId: 'u1', sessionId: 's1', docIntents },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.deferred).toBeUndefined();
+    expect(result.fileUrl).toBe(`fc://document/${savedKey}`);
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    // 有 content 时不能登记意图（避免流式结束后被重复生成一次）
+    expect(docIntents).toHaveLength(0);
+  });
+});
+
+describe('persistDocument —— 可复用落盘函数', () => {
+  const savedKey = 'persist-key';
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  let saveSpy: jest.Mock;
+
+  beforeEach(() => {
+    (docGen.markdownToPdf as jest.Mock).mockClear();
+    saveSpy = jest.fn(async () => ({ key: savedKey, expiresAt }));
+    initGenerateDocumentTool({ save: saveSpy, read: jest.fn() });
+  });
+
+  it('用传入正文落盘成功，userId/sessionId 正确透传', async () => {
+    const result = await persistDocument({
+      title: '延迟文档',
+      content: '# 正文\n\n这是流式结束后取到的回复正文',
+      format: 'pdf',
+      userId: 'u9',
+      sessionId: 's9',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.type).toBe('document');
+    expect(result.fileUrl).toBe(`fc://document/${savedKey}`);
+    expect(result.downloadUrl).toBe(`/chat/documents/download/${savedKey}`);
+    expect(result.previewUrl).toBe(`/chat/documents/preview/${savedKey}`);
+    expect(result.sizeBytes).toBeGreaterThan(0);
+
+    const args = saveSpy.mock.calls[0][0];
+    expect(args.userId).toBe('u9');
+    expect(args.sessionId).toBe('s9');
+    expect(args.format).toBe('pdf');
+    expect(args.mimeType).toBe('application/pdf');
+    expect(args.filename).toBe('延迟文档.pdf');
+  });
+
+  it('service 未注入时返回失败', async () => {
+    initGenerateDocumentTool(null as any);
+    const result = await persistDocument({ title: 'x', content: 'y', format: 'md' });
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('文档服务未初始化');
   });
 });
