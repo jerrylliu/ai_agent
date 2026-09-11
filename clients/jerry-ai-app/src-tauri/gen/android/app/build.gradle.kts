@@ -35,8 +35,9 @@ android {
         }
     }
     defaultConfig {
-        // HTTPS 域名就位前，后端走 http://124.223.169.223 明文，release 包必须允许明文否则全部请求失败；HTTPS 上线后改回 "false"
-        manifestPlaceholders["usesCleartextTraffic"] = "true"
+        // HTTPS 域名已上线（https://xn--5-fs8a810ixgul5n.online），release 包关闭明文传输满足上架合规；
+        // 若回退 IP 明文方案需临时改回 "true"
+        manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.jerry.jerry_ai_app"
         minSdk = 24
         targetSdk = 36
