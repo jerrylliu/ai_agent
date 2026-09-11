@@ -1,11 +1,11 @@
 {
-  "version": "0.1.3",
-  "pub_date": "2026-09-12T02:30:00Z",
-  "notes": "1. 修复安卓端无法登录、模型列表加载不出的严重问题（接口地址错误被系统拦截）\n2. 新增版本更新检测：有新版本时应用内直接提示，桌面端可一键自动更新，安卓端跳转下载\n3. 修复平板及个别机型底部导航栏遮挡、键盘挡住输入框的问题\n4. 老版本 WebView 手机样式异常时给出升级引导\n5. 官网支持多语言切换",
+  "version": "0.1.4",
+  "pub_date": "2026-09-12T04:30:00Z",
+  "notes": "1. 修复部分 OPPO/一加机型聊天界面收缩错乱的问题（键盘收起事件丢失导致布局卡死）\n2. 修复安卓端无法登录、模型列表加载不出的严重问题（0.1.3 已含）\n3. 新增版本更新检测：应用内直接提示，桌面端一键自动更新，安卓端跳转下载（0.1.3 已含）",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUJyVlU0N3ZaTGx4WGZCUW42Lzgzd3JzOWFjTkU0eXkydGd6dytyQjdkcXQ4Q1IvcjZiT2RLWnU5VjhITmxHa3dJd0wzV0R3VXpzNTFXRWgrMjdtTmd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTIzNTQ0CWZpbGU65Lul5aSq5b+G5qC4XzAuMS4zX3g2NC1zZXR1cC5leGUKazlHb2VLVHdRYVdOejNhUXdJTVNaT0J3M0tWRFl5cGZpZXpRMGREMUtXWVRZWkpoZzJJWURibWkxK0FNYmNDL3ZVQ1pGK1YzeEhmUnl3cDlNZStvQVE9PQo=",
-      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.3_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUxJZzl0QkxzekJ1blVNQ0FvSERITlY5eDVEVDQ0Z1c2bjE0OSt3ekI0UitWaXAwc0Zxd0dCQjV6UmxhK0JaRXhRQkRhSVFJN0ZMR1Y4akZVWXo0eEFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTI2NjA0CWZpbGU65Lul5aSq5b+G5qC4XzAuMS40X3g2NC1zZXR1cC5leGUKbUtGcVBwd0VVSHo4Wjk4Mm1VK3dZREtqbWFQWEtQdENRSWlsbTJiL0k5a0Y4clh6VURVTXhJZC9sVnNKdTFRdDhTMkgvU1lOWFRLTDR2eENabXpwQ0E9PQo=",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.4_x64-setup.exe"
     }
   }
 }
