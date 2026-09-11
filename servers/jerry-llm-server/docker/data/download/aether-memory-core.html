@@ -1011,6 +1011,17 @@
         <a href="#download" class="nav-link">下载</a>
       </div>
       <a href="#download" class="nav-cta">开始使用</a>
+      <select id="lang-select" aria-label="Language"
+        style="margin-left:12px;background:#1F111E;color:#5FF6FF;border:1px solid #5FF6FF66;border-radius:8px;padding:6px 8px;font-size:12px;cursor:pointer;outline:none;">
+        <option value="zh">简体中文</option>
+        <option value="tw">繁體中文</option>
+        <option value="en">English</option>
+        <option value="fr">Français</option>
+        <option value="de">Deutsch</option>
+        <option value="es">Español</option>
+        <option value="ja">日本語</option>
+        <option value="ru">Русский</option>
+      </select>
     </div>
   </nav>
 
@@ -1593,6 +1604,257 @@
       if (mobileMQ.addEventListener) {
         mobileMQ.addEventListener('change', setupMobileVideos);
       }
+    })();
+  </script>
+  <script>
+    // ========== 多语言 i18n（zh 基准 = 页面原文；不改 HTML 结构，按原文精确匹配替换） ==========
+    (function () {
+      var D = {
+        "核心优势": { tw: "核心優勢", en: "Core Advantages", fr: "Atouts principaux", de: "Kernvorteile", es: "Ventajas clave", ja: "コアな強み", ru: "Ключевые преимущества" },
+        "功能模块": { tw: "功能模組", en: "Feature Modules", fr: "Modules fonctionnels", de: "Funktionsmodule", es: "Módulos funcionales", ja: "機能モジュール", ru: "Функциональные модули" },
+        "检索": { tw: "檢索", en: "Search", fr: "Recherche", de: "Suche", es: "Búsqueda", ja: "検索", ru: "Поиск" },
+        "下载": { tw: "下載", en: "Download", fr: "Télécharger", de: "Download", es: "Descargar", ja: "ダウンロード", ru: "Загрузить" },
+        "开始使用": { tw: "開始使用", fr: "Commencer", de: "Jetzt starten", es: "Comenzar", ja: "始める", ru: "Начать" },
+        "以太忆核不仅仅是一个存储库，它是您思想的延伸。基于向量语义与混合检索技术，将碎片化信息转化为结构化智慧。": {
+          tw: "以太憶核不僅僅是一個儲存庫，它是您思想的延伸。基於向量語義與混合檢索技術，將碎片化資訊轉化為結構化智慧。",
+          en: "Aether Memory Core is more than a repository — it is an extension of your mind. Built on vector semantics and hybrid retrieval, it turns fragmented information into structured wisdom.",
+          fr: "Bien plus qu'un simple dépôt, Aether Memory Core est le prolongement de votre pensée. Grâce à la sémantique vectorielle et à la recherche hybride, il transforme l'information fragmentée en savoir structuré.",
+          de: "Aether Memory Core ist mehr als ein Speicher – es ist die Verlängerung Ihres Denkens. Mit Vektorsemantik und hybrider Suche verwandelt es verstreute Informationen in strukturiertes Wissen.",
+          es: "Aether Memory Core es más que un repositorio: es una extensión de tu mente. Basado en semántica vectorial y búsqueda híbrida, convierte información fragmentada en conocimiento estructurado.",
+          ja: "以太忆核は単なるストレージではありません。あなたの思考の延長です。ベクトル意味論とハイブリッド検索技術により、断片的な情報を構造化された知恵へと変換します。",
+          ru: "Aether Memory Core — это не просто хранилище, а продолжение вашей мысли. Векторная семантика и гибридный поиск превращают разрозненные сведения в структурированное знание."
+        },
+        "开启智慧之旅": { tw: "開啟智慧之旅", en: "Start Your Journey", fr: "Commencer l'aventure", de: "Reise beginnen", es: "Inicia tu viaje", ja: "智慧の旅へ", ru: "Начать путь к знанию" },
+        "观看演示": { tw: "觀看演示", en: "Watch Demo", fr: "Voir la démo", de: "Demo ansehen", es: "Ver demo", ja: "デモを見る", ru: "Смотреть демо" },
+        "认知增强引擎": { tw: "認知增強引擎", en: "Cognitive Augmentation Engine", fr: "Moteur d'augmentation cognitive", de: "Kognitive Verstärkung", es: "Motor de aumento cognitivo", ja: "認知拡張エンジン", ru: "Движок когнитивного усиления" },
+        "融合向量检索与 BM25 混合算法，配合 Multi-hop 多跳检索与 Reranker 重排，精准捕捉深层语义关联，让机器真正理解您的意图。": {
+          tw: "融合向量檢索與 BM25 混合演算法，配合 Multi-hop 多跳檢索與 Reranker 重排，精準捕捉深層語義關聯，讓機器真正理解您的意圖。",
+          en: "Combines vector retrieval with the BM25 hybrid algorithm, plus Multi-hop retrieval and Reranker re-ranking, to capture deep semantic links — the machine truly understands your intent.",
+          fr: "Fusionne recherche vectorielle et algorithme hybride BM25, avec recherche multi-sauts et re-ranking, pour capturer les liens sémantiques profonds : la machine comprend vraiment votre intention.",
+          de: "Kombiniert Vektorsuche mit BM25-Hybridalgorithmus, Multi-hop-Suche und Reranking, um tiefe semantische Verbindungen zu erfassen – die Maschine versteht Ihre Absicht wirklich.",
+          es: "Combina búsqueda vectorial con el algoritmo híbrido BM25, más recuperación multi-salto y reordenamiento, para capturar vínculos semánticos profundos: la máquina entiende de verdad tu intención.",
+          ja: "ベクトル検索とBM25ハイブリッド算法にMulti-hopマルチホップ検索とReranker再ランクを組み合わせ、深い意味的関連を正確に捉え、機械があなたの意図を真に理解します。",
+          ru: "Объединяет векторный поиск и гибридный алгоритм BM25, многошаговый поиск и реранкинг, улавливая глубинные семантические связи — машина по-настоящему понимает ваш замысел."
+        },
+        "自主智能体矩阵": { tw: "自主智慧體矩陣", en: "Autonomous Agent Matrix", fr: "Matrice d'agents autonomes", de: "Matrix autonomer Agenten", es: "Matriz de agentes autónomos", ja: "自律エージェントマトリクス", ru: "Матрица автономных агентов" },
+        "内置 Plan-Execute 规划能力，支持 MCP 协议扩展与工具链生态，自动完成复杂任务闭环。": {
+          tw: "內建 Plan-Execute 規劃能力，支援 MCP 協定擴展與工具鏈生態，自動完成複雜任務閉環。",
+          en: "Built-in Plan-Execute planning with MCP protocol extension and a tooling ecosystem — complex tasks close the loop automatically.",
+          fr: "Planification Plan-Execute intégrée, extension par protocole MCP et écosystème d'outils : les tâches complexes se bouclent automatiquement.",
+          de: "Eingebaute Plan-Execute-Planung, MCP-Protokollerweiterung und Werkzeug-Ökosystem – komplexe Aufgaben schließen sich automatisch ab.",
+          es: "Planificación Plan-Execute integrada, extensión del protocolo MCP y ecosistema de herramientas: las tareas complejas se completan automáticamente.",
+          ja: "Plan-Executeプランニングを内蔵し、MCPプロトコル拡張とツールチェーンエコシステムに対応。複雑なタスクを自動で完結させます。",
+          ru: "Встроенное планирование Plan-Execute, расширение через протокол MCP и экосистему инструментов — сложные задачи замыкаются автоматически."
+        },
+        "沉浸式 AI 创作": { tw: "沉浸式 AI 創作", en: "Immersive AI Writing", fr: "Création IA immersive", de: "Immersives KI-Schreiben", es: "Creación inmersiva con IA", ja: "没入型AIライティング", ru: "Иммерсивное AI-творчество" },
+        "基于 Tiptap 3 打造，支持 AI 幽灵补全、选区润色及一键发布，让写作如呼吸般自然。": {
+          tw: "基於 Tiptap 3 打造，支援 AI 幽靈補全、選區潤色及一鍵發布，讓寫作如呼吸般自然。",
+          en: "Powered by Tiptap 3 with AI ghost completion, selection polish and one-click publishing — writing feels as natural as breathing.",
+          fr: "Propulsé par Tiptap 3 : complétion fantôme IA, affinage de sélection et publication en un clic — écrire devient aussi naturel que respirer.",
+          de: "Basiert auf Tiptap 3 mit KI-Geistervervollständigung, Auswahl-Feinschliff und One-Click-Veröffentlichung – Schreiben wird so natürlich wie Atmen.",
+          es: "Impulsado por Tiptap 3: autocompletado fantasma con IA, pulido de selección y publicación con un clic; escribir se vuelve tan natural como respirar.",
+          ja: "Tiptap 3 ベースで、AIゴースト補完、選択範囲の推敲、ワンクリック公開に対応。書くことが呼吸のように自然になります。",
+          ru: "На базе Tiptap 3: призрачное автодополнение, полировка выделенного и публикация в один клик — письмо становится таким же естественным, как дыхание."
+        },
+        "金融级安全护栏": { tw: "金融級安全護欄", en: "Bank-Grade Security Guardrails", fr: "Garde-fous de sécurité bancaire", de: "Sicherheit auf Bankniveau", es: "Seguridad de nivel bancario", ja: "金融グレードのセーフガード", ru: "Защита банковского уровня" },
+        "Human-in-the-Loop 双通道审批机制，结合 Prompt 注入防御与审计日志，确保企业级数据安全。": {
+          tw: "Human-in-the-Loop 雙通道審批機制，結合 Prompt 注入防禦與審計日誌，確保企業級資料安全。",
+          en: "Human-in-the-Loop dual-channel approvals with prompt-injection defense and audit logs ensure enterprise-grade data security.",
+          fr: "Approbations à double canal Human-in-the-Loop, défense contre l'injection de prompts et journaux d'audit pour une sécurité des données de niveau entreprise.",
+          de: "Human-in-the-Loop-Genehmigungen über zwei Kanäle, Prompt-Injection-Abwehr und Audit-Logs garantieren Datensicherheit auf Enterprise-Niveau.",
+          es: "Aprobaciones Human-in-the-Loop de doble canal, defensa contra inyección de prompts y registros de auditoría para una seguridad empresarial.",
+          ja: "Human-in-the-Loopのデュアルチャネル承認に、プロンプトインジェクション防御と監査ログを組み合わせ、エンタープライズ級のデータセキュリティを確保します。",
+          ru: "Двухканальное согласование Human-in-the-Loop, защита от prompt-инъекций и журналы аудита обеспечивают безопасность данных корпоративного уровня."
+        },
+        "全域知识同步": { tw: "全域知識同步", en: "Omni-Domain Knowledge Sync", fr: "Synchro de connaissances universelle", de: "Universelle Wissenssync", es: "Sincronización de conocimiento global", ja: "全域ナレッジ同期", ru: "Синхронизация знаний везде" },
+        "打通飞书双向通道与 Web 爬虫深度抓取，打破信息孤岛，实现跨平台、跨应用的知识自由流动与自动化沉淀。": {
+          tw: "打通飛書雙向通道與 Web 爬蟲深度抓取，打破資訊孤島，實現跨平台、跨應用的知識自由流動與自動化沉澱。",
+          en: "Bidirectional Feishu channel plus deep web crawling break information silos — knowledge flows and settles freely across platforms and apps.",
+          fr: "Canal Feishu bidirectionnel et crawl web profond brisent les silos : le savoir circule et se dépose librement entre plateformes et applications.",
+          de: "Bidirektionaler Feishu-Kanal und tiefes Web-Crawling brechen Informationssilos – Wissen fließt frei über Plattformen und Apps.",
+          es: "Canal bidireccional con Feishu y rastreo web profundo rompen los silos de información: el conocimiento fluye libremente entre plataformas y apps.",
+          ja: "飛書（Lark）との双方向チャネルとWebディープクロールで情報のサイロを解消。プラットフォームやアプリを横断して知識が自由に流れ、自動的に蓄積されます。",
+          ru: "Двусторонний канал Feishu и глубокий веб-краулинг устраняют информационные силосы — знание свободно течёт между платформами и приложениями."
+        },
+        "本地化隐私架构": { tw: "本地化隱私架構", en: "Local-First Privacy Architecture", fr: "Architecture de confidentialité locale", de: "Lokale Datenschutz-Architektur", es: "Arquitectura de privacidad local", ja: "ローカルファーストのプライバシー設計", ru: "Локальная приватная архитектура" },
+        "基于 Tauri v2 本地构建，ChromaDB 独立向量存储；开源版支持 Ollama 本地推理，数据主权完全归您。": {
+          tw: "基於 Tauri v2 本地構建，ChromaDB 獨立向量儲存；開源版支援 Ollama 本地推理，資料主權完全歸您。",
+          en: "Built on Tauri v2 with standalone ChromaDB vector storage; the open-source edition supports Ollama local inference — full data sovereignty is yours.",
+          fr: "Construit localement sur Tauri v2 avec stockage vectoriel ChromaDB indépendant ; l'édition open source supporte l'inférence locale Ollama — la souveraineté des données vous appartient.",
+          de: "Lokal auf Tauri v2 aufgebaut mit eigenständigem ChromaDB-Vektorspeicher; die Open-Source-Edition unterstützt Ollama-Inferenz – volle Datensouveränität liegt bei Ihnen.",
+          es: "Construido localmente sobre Tauri v2 con almacenamiento vectorial ChromaDB independiente; la edición de código abierto admite inferencia local con Ollama: la soberanía de los datos es tuya.",
+          ja: "Tauri v2によるローカル構築、ChromaDBの独立ベクトルストア。オープンソース版はOllamaローカル推論に対応し、データ主権は完全にあなたのものです。",
+          ru: "Локальная сборка на Tauri v2 и независимое векторное хранилище ChromaDB; open-source-версия поддерживает локальный вывод Ollama — суверенитет данных полностью ваш."
+        },
+        "多模态智能对话": { tw: "多模態智慧對話", en: "Multimodal Smart Chat", fr: "Chat intelligent multimodal", de: "Multimodaler Chat", es: "Chat inteligente multimodal", ja: "マルチモーダル対話", ru: "Мультимодальный умный чат" },
+        "支持流式问答、多轮上下文及图文多模态输入，DashScope/DeepSeek 等多模型运行时无缝切换，打造极致流畅的对话体验。": {
+          tw: "支援串流問答、多輪上下文及圖文多模態輸入，DashScope/DeepSeek 等多模型執行時無縫切換，打造極致流暢的對話體驗。",
+          en: "Streaming Q&A, multi-turn context and image-text multimodal input, with seamless switching between DashScope, DeepSeek and more — an ultra-smooth conversation experience.",
+          fr: "Q&A en streaming, contexte multi-tours et entrée image-texte multimodale, avec bascule transparente entre DashScope, DeepSeek et autres — un dialogue ultra-fluide.",
+          de: "Streaming-Q&A, Mehrkontext und bild-text-multimodale Eingabe, nahtloser Wechsel zwischen DashScope/DeepSeek und mehr – ein ultrareibungsloses Chat-Erlebnis.",
+          es: "Preguntas en streaming, contexto multivuelo y entrada multimodal de imagen y texto, con cambio perfecto entre DashScope/DeepSeek y más: un chat muy fluido.",
+          ja: "ストリーミング応答、マルチターン文脈、画像+テキストのマルチモーダル入力に対応し、DashScope/DeepSeekなど複数モデルをシームレスに切り替えます。",
+          ru: "Стриминговые ответы, многоходовой контекст и мультимодальный ввод изображений и текста, бесшовное переключение между DashScope/DeepSeek и другими — предельно плавный диалог."
+        },
+        "高阶 RAG 与记忆": { tw: "高階 RAG 與記憶", en: "Advanced RAG & Memory", fr: "RAG avancé et mémoire", de: "Fortgeschrittenes RAG & Gedächtnis", es: "RAG avanzado y memoria", ja: "高度なRAGとメモリ", ru: "Продвинутый RAG и память" },
+        "采用向量+BM25 RRF 混合检索与 Multi-hop 多跳检索。内置用户记忆自动提取与去重合并，结合增量会话摘要，打造越用越懂你的专属大脑。": {
+          tw: "採用向量+BM25 RRF 混合檢索與 Multi-hop 多跳檢索。內建使用者記憶自動提取與去重合併，結合增量會話摘要，打造越用越懂你的專屬大腦。",
+          en: "Vector+BM25 RRF hybrid retrieval with Multi-hop search; automatic user-memory extraction and dedup merging plus incremental session summaries — a brain that knows you better over time.",
+          fr: "Recherche hybride vectorielle+BM25 (RRF) et multi-sauts ; extraction automatique de mémoire utilisateur avec déduplication et résumés de session incrémentaux — un cerveau qui vous comprend de mieux en mieux.",
+          de: "Vektor+BM25-RRF-Hybridsuche mit Multi-hop; automatische Gedächtnisextraktion mit Dedup und inkrementellen Sitzungszusammenfassungen – ein Gehirn, das Sie mit der Zeit besser versteht.",
+          es: "Búsqueda híbrida vectorial+BM25 (RRF) y multi-salto; extracción automática de memoria del usuario con deduplicación y resúmenes de sesión incrementales: un cerebro que te entiende mejor con el uso.",
+          ja: "ベクトル+BM25のRRFハイブリッド検索とMulti-hop検索。ユーザーメモリの自動抽出・重複排除マージに加え、増分セッション要約で、使うほどあなたを理解する専用脳を実現します。",
+          ru: "Гибридный поиск вектор+BM25 (RRF) и многошаговый поиск; автоматическое извлечение памяти со слиянием дубликатов и инкрементальными резюме сессий — мозг, который понимает вас всё лучше."
+        },
+        "AI 沉浸式编辑器": { tw: "AI 沉浸式編輯器", en: "Immersive AI Editor", fr: "Éditeur IA immersif", de: "Immersiver KI-Editor", es: "Editor inmersivo con IA", ja: "没入型AIエディタ", ru: "Иммерсивный AI-редактор" },
+        "基于 Tiptap 3 深度定制，支持 AI 幽灵补全、选区润色改写及全文指令。内置知识库面板，支持一键发布，让创作与知识沉淀无缝衔接。": {
+          tw: "基於 Tiptap 3 深度定制，支援 AI 幽靈補全、選區潤色改寫及全文指令。內建知識庫面板，支援一鍵發布，讓創作與知識沉澱無縫銜接。",
+          en: "Deep-customized on Tiptap 3: AI ghost completion, selection rewrite & polish, full-text commands; built-in knowledge-base panel with one-click publishing.",
+          fr: "Sur mesure sur Tiptap 3 : complétion fantôme IA, réécriture et affinage de sélection, commandes plein texte ; panneau de base de connaissances intégré avec publication en un clic.",
+          de: "Tief angepasst auf Tiptap 3: KI-Geistervervollständigung, Umschreiben und Feinschliff von Auswahlen, Ganztext-Befehle; integriertes Wissensbank-Panel mit One-Click-Veröffentlichung.",
+          es: "Personalizado a fondo sobre Tiptap 3: autocompletado fantasma con IA, reescritura y pulido de selección, comandos de texto completo; panel de base de conocimiento integrado con publicación de un clic.",
+          ja: "Tiptap 3を深度カスタマイズし、AIゴースト補完、選択範囲の推敲・書き換え、全文指示に対応。ナレッジベースパネルを内蔵し、ワンクリック公開で創作と知識の蓄積をシームレスにつなぎます。",
+          ru: "Глубокая кастомизация Tiptap 3: призрачное автодополнение, переписывание и полировка выделенного, команды для всего текста; встроенная панель базы знаний и публикация в один клик."
+        },
+        "飞书双向协同通道": { tw: "飛書雙向協同通道", en: "Bidirectional Feishu Channel", fr: "Canal bidirectionnel Feishu", de: "Bidirektionaler Feishu-Kanal", es: "Canal bidireccional Feishu", ja: "飛書（Lark）双方向チャネル", ru: "Двусторонний канал Feishu" },
+        "打通 Web 与飞书双向聊天通道，支持图表/文档等富产物原生化推送。敏感操作支持 Web 弹窗与飞书卡片双通道审批，实现无缝办公协同。": {
+          tw: "打通 Web 與飛書雙向聊天通道，支援圖表/文件等富產物原生化推送。敏感操作支援 Web 彈窗與飛書卡片雙通道審批，實現無縫辦公協同。",
+          en: "Two-way chat channel between Web and Feishu with native push of rich artifacts like charts and docs; sensitive actions are approved via Web dialog and Feishu card simultaneously.",
+          fr: "Canal de chat bidirectionnel entre le Web et Feishu, poussée native d'artefacts riches (graphiques, documents) ; actions sensibles approuvées via popup Web et carte Feishu.",
+          de: "Zwei-Wege-Chatkanal zwischen Web und Feishu mit nativem Push reicher Artefakte (Diagramme, Dokumente); sensible Aktionen werden per Web-Dialog und Feishu-Karte freigegeben.",
+          es: "Canal de chat bidireccional entre Web y Feishu con envío nativo de artefactos ricos (gráficos, documentos); las acciones sensibles se aprueban mediante popup Web y tarjeta de Feishu.",
+          ja: "Webと飛書（Lark）の双方向チャットチャネルを接続し、チャートやドキュメントなどのリッチな成果物をネイティブに送信。機密操作はWebポップアップと飛書カードのデュアルチャネル承認に対応します。",
+          ru: "Двусторонний чат между Web и Feishu с нативной отправкой богатых артефактов (графики, документы); чувствительные действия согласуются через веб-попап и карточку Feishu."
+        },
+        "自主 Agent 工作流": { tw: "自主 Agent 工作流", en: "Autonomous Agent Workflows", fr: "Workflows d'agents autonomes", de: "Autonome Agent-Workflows", es: "Flujos de trabajo de agentes autónomos", ja: "自律エージェントワークフロー", ru: "Автономные агентские сценарии" },
+        "内置 Plan-Execute 规划引擎，支持 NL2SQL 数据库查询、网页深度抓取及 MCP 协议扩展。自动拆解并执行复杂任务，联网检索后将成果总结为 PDF 等文档直接送达。": {
+          tw: "內建 Plan-Execute 規劃引擎，支援 NL2SQL 資料庫查詢、網頁深度抓取及 MCP 協定擴展。自動拆解並執行複雜任務，聯網檢索後將成果總結為 PDF 等文件直接送達。",
+          en: "Built-in Plan-Execute engine with NL2SQL database queries, deep web crawling and MCP extension — it decomposes and executes complex tasks, then delivers results as PDF documents.",
+          fr: "Moteur de planification Plan-Execute intégré : requêtes NL2SQL, crawl web profond et extension MCP — il décompose et exécute des tâches complexes, puis livre les résultats en documents PDF.",
+          de: "Eingebaute Plan-Execute-Engine mit NL2SQL-Datenbankabfragen, tiefem Web-Crawling und MCP-Erweiterung – zerlegt und führt komplexe Aufgaben aus und liefert Ergebnisse als PDF.",
+          es: "Motor Plan-Execute integrado con consultas NL2SQL, rastreo web profundo y extensión MCP: descompone y ejecuta tareas complejas, y entrega los resultados como documentos PDF.",
+          ja: "Plan-Executeプランニングエンジンを内蔵し、NL2SQLデータベース照会、Webディープクロール、MCPプロトコル拡張に対応。複雑なタスクを自動で分解・実行し、検索結果をPDFなどのドキュメントとして届けます。",
+          ru: "Встроенный движок Plan-Execute: NL2SQL-запросы к БД, глубокий веб-краулинг и расширение MCP — сам разбивает и выполняет сложные задачи, доставляя результаты в виде PDF."
+        },
+        "知识资产与版本管理": { tw: "知識資產與版本管理", en: "Knowledge Assets & Versioning", fr: "Actifs de connaissances et versions", de: "Wissensassets & Versionen", es: "Activos de conocimiento y versiones", ja: "ナレッジ資産とバージョン管理", ru: "Активы знаний и управление версиями" },
+        "提供文档多版本上传、Diff 对比与回滚审计。AI 生成文件支持 TTL 过期清理与收藏保护，结合 Web 爬虫与定时调度，实现知识源自动化同步。": {
+          tw: "提供文件多版本上傳、Diff 對比與回滾審計。AI 生成檔案支援 TTL 過期清理與收藏保護，結合 Web 爬蟲與定時調度，實現知識源自動化同步。",
+          en: "Multi-version document upload with diff compare and rollback audit; AI-generated files get TTL cleanup and favorites protection, with crawler + scheduler powering automated knowledge-source sync.",
+          fr: "Téléversement multi-versions avec comparaison diff et audit de restauration ; fichiers générés par IA avec nettoyage TTL et protection des favoris, sync automatique des sources via crawler et planificateur.",
+          de: "Mehrversionen-Upload mit Diff-Vergleich und Rollback-Audit; KI-generierte Dateien mit TTL-Aufräumung und Favoritenschutz, automatische Quellen-Sync via Crawler und Scheduler.",
+          es: "Subida multipversión con comparación diff y auditoría de reversión; archivos generados por IA con limpieza TTL y protección de favoritos, sincronización automática de fuentes mediante crawler y programador.",
+          ja: "ドキュメントの複数バージョンアップロード、Diff比較、ロールバック監査。AI生成ファイルはTTL期限切れクリーンアップとお気に入り保護に対応し、Webクローラと定時スケジューラでナレッジソースを自動同期します。",
+          ru: "Многоверсионная загрузка документов со сравнением diff и аудитом отката; TTL-очистка и защита избранного для AI-файлов, автоматическая синхронизация источников через краулер и планировщик."
+        },
+        "流式问答": { tw: "串流問答", en: "Streaming Q&A", fr: "Q&A en streaming", de: "Streaming-Q&A", es: "Q&A en streaming", ja: "ストリーミング応答", ru: "Стриминговые ответы" },
+        "多模态输入": { tw: "多模態輸入", en: "Multimodal Input", fr: "Entrée multimodale", de: "Multimodale Eingabe", es: "Entrada multimodal", ja: "マルチモーダル入力", ru: "Мультимодальный ввод" },
+        "多模型切换": { tw: "多模型切換", en: "Multi-Model Switching", fr: "Multi-modèles", de: "Modellwechsel", es: "Cambio de modelos", ja: "マルチモデル切替", ru: "Переключение моделей" },
+        "ASR 语音": { tw: "ASR 語音", en: "ASR Voice", fr: "Voix ASR", de: "ASR-Sprache", es: "Voz ASR", ja: "ASR音声", ru: "ASR-голос" },
+        "混合检索": { tw: "混合檢索", en: "Hybrid Retrieval", fr: "Recherche hybride", de: "Hybridsuche", es: "Búsqueda híbrida", ja: "ハイブリッド検索", ru: "Гибридный поиск" },
+        "记忆提取": { tw: "記憶提取", en: "Memory Extraction", fr: "Extraction de mémoire", de: "Gedächtnisextraktion", es: "Extracción de memoria", ja: "メモリ抽出", ru: "Извлечение памяти" },
+        "会话摘要": { tw: "會話摘要", en: "Session Summaries", fr: "Résumés de session", de: "Sitzungszusammenfassungen", es: "Resúmenes de sesión", ja: "セッション要約", ru: "Резюме сессий" },
+        "幽灵补全": { tw: "幽靈補全", en: "Ghost Completion", fr: "Complétion fantôme", de: "Geistervervollständigung", es: "Autocompletado fantasma", ja: "ゴースト補完", ru: "Призрачное дополнение" },
+        "选区润色": { tw: "選區潤色", en: "Selection Polish", fr: "Affinage de sélection", de: "Auswahl-Feinschliff", es: "Pulido de selección", ja: "選択範囲の推敲", ru: "Полировка выделения" },
+        "一键发布": { tw: "一鍵發布", en: "One-Click Publish", fr: "Publication en un clic", de: "One-Click-Publish", es: "Publicación con un clic", ja: "ワンクリック公開", ru: "Публикация в один клик" },
+        "双向通道": { tw: "雙向通道", en: "Bidirectional Channel", fr: "Canal bidirectionnel", de: "Zwei-Wege-Kanal", es: "Canal bidireccional", ja: "双方向チャネル", ru: "Двусторонний канал" },
+        "富产物推送": { tw: "富產物推送", en: "Rich Artifact Push", fr: "Push d'artefacts riches", de: "Rich-Artefakt-Push", es: "Envío de artefactos ricos", ja: "リッチ成果物送信", ru: "Отправка артефактов" },
+        "双通道审批": { tw: "雙通道審批", en: "Dual-Channel Approval", fr: "Approbation double canal", de: "Dual-Kanal-Genehmigung", es: "Aprobación de doble canal", ja: "デュアルチャネル承認", ru: "Двухканальное согласование" },
+        "无缝协同": { tw: "無縫協同", en: "Seamless Collaboration", fr: "Collaboration transparente", de: "Nahtlose Kollaboration", es: "Colaboración perfecta", ja: "シームレス連携", ru: "Бесшовная совместная работа" },
+        "MCP 协议": { tw: "MCP 協定", en: "MCP Protocol", fr: "Protocole MCP", de: "MCP-Protokoll", es: "Protocolo MCP", ja: "MCPプロトコル", ru: "Протокол MCP" },
+        "文档生成": { tw: "文件生成", en: "Document Generation", fr: "Génération de documents", de: "Dokumentgenerierung", es: "Generación de documentos", ja: "ドキュメント生成", ru: "Генерация документов" },
+        "多版本管理": { tw: "多版本管理", en: "Multi-Versioning", fr: "Multi-versions", de: "Mehrversionen", es: "Multi-versión", ja: "複数バージョン管理", ru: "Мультиверсионность" },
+        "Diff 对比": { tw: "Diff 對比", en: "Diff Compare", fr: "Comparaison Diff", de: "Diff-Vergleich", es: "Comparación Diff", ja: "Diff比較", ru: "Сравнение Diff" },
+        "TTL 清理": { tw: "TTL 清理", en: "TTL Cleanup", fr: "Nettoyage TTL", de: "TTL-Aufräumung", es: "Limpieza TTL", ja: "TTLクリーンアップ", ru: "TTL-очистка" },
+        "自动化同步": { tw: "自動化同步", en: "Automated Sync", fr: "Sync automatique", de: "Automatischer Sync", es: "Sincronización automática", ja: "自動同期", ru: "Автосинхронизация" },
+        "Aether Memory Core · 知识库平台": { tw: "Aether Memory Core · 知識庫平臺", en: "Aether Memory Core · Knowledge Platform", fr: "Aether Memory Core · Plateforme de connaissances", de: "Aether Memory Core · Wissensplattform", es: "Aether Memory Core · Plataforma de conocimiento", ja: "Aether Memory Core · ナレッジプラットフォーム", ru: "Aether Memory Core · Платформа знаний" },
+        "用户": { tw: "使用者", en: "User", fr: "Utilisateur", de: "Nutzer", es: "Usuario", ja: "ユーザー", ru: "Пользователь" },
+        "以太忆核": { tw: "以太憶核", en: "Aether Memory Core", fr: "Aether Memory Core", de: "Aether Memory Core", es: "Aether Memory Core", ja: "以太忆核", ru: "Aether Memory Core" },
+        "帮我检索上季度的销售数据并生成图表": { tw: "幫我檢索上季度的銷售數據並生成圖表", en: "Find last quarter's sales data and generate a chart", fr: "Retrouve les ventes du dernier trimestre et génère un graphique", de: "Suche die Verkaufsdaten des letzten Quartals und erstelle ein Diagramm", es: "Busca los datos de ventas del último trimestre y genera un gráfico", ja: "先四半期の売上データを検索してグラフを作成して", ru: "Найди данные о продажах за прошлый квартал и построй график" },
+        "已命中 3 份文档：Q3 销售环比增长 23%，图表已生成如下": { tw: "已命中 3 份文件：Q3 銷售環比增長 23%，圖表已生成如下", en: "3 documents matched: Q3 sales up 23% QoQ — chart generated below", fr: "3 documents trouvés : ventes T3 +23 % en glissement — graphique généré ci-dessous", de: "3 Dokumente gefunden: Q3-Umsatz +23 % gegenüber dem Vorquartal – Diagramm unten", es: "3 documentos encontrados: ventas Q3 +23 % intertrimestral, gráfico generado abajo", ja: "3件のドキュメントがヒット：Q3売上は前期比+23%、グラフは下記の通り", ru: "Найдено 3 документа: продажи в Q3 +23% кв/кв — график построен ниже" },
+        "这份技术方案里有哪些风险点？": { tw: "這份技術方案裡有哪些風險點？", en: "What are the risks in this technical proposal?", fr: "Quels sont les points de risque de ce document technique ?", de: "Welche Risiken stecken in diesem technischen Konzept?", es: "¿Qué riesgos tiene este documento técnico?", ja: "この技術案にはどのようなリスクがありますか？", ru: "Какие риски есть в этом техническом решении?" },
+        "识别出 2 处高风险：依赖版本冲突与迁移窗口不足": { tw: "識別出 2 處高風險：依賴版本衝突與遷移視窗不足", en: "2 high risks identified: dependency version conflicts and insufficient migration window", fr: "2 risques majeurs identifiés : conflits de versions et fenêtre de migration insuffisante", de: "2 Hauptrisiken erkannt: Abhängigkeitskonflikte und zu knappers Migrationsfenster", es: "2 riesgos altos detectados: conflictos de versiones y ventana de migración insuficiente", ja: "高リスク2件を検出：依存関係のバージョン衝突と移行期間の不足", ru: "Выявлено 2 высоких риска: конфликты версий зависимостей и нехватка окна миграции" },
+        "总结行业研报的核心结论": { tw: "總結行業研報的核心結論", en: "Summarize the key conclusions of the industry report", fr: "Résume les conclusions clés de l'étude sectorielle", de: "Fasse die Kernaussagen des Branchenreports zusammen", es: "Resume las conclusiones clave del informe del sector", ja: "業界レポートの核心的な結論をまとめて", ru: "Обобщи ключевые выводы отраслевого отчёта" },
+        "已生成 5 条摘要：市场集中度提升，头部效应加剧": { tw: "已生成 5 條摘要：市場集中度提升，頭部效應加劇", en: "5 summaries generated: market concentration rising, winner-takes-most intensifying", fr: "5 résumés générés : concentration du marché en hausse, effet de tête accentué", de: "5 Zusammenfassungen erstellt: Marktkonzentration steigt, Head-Effekte verstärken sich", es: "5 resúmenes generados: sube la concentración del mercado, se acentúa el efecto cabeza", ja: "5件の要約を生成：市場集中度が上昇し、上位集中が加速", ru: "Составлено 5 резюме: концентрация рынка растёт, эффект лидеров усиливается" },
+        "输入消息，体验完整检索与对话能力…": { tw: "輸入訊息，體驗完整檢索與對話能力…", en: "Type a message to experience full retrieval & chat…", fr: "Saisissez un message pour tout essayer…", de: "Nachricht eingeben und Suche & Chat erleben…", es: "Escribe un mensaje y prueba la búsqueda y el chat…", ja: "メッセージを入力して検索と対話を体験…", ru: "Введите сообщение — попробуйте поиск и диалог…" },
+        "完整的知识库管理、混合检索与 AI 对话体验，桌面与安卓双端支持。": { tw: "完整的知識庫管理、混合檢索與 AI 對話體驗，桌面與安卓雙端支援。", en: "Full knowledge-base management, hybrid retrieval and AI chat — for desktop and Android.", fr: "Gestion complète de base de connaissances, recherche hybride et dialogue IA — sur desktop comme sur Android.", de: "Vollständige Wissensbank-Verwaltung, Hybridsuche und KI-Chat – für Desktop und Android.", es: "Gestión completa de la base de conocimiento, búsqueda híbrida y chat con IA, en escritorio y Android.", ja: "ナレッジベース管理、ハイブリッド検索、AI対話をフル体験。デスクトップとAndroidの両方に対応。", ru: "Полноценное управление базой знаний, гибридный поиск и AI-диалог — для ПК и Android." },
+        "Windows 版下载": { tw: "Windows 版下載", en: "Download for Windows", fr: "Télécharger pour Windows", de: "Für Windows herunterladen", es: "Descargar para Windows", ja: "Windows 版をダウンロード", ru: "Скачать для Windows" },
+        "Android 版下载": { tw: "Android 版下載", en: "Download for Android", fr: "Télécharger pour Android", de: "Für Android herunterladen", es: "Descargar para Android", ja: "Android 版をダウンロード", ru: "Скачать для Android" },
+        "Windows 10+ / 64 位 · Android 7.0+ / arm64": { tw: "Windows 10+ / 64 位元 · Android 7.0+ / arm64", en: "Windows 10+ / 64-bit · Android 7.0+ / arm64", fr: "Windows 10+ / 64 bits · Android 7.0+ / arm64", de: "Windows 10+ / 64-Bit · Android 7.0+ / arm64", es: "Windows 10+ / 64 bits · Android 7.0+ / arm64", ja: "Windows 10+ / 64ビット · Android 7.0+ / arm64", ru: "Windows 10+ / 64-бит · Android 7.0+ / arm64" },
+        "Windows 约 3.8 MB · Android 约 14.3 MB": { tw: "Windows 約 3.8 MB · Android 約 14.3 MB", en: "Windows ≈ 3.8 MB · Android ≈ 14.3 MB", fr: "Windows ≈ 3,8 Mo · Android ≈ 14,3 Mo", de: "Windows ≈ 3,8 MB · Android ≈ 14,3 MB", es: "Windows ≈ 3,8 MB · Android ≈ 14,3 MB", ja: "Windows 約3.8 MB · Android 約14.3 MB", ru: "Windows ≈ 3,8 МБ · Android ≈ 14,3 МБ" },
+        "Windows 安装包需在电脑上运行；Android 安装时需允许「安装未知来源应用」": { tw: "Windows 安裝包需在電腦上執行；Android 安裝時需允許「安裝未知來源應用」", en: "The Windows installer runs on a PC; on Android, allow \"Install unknown apps\" during setup.", fr: "L'installateur Windows s'exécute sur PC ; sur Android, autorisez « Installer des applications inconnues ».", de: "Das Windows-Setup läuft auf dem PC; erlauben Sie unter Android die Installation unbekannter Apps.", es: "El instalador de Windows se ejecuta en PC; en Android, permite \"Instalar apps desconocidas\".", ja: "Windows版はPCで実行します。Androidは「提供元不明のアプリのインストール」を許可してください。", ru: "Установщик Windows запускается на ПК; на Android разрешите установку приложений из неизвестных источников." }
+      };
+      // 含内部标记的复合标题（按 innerHTML 整体替换）
+      var H = {
+        "重塑思维的数字记忆中枢": {
+          tw: "重塑思維的<br/><strong>數位記憶中樞</strong>", en: "The Digital Memory Hub That <strong>Reshapes Your Thinking</strong>",
+          fr: "Le centre de mémoire numérique qui <strong>refaçonnera votre pensée</strong>", de: "Das digitale Gedächtniszentrum, das <strong>Ihr Denken neu formt</strong>",
+          es: "El centro de memoria digital que <strong>redefine tu forma de pensar</strong>", ja: "思考を再定義する<br/><strong>デジタル記憶ハブ</strong>",
+          ru: "Цифровой центр памяти, <strong>меняющий ваше мышление</strong>"
+        },
+        "为何选择 以太忆核": {
+          tw: "為何選擇 <strong>以太憶核</strong>", en: "Why Choose <strong>Aether Memory Core</strong>", fr: "Pourquoi choisir <strong>Aether Memory Core</strong>",
+          de: "Warum <strong>Aether Memory Core</strong>", es: "Por qué elegir <strong>Aether Memory Core</strong>", ja: "<strong>以太忆核</strong>が選ばれる理由", ru: "Почему <strong>Aether Memory Core</strong>"
+        },
+        "六大核心 功能模块": {
+          tw: "六大核心 <strong>功能模組</strong>", en: "Six Core <strong>Feature Modules</strong>", fr: "Six <strong>modules fonctionnels</strong> majeurs",
+          de: "Sechs zentrale <strong>Funktionsmodule</strong>", es: "Seis <strong>módulos funcionales</strong> clave", ja: "6つのコア<strong>機能モジュール</strong>", ru: "Шесть ключевых <strong>функциональных модулей</strong>"
+        },
+        "下载 以太忆核 客户端": {
+          tw: "下載 <strong>以太憶核</strong> 用戶端", en: "Download <strong>Aether Memory Core</strong> Clients", fr: "Téléchargez les clients <strong>Aether Memory Core</strong>",
+          de: "<strong>Aether Memory Core</strong> herunterladen", es: "Descarga <strong>Aether Memory Core</strong>", ja: "<strong>以太忆核</strong>クライアントをダウンロード", ru: "Скачайте <strong>Aether Memory Core</strong>"
+        }
+      };
+      var TSUF = {
+        tw: "重塑思維的數位記憶中樞", en: "A Digital Memory Hub for Your Mind", fr: "Votre hub de mémoire numérique",
+        de: "Ihr digitales Gedächtniszentrum", es: "Tu centro de memoria digital", ja: "思考を再定義するデジタル記憶ハブ", ru: "Цифровой центр памяти"
+      };
+      var LANGS = { tw: "zh-TW", en: "en", fr: "fr", de: "de", es: "es", ja: "ja", ru: "ru" };
+      function norm(s) { return s.replace(/\s+/g, " ").trim(); }
+      function pick(lang) { return function (k) { return k === "zh" ? null : (lang === "zh-TW" ? k.tw : k[lang] !== undefined ? k[lang] : k.en); }; }
+      function applyLang(lang) {
+        var val = pick(lang);
+        // 叶子节点：纯文本替换
+        var els = document.body.querySelectorAll("*");
+        for (var i = 0; i < els.length; i++) {
+          var el = els[i], tag = el.tagName;
+          if (tag === "SCRIPT" || tag === "STYLE" || tag === "SELECT") continue;
+          if (el.children.length === 0) {
+            var key = norm(el.textContent);
+            if (key && D[key]) {
+              var v = val(D[key]);
+              if (v) el.textContent = v;
+            }
+          }
+        }
+        // 复合标题：整体 innerHTML 替换
+        var heads = document.body.querySelectorAll("h1, h2");
+        for (var j = 0; j < heads.length; j++) {
+          var hk = norm(heads[j].textContent);
+          if (H[hk]) {
+            var hv = val(H[hk]);
+            if (hv) heads[j].innerHTML = hv;
+          }
+        }
+        document.documentElement.lang = lang === "tw" ? "zh-TW" : (LANGS[lang] || "zh-CN");
+        document.title = "Aether Memory Core | " + (lang === "zh" ? "重塑思维的数字记忆中枢" : TSUF[lang]);
+        localStorage.setItem("aether-lang", lang);
+        var sel = document.getElementById("lang-select");
+        if (sel) sel.value = lang;
+      }
+      function detect() {
+        var saved = null;
+        try { saved = localStorage.getItem("aether-lang"); } catch (e) {}
+        if (saved === "zh-TW") saved = "tw"; // 兼容历史存储值
+        if (saved && (saved === "zh" || LANGS[saved])) return saved;
+        var n = (navigator.language || "zh").toLowerCase();
+        if (n.indexOf("zh") === 0) return (n.indexOf("tw") > -1 || n.indexOf("hk") > -1 || n.indexOf("hant") > -1) ? "tw" : "zh";
+        var c = ["en", "fr", "de", "es", "ja", "ru"];
+        for (var i = 0; i < c.length; i++) if (n.indexOf(c[i]) === 0) return c[i];
+        return "zh";
+      }
+      var sel = document.getElementById("lang-select");
+      if (sel) sel.addEventListener("change", function () { applyLang(sel.value); });
+      applyLang(detect());
     })();
   </script>
 </body>
