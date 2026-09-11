@@ -474,7 +474,8 @@ const ChatAgent: React.FC = () => {
           >
             {showSidebar && (
               // env(safe-area-inset-*)：沉浸式下侧边栏背景全屏延伸，内容用安全区间距避让系统栏（桌面端为 0，行为不变）
-              <div className="w-72 h-full flex flex-col pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))]">
+              // pl-[var(--safe-left)]：平板横屏时系统导航栏在左侧，不给左内边距抽屉头部会被压住
+              <div className="w-72 h-full flex flex-col pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))] pl-[var(--safe-left)]">
                 <SidebarHeader
                   createNewSession={createNewSession}
                   searchKeyword={searchKeyword}
@@ -555,7 +556,8 @@ const ChatAgent: React.FC = () => {
         </div>
 
         {/* ==================== 中间聊天区域 ==================== */}
-        <div className="flex-1 flex flex-col min-w-0">
+        {/* 左右安全区：平板横屏时系统导航栏在侧边，头部操作按钮/消息列表需内缩避让（桌面与竖屏下为 0，行为不变） */}
+        <div className="flex-1 flex flex-col min-w-0 pl-[var(--safe-left)] pr-[var(--safe-right)]">
           {/* 头部始终显示 */}
           <HeaderContent
             knowledgeBaseStatus={knowledgeBaseStatus}
@@ -752,7 +754,8 @@ const ChatAgent: React.FC = () => {
           className="fixed inset-0 z-50 bg-black/50"
           style={{ top: isMobile ? 0 : "25px" }}
         >
-          <div className="absolute inset-0 bg-card shadow-2xl pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))]">
+          {/* 左右安全区：平板横屏时系统导航栏可能在左/右侧，全屏弹层内容需内缩避让 */}
+          <div className="absolute inset-0 bg-card shadow-2xl pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))] pl-[var(--safe-left)] pr-[var(--safe-right)]">
             <ErrorBoundary>
               <DocumentManager
                 onClose={() => setShowDocumentManager(false)}
@@ -769,7 +772,8 @@ const ChatAgent: React.FC = () => {
           className="fixed inset-0 z-50 bg-black/50"
           style={{ top: isMobile ? 0 : "25px" }}
         >
-          <div className="absolute inset-0 bg-card shadow-2xl pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))]">
+          {/* 左右安全区：平板横屏时系统导航栏可能在左/右侧，全屏弹层内容需内缩避让 */}
+          <div className="absolute inset-0 bg-card shadow-2xl pt-[var(--safe-top)] pb-[calc(var(--safe-bottom)+var(--safe-keyboard))] pl-[var(--safe-left)] pr-[var(--safe-right)]">
             <ErrorBoundary>
               <KnowledgeSourceManager
                 onClose={() => setShowKnowledgeSourceManager(false)}

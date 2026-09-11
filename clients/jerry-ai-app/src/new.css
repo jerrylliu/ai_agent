@@ -60,13 +60,29 @@
 :root {
   --radius: 0.625rem;                          /* 圆角基准值 = 10px，所有圆角基于此计算 */
 
-  /* 安全区变量：默认取 env()（桌面端为 0）；安卓端由 MainActivity 原生 insets 桥动态覆写
-     （部分厂商 WebView/平板 env 恒 0，键盘高度 env 也拿不到），组件统一用 var(--safe-*)。
-     --safe-bottom 只承载系统栏（导航栏/手势条），键盘高度单独走 --safe-keyboard：
+  /* ==================== 安全区变量（三层防线） ====================
+     两条互相独立的来源，缺一不可：
+       1) 浏览器原生 env(safe-area-inset-*)：零 JS、永不「注入失败」（桌面端恒 0），
+          但它拿不到键盘高度，且部分厂商 WebView/平板上恒为 0
+       2) 安卓原生 insets 桥注入的 --native-safe-*：给 (1) 恒 0 的机型兜底，
+          并且是键盘高度的唯一来源
+     最终值取两者的【并集最大值】——注意是 max 不是相加，所以两边给出同一个值时
+     不会翻倍；任一方坏掉另一方能兜住（原生注入失败自动退回 env，恢复优雅降级）。
+     外层 clamp 是最后一道上限闸门：即使两个来源同时给出错值（如物理像素未换算被
+     放大 3 倍），最坏也只是轻微偏移，不会把布局顶出屏幕。
+     --safe-bottom 只承载系统栏（导航栏/手势条），键盘单独走 --safe-keyboard：
      合在一个变量里时，厂商 ROM 丢一次「键盘收起」事件就会永久卡在键盘高度 */
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-keyboard: 0px;
+  --native-safe-top: 0px;
+  --native-safe-bottom: 0px;
+  --native-safe-left: 0px;
+  --native-safe-right: 0px;
+  --native-safe-keyboard: 0px;
+
+  --safe-top: clamp(0px, max(env(safe-area-inset-top, 0px), var(--native-safe-top)), 15vh);
+  --safe-bottom: clamp(0px, max(env(safe-area-inset-bottom, 0px), var(--native-safe-bottom)), 15vh);
+  --safe-left: clamp(0px, max(env(safe-area-inset-left, 0px), var(--native-safe-left)), 15vw);
+  --safe-right: clamp(0px, max(env(safe-area-inset-right, 0px), var(--native-safe-right)), 15vw);
+  --safe-keyboard: clamp(0px, var(--native-safe-keyboard), 60vh);
 
   --background: oklch(1 0 0);                  /* 页面背景：纯白色 */
   --foreground: oklch(0.145 0 0);              /* 主文字：深灰/近黑色 */
@@ -183,7 +199,13 @@ html, body {
 
 #root {
   height: 100%;
-  padding-top: 25px;
+  /* 顶部留白 = 「桌面自绘标题栏 25px」与「系统状态栏/刘海高度」二者取大：
+     桌面端 --safe-top 恒为 0 → 保持原来的 25px，行为不变；
+     安卓端不再是写死的 25px（状态栏比 25px 高时，顶部内容会被状态栏盖住，
+     如一加/ColorOS 状态栏 30~40dp），直接用安全区值。
+     这里刻意用 max 而不是 calc(标题栏 + 安全区)：max 不依赖原生注入，
+     注入失败时 env() 这一路仍能给出状态栏高度，不会退化成 25px */
+  padding-top: max(25px, var(--safe-top));
   box-sizing: border-box;
 }
 
