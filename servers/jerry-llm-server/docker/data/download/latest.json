@@ -1,0 +1,11 @@
+{
+  "version": "0.1.2",
+  "pub_date": "2026-09-11T10:10:00Z",
+  "notes": "1. 新增版本更新检测：有新版本时应用内直接提示，桌面端可一键自动更新，安卓端跳转下载\n2. 修复平板及个别机型底部导航栏遮挡、键盘挡住输入框的问题\n3. 老版本 WebView 手机样式异常时给出升级引导\n4. 官网支持多语言切换",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZVBKZXE4U2ZRajg3MS9BdGxVWTNuNW9qUDlNaml1VG52ZUZlcis3V0pGU1VqMGRrOGJhaFFHbmV3Vkt4WHdNb0VBTm81OTNNUk5FL3R1Qk1QRzNpRlFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTIwNjI1CWZpbGU65Lul5aSq5b+G5qC4XzAuMS4yX3g2NC1zZXR1cC5leGUKYU5KWk9adFJmbUpuVmtlNStxVWZrTGlsS2dqdW8yVmltbHZ3czl6ZnU5UGJjNnp1T0x2QTd3VThra3llNnJQcmpQTk5NQUtKaGVDUWFGOVppamFhRHc9PQo=",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.2_x64-setup.exe"
+    }
+  }
+}

@@ -1,6 +1,7 @@
 // API 端点常量导入
 import { API_ENDPOINTS, API_BASE_URL } from "./constants";
 import { Session, Message } from "../types/session";
+import type { AppVersionInfo } from "../types/update";
 import {
   parseSSEFrames,
   handleSSEEvents,
@@ -2653,4 +2654,28 @@ export async function getRebuildProgress(): Promise<{
     success: boolean;
     progress: ReindexProgress | null;
   }>(response);
+}
+
+// ==================== 应用版本更新检测 ====================
+
+/**
+ * 获取服务端最新版本信息（静态文件，随安装包一同发布）。
+ *
+ * - 404 / 网络失败 / JSON 解析失败一律返回 null：更新检测是「锦上添花」能力，
+ *   任何异常都不能影响应用正常使用，由调用方按「无法检测」静默处理。
+ * - version.json 由 nginx 直接吐出（no-cache 头），不走 NestJS，无认证。
+ */
+export async function fetchLatestVersion(): Promise<AppVersionInfo | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/download/version.json`);
+    if (!response.ok) return null;
+    const data = (await response.json()) as AppVersionInfo;
+    // 基本结构防呆：版本号或下载地址缺失视为无效文件
+    if (!data || typeof data.version !== "string" || !data.downloads) {
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
 }

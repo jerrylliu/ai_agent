@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "以太忆核",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.jerry.jerry-ai-app",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -27,6 +27,7 @@
     "targets": ["nsis"],
     "useLocalToolsDir": true,
     "active": true,
+    "createUpdaterArtifacts": true,
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico"
@@ -40,5 +41,16 @@
       "icons/icon.ico",
       "icons/icon.png"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc4ODI3NzFFNkNFRkRDMkIKUldRcjNPOXNIbmVDZU1uZ285N28xWkFhV29oOGx1b0lRNTRpQktwNUFXRyt5K1laa2NJVmVOK0YK",
+      "endpoints": [
+        "https://xn--5-fs8a810ixgul5n.online/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

@@ -30,8 +30,10 @@ import { useAppRecovery } from "../hooks/useAppRecovery";
 import { useTheme } from "../hooks/useTheme";
 import { useAuth } from "../hooks/useAuth";
 import { useIsMobile } from "../hooks/useMediaQuery";
+import { useUpdateCheck } from "../hooks/useUpdateCheck";
 
 import { AuthDialog } from "../components/Auth";
+import { UpdateDialog } from "../components/Update";
 import { clearKnowledgeBase, respondToConfirmation } from "../lib/api";
 import { DocumentManager } from "../components/Document";
 import { KnowledgeSourceManager } from "../components/KnowledgeSource";
@@ -402,6 +404,16 @@ const ChatAgent: React.FC = () => {
   // ==================== 移动端适配（P1） ====================
   const isMobile = useIsMobile();
 
+  // ==================== 版本更新检测 ====================
+  // 启动 3 秒后自动检测一次；发现新版本时弹出 UpdateDialog
+  // （桌面静默下载重启安装，安卓跳浏览器下载 APK），失败静默不打扰
+  const updateCheck = useUpdateCheck();
+  useEffect(() => {
+    updateCheck.autoCheck();
+    // 仅挂载时触发一次，依赖 intentionally omitted
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 注：软键盘适配不在这里做——Android WebView 默认 adjustResize 会在键盘弹起时
   // 自动收缩原生窗口，h-full 布局自然跟随。此前用 visualViewport 写 CSS 变量的
   // 方案在「桌面加载后切设备模拟器」场景会残留过期高度，导致底部被裁出屏幕，已移除。
@@ -700,6 +712,15 @@ const ChatAgent: React.FC = () => {
         onLogin={login}
         onRegister={register}
       />
+      {/* 版本更新提示弹窗（force 更新时无关闭入口） */}
+      {updateCheck.update && (
+        <UpdateDialog
+          update={updateCheck.update}
+          installing={updateCheck.installing}
+          onInstall={() => void updateCheck.installUpdate()}
+          onClose={updateCheck.dismissUpdate}
+        />
+      )}
       <MemorySummaryDialog
         open={showMemorySummary}
         onClose={() => setShowMemorySummary(false)}
@@ -724,6 +745,7 @@ const ChatAgent: React.FC = () => {
         onThemeChange={setTheme}
         settings={appSettings}
         onSettingsChange={updateSettings}
+        updateCheck={updateCheck}
       />
       {showDocumentManager && (
         <div
