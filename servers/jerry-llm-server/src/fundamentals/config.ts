@@ -17,6 +17,7 @@
  */
 
 import { z } from 'zod';
+import * as path from 'path';
 
 // ==================== 工具：字符串 → boolean ====================
 
@@ -527,3 +528,25 @@ export const config = {
 } as const;
 
 export type AppConfig = typeof config;
+
+// ==================== 运行时数据目录 ====================
+
+/**
+ * 运行时数据目录（统一以「项目根 = process.cwd()」为基准）
+ *
+ * 为什么不用 __dirname 相对路径：
+ * 编译产物是 dist/src/**（入口 dist/src/main.js），`__dirname` 指向 dist/src/...，
+ * 各控制器再往上跳若干级得到的目录会落到 dist/ 下，与 docker-compose 挂载到
+ * 项目根的 uploads 目录（./data/uploads:/app/servers/jerry-llm-server/uploads）
+ * 不一致，导致三类问题：
+ *   1. 写入目录与 express.static 服务的目录不是同一个（上传成功但访问 404，头像即此问题）
+ *   2. 文件落在容器镜像层，容器重建后丢失（挂载卷形同虚设）
+ *   3. 不同文件跳级数不统一时，写入方与读取方指向不同目录
+ *
+ * 统一用 process.cwd() 锚定后，本地开发（cwd = servers/jerry-llm-server）与
+ * 生产容器（WORKDIR = /app/servers/jerry-llm-server）解析结果一致，且与挂载卷对齐。
+ */
+export const runtimePaths = {
+  /** 上传文件根目录：由 main.ts 以 /files 前缀对外提供静态访问 */
+  uploads: path.resolve(process.cwd(), 'uploads'),
+};

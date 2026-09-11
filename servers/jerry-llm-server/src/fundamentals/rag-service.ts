@@ -13,15 +13,15 @@ import * as path from 'path';
 import * as fs from 'fs';
 import type { Response } from 'express';
 import { logger } from './logger';
-import { config } from './config.js';
+import { config, runtimePaths } from './config.js';
 import { calculateChecksum, computeContentHash } from './file-storage.js';
 import { SemanticCache } from './semantic-cache.js';
 import { getEmbeddings } from './vector-store/store-state.js';
 import { UNTRUSTED_CONTEXT_INSTRUCTION } from './prompt-injection-guard.js';
 import mysql from 'mysql2/promise';
 
-// 配置
-const UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads');
+// 配置（项目根/uploads，与 main.ts 的 /files 静态服务目录同源）
+const UPLOAD_DIR = runtimePaths.uploads;
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 // 确保上传目录存在

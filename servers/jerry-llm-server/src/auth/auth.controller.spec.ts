@@ -9,6 +9,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { BadRequestException } from '@nestjs/common';
+import * as fs from 'fs';
 
 // Mock AuthGuard — 必须 export 一个可构造类，而非普通对象
 jest.mock('./auth.guard', () => {
@@ -38,6 +39,10 @@ jest.mock('../fundamentals/config', () => ({
     chromaHost: 'localhost',
     chromaPort: 8000,
     corsOrigins: [],
+  },
+  // 头像落盘目录来源（真实实现为 path.resolve(process.cwd(), 'uploads')，此处用固定路径断言）
+  runtimePaths: {
+    uploads: '/tmp/test-uploads',
   },
 }));
 
@@ -226,6 +231,13 @@ describe('AuthController', () => {
       expect(authService.updateProfile).toHaveBeenCalled();
       const arg = authService.updateProfile.mock.calls[0][1];
       expect(arg.avatar).toContain('http://localhost:3000/files/avatars/');
+
+      // 回归保护：写入目录必须与 main.ts 的 /files 静态服务目录同源（runtimePaths.uploads），
+      // 否则文件写盘成功但 URL 访问 404，前端表现为「上传成功但不显示」
+      const writeMock = fs.writeFileSync as unknown as jest.Mock;
+      expect(String(writeMock.mock.calls[0][0])).toContain(
+        '/tmp/test-uploads/avatars/',
+      );
     });
   });
 });

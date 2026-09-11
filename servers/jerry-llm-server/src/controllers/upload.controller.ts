@@ -17,7 +17,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import * as path from 'path';
 // 导入 Node.js fs 模块，用于文件系统操作（创建目录、写入文件）
 import * as fs from 'fs';
-import { config } from '../fundamentals/config';
+import { config, runtimePaths } from '../fundamentals/config';
 import { parseDocument, getMimeType } from '../fundamentals/document-parser';
 import { logger } from '../fundamentals/logger';
 
@@ -39,8 +39,8 @@ export class UploadController {
     // 包含：originalname（原始文件名）、buffer（文件二进制数据）、mimetype（MIME类型）等
     @UploadedFile() file: any,
   ) {
-    // 构建上传目录的绝对路径：项目根目录/uploads
-    const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+    // 构建上传目录的绝对路径：项目根/uploads（与 main.ts 的 /files 静态服务目录同源）
+    const uploadDir = runtimePaths.uploads;
 
     // 检查上传目录是否存在，不存在则递归创建
     if (!fs.existsSync(uploadDir)) {
@@ -95,7 +95,7 @@ export class UploadController {
     const mimeType: string = file.mimetype || getMimeType(fileName);
 
     // 写入临时文件供解析器读取（pdf-parse / mammoth 需要文件路径）
-    const uploadDir = path.join(__dirname, '..', '..', 'uploads');
+    const uploadDir = runtimePaths.uploads;
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
