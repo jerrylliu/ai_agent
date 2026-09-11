@@ -1,11 +1,11 @@
 {
-  "version": "0.1.5",
+  "version": "0.1.6",
   "pub_date": "2026-09-12T06:00:00Z",
-  "notes": "1. 修复安卓端（OPPO/一加等）聊天界面整体收缩错位的严重问题：安全区数值未做屏幕密度换算，被放大约 3 倍（0.1.4 的修复方向有误，本版为真正修复）\n2. 修复安卓端无法登录、模型列表加载不出的严重问题（0.1.3 已含）\n3. 新增版本更新检测：应用内直接提示，桌面端一键自动更新，安卓端跳转下载（0.1.3 已含）",
+  "notes": "1. 安卓端安全区加固：新增三层防线（多源冗余 / 合法性闸门 / 时序自愈）并补齐左右安全区，彻底解决个别机型与平板上的界面收缩错位、侧边内容被系统导航栏遮挡问题\n2. 修复版本更新弹窗在手机窄屏下按钮被挤压变形、桌面端两个按钮宽窄不一致、按钮内文字不居中的问题\n3. 保留 0.1.5 的屏幕密度换算修复与 0.1.3 的应用内更新检测",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUFROVN0Umd5cXlXMkVUMUVHdExSQWFFdUtFL0pGRzYvdzhkMlBVRUxmRE1sNWZvQWJaQ3NWR0RqbjBkWFZueFRMQjdFaEtEbVFNTjNYUWlobndnL0F3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTMxOTUwCWZpbGU65Lul5aSq5b+G5qC4XzAuMS41X3g2NC1zZXR1cC5leGUKbjlHNmI5VHdKbTdRQ2ZyYXZ2cVpOMGRiaFkzdWcwdk9iblZhN3hwbFRGL0VhSVAwaUJsOHl1T2Z4NGRndmRrK2pVOWNIamFHRnBNTUxjN2hDWUszRFE9PQo=",
-      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.5_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUpLV0pIaDE4aWZBU1ZvQWFSK2c2OHBrN1pxcG1KU2IxektUNVJwZE5iZDJIWWRZYlBIUFdzSCtuTmZGeEZxNlk1RXNuMUR4QW95eTRlYlYyTndQd0FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5MTM1MTg5CWZpbGU65Lul5aSq5b+G5qC4XzAuMS42X3g2NC1zZXR1cC5leGUKM281aUpMWFp4amNCemlpMkYvR1ZwWVVNbzg0YlBCZGhZQjZNZUxtNlpEbDRHY0xUSllqU0M5akU1Mmo5elU0UDIvM0QrazBsUU5uRnQvN3ZzQkNvQkE9PQo=",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.6_x64-setup.exe"
     }
   }
 }
