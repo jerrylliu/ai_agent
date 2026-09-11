@@ -7,10 +7,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { logger } from './logger';
-import { config } from './config.js';
+import { config, runtimePaths } from './config.js';
 
-// 基础上传目录
-const BASE_UPLOAD_DIR = path.join(__dirname, '..', '..', 'uploads', 'documents');
+// 基础上传目录（项目根/uploads，与 main.ts 的 /files 静态服务目录同源）
+const BASE_UPLOAD_DIR = path.join(runtimePaths.uploads, 'documents');
 
 // 文件大小限制：50MB
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
@@ -138,7 +138,7 @@ export function validateFileType(fileName: string): { valid: boolean; message?: 
  * 获取文件的绝对路径
  */
 export function getAbsoluteFilePath(fileUrl: string): string {
-  return path.join(__dirname, '..', '..', 'uploads', fileUrl);
+  return path.join(runtimePaths.uploads, fileUrl);
 }
 
 /**

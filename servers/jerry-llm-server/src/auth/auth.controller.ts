@@ -6,7 +6,7 @@ import { AuthGuard } from './auth.guard.js';
 import { RegisterDto, LoginDto, ChangePasswordDto, ResetPasswordDto } from './dto.js';
 import * as path from 'path';
 import * as fs from 'fs';
-import { config } from '../fundamentals/config';
+import { config, runtimePaths } from '../fundamentals/config';
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
@@ -59,7 +59,9 @@ export class AuthController {
       throw new BadRequestException('头像文件大小不能超过 20MB');
     }
 
-    const uploadDir = path.join(__dirname, '..', '..', '..', 'uploads', 'avatars');
+    // 头像落盘目录必须与 main.ts 中 /files 静态服务目录同源（runtimePaths.uploads），
+    // 否则文件写进去了但 URL 访问 404，前端表现为「上传成功但不显示」
+    const uploadDir = path.join(runtimePaths.uploads, 'avatars');
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }

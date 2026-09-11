@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { validateSearchWebConfig, validateWeatherConfig } from './fundamentals/tools';
-import { config } from './fundamentals/config';
+import { config, runtimePaths } from './fundamentals/config';
 import { closeRedis, getRedis, waitForRedisReady } from './fundamentals/redis-client';
 import { loadApiKeysFromStorage } from './fundamentals/model-provider';
 import { cleanupStaleSessionLocks } from './fundamentals/distributed-lock';
@@ -77,10 +77,9 @@ async function bootstrap() {
   // ============================================
 
   // 拼接上传目录的绝对路径
-  // __dirname: 编译后的 JS 文件所在目录（dist/）
-  // '..': 回到项目根目录（servers/jerry-llm-server/）
-  // 'uploads': 上传文件存储的目录名
-  const uploadDir = path.join(__dirname, '..', 'uploads');
+  // 统一取自 runtimePaths.uploads（以 process.cwd() = 项目根为基准）
+  // 这样静态服务目录与各上传控制器的写入目录严格一致，且与 docker 挂载卷对齐
+  const uploadDir = runtimePaths.uploads;
 
   // 检查 uploads 目录是否存在
   if (!fs.existsSync(uploadDir)) {

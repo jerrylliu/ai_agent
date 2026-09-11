@@ -62,6 +62,7 @@ import {
   computeImageHashExport,
 } from '../fundamentals/vision-translator';
 import { markdownToDocx } from '../fundamentals/document-generator';
+import { runtimePaths } from '../fundamentals/config';
 
 // ==================== 全量重建进度 ====================
 
@@ -1436,7 +1437,7 @@ export class DocumentService implements OnApplicationBootstrap {
       let duplicateWarning: string | undefined;
       try {
         // parseDocument 接受文件路径而非 buffer，需先写到临时文件
-        const tempDir = path.join(__dirname, '..', '..', 'uploads', 'temp');
+        const tempDir = path.join(runtimePaths.uploads, 'temp');
         if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
         const tempFilePath = path.join(
           tempDir,
@@ -2195,16 +2196,13 @@ export class DocumentService implements OnApplicationBootstrap {
     fileUrl: string,
     ext: string,
   ): { filePath: string; isTemp: boolean } {
-    const absPath = path.join(__dirname, '..', '..', 'uploads', fileUrl);
+    const absPath = path.join(runtimePaths.uploads, fileUrl);
     if (fs.existsSync(absPath)) return { filePath: absPath, isTemp: false };
 
     const buffer = readVersionFile(fileUrl);
     if (!buffer) throw new Error('文件不存在');
     const tempPath = path.join(
-      __dirname,
-      '..',
-      '..',
-      'uploads',
+      runtimePaths.uploads,
       `temp_parse_${Date.now()}.${ext}`,
     );
     fs.writeFileSync(tempPath, buffer);

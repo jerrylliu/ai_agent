@@ -86,6 +86,9 @@ jest.mock('../config.js', () => ({
     dashscopeBaseUrl: 'https://dashscope.aliyuncs.com',
     dashscopeApiKey: 'test-dashscope-key',
   },
+  // 检索增强链路会间接加载 file-storage / rag-service，它们读取该字段取上传根目录；
+  // 与真实实现一致锚定项目根，避免测试在系统临时目录创建垃圾目录
+  runtimePaths: { uploads: require('path').resolve(process.cwd(), 'uploads') },
 }));
 
 // Mock global fetch for DashScope Reranker tests

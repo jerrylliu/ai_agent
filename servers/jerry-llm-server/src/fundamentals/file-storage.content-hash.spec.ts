@@ -12,6 +12,8 @@ jest.mock('./logger', () => ({
 
 jest.mock('./config', () => ({
   config: {},
+  // 与真实实现一致：上传根目录锚定项目根（避免测试在系统临时目录创建垃圾目录）
+  runtimePaths: { uploads: require('path').resolve(process.cwd(), 'uploads') },
 }));
 
 import { computeContentHash, calculateChecksum } from './file-storage';
