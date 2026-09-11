@@ -90,9 +90,9 @@ export const generateDocumentParamsSchema = z.object({
     .describe('文档标题（也用于文件名，会自动追加扩展名）'),
   content: z
     .string()
-    .min(1)
+    .optional()
     .describe(
-      '文档正文内容，必须是 Markdown 格式。支持标题(#)、列表、粗体(**xx**)、代码块(```)、引用(>)、表格等。',
+      '文档正文内容，必须是 Markdown 格式。一般情况下不要传这个参数：请把文档正文直接写在你的回复正文里，系统会在本轮回复结束后自动取用正文生成文件。仅当需要生成的文档内容与你的回复正文不一致时，才在这里显式提供正文。',
     ),
   format: z
     .enum(['pdf', 'docx', 'html', 'md'])
@@ -103,9 +103,21 @@ export const generateDocumentParamsSchema = z.object({
 
 export type GenerateDocumentParams = z.infer<typeof generateDocumentParamsSchema>;
 
+/**
+ * 文档导出意图（P1：正文与格式分离）
+ *
+ * 模型调用 generate_document 且未提供 content 时，只登记"要导出什么标题、什么格式"，
+ * 真正的正文由调用方在流式结束后从本轮回复正文中取，避免把整篇文档塞进工具参数
+ * （大 payload 会拖慢首 token、易被中转站截断，也是 DSML 文本泄漏的诱因之一）。
+ */
+export interface GenerateDocumentIntent {
+  title: string;
+  format: 'pdf' | 'docx' | 'html' | 'md';
+}
+
 export const generateDocumentSchema = buildToolJsonSchema(
   'generate_document',
-  '把 Markdown 内容生成为 PDF / Word(docx) / HTML / Markdown(md) 文件，返回 fileUrl 字段（内部协议引用）。当用户要求"生成 PDF/Word/HTML/Markdown 文档/报告/手册"等场景时使用。返回的 fileUrl 可直接填入 send_notification.attachments[].url 作为邮件附件发送。',
+  '把 Markdown 内容生成为 PDF / Word(docx) / HTML / Markdown(md) 文件，返回 fileUrl 字段（内部协议引用）。当用户要求"生成 PDF/Word/HTML/Markdown 文档/报告/手册"等场景时使用。调用时只需要 title + format：请把文档正文完整写在你的回复正文里，系统会自动取用本轮回复正文生成文件并展示文件卡片。返回的 fileUrl 可直接填入 send_notification.attachments[].url 作为邮件附件发送。',
   generateDocumentParamsSchema,
 );
 
@@ -117,6 +129,8 @@ export const generateDocumentResultSchema = z.looseObject({
   success: z.boolean(),
   /** 类型标记：前端识别为文件卡片 */
   type: z.literal('document').optional(),
+  /** 是否延迟落盘：true 表示只登记了导出意图，正文将由调用方在流式结束后补上 */
+  deferred: z.boolean().optional(),
   /** 内部协议 URL：fc://document/{key}，可传给 send_notification.attachments[].url */
   fileUrl: z.string().optional(),
   /** HTTP 下载链接：前端 FileCard 用 */
@@ -138,32 +152,33 @@ export type GenerateDocumentResult = z.infer<typeof generateDocumentResultSchema
 interface ToolContext {
   userId?: string;
   sessionId?: string;
+  /** SSE Response（或飞书 fakeResponse）：延迟落盘后要往这个通道推文件卡片 */
+  res?: any;
+  /** 请求级文档导出意图收集器（P1：由 prompt.ts 每次请求创建并注入，实现请求隔离） */
+  docIntents?: GenerateDocumentIntent[];
 }
 
 // ==================== 执行器 ====================
 
-export async function executeGenerateDocument(
-  rawParams: unknown,
-  context?: ToolContext,
-): Promise<GenerateDocumentResult> {
+/**
+ * 把 Markdown 正文落盘成指定格式文档（可复用）
+ *
+ * 同时被两条路径复用，保证行为一致：
+ *   1. 模型直接在 content 里给了正文 → executeGenerateDocument 立即调用
+ *   2. 模型只登记意图 → prompt.ts 在流式结束后用本轮回复正文调用
+ */
+export async function persistDocument(params: {
+  title: string;
+  content: string;
+  format: 'pdf' | 'docx' | 'html' | 'md';
+  userId?: string;
+  sessionId?: string;
+}): Promise<GenerateDocumentResult> {
+  const { title, content, format, userId, sessionId } = params;
+
   if (!documentStorageService) {
     return { success: false, message: '文档服务未初始化' };
   }
-
-  // zod 校验：title / content 非空、format 限定 pdf|docx|html|md
-  const parsed = safeParseToolParams(generateDocumentParamsSchema, rawParams);
-  if (!parsed.success) {
-    logger.warn('FC工具 [generate_document] 参数校验失败', {
-      module: 'Tool:GenerateDocument',
-      error: parsed.error,
-    });
-    return {
-      success: false,
-      message: `参数校验失败：${parsed.error}`,
-    };
-  }
-
-  const { title, content, format } = parsed.data;
 
   const startedAt = Date.now();
   try {
@@ -187,8 +202,8 @@ export async function executeGenerateDocument(
       filename,
       format,
       mimeType,
-      userId: context?.userId,
-      sessionId: context?.sessionId,
+      userId,
+      sessionId,
     });
 
     const fileUrl = `${DOCUMENT_URL_PREFIX}${saved.key}`;
@@ -200,6 +215,7 @@ export async function executeGenerateDocument(
       module: 'Tool:GenerateDocument',
       title,
       format,
+      contentLength: content.length,
       sizeBytes: buffer.length,
       durationMs: Date.now() - startedAt,
       key: saved.key,
@@ -230,4 +246,72 @@ export async function executeGenerateDocument(
       message: `生成${format}文档失败：${error?.message || String(error)}`,
     };
   }
+}
+
+export async function executeGenerateDocument(
+  rawParams: unknown,
+  context?: ToolContext,
+): Promise<GenerateDocumentResult> {
+  if (!documentStorageService) {
+    return { success: false, message: '文档服务未初始化' };
+  }
+
+  // zod 校验：title 非空、format 限定 pdf|docx|html|md；content 可选
+  const parsed = safeParseToolParams(generateDocumentParamsSchema, rawParams);
+  if (!parsed.success) {
+    logger.warn('FC工具 [generate_document] 参数校验失败', {
+      module: 'Tool:GenerateDocument',
+      error: parsed.error,
+    });
+    return {
+      success: false,
+      message: `参数校验失败：${parsed.error}`,
+    };
+  }
+
+  const { title, content, format } = parsed.data;
+  const body = (content ?? '').trim();
+
+  // P1：模型没给正文 → 只登记导出意图，由调用方在流式结束后用本轮回复正文落盘，
+  // 避免把整篇文档塞进工具参数（大 payload 拖慢响应、易被截断、也是文本协议泄漏的诱因）。
+  // 前置条件：必须有可推送文件卡片的响应通道（SSE res / 飞书 fakeResponse）+ 意图收集器，
+  // 否则"登记"永远没人兑现，只会给模型一个假成功，不如直接失败让它把正文写进回复里。
+  if (!body) {
+    if (!context?.docIntents || !context?.res) {
+      logger.warn('FC工具 [generate_document] 未提供正文且上下文不支持延迟生成', {
+        module: 'Tool:GenerateDocument',
+        title,
+        format,
+        hasRes: !!context?.res,
+        hasDocIntents: !!context?.docIntents,
+      });
+      return {
+        success: false,
+        message: '缺少文档正文：请把文档正文写入你的回复正文，或将 Markdown 正文放进 content 参数后再调用本工具',
+      };
+    }
+    context.docIntents.push({ title, format });
+    logger.info('FC工具 [generate_document] 已登记文档导出意图（正文走回复正文通道）', {
+      module: 'Tool:GenerateDocument',
+      title,
+      format,
+      intentCount: context.docIntents.length,
+    });
+    return {
+      success: true,
+      type: 'document',
+      deferred: true,
+      filename: ensureExtension(title.trim(), format),
+      format,
+      message: `已登记生成${format.toUpperCase()}文档"${title}"：请把文档正文完整写在你的回复正文里，系统会在本轮回复结束后自动取用正文生成文件并推送给用户。不要在工具参数里重复提供正文。`,
+    };
+  }
+
+  return persistDocument({
+    title,
+    content: body,
+    format,
+    userId: context?.userId,
+    sessionId: context?.sessionId,
+  });
 }

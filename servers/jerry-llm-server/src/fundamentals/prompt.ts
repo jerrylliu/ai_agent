@@ -124,7 +124,11 @@ import {
   createMindmapResultSchema,
   generateChartResultSchema,
 } from './tools/multimodal-output';
-import { generateDocumentResultSchema } from './tools/generate-document';
+import {
+  generateDocumentResultSchema,
+  persistDocument,
+  type GenerateDocumentIntent,
+} from './tools/generate-document';
 // 【多模态产出辅助】mindmapImageUrl：把 mermaid 源码转成可访问的图片 URL（懒渲染）。
 import { mindmapImageUrl } from './tools/multimodal-output';
 // 【泛型缓存类】MultiLevelCache<T>：T 为缓存值类型，支持 L1（内存 LRU）+ L2（Redis）。
@@ -905,6 +909,10 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
       return content;
     }
     const data = parsed.data;
+    if (data.success && data.type === 'document' && data.deferred) {
+      // 延迟落盘：只登记了意图，文件要等本轮回复正文写完才生成
+      return `已登记生成${data.format?.toUpperCase()}文档"${data.filename}"。请把该文档的正文完整写在你的回复正文里（Markdown 格式），系统会在本轮回复结束后自动取用正文生成文件并推送文件卡片。不要再在工具参数里重复提供正文，也不要再重复调用本工具。`;
+    }
     if (data.success && data.type === 'document') {
       // fileUrl 必须保留：用户要求邮件发送时，LLM 需要把它填入 send_notification.attachments
       return `文档"${data.filename}"（${data.format?.toUpperCase()}，${((data.sizeBytes ?? 0) / 1024).toFixed(1)} KB）已生成成功。\n**fileUrl**（发邮件用）：${data.fileUrl}\n\n文件卡片已自动展示给用户，包含下载和预览按钮，请用一两句话简要说明文档内容即可，不要再列出文档结构或重复描述章节。如果用户要求发邮件，把上面的 fileUrl 传给 send_notification.attachments[].url 字段。`;
@@ -1113,7 +1121,7 @@ function buildFCSystemPrompt(): string {
     generate_chart: '根据数据生成图表（折线图、柱状图、饼图等），返回 imageUrl 可嵌入邮件',
     generate_image: '根据文字描述生成图片（文生图）',
     create_mindmap: '生成思维导图，返回 imageUrl 可嵌入邮件',
-    generate_document: '把 Markdown 内容生成为 PDF / Word(docx) / HTML / Markdown(md) 文件，返回 fileUrl 可作为邮件附件发送',
+    generate_document: '把回复正文导出为 PDF / Word(docx) / HTML / Markdown(md) 文件；调用时只需 title + format，正文写在回复正文里由系统自动取用，生成后返回 fileUrl 可作邮件附件',
     // ---------------- 外部 API 集成工具（方案 A） ----------------
     send_notification: '发送通知到飞书消息、邮件、Webhook（钉钉/企业微信群机器人），用于把任务结果主动推送给用户或团队',
     query_database: '查询外部业务数据库（仅支持 SELECT 语句），自动经过 SQL 安全网关校验，可用于统计订单/用户/销售等业务数据',
@@ -1254,10 +1262,11 @@ ${toolList}
   if (availableTools.includes('generate_document')) {
     prompt += `\n\n文档生成规则（PDF / Word / HTML / Markdown）：
 - 当用户要求"生成 PDF/Word/docx/HTML/Markdown/md 文档"、"导出为文件"、"做一份报告/手册"等场景时，调用 generate_document
-- 必须提供 title（文档标题）、content（Markdown 格式正文）、format（'pdf' / 'docx' / 'html' / 'md' 四选一）
-- content 必须是 Markdown：用 # 表示标题、- 表示列表、**xx** 加粗、\`\`\` 代码块、> 引用
+- 调用时只传 title（文档标题）和 format（'pdf' / 'docx' / 'html' / 'md' 四选一），**不要把正文塞进 content 参数**
+- 文档正文直接写在你的回复正文里（Markdown 格式：用 # 表示标题、- 表示列表、**xx** 加粗、\`\`\` 代码块、> 引用），系统会在你回复结束后自动取用回复正文生成文件并推送文件卡片
 - 用户未指定格式时，默认选 pdf（最通用、可直接打印）；要求"可编辑"时选 docx；只在网页查看选 html；用户明确要"Markdown / md / 源文件"时选 md
-- 工具返回 fileUrl 字段（内部协议 fc://document/xxx），如果用户要求邮件发送，把 fileUrl 直接填入 send_notification.attachments[].url 即可。示例：先 generate_document({title:"周报",content:"...",format:"pdf"}) 得到 { fileUrl }，再 send_notification({channel:"email", title:"本周周报", content:"详见附件", recipients:["x@x.com"], attachments:[{filename:"周报.pdf", url: fileUrl}]})
+- 只有在"要生成的文档内容与回复正文不一致"时，才通过 content 参数显式传入正文；此时工具会立即生成文件并返回 fileUrl
+- 工具返回 fileUrl 字段（内部协议 fc://document/xxx），如果用户要求邮件发送，把 fileUrl 直接填入 send_notification.attachments[].url 即可。示例：先 generate_document({title:"周报",format:"pdf"}) 并把周报正文写在回复里，工具返回文件卡片后再 send_notification({channel:"email", title:"本周周报", content:"详见附件", recipients:["x@x.com"], attachments:[{filename:"周报.pdf", url: fileUrl}]})
 - 不要把整段 Markdown 内容塞进 send_notification.content 当邮件正文——文档必须作为附件发送`;
   }
 
@@ -1842,6 +1851,9 @@ async function promptWithFunctionCalling(
   let collectedMindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }> = []; // 收集工具生成的思维导图
   let collectedChartOptions: Array<{ option: any; chartType?: string; imageUrl?: string }> = []; // 收集工具生成的图表 ECharts option
   let collectedFileCards: Array<{ key: string; filename: string; format: string; sizeBytes: number; downloadUrl: string; previewUrl: string; expiresAt: number; favorited: boolean }> = []; // 收集 generate_document 生成的文件卡片
+  // P1：请求级文档导出意图（每次请求独立创建，绝不放到模块作用域，避免并发请求互相污染）。
+  // 模型调用 generate_document 只给 title + format 时登记在这里，流式结束后用本轮回复正文落盘。
+  const docIntents: GenerateDocumentIntent[] = [];
 
   // 工具资产收集：把工具执行结果中的多模态产物推入对应收集数组（流式输出前/中统一发送）。
   // invoke 循环与流式期 DSML 解析执行两条路径共用，保证资产收集口径一致。
@@ -1865,8 +1877,14 @@ async function promptWithFunctionCalling(
       collectedMindmaps.push({ mermaidCode: result.mermaidCode, title: result.title, imageUrl: result?.imageUrl });
     }
 
-    // 收集 generate_document 生成的文件卡片：稍后通过 SSE file_card 事件推送
-    if (toolName === 'generate_document' && result?.success && result?.type === 'document') {
+    // 收集 generate_document 生成的文件卡片：稍后通过 SSE file_card 事件推送。
+    // deferred=true 表示只登记了导出意图、还没落盘，此处不能推卡片（等最终正文落盘后再推）。
+    if (
+      toolName === 'generate_document' &&
+      result?.success &&
+      result?.type === 'document' &&
+      !result?.deferred
+    ) {
       collectedFileCards.push({
         key: result.key,
         filename: result.filename,
@@ -2185,7 +2203,7 @@ async function promptWithFunctionCalling(
         }
 
         try {
-          const result = await executeTool(toolCall.name, effectiveArgs, { userId, sessionId, res, imageModel, originalQuery: promptText });
+          const result = await executeTool(toolCall.name, effectiveArgs, { userId, sessionId, res, imageModel, originalQuery: promptText, docIntents });
           const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
 
           // 数据绑定：将工具结果存入匹配的计划步骤的 output 字段，供后续步骤引用
@@ -2578,7 +2596,7 @@ async function promptWithFunctionCalling(
               sendToolStatus(res, call.name, 'executing');
               try {
                 const result = await executeTool(call.name, call.args, {
-                  userId, sessionId, res, imageModel, originalQuery: promptText,
+                  userId, sessionId, res, imageModel, originalQuery: promptText, docIntents,
                 });
                 const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
                 collectToolAssets(call.name, result);
@@ -2616,6 +2634,63 @@ async function promptWithFunctionCalling(
                 resultSummaries.join('\n') +
                 '\n请基于上述结果继续完成对用户问题的回答。直接输出正文内容，不要再输出任何工具调用格式的文本。',
             }));
+          }
+
+          // ==================== 延迟文档落盘（P1：正文与格式分离） ====================
+          // 模型调用 generate_document 时只给了 title + format（没给 content），意图登记在
+          // docIntents 里。此时本轮回复正文已经流式输出完毕，用它作为文档正文落盘，并推送
+          // 文件卡片。这样大 payload 不再经过工具参数，既快又不会被中转站截断。
+          if (docIntents.length > 0) {
+            const docBody = fcFullResponse.trim();
+            if (!docBody) {
+              logger.warn('延迟文档：本轮回复正文为空，放弃落盘', {
+                module: 'PromptService',
+                intentCount: docIntents.length,
+                titles: docIntents.map((i) => i.title),
+              });
+              docIntents.length = 0;
+            } else {
+              const pendingIntents = docIntents.splice(0, docIntents.length);
+              for (const intent of pendingIntents) {
+                try {
+                  const docResult = await persistDocument({
+                    title: intent.title,
+                    content: docBody,
+                    format: intent.format,
+                    userId,
+                    sessionId,
+                  });
+                  if (docResult.success && docResult.type === 'document') {
+                    collectToolAssets('generate_document', docResult);
+                    // 立即推送：文件卡片走独立 SSE 事件，不污染正文
+                    fcFullResponse += emitNewAssets();
+                    logger.info('延迟文档生成成功', {
+                      module: 'PromptService',
+                      title: intent.title,
+                      format: intent.format,
+                      contentLength: docBody.length,
+                      sizeBytes: docResult.sizeBytes,
+                      key: docResult.key,
+                    });
+                  } else {
+                    logger.warn('延迟文档生成失败', {
+                      module: 'PromptService',
+                      title: intent.title,
+                      format: intent.format,
+                      message: docResult.message,
+                    });
+                  }
+                } catch (docError: any) {
+                  // 单个文档失败不影响其它文档与整体响应
+                  logger.error('延迟文档生成异常', {
+                    module: 'PromptService',
+                    title: intent.title,
+                    format: intent.format,
+                    error: docError?.message || String(docError),
+                  });
+                }
+              }
+            }
           }
 
           // 保存本轮生成的资产 URL 到跨轮次缓存，下一轮对话可直接引用

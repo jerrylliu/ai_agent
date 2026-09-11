@@ -1,55 +1,74 @@
 // ============================================================================
-// 文件作用：DSML 原始工具调用文本的检测 / 过滤 / 解析 / 流式整块抑制（纯函数模块）。
+// 文件作用：模型把工具调用写成"文本协议"时的检测 / 过滤 / 解析 / 流式整块抑制（纯函数模块）。
 //          单独提取成文件是为了可测试性--避免测试时加载整个 prompt.ts 的重依赖
 //          （LLM 客户端、工具注册、SSE、缓存等），与 prompt-message-cleaner.ts 同一模式。
 //
-// 背景：部分模型（DeepSeek 某些版本 / 本地模型）在 function calling 通道不稳定，
-//      会把工具调用以 DSML 文本格式写在 content 里，例如：
-//        <｜｜DSML｜｜tool_calls>
-//          <｜｜DSML｜｜invoke name="search_knowledge_base">
-//            <｜｜DSML｜｜parameter name="query" string="true">液氮 杜瓦冷罐</｜｜DSML｜｜parameter>
-//          </｜｜DSML｜｜invoke>
-//        </｜｜DSML｜｜tool_calls>
+// 背景：部分模型（DeepSeek 某些版本 / 本地模型 / 中转站丢弃 tools 字段时）的 function calling
+//      通道不可靠，会把工具调用以文本形式写在 content 里。各家方言不一致：
+//        - DeepSeek DSML：<｜DSML｜tool_calls> + <｜DSML｜invoke name="x"> + <｜DSML｜parameter …>
+//        - 裸 XML：DSML 特殊标记被链路丢弃、或 Anthropic 风格，只剩 <tool_calls> / <invoke> / <parameter>
+//        - 单数标签：<tool_call> … </tool_call>（Qwen 等）
+//
+// 设计原则（P0 出口契约）：**不按精确字面量做白名单**，而按"控制标签名"识别，容忍
+//   1) 装饰前缀（竖线 + DSML + 竖线）有无皆可
+//   2) antml: 前缀（Anthropic 风格）
+//   3) 属性区、空白、大小写差异
+//   4) 单复数（tool_call(s) / function_call(s)）
+//   5) 开闭标签不对称（只有开标签时，剩余内容整体抑制到流结束）
+// 行为底线：宁可少显示，绝不把控制标记透给用户；同时把捕获到的块交给 parseDSMLToolCalls
+//          真实执行工具，避免"只抑制不执行"导致功能静默丢失。
 // ============================================================================
 
 import { logger } from './logger.js';
 
-// 检测用正则（不带 /g，避免 .test() 的 lastIndex 副作用）
-const RAW_TOOL_CALL_DETECT_PATTERNS = [
-  /<｜｜DSML｜｜[^>]*>/,                     // DeepSeek DSML 标签
-  /<\/｜｜DSML｜｜[^>]*>/,                    // DeepSeek DSML 闭合标签
-  /<\|\|DSML\|\|[^>]*>/,                     // DeepSeek DSML 标签（ASCII 编码）
-  /<\/\|\|DSML\|\|[^>]*>/,                   // DeepSeek DSML 闭合标签（ASCII 编码）
-  /<tool_calls>[\s\S]*?<\/tool_calls>/,      // 通用 tool_calls 标签
-  /<function_call>[\s\S]*?<\/function_call>/, // 通用 function_call 标签
+// ==================== 控制标签识别 ====================
+
+/** 控制标签名（全部小写）：模型把工具调用写成文本时用到的标签名集合 */
+const CONTROL_TAG_NAMES: readonly string[] = [
+  'tool_call',
+  'tool_calls',
+  'invoke',
+  'parameter',
+  'function_call',
+  'function_calls',
 ];
 
-// 过滤用正则（带 /g，用于全局替换）
-const RAW_TOOL_CALL_REPLACE_PATTERNS = [
-  /<｜｜DSML｜｜[^>]*>/g,
-  /<\/｜｜DSML｜｜[^>]*>/g,
-  /<\|\|DSML\|\|[^>]*>/g,
-  /<\/\|\|DSML\|\|[^>]*>/g,
-  /<tool_calls>[\s\S]*?<\/tool_calls>/g,
-  /<function_call>[\s\S]*?<\/function_call>/g,
-];
+/** 竖线字符（全角 ｜ 与 ASCII | 都接受） */
+const PIPE_RE = /[|｜]/;
+/** 标签名允许的字符 */
+const NAME_CHAR_RE = /[A-Za-z0-9_]/;
+
+/** 装饰前缀源码：竖线 + DSML + 竖线（整体可选） */
+const DECORATION_SOURCE = '(?:[|｜]+\\s*DSML\\s*[|｜]+\\s*)?';
+/** antml: 前缀源码（整体可选） */
+const ANTLM_SOURCE = '(?:antml\\s*:\\s*)?';
+/** 控制标签名源码：长名在前，避免 tool_call 抢先匹配 tool_calls */
+const TAG_NAME_SOURCE = '(?:tool_calls|tool_call|function_calls|function_call|invoke|parameter)';
+
+/** 检测用正则（不带 /g，避免 .test() 的 lastIndex 副作用） */
+const RAW_TOOL_CALL_DETECT_RE = new RegExp(
+  `<\\s*/?\\s*${DECORATION_SOURCE}${ANTLM_SOURCE}${TAG_NAME_SOURCE}\\b`,
+  'i',
+);
+
+/** 过滤用正则（带 /g）：逐个删除控制标签本身，保留标签之间的正文 */
+const RAW_TOOL_CALL_REPLACE_RE = new RegExp(
+  `<\\s*/?\\s*${DECORATION_SOURCE}${ANTLM_SOURCE}${TAG_NAME_SOURCE}\\b[^>]*>`,
+  'gi',
+);
 
 /**
  * 检测文本是否包含原始工具调用格式
  */
 export function containsRawToolCallFormat(text: string): boolean {
-  return RAW_TOOL_CALL_DETECT_PATTERNS.some(pattern => pattern.test(text));
+  return RAW_TOOL_CALL_DETECT_RE.test(text);
 }
 
 /**
- * 过滤文本中的原始工具调用格式标签
+ * 过滤文本中的原始工具调用格式标签（仅删标签，保留标签之间的正文）
  */
 export function filterRawToolCalls(text: string): string {
-  let result = text;
-  for (const pattern of RAW_TOOL_CALL_REPLACE_PATTERNS) {
-    result = result.replace(pattern, '');
-  }
-  return result.trim();
+  return text.replace(RAW_TOOL_CALL_REPLACE_RE, '').trim();
 }
 
 /**
@@ -61,11 +80,13 @@ export function isPossibleRawToolCallStart(text: string): boolean {
   return /^[<｜]/.test(text) || text.includes('<|') || text.includes('<｜');
 }
 
+// ==================== 文本协议工具调用解析 ====================
+
 /**
- * 从模型输出的 DSML 文本中解析工具调用（文本协议降级通道）
+ * 从模型输出的文本中解析工具调用（文本协议降级通道）
  *
  * 与其重试 10 轮赌模型改用原生 FC（不支持时永远失败），不如直接解析文本执行工具。
- * 同时兼容 ASCII 竖线变体 <||DSML||...>。
+ * 标签形态按 parseControlTag 的同一套容错规则（装饰前缀 / antml: / 单复数 / 属性区都可省）。
  *
  * @param text 模型输出的原始文本
  * @param availableToolNames 可用工具名列表；非空时解析结果必须命中列表（防模型幻觉出不存在的工具），
@@ -80,9 +101,17 @@ export function parseDSMLToolCalls(
 
   const results: Array<{ name: string; args: Record<string, unknown> }> = [];
 
-  // 同时匹配全角 ｜ 和 ASCII | 两种竖线变体
-  const invokeBlockPattern = /<[｜|]{2}DSML[｜|]{2}invoke\s+name="([^"]+)"\s*>([\s\S]*?)<\/[｜|]{2}DSML[｜|]{2}invoke>/g;
-  const paramPattern = /<[｜|]{2}DSML[｜|]{2}parameter\s+name="([^"]+)"(?:\s+string="[^"]*")?\s*>([\s\S]*?)<\/[｜|]{2}DSML[｜|]{2}parameter>/g;
+  // invoke / parameter 的标签形态：装饰前缀与 antml: 前缀都可选，属性区任意
+  const invokeBlockPattern = new RegExp(
+    `<\\s*${DECORATION_SOURCE}${ANTLM_SOURCE}invoke\\s+name\\s*=\\s*"([^"]+)"[^>]*>([\\s\\S]*?)` +
+      `<\\s*/\\s*${DECORATION_SOURCE}${ANTLM_SOURCE}invoke\\s*>`,
+    'gi',
+  );
+  const paramPattern = new RegExp(
+    `<\\s*${DECORATION_SOURCE}${ANTLM_SOURCE}parameter\\s+name\\s*=\\s*"([^"]+)"[^>]*>([\\s\\S]*?)` +
+      `<\\s*/\\s*${DECORATION_SOURCE}${ANTLM_SOURCE}parameter\\s*>`,
+    'gi',
+  );
 
   let invokeMatch: RegExpExecArray | null;
   while ((invokeMatch = invokeBlockPattern.exec(text)) !== null) {
@@ -117,98 +146,91 @@ export function parseDSMLToolCalls(
 // ==================== 流式整块抑制器 ====================
 //
 // 为什么不能复用 filterRawToolCalls / isPossibleRawToolCallStart：
-// 流式 chunk 边界会任意切碎标签（如 "<"、"｜"、"｜"、"DSML" 分属四个 chunk），
+// 流式 chunk 边界会任意切碎标签（如 "<"、"｜"、"DSML" 分属多个 chunk），
 // 基于"单个 chunk 是否像标签开头"的启发式必然被击穿，标签碎片会逐块泄漏给用户。
 // 本抑制器为字符级三态机，对任意 chunk 切分安全：
 //   - text：原样透出；遇到 "<" 进入 tag 候选态
 //   - tag：缓冲候选；命中完整标签 → 进入 block；候选死亡 → 透出安全部分并回溯到最近的 "<"
 //   - block：整块捕获（不吐出，供 parseDSMLToolCalls 解析执行）；按开/闭标签计数深度，归零结束
-// parameter 内容守卫：参数正文（如待生成的文档）可能含 "<" / ">"（如 <div>、"1 < 2"），
-// 在参数内容区只认 parameter 闭合标签作为终止符，防止正文中的其他尖括号干扰深度计数。
+//
+// 与旧实现的差异：旧版按"精确字面量标签"匹配（要求标签逐字符完全一致），白名单外的方言
+// 会整段泄漏；新版按标签名匹配，普通正文里的 <div> / 1 < 2 / <title> 依然不会被误吞。
 
-/** 竖线字符类：同时兼容全角 ｜ 与 ASCII | */
-const PIPE_CLASS = '[｜|]';
-
-/** 抑制器标签规格：用"字符类序列 + 可选属性区"描述一类标签 */
-interface SuppressorTagSpec {
+/** 识别出的控制标签 */
+interface ControlTag {
+  /** 标签名（小写，命中 CONTROL_TAG_NAMES 之一） */
+  name: string;
   /** 开标签（进入块 / 深度 +1）还是闭标签（深度 -1 / 单独抑制） */
   isOpen: boolean;
-  /** DSML parameter 开标签：进入块后触发"参数内容"守卫 */
-  isParamOpen: boolean;
-  /** 匹配完整标签（^...$ 锚定） */
-  completeRe: RegExp;
-  /** 匹配标签的任意非空前缀（^...$ 锚定；不带 $ 会把 "<xyz" 误判为前缀） */
-  prefixRe: RegExp;
 }
 
-/** 把字面字符串拆成单字符类（转义正则特殊字符） */
-function literalClasses(word: string): string[] {
-  return word.split('').map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-}
+/** 标签匹配结果：命中完整标签 / 仍可能是标签前缀 / 不是标签 */
+type TagMatchResult = { tag: ControlTag } | 'prefix' | null;
 
 /**
- * 构造"任意非空前缀"正则源码：嵌套可选组
- * 如 [a, b, c] → a(?:b(?:c)?)? 可匹配 a / ab / abc
+ * 尝试把缓冲区解析成一个控制标签（容错规则见文件头）。
+ *
+ * @param buffer 以 "<" 开头的候选缓冲（后续字符可能还没到达）
+ * @returns 命中返回标签；"prefix" 表示还需要继续缓冲；null 表示不是控制标签（按普通文本处理）
  */
-function buildPrefixSource(classes: string[]): string {
-  let src = classes[0];
-  for (let i = 1; i < classes.length; i++) {
-    src += `(?:${classes[i]}`;
+function parseControlTag(buffer: string): TagMatchResult {
+  if (!buffer.startsWith('<')) return null;
+  let i = 1;
+
+  let isOpen = true;
+  if (buffer[i] === '/') {
+    isOpen = false;
+    i += 1;
   }
-  // 嵌套组必须可选（)?），否则只能匹配完整序列，成长中的前缀（如 "<｜"）会匹配失败
-  src += ')?'.repeat(classes.length - 1);
-  return src;
-}
 
-/** 构造单个标签规格 */
-function buildSuppressorTagSpec(
-  classes: string[],
-  isOpen: boolean,
-  attrRegion: boolean,
-  isParamOpen = false,
-): SuppressorTagSpec {
-  const headSource = classes.join('');
-  const completeRe = new RegExp(`^${headSource}${attrRegion ? '[^>]*' : ''}>$`);
-  const prefixSource = attrRegion
-    ? `^(?:${buildPrefixSource(classes)}|${headSource}[^>]*)$`
-    : `^${buildPrefixSource(classes)}$`;
-  return { isOpen, isParamOpen, completeRe, prefixRe: new RegExp(prefixSource) };
-}
-
-// DSML 标签头（开 / 闭），竖线位置同时兼容全角与 ASCII
-const DSML_OPEN_HEAD: string[] = ['<', PIPE_CLASS, PIPE_CLASS, ...literalClasses('DSML'), PIPE_CLASS, PIPE_CLASS];
-const DSML_CLOSE_HEAD: string[] = ['<', '/', PIPE_CLASS, PIPE_CLASS, ...literalClasses('DSML'), PIPE_CLASS, PIPE_CLASS];
-
-// parameter 闭合标签：参数内容守卫下唯一识别的标签
-const DSML_PARAM_CLOSE: SuppressorTagSpec = buildSuppressorTagSpec(
-  [...DSML_CLOSE_HEAD, ...literalClasses('parameter')],
-  false,
-  false,
-);
-
-// 需抑制的全部标签规格：DSML 开/闭 x 3 + 泛型开/闭 x 2
-const SUPPRESSOR_TAG_SPECS: SuppressorTagSpec[] = [
-  buildSuppressorTagSpec([...DSML_OPEN_HEAD, ...literalClasses('tool_calls')], true, false),
-  buildSuppressorTagSpec([...DSML_CLOSE_HEAD, ...literalClasses('tool_calls')], false, false),
-  buildSuppressorTagSpec([...DSML_OPEN_HEAD, ...literalClasses('invoke')], true, true),
-  buildSuppressorTagSpec([...DSML_CLOSE_HEAD, ...literalClasses('invoke')], false, false),
-  buildSuppressorTagSpec([...DSML_OPEN_HEAD, ...literalClasses('parameter')], true, true, true),
-  DSML_PARAM_CLOSE,
-  buildSuppressorTagSpec(literalClasses('<tool_calls'), true, false),
-  buildSuppressorTagSpec(literalClasses('</tool_calls'), false, false),
-  buildSuppressorTagSpec(literalClasses('<function_call'), true, false),
-  buildSuppressorTagSpec(literalClasses('</function_call'), false, false),
-];
-
-/** 尝试把缓冲区匹配为完整标签或标签前缀（完整优先） */
-function matchSuppressorTag(buffer: string): { spec: SuppressorTagSpec } | 'prefix' | null {
-  for (const spec of SUPPRESSOR_TAG_SPECS) {
-    if (spec.completeRe.test(buffer)) return { spec };
+  // ---------- 装饰前缀：竖线 + DSML + 竖线 ----------
+  if (buffer[i] !== undefined && PIPE_RE.test(buffer[i])) {
+    let p = i;
+    while (p < buffer.length && PIPE_RE.test(buffer[p])) p += 1;
+    if (p >= buffer.length) return 'prefix'; // 只到竖线，DSML 还没到
+    const keyword = 'DSML';
+    for (let k = 0; k < keyword.length; k++) {
+      const ch = buffer[p + k];
+      if (ch === undefined) return 'prefix';
+      if (ch.toUpperCase() !== keyword[k]) return null; // 不是竖线装饰前缀
+    }
+    p += keyword.length;
+    let q = p;
+    while (q < buffer.length && PIPE_RE.test(buffer[q])) q += 1;
+    if (q >= buffer.length) return 'prefix'; // 收尾竖线还没到
+    if (q === p) return null; // DSML 后面没有竖线 → 不合法
+    i = q;
   }
-  for (const spec of SUPPRESSOR_TAG_SPECS) {
-    if (spec.prefixRe.test(buffer)) return 'prefix';
+
+  // ---------- antml: 前缀（Anthropic 风格） ----------
+  if (buffer[i] !== undefined && buffer[i].toLowerCase() === 'a') {
+    const antml = 'antml:';
+    for (let k = 0; k < antml.length; k++) {
+      const ch = buffer[i + k];
+      if (ch === undefined) return 'prefix';
+      if (ch.toLowerCase() !== antml[k]) return null;
+    }
+    i += antml.length;
   }
-  return null;
+
+  // ---------- 标签名 ----------
+  let j = i;
+  while (j < buffer.length && NAME_CHAR_RE.test(buffer[j])) j += 1;
+  const rawName = buffer.slice(i, j).toLowerCase();
+  const name = CONTROL_TAG_NAMES.find((n) => n === rawName);
+  if (!name) {
+    // 关键：区分"名字还没收集完"与"名字已被非名字符终结"。
+    //   - j 仍在缓冲末尾（如 "<" / "</" / "<tool_cal"）→ 可能还是某个标签名的前缀，继续缓冲
+    //   - 名字后面已出现非名字符（如 "<div "、"1 < 2"、"<to>"）→ 名字已终结且对不上，
+    //     必须立刻判定为普通文本，否则 scanBuffer 会被永久毒化成 prefix，块永远收不了尾
+    if (j < buffer.length) return null;
+    return CONTROL_TAG_NAMES.some((n) => n.startsWith(rawName)) ? 'prefix' : null;
+  }
+
+  // ---------- 属性区 + 闭合尖括号 ----------
+  // 属性区允许任意内容（单复数标签、带 string="true" 的 parameter、antml 自带的属性都走这里）
+  if (buffer.indexOf('>', j) === -1) return 'prefix';
+  return { tag: { name, isOpen } };
 }
 
 /**
@@ -225,10 +247,8 @@ export class StreamingDsmlSuppressor {
   private tagBuffer = '';
   /** block 态的标签扫描缓冲（仅用于匹配，不影响捕获） */
   private scanBuffer = '';
-  /** 块当前嵌套深度 */
-  private depth = 0;
-  /** 是否处于参数内容区（只匹配 parameter 闭合标签，忽略其他尖括号） */
-  private inParamContent = false;
+  /** block 态已打开的控制标签栈（按名字配对收尾，容忍子标签漏闭合） */
+  private openStack: string[] = [];
   /** 被抑制块的全量捕获文本 */
   private captured = '';
 
@@ -247,7 +267,7 @@ export class StreamingDsmlSuppressor {
       const residue = this.tagBuffer;
       this.tagBuffer = '';
       this.state = 'text';
-      // 仅抑制 DSML 残留；"1 <" 这类普通文本残留原样吐出，避免误吞
+      // 仅抑制含装饰标记的残留；"1 <" / "<tool_cal" 这类普通文本残留原样吐出，避免误吞
       if (/DSML|｜|\|\|/.test(residue)) {
         this.captured += residue;
         return '';
@@ -257,6 +277,7 @@ export class StreamingDsmlSuppressor {
     if (this.state === 'block') {
       // 未闭合块：剩余部分整体抑制（均已进入 captured，其中完整 invoke 仍可被解析）
       this.scanBuffer = '';
+      this.openStack = [];
       this.state = 'text';
       return '';
     }
@@ -285,17 +306,16 @@ export class StreamingDsmlSuppressor {
 
     if (this.state === 'tag') {
       this.tagBuffer += c;
-      const match = matchSuppressorTag(this.tagBuffer);
+      const match = parseControlTag(this.tagBuffer);
       if (match === 'prefix') return '';
       if (match !== null) {
         // 完整标签：整体抑制并进入对应状态
         this.captured += this.tagBuffer;
         this.tagBuffer = '';
-        if (match.spec.isOpen) {
+        if (match.tag.isOpen) {
           this.state = 'block';
-          this.depth = 1;
+          this.openStack = [match.tag.name];
           this.scanBuffer = '';
-          this.inParamContent = match.spec.isParamOpen;
         } else {
           // 孤立闭标签（前无开标签）：仅抑制该标签本身，不进块
           this.state = 'text';
@@ -317,59 +337,38 @@ export class StreamingDsmlSuppressor {
 
     // block 态：全部捕获，绝不透出
     this.captured += c;
-    if (this.inParamContent) {
-      this.scanParamContent(c);
-    } else {
-      this.scanBlockTags(c);
-    }
+    this.scanBlockTags(c);
     return '';
   }
 
-  /** block 态（非参数内容区）：按开/闭标签计数深度 */
+  /**
+   * block 态：按开/闭控制标签名配对维护标签栈
+   *
+   * 说明：块内正文（参数值是整篇文档时尤其长）可能含 < > 等字符，但它们只有构成
+   * "控制标签名"才会被识别（<div>、1 < 2 都不算），因此不需要为参数正文单独开守卫。
+   * 用栈而非纯计数，是为了容忍模型漏写子标签闭合：`<invoke><parameter>x</invoke>` 里
+   * 闭合 invoke 时会连同未闭合的 parameter 一起出栈，不会把块之后的正常正文一起吞掉。
+   */
   private scanBlockTags(c: string): void {
     if (this.scanBuffer === '') {
       if (c === '<') this.scanBuffer = '<';
       return;
     }
     this.scanBuffer += c;
-    const match = matchSuppressorTag(this.scanBuffer);
+    const match = parseControlTag(this.scanBuffer);
     if (match === 'prefix') return;
     if (match !== null) {
       this.scanBuffer = '';
-      if (match.spec.isOpen) {
-        this.depth += 1;
-        if (match.spec.isParamOpen) this.inParamContent = true;
+      if (match.tag.isOpen) {
+        this.openStack.push(match.tag.name);
       } else {
-        this.depth -= 1;
-        if (this.depth <= 0) {
-          this.state = 'text';
-          this.depth = 0;
-        }
+        const idx = this.openStack.lastIndexOf(match.tag.name);
+        // 找得到开标签：连同其内部所有未闭合的子标签一起出栈；找不到（孤立闭标签）则忽略
+        if (idx !== -1) this.openStack.length = idx;
+        if (this.openStack.length === 0) this.state = 'text';
       }
       return;
     }
-    const lastLt = this.scanBuffer.lastIndexOf('<');
-    this.scanBuffer = lastLt > 0 ? this.scanBuffer.slice(lastLt) : '';
-  }
-
-  /** block 态（参数内容区）：只认 parameter 闭合标签，防文档正文尖括号误计深度 */
-  private scanParamContent(c: string): void {
-    if (this.scanBuffer === '') {
-      if (c === '<') this.scanBuffer = '<';
-      return;
-    }
-    this.scanBuffer += c;
-    if (DSML_PARAM_CLOSE.completeRe.test(this.scanBuffer)) {
-      this.scanBuffer = '';
-      this.inParamContent = false;
-      this.depth -= 1;
-      if (this.depth <= 0) {
-        this.state = 'text';
-        this.depth = 0;
-      }
-      return;
-    }
-    if (DSML_PARAM_CLOSE.prefixRe.test(this.scanBuffer)) return;
     const lastLt = this.scanBuffer.lastIndexOf('<');
     this.scanBuffer = lastLt > 0 ? this.scanBuffer.slice(lastLt) : '';
   }
@@ -382,4 +381,4 @@ export function suppressRawToolCallBlocks(text: string): { safeText: string; cap
   const suppressor = new StreamingDsmlSuppressor();
   const safeText = suppressor.push(text) + suppressor.flush();
   return { safeText, captured: suppressor.getCaptured() };
-} 
+}

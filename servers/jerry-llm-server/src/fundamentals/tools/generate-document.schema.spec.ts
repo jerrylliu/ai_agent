@@ -30,9 +30,10 @@ describe('generateDocumentSchema 结构', () => {
     expect(generateDocumentSchema.function.description).toContain('Markdown');
   });
 
-  it('title / content / format 三字段全必填', () => {
+  it('title / format 必填，content 为可选（P1：正文走回复正文通道）', () => {
     const params = generateDocumentSchema.function.parameters as any;
-    expect(params.required.sort()).toEqual(['content', 'format', 'title']);
+    expect(params.required.sort()).toEqual(['format', 'title']);
+    expect(Object.keys(params.properties).sort()).toEqual(['content', 'format', 'title']);
   });
 
   it('format enum 应为 pdf / docx / html / md', () => {
@@ -78,13 +79,21 @@ describe('generateDocumentParamsSchema 校验', () => {
     expect(r.success).toBe(false);
   });
 
-  it('空 content 应被拦截', () => {
+  it('缺 content 应通过（延迟落盘场景，由执行器登记意图）', () => {
+    const r = generateDocumentParamsSchema.safeParse({
+      title: 'x',
+      format: 'pdf',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('空 content 也应通过（执行器按"无正文"处理，避免参数校验直接失败）', () => {
     const r = generateDocumentParamsSchema.safeParse({
       title: 'x',
       content: '',
       format: 'pdf',
     });
-    expect(r.success).toBe(false);
+    expect(r.success).toBe(true);
   });
 
   it('缺失 format 应被拦截', () => {

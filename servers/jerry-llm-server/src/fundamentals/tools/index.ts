@@ -8,7 +8,7 @@ import { createPlanSchema, executeCreatePlan, type CreatePlanParams, type Create
 import { crawlWebpageSchema, executeCrawlWebpage, type CrawlWebpageParams, type CrawlWebpageResult } from './crawl-webpage';
 import { createDocumentSchema, executeCreateDocument, type CreateDocumentParams, type CreateDocumentResult, updateDocumentSchema, executeUpdateDocument, type UpdateDocumentParams, type UpdateDocumentResult, summarizeDocumentSchema, executeSummarizeDocument, type SummarizeDocumentParams, type SummarizeDocumentResult, compareDocumentsSchema, executeCompareDocuments, type CompareDocumentsParams, type CompareDocumentsResult, initDocumentTools } from './document-ops';
 import { generateChartSchema, executeGenerateChart, type GenerateChartParams, type GenerateChartResult, generateImageSchema, executeGenerateImage, type GenerateImageParams, type GenerateImageResult, createMindmapSchema, executeCreateMindmap, type CreateMindmapParams, type CreateMindmapResult } from './multimodal-output';
-import { generateDocumentSchema, executeGenerateDocument, type GenerateDocumentParams, type GenerateDocumentResult } from './generate-document';
+import { generateDocumentSchema, executeGenerateDocument, type GenerateDocumentParams, type GenerateDocumentResult, type GenerateDocumentIntent } from './generate-document';
 import { sendNotificationSchema, executeSendNotification, validateSendNotificationConfig, isSendNotificationAvailable, type SendNotificationParams, type SendNotificationResult } from './send-notification';
 import { queryDatabaseSchema, executeQueryDatabase, validateQueryDatabaseConfig, isQueryDatabaseAvailable, type QueryDatabaseParams, type QueryDatabaseResult } from './query-database';
 import { buildMcpProxySchema, executeMcpProxy, validateMcpProxyConfig, isMcpProxyAvailable, initMcpProxy, type McpProxyParams, type McpProxyResult } from './mcp-proxy';
@@ -26,6 +26,13 @@ export interface ToolContext {
   res?: any; // SSE Response 对象，用于推送确认请求
   imageModel?: string; // 用户偏好的图片生成模型
   originalQuery?: string; // 用户原始输入（用于缓存 key 生成，避免 LLM 生成的工具参数有微小差异导致缓存不命中）
+  /**
+   * 请求级"文档导出意图"收集器（P1）
+   *
+   * generate_document 只登记标题 + 格式，正文由 prompt.ts 在流式结束后从本轮回复正文中取。
+   * 必须由每次请求单独创建（不能是模块级变量），否则并发请求会互相污染。
+   */
+  docIntents?: GenerateDocumentIntent[];
 }
 
 // 工具调用记录回调，由外部注入（避免循环依赖）
@@ -267,7 +274,7 @@ const TOOL_COMPACT_DESCRIPTIONS: Record<string, string> = {
   generate_chart: '生成图表，折线柱状饼图等，数据可视化时使用',
   generate_image: '文生图，根据文字描述生成图片，需要图片时使用',
   create_mindmap: '生成思维导图，整理知识结构梳理逻辑时使用',
-  generate_document: '生成PDF/Word/HTML/Markdown文档文件，返回fileUrl可作为邮件附件发送，用户要文档导出时使用',
+  generate_document: '导出文档文件(PDF/Word/HTML/MD)，只传标题与格式，正文写在回复正文里',
   execute_workflow: '一键执行预置流水线，多步任务匹配模板时优先用此工具',
   send_notification: '发送通知到飞书邮件Webhook，任务完成或主动提醒时使用',
   query_database: '查询外部业务库执行SELECT语句，需要业务数据时使用',
@@ -333,7 +340,6 @@ const TOOL_COMPACT_PARAM_DESCRIPTIONS: Record<string, Record<string, string>> = 
   },
   generate_document: {
     title: '文档标题',
-    content: '文档正文(Markdown)',
     format: '输出格式',
   },
   execute_workflow: {
