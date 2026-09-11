@@ -57,6 +57,17 @@ const buildReindexDoneStatus = (progress: ReindexProgress): { ok: boolean; text:
   return { ok: false, text: base };
 };
 
+// 跳转工信部备案系统：Tauri 环境用系统浏览器打开，浏览器环境新开标签页
+const openBeianSite = async (): Promise<void> => {
+  const url = 'https://beian.miit.gov.cn/';
+  try {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(url);
+  } catch {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+};
+
 const SettingsDialog: React.FC<SettingsDialogProps> = ({
   open,
   onClose,
@@ -1003,6 +1014,25 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 {rateLimiterLoading ? '保存中...' : '保存限流配置'}
               </Button>
             )}
+          </div>
+
+          {/* ==================== 关于 ==================== */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-medium text-foreground cyberpunk-ms-text">关于</h3>
+            <div className="rounded-md bg-muted/50 px-3 py-2.5 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">以太忆核</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Aether Memory Core · v0.1.1</p>
+              </div>
+              <Cpu className="h-4 w-4 text-muted-foreground shrink-0" />
+            </div>
+            <button
+              type="button"
+              onClick={openBeianSite}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            >
+              陕ICP备2026025350号-1
+            </button>
           </div>
         </div>
       </div>
