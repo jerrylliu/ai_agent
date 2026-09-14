@@ -908,6 +908,13 @@
     .footer .footer-icp a:hover {
       color: var(--text-secondary, #9aa7b8);
     }
+    /* 公安联网备案图标：官方要求显示在备案编号之前，尺寸随文字行高缩放 */
+    .footer .footer-icp .gongan-img {
+      height: 16px;
+      width: auto;
+      vertical-align: -3px;
+      margin-right: 4px;
+    }
 
     /* ========== Animations ========== */
     @keyframes float {
@@ -1410,6 +1417,8 @@
     <div class="container">
       <p>&copy; 2024 Aether Memory Core. Crafted with precision.</p>
       <p class="footer-icp"><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">陕ICP备2026025350号-1</a></p>
+      <!-- 公安联网备案：编号+图标悬挂于首页底部，链接指向官方查询页（code 为 14 位备案数字） -->
+      <p class="footer-icp"><a href="https://beian.mps.gov.cn/#/query/webSearch?code=61019002004257" target="_blank" rel="noopener noreferrer"><img class="gongan-img" src="./beian.png" alt="" />陕公网安备61019002004257号</a></p>
     </div>
   </footer>
 
