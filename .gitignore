@@ -11,6 +11,7 @@ yarn-error.log*
 
 # 部署信息（含服务器 IP 等，仅本地保留）
 DEPLOYMENT_INFO.md
+PACKAGING_RUNBOOK.md
 
 # 构建产物
 dist/
