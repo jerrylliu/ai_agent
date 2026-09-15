@@ -1,7 +1,7 @@
 /**
- * 向量存储 — BM25 关键词索引管理
+ * 向量存储 — BM25 关键词索引管理（门面层）
  *
- * 管理 BM25 倒排索引的完整生命周期：
+ * 对外提供 BM25 索引的完整生命周期 API：
  * - 初始化（从磁盘加载或创建空索引）
  * - 增删改（单条/批量操作）
  * - 持久化（保存到磁盘）
@@ -9,125 +9,41 @@
  *
  * BM25 索引用于混合搜索中的关键词检索，
  * 与向量检索互补，提升关键词精确匹配的召回率。
+ *
+ * ⚠️ 架构说明（S1.7a，永久双引擎）：
+ * 本文件已退化为**门面**，所有实际逻辑委派给 BM25Engine 适配器
+ * （当前实现：MiniSearchBM25Engine；Tantivy 适配器待 S1.7b spike + S1.8 落地）。
+ * 引擎由 env BM25_ENGINE 选型（默认 minisearch），进程内单例、全链路统一。
+ * 本文件的导出签名与改造前完全一致，因此调用方
+ * （vector-search / vector-crud / vector-version）在本阶段零改动；
+ * 调用方改为直接依赖 BM25Engine 接口属于 S1.9 的工作。
  */
 
-import MiniSearch from 'minisearch';
-import * as fs from 'fs';
 import { logger } from '../logger.js';
-import {
-  PERSIST_DIR,
-  getBM25Index,
-  setBM25Index,
-  getBM25DocumentStore,
-  setBM25DocumentStore,
-} from './store-state.js';
+import { getBM25Engine } from './bm25-engine.js';
 
-// ==================== 常量 ====================
-
-/** BM25 索引文件路径 */
-const BM25_INDEX_PATH = `${PERSIST_DIR}/bm25_index.json`;
+// 兼容既有引用点：createBM25Index 是 MiniSearch 适配器特有的实例化工厂，
+// 不属于 BM25Engine 窄接口（Tantivy 无对应概念），故从适配器直接再导出。
+export { createBM25Index } from './minisearch-engine.js';
 
 // ==================== 索引初始化 ====================
 
 /**
- * 创建空的 BM25 索引
- * 使用 MiniSearch 实现，配置中文友好的搜索选项
- */
-export function createBM25Index(): MiniSearch {
-  return new MiniSearch({
-    fields: ['content'],             // 只对 content 字段建立倒排索引
-    storeFields: ['content', 'metadata'], // 存储原始内容，用于结果返回
-    searchOptions: {
-      boost: { content: 1 },         // content 字段权重
-      fuzzy: 0.2,                    // 模糊匹配容忍度（处理拼写错误）
-      prefix: true,                  // 支持前缀匹配（输入部分关键词即可匹配）
-    },
-  });
-}
-
-/**
- * 初始化 BM25 索引
+ * 初始化 BM25 索引（幂等）
  * 如果磁盘上有索引文件则加载，否则创建空索引
  */
 export async function initializeBM25Index(): Promise<void> {
-  if (getBM25Index()) return;
-
-  // 创建空索引
-  setBM25Index(createBM25Index());
-  setBM25DocumentStore(new Map());
-
-  // 尝试从磁盘加载已有索引
-  if (fs.existsSync(BM25_INDEX_PATH)) {
-    await loadBM25Index();
-  } else {
-    logger.info('BM25 索引文件不存在，已创建空索引', { module: 'VectorStore' });
-  }
+  await getBM25Engine().init();
 }
 
 // ==================== 索引持久化 ====================
 
 /**
- * 从磁盘加载 BM25 索引
- * 使用 MiniSearch 官方 loadJSON 反序列化
- */
-async function loadBM25Index(): Promise<void> {
-  try {
-    const fileContent = fs.readFileSync(BM25_INDEX_PATH, 'utf-8');
-    if (!fileContent || fileContent.trim().length === 0) {
-      logger.info('BM25 索引文件为空，将创建新索引', { module: 'VectorStore' });
-      return;
-    }
-
-    const data = JSON.parse(fileContent);
-    if (data?.index && data.index.serializationVersion) {
-      // 使用 MiniSearch 官方 loadJSON 反序列化
-      setBM25Index(MiniSearch.loadJSON(JSON.stringify(data.index), {
-        fields: ['content'],
-        storeFields: ['content', 'metadata'],
-        searchOptions: {
-          boost: { content: 1 },
-          fuzzy: 0.2,
-          prefix: true,
-        },
-      }));
-      setBM25DocumentStore(new Map(Object.entries(data.documentStore || {})));
-      logger.info('已加载 BM25 索引', { module: 'VectorStore', documentCount: getBM25Index().documentCount });
-    } else {
-      logger.warn('BM25 索引数据格式不正确，将创建新索引', { module: 'VectorStore' });
-    }
-  } catch (error: any) {
-    logger.error('加载 BM25 索引失败', { module: 'VectorStore', error: error.message });
-    logger.info('将删除损坏的索引文件并创建新索引', { module: 'VectorStore' });
-    try {
-      if (fs.existsSync(BM25_INDEX_PATH)) {
-        fs.unlinkSync(BM25_INDEX_PATH);
-        logger.info('已删除损坏的索引文件', { module: 'VectorStore' });
-      }
-    } catch (deleteError) {
-      logger.error('删除损坏索引文件失败', { module: 'VectorStore', error: deleteError.message });
-    }
-  }
-}
-
-/**
  * 保存 BM25 索引到磁盘
- * 将索引和文档存储序列化为 JSON 写入文件
+ * MiniSearch 引擎：序列化为 JSON 写入 `${PERSIST_DIR}/bm25_index.json`
  */
 export async function saveBM25Index(): Promise<void> {
-  try {
-    if (!fs.existsSync(PERSIST_DIR)) {
-      fs.mkdirSync(PERSIST_DIR, { recursive: true });
-    }
-    const bm25Index = getBM25Index();
-    const bm25DocumentStore = getBM25DocumentStore();
-    const data = {
-      index: bm25Index ? bm25Index.toJSON() : null,
-      documentStore: Object.fromEntries(bm25DocumentStore),
-    };
-    fs.writeFileSync(BM25_INDEX_PATH, JSON.stringify(data));
-  } catch (error) {
-    logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(error) });
-  }
+  await getBM25Engine().commit();
 }
 
 // ==================== 增删操作 ====================
@@ -146,16 +62,7 @@ export async function addToBM25Index(
   metadata: any,
   skipSave: boolean = false,
 ): Promise<void> {
-  if (!getBM25Index()) {
-    await initializeBM25Index();
-  }
-
-  getBM25Index()!.add({ id, content, metadata });
-  getBM25DocumentStore().set(id, { content, metadata });
-
-  if (!skipSave) {
-    await saveBM25Index();
-  }
+  await getBM25Engine().add(id, content, metadata, skipSave);
 }
 
 /**
@@ -163,20 +70,7 @@ export async function addToBM25Index(
  * 删除后异步保存索引到磁盘
  */
 export function deleteFromBM25Index(id: string): void {
-  const bm25Index = getBM25Index();
-  if (!bm25Index) return;
-
-  try {
-    // MiniSearch.remove 需要传入完整文档对象（与添加时一致）
-    const doc = getBM25DocumentStore().get(id);
-    if (doc) {
-      bm25Index.remove({ id, content: doc.content, metadata: doc.metadata });
-    }
-    getBM25DocumentStore().delete(id);
-    saveBM25Index().catch(err => logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(err) }));
-  } catch (error) {
-    logger.warn('删除 BM25 文档失败（可能不存在）', { module: 'VectorStore', id });
-  }
+  getBM25Engine().delete(id);
 }
 
 /**
@@ -184,16 +78,7 @@ export function deleteFromBM25Index(id: string): void {
  * 删除磁盘索引文件，重新创建空索引
  */
 export async function clearBM25Index(): Promise<void> {
-  setBM25Index(null);
-  getBM25DocumentStore().clear();
-  try {
-    if (fs.existsSync(BM25_INDEX_PATH)) {
-      fs.unlinkSync(BM25_INDEX_PATH);
-    }
-  } catch (error) {
-    logger.error('删除 BM25 索引文件失败', { module: 'VectorStore', error: String(error) });
-  }
-  await initializeBM25Index();
+  await getBM25Engine().clear();
 }
 
 /**

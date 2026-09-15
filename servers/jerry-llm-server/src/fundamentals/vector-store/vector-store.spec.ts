@@ -50,6 +50,8 @@ jest.mock('../config', () => ({
     chromaPort: 8000,
     chromaUrl: 'http://localhost:8000',
     ollamaBaseUrl: 'http://localhost:11434',
+    // BM25 引擎选型（bm25-engine 工厂读取），单元测试固定默认引擎
+    bm25Engine: 'minisearch',
   },
 }));
 
@@ -670,7 +672,7 @@ describe('vector-crud', () => {
 
       await expect(
         addDocuments(['测试文本'], [{ source: 'test.txt' }])
-      ).rejects.toThrow('所有文本块添加失败');
+      ).rejects.toThrow('个文本块写入失败');
     });
   });
 
