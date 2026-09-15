@@ -7,8 +7,8 @@
 //      通道不可靠，会把工具调用以文本形式写在 content 里。各家方言不一致：
 //        - DeepSeek DSML：<｜DSML｜tool_calls> + <｜DSML｜invoke name="x"> + <｜DSML｜parameter …>
 //        - 裸 XML：DSML 特殊标记被链路丢弃、或 Anthropic 风格，只剩 <tool_calls> / <invoke> / <parameter>
-//        - 单数标签：tool_call / function_call 的单数形式（Qwen 等）
-//        - 缩写包裹标签：DSML 装饰 + calls / call（tool_calls 的缩写，真实泄漏案例中出现过）
+//        - 单数标签：<tool_call> … </tool_call>（Qwen 等）
+//
 // 设计原则（P0 出口契约）：**不按精确字面量做白名单**，而按"控制标签名"识别，容忍
 //   1) 装饰前缀（竖线 + DSML + 竖线）有无皆可
 //   2) antml: 前缀（Anthropic 风格）
@@ -31,10 +31,6 @@ const CONTROL_TAG_NAMES: readonly string[] = [
   'parameter',
   'function_call',
   'function_calls',
-  // 缩写包裹标签：部分模型把外层 <tool_calls> 写成 <calls> / <call>，必须一并识别，
-  // 否则包裹标签会被当作普通文本透出（历史泄漏案例：<｜DSML｜calls> … </｜DSML｜calls>）
-  'calls',
-  'call',
 ];
 
 /** 竖线字符（全角 ｜ 与 ASCII | 都接受） */
@@ -46,9 +42,8 @@ const NAME_CHAR_RE = /[A-Za-z0-9_]/;
 const DECORATION_SOURCE = '(?:[|｜]+\\s*DSML\\s*[|｜]+\\s*)?';
 /** antml: 前缀源码（整体可选） */
 const ANTLM_SOURCE = '(?:antml\\s*:\\s*)?';
-/** 控制标签名源码：长名在前，避免 tool_call 抢先匹配 tool_calls、call 抢先匹配 calls */
-const TAG_NAME_SOURCE =
-  '(?:tool_calls|tool_call|function_calls|function_call|invoke|parameter|calls|call)';
+/** 控制标签名源码：长名在前，避免 tool_call 抢先匹配 tool_calls */
+const TAG_NAME_SOURCE = '(?:tool_calls|tool_call|function_calls|function_call|invoke|parameter)';
 
 /** 检测用正则（不带 /g，避免 .test() 的 lastIndex 副作用） */
 const RAW_TOOL_CALL_DETECT_RE = new RegExp(

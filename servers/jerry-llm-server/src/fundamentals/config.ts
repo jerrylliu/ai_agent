@@ -240,25 +240,8 @@ const RootSchema = z.object({
   /** JWT 必需，缺失时 fail-fast */
   jwtSecret: z.string().min(1, 'JWT_SECRET 未设置，服务无法启动'),
 
-  /**
-   * BM25 引擎选型（永久双引擎，进程级全局单例）
-   * - minisearch：默认，落盘单文件 bm25_index.json，受 V8 单字符串 ~512MB 上限
-   * - tantivy：目录落盘，解除规模上限（适配器落地后可用）
-   * 禁止同一进程内按场景混用两种引擎（会破坏 RRF 融合键=content 的语义一致性）
-   */
-  bm25Engine: z.enum(['minisearch', 'tantivy']).default('minisearch'),
-
   ollamaBaseUrl: z.string().min(1).default('http://localhost:11434'),
   chromaUrl: z.string().min(1).default('http://localhost:8000'),
-  /**
-   * 持久化目录覆盖（ChromaDB 数据目录 + BM25 索引落盘目录，两者同源）
-   *
-   * 未设置时由 store-state.ts 回退到代码内默认值（项目根 `chromadb_data`），
-   * 因此生产环境不配置此项 → 行为与改造前完全一致。
-   * 设置场景：benchmark 等需要与生产数据物理隔离的旁路（见方案 §4.6 D5=方案 A）。
-   * 默认值不写在这里，是因为它依赖 store-state.ts 的文件位置（__dirname 相对推导）。
-   */
-  chromaPersistDir: z.string().min(1).optional(),
   serverBaseUrl: z.string().min(1).default('http://localhost:3000'),
   deepseekBaseUrl: z.string().min(1).default('https://api.deepseek.com'),
   zhipuBaseUrl: z
@@ -311,11 +294,8 @@ function buildRawConfig() {
     port: env.PORT,
     jwtSecret: env.JWT_SECRET,
 
-    bm25Engine: env.BM25_ENGINE,
-
     ollamaBaseUrl: env.OLLAMA_BASE_URL,
     chromaUrl: env.CHROMA_URL,
-    chromaPersistDir: env.CHROMA_PERSIST_DIR,
     serverBaseUrl: env.SERVER_BASE_URL,
     deepseekBaseUrl: env.DEEPSEEK_BASE_URL,
     zhipuBaseUrl: env.ZHIPU_BASE_URL,
@@ -486,18 +466,10 @@ export const config = {
   port: parsed.port,
   jwtSecret: parsed.jwtSecret,
 
-  /** BM25 引擎选型：'minisearch' | 'tantivy'（进程级全局单例，启动时确定） */
-  bm25Engine: parsed.bm25Engine,
-
   db: parsed.db,
 
   ollamaBaseUrl: parsed.ollamaBaseUrl,
   chromaUrl: parsed.chromaUrl,
-  /**
-   * 持久化目录覆盖（未设置时为 undefined，由 store-state.ts 回退代码内默认值）
-   * 同时决定 ChromaDB 数据目录与 BM25 索引落盘目录，生产不配置即零影响
-   */
-  chromaPersistDir: parsed.chromaPersistDir,
   get chromaHost() {
     return safeUrlPart(this.chromaUrl, (u) => u.hostname, 'localhost');
   },
