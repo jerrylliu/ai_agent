@@ -227,9 +227,6 @@ importers:
       '@nestjs/typeorm':
         specifier: ^11.0.1
         version: 11.0.1(@nestjs/common@11.1.18(class-transformer@0.5.1)(class-validator@0.15.1)(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.18)(reflect-metadata@0.2.2)(rxjs@7.8.2)(typeorm@0.3.28(ioredis@5.11.1)(mysql2@3.21.0(@types/node@24.12.2))(ts-node@10.9.2(@types/node@24.12.2)(typescript@5.9.3)))
-      '@pngwasi/node-tantivy-binding':
-        specifier: ^0.3.4
-        version: 0.3.4
       bcryptjs:
         specifier: ^3.0.3
         version: 3.0.3
@@ -2237,35 +2234,6 @@ packages:
     resolution: {integrity: sha512-PG6q63nQg5c9rIi4/Z5lR5IVF7yU5MqmKaPOe0HSc0O2cX1fPi96sUQu5j7eo4gKCkB2AnNGoWt7y4/Xx3Kcqg==}
     engines: {node: '>=18'}
     hasBin: true
-
-  '@pngwasi/node-tantivy-binding-darwin-arm64@0.3.4':
-    resolution: {integrity: sha512-gX1RdlMc1JF0IiKJz7Lb3B5txDgtk+BK9pmBQUJ4PfAlKXTwoDMltUjojnc2A349SVNml/2fnF90TEszLzBFOg==}
-    engines: {node: '>= 22.15.1'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@pngwasi/node-tantivy-binding-darwin-x64@0.3.4':
-    resolution: {integrity: sha512-v5d34PjL3qy1NZhrdjeaefJyt6M5hHTApKSyvDRjv8vjbtZyti4dHw8aHMdGwk7cqpc46QFXpJ+RP4BydiNeTg==}
-    engines: {node: '>= 22.15.1'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@pngwasi/node-tantivy-binding-linux-x64-gnu@0.3.4':
-    resolution: {integrity: sha512-eeHJF5t4dBvZbnI0EDSoea8CQ6CKlk/2lEJLPzxvS+I2Txhsy6pAb6Hpht+AauE5L0XWTUVg4W6x3OnIP6w+2Q==}
-    engines: {node: '>= 22.15.1'}
-    cpu: [x64]
-    os: [linux]
-    libc: [glibc]
-
-  '@pngwasi/node-tantivy-binding-win32-x64-msvc@0.3.4':
-    resolution: {integrity: sha512-BUZtgJi02K7yxrbrM1bde6RqwTW06qGEE4T115nTiRj6sqfi1IM3raM++rNheHBcgut8bjAoA9rolHxgVHe1mQ==}
-    engines: {node: '>= 22.15.1'}
-    cpu: [x64]
-    os: [win32]
-
-  '@pngwasi/node-tantivy-binding@0.3.4':
-    resolution: {integrity: sha512-/Vxxbd3VZyL/fjPcdhdn+Thbzstan7Kr4tDiCNZ2IveigVOagzENGplVFpQhlyW5SEyMUaObyNmjoNtQZYjFKQ==}
-    engines: {node: '>= 22.15.1'}
 
   '@protobufjs/aspromise@1.1.2':
     resolution: {integrity: sha512-j+gKExEuLmKwvz3OgROXtrJ2UG2x8Ch2YZUxahh+s1F2HZ+wAceUNLkvy6zKCPVRkU++ZWQrdxsUeQXmcg4uoQ==}
@@ -9878,25 +9846,6 @@ snapshots:
   '@playwright/test@1.59.1':
     dependencies:
       playwright: 1.59.1
-
-  '@pngwasi/node-tantivy-binding-darwin-arm64@0.3.4':
-    optional: true
-
-  '@pngwasi/node-tantivy-binding-darwin-x64@0.3.4':
-    optional: true
-
-  '@pngwasi/node-tantivy-binding-linux-x64-gnu@0.3.4':
-    optional: true
-
-  '@pngwasi/node-tantivy-binding-win32-x64-msvc@0.3.4':
-    optional: true
-
-  '@pngwasi/node-tantivy-binding@0.3.4':
-    optionalDependencies:
-      '@pngwasi/node-tantivy-binding-darwin-arm64': 0.3.4
-      '@pngwasi/node-tantivy-binding-darwin-x64': 0.3.4
-      '@pngwasi/node-tantivy-binding-linux-x64-gnu': 0.3.4
-      '@pngwasi/node-tantivy-binding-win32-x64-msvc': 0.3.4
 
   '@protobufjs/aspromise@1.1.2': {}
 

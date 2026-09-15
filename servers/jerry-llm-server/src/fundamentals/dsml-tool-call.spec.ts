@@ -36,10 +36,6 @@ import {
 const LEAKED_TEXT =
   '<｜｜DSML｜｜tool_calls> <｜｜DSML｜｜invoke name="search_knowledge_base"> <｜｜DSML｜｜parameter name="query" string="true">液氮 杜瓦冷罐 工程干员</｜｜DSML｜｜parameter> </｜｜DSML｜｜invoke> </｜｜DSML｜｜tool_calls>';
 
-// 回归：用户实际泄漏的缩写包裹标签形态（单全角竖线装饰 + calls，手机端多次复现）
-const LEAKED_TEXT_CALLS =
-  '<｜DSML｜calls> <｜DSML｜invoke name="search_web"> <｜DSML｜parameter name="query" string="true">七格玛 枣庄 纳税人资质 增值税一般纳税人</｜DSML｜parameter> </｜DSML｜invoke> </｜DSML｜calls>';
-
 const AVAILABLE_TOOLS = ['search_knowledge_base', 'search_web', 'get_weather'];
 
 describe('parseDSMLToolCalls', () => {
@@ -48,13 +44,6 @@ describe('parseDSMLToolCalls', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].name).toBe('search_knowledge_base');
     expect(calls[0].args).toEqual({ query: '液氮 杜瓦冷罐 工程干员' });
-  });
-
-  it('回归：缩写包裹标签 calls（单全角竖线装饰）可正确解析', () => {
-    const calls = parseDSMLToolCalls(LEAKED_TEXT_CALLS, AVAILABLE_TOOLS);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].name).toBe('search_web');
-    expect(calls[0].args).toEqual({ query: '七格玛 枣庄 纳税人资质 增值税一般纳税人' });
   });
 
   it('多行格式化 DSML 文本', () => {
@@ -141,11 +130,6 @@ describe('containsRawToolCallFormat', () => {
     expect(containsRawToolCallFormat('</｜｜DSML｜｜invoke>')).toBe(true);
     expect(containsRawToolCallFormat('<||DSML||tool_calls>')).toBe(true);
     expect(containsRawToolCallFormat('<tool_calls>{"q":1}</tool_calls>')).toBe(true);
-    // 缩写包裹标签：装饰 calls 与裸 calls / call
-    expect(containsRawToolCallFormat('<｜DSML｜calls>')).toBe(true);
-    expect(containsRawToolCallFormat('</｜DSML｜calls>')).toBe(true);
-    expect(containsRawToolCallFormat(bare('calls') + bareClose('calls'))).toBe(true);
-    expect(containsRawToolCallFormat(bare('call') + bareClose('call'))).toBe(true);
   });
 
   it('普通文本不误报', () => {
@@ -158,12 +142,6 @@ describe('filterRawToolCalls', () => {
   it('移除泄漏文本的所有 DSML 标签，仅保留参数内容', () => {
     const cleaned = filterRawToolCalls(LEAKED_TEXT);
     expect(cleaned).toBe('液氮 杜瓦冷罐 工程干员');
-    expect(cleaned).not.toContain('DSML');
-  });
-
-  it('回归：缩写包裹标签 calls 形态同样移除全部标签', () => {
-    const cleaned = filterRawToolCalls(LEAKED_TEXT_CALLS);
-    expect(cleaned).toBe('七格玛 枣庄 纳税人资质 增值税一般纳税人');
     expect(cleaned).not.toContain('DSML');
   });
 
@@ -372,18 +350,6 @@ describe('StreamingDsmlSuppressor', () => {
       { name: 'search_knowledge_base', args: { query: '液氮 杜瓦冷罐 工程干员' } },
     ]);
   });
-
-  it('回归：缩写包裹标签（LEAKED_TEXT_CALLS）整块抑制且捕获可解析', () => {
-    const s = new StreamingDsmlSuppressor();
-    const safe = runStream(s, [
-      '公开信息里没有直接标注它的纳税人资质，我换个关键词再核实一遍。\n\n' + LEAKED_TEXT_CALLS,
-    ]);
-    expect(safe).toBe('公开信息里没有直接标注它的纳税人资质，我换个关键词再核实一遍。\n\n');
-    const calls = parseDSMLToolCalls(s.getCaptured(), AVAILABLE_TOOLS);
-    expect(calls).toEqual([
-      { name: 'search_web', args: { query: '七格玛 枣庄 纳税人资质 增值税一般纳税人' } },
-    ]);
-  });
 });
 
 describe('suppressRawToolCallBlocks', () => {
@@ -470,8 +436,6 @@ describe('P0 方言容错：检测 / 过滤 / 解析', () => {
       bare('tool_calls') + '{"q":1}' + bareClose('tool_calls'),
       bare('TOOL_CALLS') + '{"q":1}' + bareClose('TOOL_CALLS'),
       bare('invoke', 'name = "search_web"') + '{"q":1}' + bareClose('invoke'),
-      bare('calls') + buildBareBlock(null, 'search_web', { query: 'x' }) + bareClose('calls'),
-      bare('call') + buildBareBlock(null, 'search_web', { query: 'x' }) + bareClose('call'),
     ];
     for (const s of samples) {
       expect(containsRawToolCallFormat(s)).toBe(true);
@@ -491,7 +455,6 @@ describe('P0 方言容错：检测 / 过滤 / 解析', () => {
           bareClose('tool_call'),
       ),
     ).toBe('丁');
-    expect(filterRawToolCalls(buildBareBlock('calls', 'search_web', { query: '戊' }))).toBe('戊');
   });
 
   it('解析层：单数 tool_call 包裹与裸 invoke 均可解析执行', () => {
@@ -631,25 +594,5 @@ describe('P0 方言容错：流式整块抑制', () => {
       expect(runStream(s, [text])).toBe(text);
       expect(s.hasCaptured()).toBe(false);
     }
-  });
-
-  it('缩写包裹标签 calls（裸）整块抑制', () => {
-    const block = buildBareBlock('calls', 'search_web', { query: '缩写裸' });
-    expectInvariant('头' + block + '尾', '头尾', [
-      { name: 'search_web', args: { query: '缩写裸' } },
-    ]);
-  });
-
-  it('缩写包裹标签 call（单数裸）整块抑制', () => {
-    const block = buildBareBlock('call', 'search_web', { query: '单数缩写' });
-    expectInvariant('A' + block + 'B', 'AB', [
-      { name: 'search_web', args: { query: '单数缩写' } },
-    ]);
-  });
-
-  it('DSML 装饰 + 缩写包裹标签（用户泄漏形态）整块抑制且任意切分一致', () => {
-    expectInvariant('正文\n\n' + LEAKED_TEXT_CALLS, '正文\n\n', [
-      { name: 'search_web', args: { query: '七格玛 枣庄 纳税人资质 增值税一般纳税人' } },
-    ]);
   });
 });

@@ -40,16 +40,8 @@ import {
 /** 知识库集合名前缀（完整集合名 = 前缀 + '_' + 嵌入模型指纹） */
 export const COLLECTION_NAME_PREFIX = 'knowledge_base';
 
-/**
- * ChromaDB 数据持久化目录（同时作为 BM25 索引落盘根目录，见 minisearch-engine.ts）
- *
- * 可用 env `CHROMA_PERSIST_DIR` 覆盖（经 config.ts 的 zod 校验，见 config.chromaPersistDir）；
- * 未设置时回退到原默认值 = 项目根 `chromadb_data`，生产行为零变化。
- * 覆盖用途：benchmark 等旁路需要与生产数据物理隔离（方案 §4.6 D5=方案 A）。
- */
-export const PERSIST_DIR = config.chromaPersistDir
-  ? path.resolve(config.chromaPersistDir)
-  : path.join(__dirname, '..', '..', '..', 'chromadb_data');
+/** ChromaDB 数据持久化目录 */
+export const PERSIST_DIR = path.join(__dirname, '..', '..', '..', 'chromadb_data');
 
 /** 批量添加文档时的批次大小（增大批次减少嵌入请求次数，提升入库速度） */
 export const BATCH_SIZE = 20;

@@ -13,11 +13,12 @@
 import { logger } from '../logger.js';
 import {
   initializeVectorStore,
+  getBM25Index,
+  getBM25DocumentStore,
 } from './store-state.js';
 import {
   initializeBM25Index,
 } from './bm25-index.js';
-import { getBM25Engine } from './bm25-engine.js';
 import { LRUCache, searchCache } from '../cache.js';
 import { cacheFuzzyMatcher, type CacheSlots } from '../cache-fuzzy-matcher.js';
 import { cacheAliasLearner } from '../cache-alias-learner.js';
@@ -428,27 +429,34 @@ async function bm25Search(
   try {
     await initializeBM25Index();
 
+    const bm25Index = getBM25Index();
+    const bm25DocumentStore = getBM25DocumentStore();
+
+    if (!bm25Index || bm25Index.documentCount === 0) {
+      logger.info('BM25 索引为空，跳过关键词检索', { module: 'VectorStore', indexExists: !!bm25Index });
+      return [];
+    }
+
     logger.debug('BM25 检索开始', {
       module: 'VectorStore',
       query: query.substring(0, 100),
       topK,
+      documentCount: bm25Index.documentCount,
     });
 
-    // 经 BM25Engine 窄接口检索，使 MiniSearch / Tantivy 双引擎均可用（红线 #10：进程内单例统一）
-    const searchResults = await getBM25Engine().search(query, topK * 2);
-
-    if (searchResults.length === 0) {
-      logger.info('BM25 索引无命中，跳过关键词检索', { module: 'VectorStore' });
-      return [];
-    }
+    const searchResults = bm25Index.search(query, { limit: topK * 2 });
 
     logger.debug('BM25 检索原始结果', { module: 'VectorStore', resultCount: searchResults.length });
 
-    let results = searchResults.map((r) => ({
-      content: r.content,
-      metadata: r.metadata,
-      score: r.score,
-    }));
+    let results = searchResults
+      .map((result: any) => {
+        const doc = bm25DocumentStore.get(result.id);
+        return {
+          content: doc?.content || result.content,
+          metadata: doc?.metadata || {},
+          score: result.score,
+        };
+      });
 
     // 元数据过滤
     if (filter) {
