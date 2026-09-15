@@ -27,7 +27,14 @@
     "dedup:cleanup": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/cleanup-duplicate-chunks.ts",
     "eval:generate": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/eval/generate-dataset.ts",
     "eval:run": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/eval/run-eval.ts",
-    "eval:analyze": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/eval/analyze-queries.ts"
+    "eval:analyze": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/eval/analyze-queries.ts",
+    "bench:verify-loader": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/verify-loader.ts",
+    "bench:verify-progress": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/verify-progress.ts",
+    "bench:measure-expansion": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/measure-expansion.ts",
+    "bench:measure-runtime": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/measure-runtime.ts",
+    "bench:import": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/import-erb-corpus.ts",
+    "bench:eval": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/run-erb-eval.ts",
+    "bench:metrics": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/internal-metrics.ts"
   },
   "dependencies": {
     "@langchain/classic": "^1.0.29",
@@ -45,6 +52,7 @@
     "@nestjs/schedule": "^6.1.3",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/typeorm": "^11.0.1",
+    "@pngwasi/node-tantivy-binding": "^0.3.4",
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.2.0",
     "chromadb": "^3.4.3",

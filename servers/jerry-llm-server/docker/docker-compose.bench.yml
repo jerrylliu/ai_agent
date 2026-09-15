@@ -1,0 +1,42 @@
+# =============================================================================
+# EnterpriseRAG-Bench 专用 ChromaDB 独立实例（S0.4）
+#
+# 为什么必须独立实例（红线 #3）：
+#   benchmark 语料约 51 万篇，绝不能写进生产 jerry-chroma-dev（:8000，
+#   named volume chroma-data），否则会污染生产向量库且磁盘不可控。
+#   本实例与生产完全隔离：独立容器名、独立端口、独立数据目录（E: 盘）。
+#
+# 与生产实例的配置对照：
+#   | 项           | 生产 jerry-chroma-dev   | bench jerry-chroma-bench      |
+#   | 端口         | 8000:8000               | 8001:8000                     |
+#   | 数据卷       | named volume chroma-data | bind mount E:/ragbench/chroma-data |
+#   | 镜像/持久化  | chromadb/chroma:latest + IS_PERSISTENT=TRUE（两者一致） |
+#
+# 使用方式：
+#   cd servers/jerry-llm-server/docker
+#   docker compose -f docker-compose.bench.yml up -d
+#
+# benchmark 脚本侧配套环境变量（写入 .env 或运行前注入）：
+#   CHROMA_URL=http://localhost:8001
+#   CHROMA_PERSIST_DIR=E:\ragbench\bm25     # BM25 索引落盘，与向量数据同在 E:
+#
+# 停止（保留数据）：
+#   docker compose -f docker-compose.bench.yml down
+#
+# 彻底清空重来（数据在宿主机 E:/ragbench/chroma-data，需手动删除该目录）：
+#   docker compose -f docker-compose.bench.yml down
+# =============================================================================
+
+services:
+  chroma-bench:
+    image: chromadb/chroma:latest
+    container_name: jerry-chroma-bench
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    volumes:
+      # bind mount 到 E: 盘（51 万篇语料的向量数据落这里，方便整目录迁移/清理）
+      - E:/ragbench/chroma-data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
