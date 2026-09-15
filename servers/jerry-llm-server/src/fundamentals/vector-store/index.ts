@@ -72,6 +72,15 @@ export {
   rebuildBM25Index,
 } from './bm25-index.js';
 
+// ==================== BM25 引擎抽象（永久双引擎） ====================
+export { getBM25Engine, resetBM25Engine } from './bm25-engine.js';
+
+export type {
+  BM25Engine,
+  BM25EngineType,
+  BM25SearchResult,
+} from './bm25-engine.js';
+
 // ==================== 文档 CRUD ====================
 export {
   addDocuments,

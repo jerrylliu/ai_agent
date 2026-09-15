@@ -294,7 +294,8 @@ export function FileCard({ attachment, onDelete, onFavoriteChange }: FileCardPro
           : 'border-border bg-card text-card-foreground'
       }`}
     >
-      <div className="flex items-stretch">
+      {/* 移动端窄屏改为上下两行（主信息 + 操作按钮），避免单行挤压导致文字竖排扭曲 */}
+      <div className="flex flex-col sm:flex-row sm:items-stretch">
         {/* 左侧图标块 + 中间元信息 → 点击预览（DOCX → 下载） */}
         <div
           className={`flex flex-1 min-w-0 items-stretch cursor-pointer group ${
@@ -309,7 +310,7 @@ export function FileCard({ attachment, onDelete, onFavoriteChange }: FileCardPro
           onKeyDown={isAvailable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handlePreview(); } } : undefined}
         >
           {/* 图标 */}
-          <div className={`flex items-center justify-center px-4 ${style.bg}`}>
+          <div className={`flex shrink-0 items-center justify-center px-4 ${style.bg}`}>
             <FileText className={`h-8 w-8 ${style.color}`} aria-hidden="true" />
           </div>
 
@@ -319,15 +320,16 @@ export function FileCard({ attachment, onDelete, onFavoriteChange }: FileCardPro
               {attachment.filename}
               {favorited && <Star className="inline h-3.5 w-3.5 ml-1 text-amber-500 fill-amber-500" />}
             </div>
-            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-              <span className={`px-1.5 py-0.5 rounded ${style.bg} ${style.color} font-medium`}>
+            {/* 窄屏允许换行，且各元信息项内部不折行，杜绝逐字竖排 */}
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              <span className={`whitespace-nowrap px-1.5 py-0.5 rounded ${style.bg} ${style.color} font-medium`}>
                 {style.label}
               </span>
               <span>·</span>
-              <span>{formatSize(attachment.sizeBytes)}</span>
+              <span className="whitespace-nowrap">{formatSize(attachment.sizeBytes)}</span>
               <span>·</span>
               <span
-                className={`inline-flex items-center gap-1 ${
+                className={`inline-flex whitespace-nowrap items-center gap-1 ${
                   remaining.expired && !favorited
                     ? 'text-red-500'
                     : remaining.warning
@@ -348,8 +350,8 @@ export function FileCard({ attachment, onDelete, onFavoriteChange }: FileCardPro
           </div>
         </div>
 
-        {/* 右侧操作按钮 */}
-        <div className="flex items-center gap-1 pr-2" onClick={(e) => e.stopPropagation()}>
+        {/* 右侧操作按钮：移动端独占一行右对齐 */}
+        <div className="flex items-center justify-end gap-1 pr-2 pb-2 sm:pb-0" onClick={(e) => e.stopPropagation()}>
           {/* 收藏 */}
           <button
             type="button"

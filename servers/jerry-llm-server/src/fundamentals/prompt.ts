@@ -3297,6 +3297,17 @@ ${docList}
     // 去除 think 标签
     if (typeof result.content === 'string') {
       result.content = result.content.replace(/<think>[\s\S]*?<\/think>/gs, "");
+      // 出口契约：非流式路径同样整块抑制文本协议工具调用块。
+      // 否则原始 DSML 标签会经 onUsageComplete(assistantMessage) 进入落库链路，
+      // 污染行一旦入库，历史会话会持续渲染泄漏文本
+      if (containsRawToolCallFormat(result.content)) {
+        const suppressed = suppressRawToolCallBlocks(result.content);
+        logger.warn('非流式调用：抑制文本协议工具调用块', {
+          module: 'PromptService',
+          capturedLength: suppressed.captured.length,
+        });
+        result.content = suppressed.safeText;
+      }
     }
     logger.debug('非流式调用完成', { module: 'PromptService' });
 

@@ -10,6 +10,7 @@ import { AutoEvaluation } from '../entities/auto-evaluation.entity';
 import { GeneratedDocument } from '../entities/generated-document.entity';
 import { logger } from '../fundamentals/logger';
 import { publishChatHistoryEvent, publishSessionDeletedEvent } from '../fundamentals/chat-event-bus';
+import { containsRawToolCallFormat, suppressRawToolCallBlocks } from '../fundamentals/dsml-tool-call';
 import { SummaryService } from './summary.service';
 import { MemoryService } from './memory.service';
 
@@ -45,6 +46,22 @@ export class SessionService {
     workflowCards?: unknown[],
   ) {
     logger.debug('保存聊天记录', { module: 'SessionService', sessionId, role, contentLength: content.length });
+
+    // ==================== 写边界 sanitize（出口契约兜底） ====================
+    // 为什么需要：即使上游某条路径（非流式 / 回退 / 未来新增路径）漏掉抑制，
+    // 原始 DSML 控制标签也不得入库——污染行一旦入库，所有读取历史的端
+    // （Web / 手机端 / 飞书）都会持续渲染泄漏文本。
+    // 放在幂等比对之前：保证同一条回复的"污染版 / 干净版"被判为重复，
+    // 避免因 sanitize 时机差异插入两条几乎相同的消息。
+    if (role === 'assistant' && containsRawToolCallFormat(content)) {
+      const suppressed = suppressRawToolCallBlocks(content);
+      logger.warn('聊天记录写边界：抑制文本协议工具调用块', {
+        module: 'SessionService',
+        sessionId,
+        capturedLength: suppressed.captured.length,
+      });
+      content = suppressed.safeText;
+    }
 
     // ==================== 幂等保护 ====================
     // 为什么需要：助手回复已改为服务端在 SSE 流结束后自动落库（ChatController 回调），
@@ -126,6 +143,15 @@ export class SessionService {
       where: { sessionId },
       order: { createdAt: 'ASC' },
     });
+
+    // 读边界 sanitize（免迁移修复历史污染行）：已入库的 assistant 消息可能含
+    // 原始 DSML 控制标签（出口契约兜底上线前产生），读取时统一抑制。
+    // 仅修改返回的内存对象，不回写数据库。
+    for (const m of messages) {
+      if (m.role === 'assistant' && containsRawToolCallFormat(m.content)) {
+        m.content = suppressRawToolCallBlocks(m.content).safeText;
+      }
+    }
 
     // 关联 generated_document：把当前会话下未过期的文档按时间顺序贴回最近的 assistant 消息
     // 这样重启或重新加载历史后，文件卡片不会丢失
