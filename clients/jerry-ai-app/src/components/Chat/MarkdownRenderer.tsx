@@ -5,6 +5,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import mermaid from 'mermaid';
 import * as echarts from 'echarts';
+import { sanitizeMessageContent } from '@/lib/utils';
 
 // Mermaid 初始化（只执行一次）
 mermaid.initialize({
@@ -182,9 +183,8 @@ const CodeBlock: React.FC<any> = React.memo(({ inline, className, children }) =>
 
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = React.memo(({ children, className }) => {
   // 缓存过滤后的内容，避免每次渲染都执行正则替换
-  const content = useMemo(() => {
-    return children.replace(/<think[\s\S]*?<\/think>/gs, '');
-  }, [children]);
+  // sanitizeMessageContent：移除 think 块 + 残留工具调用控制标签（DSML 等方言）的渲染兜底
+  const content = useMemo(() => sanitizeMessageContent(children), [children]);
 
   return (
     <div className={`min-w-0 ${className || ''}`} style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>

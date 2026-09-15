@@ -4,7 +4,7 @@ import { Database, ThumbsUp, ThumbsDown, Pencil, FileText, Download, FileCode, F
 import MarkdownRenderer from "./MarkdownRenderer";
 import { FileCard } from "./FileCard";
 import { PopupMenu, type PopupMenuItem } from "../ui/popup-menu";
-import { formatTime } from "../../lib/utils";
+import { formatTime, sanitizeMessageContent } from "../../lib/utils";
 import type { Message, MessageAttachment, MessageDocumentCard, WorkflowProgress } from "../../types/session";
 import { submitFeedback, getDocumentVersions, exportVersion, getDocumentByTitle } from "../../lib/api";
 import { openEditorWithContent } from "../../lib/window";
@@ -209,7 +209,8 @@ function UserDocumentCard({ card }: { card: MessageDocumentCard }) {
 
   return (
     <div className="my-2 rounded-xl border border-border bg-card text-card-foreground shadow-sm overflow-hidden">
-      <div className="flex items-stretch">
+      {/* 移动端窄屏改为上下两行（主信息 + 操作按钮），避免单行挤压导致文字竖排扭曲 */}
+      <div className="flex flex-col sm:flex-row sm:items-stretch">
         {/* 左侧图标块 + 中间元信息 → 点击下载原文件 */}
         <div
           className="flex flex-1 min-w-0 items-stretch cursor-pointer group hover:bg-muted/30 dark:hover:bg-muted/10"
@@ -220,7 +221,7 @@ function UserDocumentCard({ card }: { card: MessageDocumentCard }) {
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void downloadUserDoc(card.fileUrl, card.fileName); } }}
         >
           {/* 图标 */}
-          <div className={`flex items-center justify-center px-4 ${style.bg}`}>
+          <div className={`flex shrink-0 items-center justify-center px-4 ${style.bg}`}>
             <FileText className={`h-8 w-8 ${style.color}`} aria-hidden="true" />
           </div>
           {/* 元信息 */}
@@ -228,16 +229,17 @@ function UserDocumentCard({ card }: { card: MessageDocumentCard }) {
             <div className="font-medium text-sm truncate" title={card.fileName}>
               {card.fileName}
             </div>
-            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-              <span className={`px-1.5 py-0.5 rounded ${style.bg} ${style.color} font-medium`}>
+            {/* 窄屏允许换行，且各元信息项内部不折行，杜绝逐字竖排 */}
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              <span className={`whitespace-nowrap px-1.5 py-0.5 rounded ${style.bg} ${style.color} font-medium`}>
                 {style.label}
               </span>
               <span>·</span>
-              <span>{formatDocSize(card.sizeBytes)}</span>
+              <span className="whitespace-nowrap">{formatDocSize(card.sizeBytes)}</span>
               {card.charCount > 0 && (
                 <>
                   <span>·</span>
-                  <span>{card.charCount} 字</span>
+                  <span className="whitespace-nowrap">{card.charCount} 字</span>
                 </>
               )}
               {card.truncated && (
@@ -251,8 +253,8 @@ function UserDocumentCard({ card }: { card: MessageDocumentCard }) {
             </div>
           </div>
         </div>
-        {/* 右侧操作按钮 */}
-        <div className="flex items-center gap-1 pr-2" onClick={(e) => e.stopPropagation()}>
+        {/* 右侧操作按钮：移动端独占一行右对齐 */}
+        <div className="flex items-center justify-end gap-1 pr-2 pb-2 sm:pb-0" onClick={(e) => e.stopPropagation()}>
           {/* 在编辑器中打开 */}
           {card.contentJson != null && (
             <button
@@ -577,7 +579,8 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                   const btn = e.currentTarget;
                   const rect = btn.getBoundingClientRect();
                   try {
-                    const contentToCopy = message.content.replace(/<think[\s\S]*?<\/think>/gs, "");
+                    // 复制内容同样走兜底清洗，避免把残留控制标签复制出去
+                    const contentToCopy = sanitizeMessageContent(message.content);
                     await navigator.clipboard.writeText(contentToCopy);
                     onCopyToast({ show: true, message: '内容已复制', x: rect.left, y: rect.top - 8 });
                     setTimeout(() => onCopyToast({ show: false, message: '', x: 0, y: 0 }), 2000);
