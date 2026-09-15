@@ -120,3 +120,25 @@ export const logger = {
   error: (message: string, meta?: Record<string, any>) => standaloneLogger.error(message, meta),
   debug: (message: string, meta?: Record<string, any>) => standaloneLogger.debug(message, meta),
 };
+
+/**
+ * 优雅关闭独立日志器的所有 transports（flush 文件缓冲、关闭 File/Loki transport 句柄）
+ *
+ * 供 CLI 脚本（scripts/eval、scripts/bench 等）在退出前调用：
+ * winston 的 File transport（及 Loki transport 的后台 worker）句柄会驻留事件循环，
+ * 导致脚本跑完后进程挂起不退出，必须先 end() 关闭。
+ * 带 2 秒超时兜底：Loki 不可达时 flush 可能挂起，超时后放弃等待直接返回。
+ *
+ * 注意：关闭 logger 不足以规避 Windows 退出崩溃——若进程中存在 undici
+ * （全局 fetch）keep-alive 连接（如 ChromaClient），需等待其排空后再退出，
+ * 详见 scripts/bench/import-erb-corpus.ts 的 gracefulExit。
+ */
+export async function closeLogger(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 2000);
+    standaloneLogger.end(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
