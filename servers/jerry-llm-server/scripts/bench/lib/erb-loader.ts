@@ -349,3 +349,142 @@ export function countDocsByType(): Map<ErbSourceType, number> {
   }
   return counts;
 }
+
+// ==================== gold-first 逆向抽样（方案 §3.0.1） ====================
+
+/**
+ * gold-first 档位预设（方案 §3.0.1 表格，D6 拍板）。
+ *
+ * 两档 gold 闭包完全相同（722 篇），只有干扰部分随 seed 变化，
+ * 因此 T1/T2 的分数差异可直接归因于噪声密度（红线：密度失真须在报告标注）。
+ */
+export const GOLD_FIRST_TIERS = {
+  /** gold-only 基准：无干扰 */
+  T0: { interference: 0, seed: 0 },
+  /** T1 档：722 gold + 9,978 干扰（seed=42），≈22.9 万 child chunk */
+  T1: { interference: 9978, seed: 42 },
+  /** T2 档：722 gold + 49,278 干扰（seed=43），≈105 万 chunk，仅 tantivy 可承载 */
+  T2: { interference: 49278, seed: 43 },
+} as const;
+
+/** gold-first 档位联合类型 */
+export type GoldFirstTier = keyof typeof GOLD_FIRST_TIERS;
+
+/** goldFirstSample 选项 */
+export interface GoldFirstOptions {
+  /** 追加的非 gold 干扰文档数（T0=0 / T1=9978 / T2=49278） */
+  interference: number;
+  /** 干扰抽样随机种子（T1=42 / T2=43，缺省 42） */
+  seed?: number;
+}
+
+/**
+ * 计算 500 题的 gold 并集（去重后的 documentId 集合）。
+ * 实测 722 篇（470 道非空 gold 题，含跨题重复引用去重）。
+ *
+ * @param dataDir 数据根目录，缺省 ERB_DATA_DIR
+ */
+export function getGoldDocIdSet(dataDir: string = ERB_DATA_DIR): Set<string> {
+  const goldIds = new Set<string>();
+  for (const q of loadQuestions(dataDir)) {
+    for (const id of q.expected_doc_ids) goldIds.add(id);
+  }
+  return goldIds;
+}
+
+/**
+ * 按语料真实比例把总配额 n 拆到各 source_type（最大余数法，保证 Σ配额 === n）。
+ *
+ * 为什么不用 Math.round 直接凑整：四舍五入的舍入误差会让总数偏离 n，
+ * 而 T1=10,700 / T2=50,000 是方案拍板的确定档位值，必须精确命中。
+ *
+ * @param counts source_type → 文档总数
+ * @param n 干扰总配额
+ */
+function proportionalQuotas(
+  counts: Map<ErbSourceType, number>,
+  n: number,
+): Map<ErbSourceType, number> {
+  const total = [...counts.values()].reduce((a, b) => a + b, 0);
+  if (total <= 0) throw new Error('语料为空，无法计算比例配额');
+  const quotas = new Map<ErbSourceType, number>();
+  const fracs: Array<{ type: ErbSourceType; frac: number }> = [];
+  let allocated = 0;
+  for (const [t, c] of counts) {
+    const exact = (n * c) / total;
+    const floor = Math.floor(exact);
+    quotas.set(t, floor);
+    allocated += floor;
+    fracs.push({ type: t, frac: exact - floor });
+  }
+  // 余数按小数部分从大到小分配（最大余数法；余数必然 < 类型数）
+  fracs.sort((a, b) => b.frac - a.frac);
+  for (let i = 0; i < n - allocated; i++) {
+    const t = fracs[i % fracs.length].type;
+    quotas.set(t, (quotas.get(t) ?? 0) + 1);
+  }
+  return quotas;
+}
+
+/**
+ * gold-first 逆向抽样（方案 §3.0.1 落地改动点）。
+ *
+ * 与「正向分层随机抽样」相反：以 500 题 expected_doc_ids 并集（722 篇）为闭包，
+ * 保证每道题的 gold 都在库内（Document Recall 分母完整），再按语料真实比例
+ * 追加非 gold 干扰文档放大噪声密度（用于「规模 vs 召回衰减」曲线）。
+ *
+ * 确定性保证：
+ *   - gold 闭包不受 seed 影响，按全库遍历顺序产出（任何规模档位下 gold 恒定）；
+ *   - 干扰按「比例配额 + 蓄水池抽样（seed + 类型序号）」产出，同 seed 同结果。
+ *
+ * 全库遍历 3~4 遍（gold 定位 + 分型计数 + 各类型干扰抽样），纯 I/O ≈ 20s。
+ *
+ * @param options interference=干扰文档数，seed=随机种子
+ * @yields ErbDoc（gold 在前、干扰在后，供入库脚本「先 gold 后干扰」增量消费）
+ */
+export function* goldFirstSample(options: GoldFirstOptions): Generator<ErbDoc> {
+  const { interference, seed = 42 } = options;
+  const goldIds = getGoldDocIdSet();
+
+  // ① 定位 gold 闭包：全库遍历一遍，按遍历顺序收集（dsid 跨目录重复时取首见）
+  const located = new Map<string, ErbDoc>();
+  for (const doc of walkDocs()) {
+    if (goldIds.has(doc.documentId) && !located.has(doc.documentId)) {
+      located.set(doc.documentId, doc);
+    }
+  }
+  if (located.size !== goldIds.size) {
+    // fail-fast：闭包不完整意味着部分题的 gold 不在语料里，Document Recall 会恒缺
+    throw new Error(
+      `gold 闭包不完整：题目引用 ${goldIds.size} 篇，语料中仅定位到 ${located.size} 篇` +
+        '（请检查 ERB_DATA_DIR 数据完整性）',
+    );
+  }
+  yield* located.values();
+
+  if (interference <= 0) return;
+
+  // ② 干扰填充：按各 source_type 语料真实比例分配配额（非 gold、非重复），
+  //    每类型独立蓄水池抽样；seed + 类型序号保证确定性且各类型流互不相关
+  const counts = countDocsByType();
+  const quotas = proportionalQuotas(counts, interference);
+  for (let ti = 0; ti < ERB_SOURCE_TYPES.length; ti++) {
+    const t = ERB_SOURCE_TYPES[ti];
+    const quota = quotas.get(t) ?? 0;
+    if (quota <= 0) continue;
+    // 非 gold 流（惰性过滤，不落盘中间数组）
+    function* nonGold(): Generator<ErbDoc> {
+      for (const doc of walkDocs({ sourceType: t })) {
+        if (!goldIds.has(doc.documentId)) yield doc;
+      }
+    }
+    // 蓄水池抽样后按 documentId 去重：同一 dsid 落两处时 reservoir 可能同时抽中，
+    // 去重会导致该类型配额少 1~2 篇（全库仅 4 个重复 dsid，密度失真可忽略）
+    const picked = reservoirSample(nonGold(), quota, seed + ti);
+    const unique = new Map<string, ErbDoc>();
+    for (const doc of picked) {
+      if (!goldIds.has(doc.documentId)) unique.set(doc.documentId, doc);
+    }
+    yield* unique.values();
+  }
+}
