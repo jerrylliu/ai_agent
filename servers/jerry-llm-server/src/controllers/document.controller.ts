@@ -10,6 +10,7 @@ import {
   UploadedFile, ParseIntPipe, HttpException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { DocumentService } from '../services/document.service';
 import { DocumentScanService } from '../services/document-scan.service';
@@ -26,7 +27,19 @@ function serializeVersions(versions: DocumentVersion[]) {
   return versions.map(serializeVersion);
 }
 
+// ==================== 限流策略（读写分离） ====================
+// 背景：全局 ThrottlerGuard 默认 10 次/分钟（auth.module.ts），文档管理页的
+// 查询/轮询接口（版本状态轮询、切换文档时的联动查询）正常操作即可打爆配额，
+// 触发 ThrottlerException: Too Many Requests。
+// 策略：类级放宽到 60 次/分钟（与 chat / knowledge-source 控制器对齐）；
+// 写操作统一收紧回 10 次/分钟，防刷强度与原全局默认一致。
+
+/** 写操作限流：10 次/分钟（上传/发布/删除/复核/定时任务手动触发等重操作防刷） */
+const WRITE_THROTTLE = { default: { ttl: 60000, limit: 10 } };
+
 @Controller('documents')
+// 类级读限流：60 次/分钟，覆盖列表查询 + 版本状态轮询场景
+@Throttle({ default: { ttl: 60000, limit: 60 } })
 @UseGuards(OptionalAuthGuard)
 export class DocumentController {
 
@@ -41,6 +54,7 @@ export class DocumentController {
    * 上传文档（新建文档或新增版本）
    */
   @Post('upload')
+  @Throttle(WRITE_THROTTLE)
   @UseInterceptors(FileInterceptor('file'))
   async uploadDocument(
     @UploadedFile() file: any,
@@ -86,6 +100,7 @@ export class DocumentController {
    * Body: { fileName: string, contentJson: object, contentText: string }
    */
   @Post('save-draft')
+  @Throttle(WRITE_THROTTLE)
   async saveDraft(
     @Body() body: { fileName: string; contentJson: unknown; contentText: string },
   ) {
@@ -154,6 +169,7 @@ export class DocumentController {
    * 批量归档
    */
   @Post('batch-archive')
+  @Throttle(WRITE_THROTTLE)
   async batchArchive(@Body('versionIds') versionIds: number[], @Body('operator') operator?: string) {
     try {
       const count = await this.documentService.batchArchive(versionIds, operator || 'anonymous');
@@ -169,6 +185,7 @@ export class DocumentController {
    * 批量删除
    */
   @Post('batch-delete')
+  @Throttle(WRITE_THROTTLE)
   async batchDelete(@Body('versionIds') versionIds: number[], @Body('operator') operator?: string) {
     try {
       const count = await this.documentService.batchDelete(versionIds, operator || 'anonymous');
@@ -186,6 +203,7 @@ export class DocumentController {
    * 扫描超过 90 天的 archived 版本
    */
   @Post('scheduler/scan-archived')
+  @Throttle(WRITE_THROTTLE)
   async scanArchivedVersions() {
     try {
       const oldVersions = await this.schedulerService.scanArchivedVersions();
@@ -201,6 +219,7 @@ export class DocumentController {
    * 校验向量一致性
    */
   @Post('scheduler/verify-vectors')
+  @Throttle(WRITE_THROTTLE)
   async verifyVectorConsistency() {
     try {
       const result = await this.schedulerService.verifyVectorConsistency();
@@ -216,6 +235,7 @@ export class DocumentController {
    * 清理孤岛向量
    */
   @Post('scheduler/clean-orphans')
+  @Throttle(WRITE_THROTTLE)
   async cleanOrphans() {
     try {
       const count = await this.schedulerService.cleanOrphans();
@@ -231,6 +251,7 @@ export class DocumentController {
    * 重试失败的向量操作
    */
   @Post('scheduler/retry-failed-ops')
+  @Throttle(WRITE_THROTTLE)
   async retryFailedOps() {
     try {
       const result = await this.schedulerService.retryFailedOps();
@@ -246,6 +267,7 @@ export class DocumentController {
    * 清理过期审计日志
    */
   @Post('scheduler/clean-audit-logs')
+  @Throttle(WRITE_THROTTLE)
   async cleanAuditLogs() {
     try {
       const count = await this.schedulerService.cleanOldAuditLogs();
@@ -261,6 +283,7 @@ export class DocumentController {
    * 修复 draft 状态的向量（将 versionStatus=draft 更新为 active）
    */
   @Post('scheduler/fix-draft-vectors')
+  @Throttle(WRITE_THROTTLE)
   async fixDraftVectors() {
     try {
       const result = await this.schedulerService.fixDraftVectors();
@@ -293,6 +316,7 @@ export class DocumentController {
    * reason=source-unavailable 表示源文件已丢失，重试无效，需重新上传文档。
    */
   @Post('pending-ops/:id/retry')
+  @Throttle(WRITE_THROTTLE)
   async retrySingleOp(@Param('id', ParseIntPipe) id: number) {
     try {
       const result = await this.documentService.retrySingleVectorOp(id);
@@ -308,6 +332,7 @@ export class DocumentController {
   }
 
   @Delete('pending-ops/:id')
+  @Throttle(WRITE_THROTTLE)
   async deletePendingOp(@Param('id', ParseIntPipe) id: number) {
     try {
       await this.documentService.deletePendingVectorOp(id);
@@ -348,6 +373,7 @@ export class DocumentController {
    * 复核通过：校验内容未被篡改后发布该版本到知识库
    */
   @Post('scan/:versionId/approve')
+  @Throttle(WRITE_THROTTLE)
   async approveScanReview(
     @Param('versionId', ParseIntPipe) versionId: number,
     @Body('operator') operator?: string,
@@ -366,6 +392,7 @@ export class DocumentController {
    * 复核拒绝：该版本不允许发布
    */
   @Post('scan/:versionId/reject')
+  @Throttle(WRITE_THROTTLE)
   async rejectScanReview(
     @Param('versionId', ParseIntPipe) versionId: number,
     @Body('operator') operator?: string,
@@ -391,6 +418,7 @@ export class DocumentController {
    * - 扫描门禁关闭（DOC_SCAN_ENABLED=false）：scanGate = null，行为与旧版一致
    */
   @Post(':id/versions/:versionId/publish')
+  @Throttle(WRITE_THROTTLE)
   async publishToVectorStore(
     @Param('id', ParseIntPipe) id: number,
     @Param('versionId', ParseIntPipe) versionId: number,
@@ -522,6 +550,7 @@ export class DocumentController {
    * 修改版本状态
    */
   @Patch(':id/versions/:versionId')
+  @Throttle(WRITE_THROTTLE)
   async updateVersionStatus(
     @Param('id', ParseIntPipe) id: number,
     @Param('versionId', ParseIntPipe) versionId: number,
@@ -572,6 +601,7 @@ export class DocumentController {
    * Body: { contentJson: object, contentText: string }
    */
   @Put(':id/content')
+  @Throttle(WRITE_THROTTLE)
   async saveDocumentContent(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: { contentJson: unknown; contentText?: string },
@@ -599,6 +629,7 @@ export class DocumentController {
    * 修改文档元信息
    */
   @Put(':id')
+  @Throttle(WRITE_THROTTLE)
   async updateDocument(
     @Param('id', ParseIntPipe) id: number,
     @Body() body: { title?: string; description?: string; tags?: string[] },
@@ -617,6 +648,7 @@ export class DocumentController {
    * 回滚到指定版本
    */
   @Post(':id/rollback')
+  @Throttle(WRITE_THROTTLE)
   async rollbackVersion(
     @Param('id', ParseIntPipe) id: number,
     @Body('versionId') versionId: number,
@@ -636,6 +668,7 @@ export class DocumentController {
    * 删除特定版本
    */
   @Delete(':id/versions/:versionId')
+  @Throttle(WRITE_THROTTLE)
   async deleteVersion(
     @Param('id', ParseIntPipe) id: number,
     @Param('versionId', ParseIntPipe) versionId: number,
@@ -655,6 +688,7 @@ export class DocumentController {
    * 删除整个文档
    */
   @Delete(':id')
+  @Throttle(WRITE_THROTTLE)
   async deleteDocument(
     @Param('id', ParseIntPipe) id: number,
     @Body('operator') operator?: string,
