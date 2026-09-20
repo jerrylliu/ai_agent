@@ -85,6 +85,9 @@ jest.mock('../config.js', () => ({
   config: {
     dashscopeBaseUrl: 'https://dashscope.aliyuncs.com',
     dashscopeApiKey: 'test-dashscope-key',
+    // 二段式检索（S4.1）：executor 读取该字段计算宽召回候选池；
+    // 缺失会使 Math.max(topK, undefined)=NaN → slice(0, NaN) 返回空结果
+    rerankCandidatePool: 30,
   },
   // 检索增强链路会间接加载 file-storage / rag-service，它们读取该字段取上传根目录；
   // 与真实实现一致锚定项目根，避免测试在系统临时目录创建垃圾目录
@@ -422,8 +425,7 @@ describe('multi-hop-search', () => {
       mainQuery: '数据库 连接 配置',
       subQueries: ['数据库连接方法'],
       keywords: ['数据库', '连接'],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
 
     // LLM 判断无需追问
     mockLLMInvoke.mockResolvedValue({

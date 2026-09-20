@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 语义空转预防机制测试
  *
  * 覆盖 4 个模块：
@@ -297,8 +297,7 @@ describe('evaluateRewriteQuality', () => {
       mainQuery: '项目A 进度',
       subQueries: [],
       keywords: [],
-      wasRewritten: false,
-    };
+      wasRewritten: false, queryType: 'keyword' as const, hypotheticalAnswer: '', };
     const result = evaluateRewriteQuality('项目A 进度', rewritten);
     expect(result.useRewritten).toBe(false);
     expect(result.fallbackReason).toBe('no_rewrite');
@@ -309,8 +308,7 @@ describe('evaluateRewriteQuality', () => {
       mainQuery: '项目A 当前进度情况',
       subQueries: [],
       keywords: [],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
     const result = evaluateRewriteQuality('项目A 进度', rewritten);
     expect(result.useRewritten).toBe(true);
     expect(result.similarity).toBeGreaterThan(0.3);
@@ -321,8 +319,7 @@ describe('evaluateRewriteQuality', () => {
       mainQuery: 'Q2 季度财务报告',
       subQueries: [],
       keywords: [],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
     const result = evaluateRewriteQuality('项目A 进度', rewritten);
     expect(result.useRewritten).toBe(false);
     expect(result.fallbackReason).toBe('semantic_deviation');
@@ -334,8 +331,7 @@ describe('evaluateRewriteQuality', () => {
       mainQuery: '项目A 进度',
       subQueries: [],
       keywords: [],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
     const result = evaluateRewriteQuality('项目A 进度', rewritten);
     expect(result.similarity).toBe(1);
   });

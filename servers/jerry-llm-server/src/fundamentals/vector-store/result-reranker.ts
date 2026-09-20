@@ -363,12 +363,23 @@ async function llmRerank(
     .replace('__QUERY__', query)
     .replace('__DOCUMENTS__', documentsStr);
 
-  const result = await Promise.race([
-    llm.invoke([new HumanMessage(prompt)]),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('重排 LLM 调用超时')), timeout)
-    ),
-  ]);
+  // 带超时的 LLM 调用。
+  // 与 query-rewriter 同因：原 Promise.race 只放弃等待、不取消在途请求，
+  // 被放弃的调用会继续占用 DeepSeek 令牌桶与 fast 池槽位（幽灵负载）。
+  // 改用 AbortSignal.timeout 真正中断；超时文案保持不变，避免影响既有日志统计与调用方判断。
+  const signal = AbortSignal.timeout(timeout);
+  const result = await llm
+    .invoke([new HumanMessage(prompt)], { signal })
+    .catch((error: any) => {
+      const aborted =
+        error?.name === 'AbortError' ||
+        error?.name === 'APIUserAbortError' ||
+        /abort/i.test(String(error?.message ?? ''));
+      if (aborted) {
+        throw new Error('重排 LLM 调用超时');
+      }
+      throw error;
+    });
 
   const content = typeof result.content === 'string' ? result.content : '';
   const scores = parseRerankResponse(content, docsToRerank.length);

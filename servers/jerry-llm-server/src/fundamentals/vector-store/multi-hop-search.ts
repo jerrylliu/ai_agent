@@ -13,9 +13,11 @@
  */
 
 import { logger } from '../logger.js';
+import { config } from '../config.js';
 import { createRateLimitedLLM, buildModelConfig } from '../model-provider.js';
 import { HumanMessage } from '@langchain/core/messages';
 import { hybridSearchKnowledgeBase } from './vector-search.js';
+import { mergeRankedListsByRRF } from './multi-way-rrf.js';
 import type { RewrittenQuery } from './query-rewriter.js';
 import { z } from 'zod';
 import { parseLlmJson } from '../llm-json-parser.js';
@@ -96,6 +98,9 @@ export async function multiHopSearch(
     filter?: Record<string, any>;
     /** 缓存 key 覆盖：传入原始查询确保 FC 模式下同一用户输入命中缓存 */
     cacheKeyOverride?: string;
+    /** 向量路独立嵌入文本（HyDE 假想答案，S4.2）：仅用于第 1 跳（与原始问题对应）；
+     *  第 2 跳起的追问查询由 LLM 生成，语义已偏移，不复用第 1 跳的假想答案 */
+    vectorQueryText?: string;
   },
 ): Promise<MultiHopResult> {
   const maxHops = options?.maxHops ?? 2;
@@ -116,9 +121,10 @@ export async function multiHopSearch(
     cacheKeyOverride: cacheKeyOverride?.substring(0, 100),
   });
 
-  // 未启用多跳，直接执行单次检索
+  // 未启用多跳，直接执行单次检索（HyDE 文本透传，与多跳路径第 1 跳行为一致，
+  // 避免「多跳开 = 有 HyDE、多跳关 = 无 HyDE」的静默不一致）
   if (!enabled) {
-    return singleHopSearch(originalQuery, rewrittenQuery, topK, vectorWeight, bm25Weight, filter, cacheKeyOverride);
+    return singleHopSearch(originalQuery, rewrittenQuery, topK, vectorWeight, bm25Weight, filter, cacheKeyOverride, options?.vectorQueryText);
   }
 
   logger.info('多跳检索开始', {
@@ -128,46 +134,59 @@ export async function multiHopSearch(
     topK,
   });
 
-  const allResults = new Map<string, SearchResult & { hop: number }>();
+  // 各跳结果按跳分组保存（统一 RRF 合并，禁止跨路/跨跳 score 直接比较）
+  // hopLists[0] = 第 1 跳主路（含子查询已内部合并），
+  // hopLists[i] = 第 i+1 跳各子查询合并后的结果
+  const hopLists: Array<SearchResult[]> = [];
   const hopDetails: MultiHopResult['hopDetails'] = [];
 
-  // 第 1 跳：使用改写后的主查询，缓存 key 用原始查询确保命中
+  // 第 1 跳：使用改写后的主查询（替换模式，锚点轮已验证状态），缓存 key 用原始查询确保命中
+  // （增量模式主路=原始查询在 2026-09-18 验证轮 semantic 暴跌至 0.4231，已回滚）
+  // HyDE（S4.2）：第 1 跳与原始问题对应，向量路可使用假想答案嵌入（附加向量路）
   const firstQuery = rewrittenQuery?.mainQuery ?? originalQuery;
-  const firstResults = await hybridSearchKnowledgeBase(firstQuery, hopTopK, vectorWeight, bm25Weight, filter, cacheKeyOverride);
+  const firstResults = await hybridSearchKnowledgeBase(
+    firstQuery,
+    hopTopK,
+    vectorWeight,
+    bm25Weight,
+    filter,
+    cacheKeyOverride,
+    config.retrievalMinSimilarity,
+    undefined,
+    undefined,
+    options?.vectorQueryText,
+  );
 
-  // 记录第 1 跳结果
-  for (const r of firstResults) {
-    if (!allResults.has(r.content)) {
-      allResults.set(r.content, { ...r, hop: 1 });
-    }
-  }
   hopDetails.push({ hop: 1, query: firstQuery, resultCount: firstResults.length });
+  hopLists.push(firstResults);
 
-  // 如果改写产生了子查询，也一并检索
+  // 如果改写产生了子查询，也一并检索（统一 RRF 合并，禁止跨路 score 直接比较）
   if (rewrittenQuery?.subQueries && rewrittenQuery.subQueries.length > 0) {
+    const subLists: SearchResult[][] = [];
     for (const subQ of rewrittenQuery.subQueries) {
-      const subResults = await hybridSearchKnowledgeBase(subQ, hopTopK, vectorWeight, bm25Weight, filter);
-      for (const r of subResults) {
-        if (!allResults.has(r.content)) {
-          allResults.set(r.content, { ...r, hop: 1 });
-        }
-      }
+      const subResults = await hybridSearchKnowledgeBase(subQ, hopTopK, vectorWeight, bm25Weight, filter, undefined, config.retrievalMinSimilarity);
+      subLists.push(subResults);
       hopDetails.push({ hop: 1, query: subQ, resultCount: subResults.length });
     }
+    // 第 1 跳主路结果 + 各子查询路：二次 RRF（主路加权 1.5，附加路 1.0）
+    // 权重倒挂修复（2026-09-18）：旧实现直接按 score 排序合并，子查询满权向量路的
+    // rank-1 分系统性压过主路（HyDE 集成时主向量路权重减半），池口截断丢主路强块
+    // 合并结果覆盖 hopLists[0]（第 1 跳 = 主路 + 子查询的联合列表）
+    hopLists[0] = mergeRankedListsByRRF([firstResults, ...subLists], 1.5);
   }
 
   logger.info('第 1 跳完成', {
     module: 'MultiHopSearch',
     query: firstQuery,
     resultCount: firstResults.length,
-    totalUniqueResults: allResults.size,
+    totalUniqueResults: hopLists[0].length,
   });
 
   // 后续跳：LLM 判断是否需要追问
   let currentHop = 1;
   while (currentHop < maxHops) {
-    // 构建当前结果摘要供 LLM 判断
-    const resultsSummary = Array.from(allResults.values())
+    // 构建当前结果摘要供 LLM 判断（用第 1 跳联合列表的前 5 条）
+    const resultsSummary = hopLists[0]
       .slice(0, 5)
       .map((r, i) => `[${i + 1}] ${r.content.substring(0, 150)}`)
       .join('\n');
@@ -193,34 +212,34 @@ export async function multiHopSearch(
       followUpQueries: followUp.queries,
     });
 
-    // 执行追问检索
+    // 执行追问检索（追问各路结果合并为一跳列表）
+    const followUpLists: SearchResult[][] = [];
     for (const q of followUp.queries) {
-      const hopResults = await hybridSearchKnowledgeBase(q, hopTopK, vectorWeight, bm25Weight, filter);
-      let newCount = 0;
-      for (const r of hopResults) {
-        if (!allResults.has(r.content)) {
-          allResults.set(r.content, { ...r, hop: currentHop });
-          newCount++;
-        }
-      }
+      const hopResults = await hybridSearchKnowledgeBase(q, hopTopK, vectorWeight, bm25Weight, filter, undefined, config.retrievalMinSimilarity);
+      followUpLists.push(hopResults);
       hopDetails.push({ hop: currentHop, query: q, resultCount: hopResults.length });
+    }
+    if (followUpLists.length > 0) {
+      // 追问查询互相平等（无主次），统一 RRF 合并成一跳的联合列表
+      hopLists.push(mergeRankedListsByRRF(followUpLists, 1.0));
     }
 
     logger.info(`第 ${currentHop} 跳完成`, {
       module: 'MultiHopSearch',
-      totalUniqueResults: allResults.size,
+      totalUniqueResults: hopLists[hopLists.length - 1].length,
     });
   }
 
-  // 按分数排序，取 topK
-  const finalResults = Array.from(allResults.values())
-    .sort((a, b) => b.score - a.score)
+  // 最终合并：各跳列表统一 RRF（第 1 跳主路加权 1.5 保主查询信号，后续跳 1.0）
+  const finalMerged = mergeRankedListsByRRF(hopLists, 1.5);
+  const finalResults = finalMerged
+    .map((r) => ({ ...r, hop: hopIndexOf(r.content, hopLists) ?? 1 }))
     .slice(0, topK);
 
   logger.info('多跳检索完成', {
     module: 'MultiHopSearch',
     hopsExecuted: currentHop,
-    totalUniqueResults: allResults.size,
+    totalUniqueResults: finalMerged.length,
     finalResultCount: finalResults.length,
   });
 
@@ -229,6 +248,16 @@ export async function multiHopSearch(
     hopsExecuted: currentHop,
     hopDetails,
   };
+}
+
+/**
+ * 定位统一 RRF 合并结果在各跳列表中的原始归属（用于 hop 标记，找不到返回 undefined）
+ */
+function hopIndexOf(content: string, hopLists: SearchResult[][]): number | undefined {
+  for (let i = 0; i < hopLists.length; i++) {
+    if (hopLists[i].some((r) => r.content === content)) return i + 1;
+  }
+  return undefined;
 }
 
 /**
@@ -242,37 +271,46 @@ async function singleHopSearch(
   bm25Weight: number,
   filter?: Record<string, any>,
   cacheKeyOverride?: string,
+  /** 向量路独立嵌入文本（HyDE 假想答案，可空） */
+  vectorQueryText?: string,
 ): Promise<MultiHopResult> {
+  const hopDetails: MultiHopResult['hopDetails'] = [];
+  // 主路用改写后的主查询（替换模式，与第 1 跳主路径口径一致）；缺省回落原始查询
   const mainQuery = rewrittenQuery?.mainQuery ?? originalQuery;
-  const results = await hybridSearchKnowledgeBase(mainQuery, topK, vectorWeight, bm25Weight, filter, cacheKeyOverride);
+  const mainResults = await hybridSearchKnowledgeBase(
+    mainQuery,
+    topK,
+    vectorWeight,
+    bm25Weight,
+    filter,
+    cacheKeyOverride,
+    config.retrievalMinSimilarity,
+    undefined,
+    undefined,
+    vectorQueryText,
+  );
+  hopDetails.push({ hop: 1, query: mainQuery, resultCount: mainResults.length });
 
-  const allResults = new Map<string, SearchResult & { hop: number }>();
-  for (const r of results) {
-    if (!allResults.has(r.content)) {
-      allResults.set(r.content, { ...r, hop: 1 });
-    }
-  }
-
-  // 子查询也检索
+  // 子查询也检索（各子查询为独立一路，与主路统一 RRF 合并）
+  const rankedLists: SearchResult[][] = [mainResults];
   if (rewrittenQuery?.subQueries) {
     for (const subQ of rewrittenQuery.subQueries) {
-      const subResults = await hybridSearchKnowledgeBase(subQ, topK, vectorWeight, bm25Weight, filter);
-      for (const r of subResults) {
-        if (!allResults.has(r.content)) {
-          allResults.set(r.content, { ...r, hop: 1 });
-        }
-      }
+      const subResults = await hybridSearchKnowledgeBase(subQ, topK, vectorWeight, bm25Weight, filter, undefined, config.retrievalMinSimilarity);
+      rankedLists.push(subResults);
+      hopDetails.push({ hop: 1, query: subQ, resultCount: subResults.length });
     }
   }
 
-  const finalResults = Array.from(allResults.values())
-    .sort((a, b) => b.score - a.score)
+  // 统一 RRF 合并（主路加权 1.5，附加路 1.0）：只看路内排名做融合，
+  // 杜绝跨路 score 直接比较（权重倒挂修复，与多跳路径口径一致）
+  const finalResults = mergeRankedListsByRRF(rankedLists, 1.5)
+    .map((r) => ({ ...r, hop: 1 }))
     .slice(0, topK);
 
   return {
     results: finalResults,
     hopsExecuted: 1,
-    hopDetails: [{ hop: 1, query: mainQuery, resultCount: results.length }],
+    hopDetails,
   };
 }
 

@@ -37,6 +37,8 @@ export interface CacheSlots {
   bm25Weight: number;
   /** 检索类型标识 */
   type: string;
+  /** 是否启用 HyDE 双向量路（有/无 HyDE 的融合结果不同，不能跨状态复用缓存） */
+  hyde?: boolean;
 }
 
 /** cache key 索引条目 */
@@ -147,6 +149,9 @@ function isSlotsCompatible(a: CacheSlots, b: CacheSlots): boolean {
   // 权重必须相同（浮点数精确比较，因为同一配置来源值相同）
   if (a.vectorWeight !== b.vectorWeight) return false;
   if (a.bm25Weight !== b.bm25Weight) return false;
+
+  // HyDE 状态必须相同（undefined 与 false 视为等价：都是无 HyDE）
+  if (!!a.hyde !== !!b.hyde) return false;
 
   // filter 深度比较
   const filterA = JSON.stringify(a.filter ?? {});

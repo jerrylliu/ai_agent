@@ -129,6 +129,8 @@ export class KnowledgeController {
         subQueries: string[];
         keywords: string[];
         wasRewritten: boolean;
+        queryType: 'keyword' | 'semantic';
+        hypotheticalAnswer: string;
       };
       try {
         rewritten = await rewriteQuery(query);
@@ -143,7 +145,14 @@ export class KnowledgeController {
           module: 'KnowledgeController',
           error: error.message,
         });
-        rewritten = { mainQuery: query, subQueries: [], keywords: [], wasRewritten: false };
+        rewritten = {
+          mainQuery: query,
+          subQueries: [],
+          keywords: [],
+          wasRewritten: false,
+          queryType: 'keyword',
+          hypotheticalAnswer: '',
+        };
       }
 
       // ==================== 阶段2：多跳混合搜索（与聊天管线一致） ====================
@@ -202,7 +211,7 @@ export class KnowledgeController {
           results: fallback.results.map((r) => ({ ...r, hop: 1 })),
           hopsExecuted: 1,
           hopDetails: [
-            { hop: 1, query: rewritten.mainQuery, resultCount: fallback.results.length },
+            { hop: 1, query, resultCount: fallback.results.length },
           ],
         };
         logger.info('降级单次混合搜索完成', {

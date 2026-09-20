@@ -248,6 +248,36 @@ const RootSchema = z.object({
    */
   bm25Engine: z.enum(['minisearch', 'tantivy']).default('minisearch'),
 
+  /**
+   * RAG 语义缓存（L3）总开关，默认 true（生产保持开启，行为与开关引入前完全一致）
+   * 设为 false 时 rag-service 两处 cacheable 判定同时短路 get/set，
+   * 用途：ERB benchmark 评测必须关闭缓存，避免同义题命中缓存导致检索链路被短路、
+   * 结果失真（方案 §5.2 坑 4 / 红线 #4）；禁止用 topK≠3 之类的隐式参数绕过
+   */
+  semanticCacheEnabled: zBoolFromString(true),
+
+  /**
+   * 二段式检索：宽召回候选池宽度（rerank 精排前的召回数量上限）
+   * - 工具层按 max(LLM top_k, 此值) 宽召回 → rerank 精排 → 按 LLM top_k 截断返回，
+   *   最终返回条数与默认口径一致（top_k 默认 6），只扩大精排的候选面
+   * - 攻击点：top-10 → top-3 的排序截断损失（2026-09-17 ERB 诊断：
+   *   Recall@10 0.806 → Recall@3 0.632，17pp 损失发生在截断而非召回）
+   * - 默认 50：qwen3-vl-rerank 单次支持 100 文档，50 候选重排延迟约 +0.8s；
+   *   2026-09-19 评测验证池 50 对冲统一 RRF 的池口挤出效应（30 题联验 R@3 +13.3pp）
+   */
+  rerankCandidatePool: z.coerce.number().int().positive().default(50),
+
+  /**
+   * 向量检索最小相似度阈值（ChromaDB cosine 距离上限；score > 阈值的结果被过滤）
+   * - ⚠️ 方向注意：score 是 cosine 距离（越小越相似），本值是"距离上限"——
+   *   调高（0.55→0.65→0.70）= 放宽 = 召回↑噪声↑（由 rerank 兜底）；调低 = 更严格 = 召回↓
+   * - 默认 0.55（经验值）：2026-09-18 内部评测实测 Recall@10 = 0.84，
+   *   约 16% 的 gold 文档（主要是 semantic 题型，gold 距离分布偏远）被该阈值挡在候选池外——
+   *   阈值分档实验向放宽方向（0.65/0.70）寻找"召回天花板更高且 Precision 不崩"的平衡档
+   * - 影响面：纯向量检索、混合检索（含 HyDE 双向量路）、多跳、子查询、RAG 注入路径
+   */
+  retrievalMinSimilarity: z.coerce.number().min(0).max(1).default(0.55),
+
   ollamaBaseUrl: z.string().min(1).default('http://localhost:11434'),
   chromaUrl: z.string().min(1).default('http://localhost:8000'),
   /**
@@ -312,6 +342,9 @@ function buildRawConfig() {
     jwtSecret: env.JWT_SECRET,
 
     bm25Engine: env.BM25_ENGINE,
+    semanticCacheEnabled: env.SEMANTIC_CACHE_ENABLED,
+    rerankCandidatePool: env.RETRIEVAL_CANDIDATE_POOL,
+    retrievalMinSimilarity: env.RETRIEVAL_MIN_SIMILARITY,
 
     ollamaBaseUrl: env.OLLAMA_BASE_URL,
     chromaUrl: env.CHROMA_URL,
@@ -488,6 +521,15 @@ export const config = {
 
   /** BM25 引擎选型：'minisearch' | 'tantivy'（进程级全局单例，启动时确定） */
   bm25Engine: parsed.bm25Engine,
+
+  /** RAG 语义缓存总开关（默认 true；benchmark 评测设 false，见 .env.example 说明） */
+  semanticCacheEnabled: parsed.semanticCacheEnabled,
+
+  /** 二段式检索：宽召回候选池宽度（rerank 精排前的召回数量上限，默认 30） */
+  rerankCandidatePool: parsed.rerankCandidatePool,
+
+  /** 向量检索最小相似度阈值（cosine 距离，默认 0.55；阈值分档实验用 env 覆盖） */
+  retrievalMinSimilarity: parsed.retrievalMinSimilarity,
 
   db: parsed.db,
 

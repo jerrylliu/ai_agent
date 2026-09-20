@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 语义空转防线验证脚本
  *
  * 模拟 FC 循环内的工具调用场景，验证 Layer 1/2 是否正确触发。
@@ -128,20 +128,17 @@ describe('【场景 3b】keywords 作 cache key 源 - 修复改写后 mainQuery 
       mainQuery: '干员 液氮 技能 ability skill',
       subQueries: [],
       keywords: ['干员', '液氮', '技能'],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
     const rewrite2: RewrittenQuery = {
       mainQuery: '干员 液氮 技能 skill power',
       subQueries: [],
       keywords: ['干员', '液氮', '技能'],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
     const rewrite3: RewrittenQuery = {
       mainQuery: '干员 液氮 技能 talent capability',
       subQueries: [],
       keywords: ['干员', '液氮', '技能'],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
 
     // 旧方案：用 mainQuery 作 cache key 源 → 每次不同
     const oldKey1 = buildNormalizedCacheKey(rewrite1.mainQuery);
@@ -182,8 +179,7 @@ describe('【场景 4】改写偏差兜底 - 偏差大时降级', () => {
       mainQuery: '项目A 当前进度情况',
       subQueries: [],
       keywords: [],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
     const goodResult = evaluateRewriteQuality('项目A 进度', goodRewrite);
     console.log('改写合理:');
     console.log('  输入: "项目A 进度" → 改写: "' + goodRewrite.mainQuery + '"');
@@ -195,8 +191,7 @@ describe('【场景 4】改写偏差兜底 - 偏差大时降级', () => {
       mainQuery: 'Q2 季度财务报告',
       subQueries: [],
       keywords: [],
-      wasRewritten: true,
-    };
+      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
     const badResult = evaluateRewriteQuality('项目A 进度', badRewrite);
     console.log('\n改写偏差大:');
     console.log('  输入: "项目A 进度" → 改写: "' + badRewrite.mainQuery + '"');

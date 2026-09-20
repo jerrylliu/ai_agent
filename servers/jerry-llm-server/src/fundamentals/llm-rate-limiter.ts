@@ -306,7 +306,16 @@ export class LLMRateLimiter {
       return result;
     } catch (error: any) {
       const execMs = Date.now() - execStart;
-      const isAbort = error.name === 'AbortError' || error.message === 'This operation was aborted';
+      // abort 判定必须覆盖各家 SDK 的命名：
+      // - AbortError：标准 DOMException
+      // - APIUserAbortError：openai SDK 主动取消时抛出的名字（DeepSeek 走同一 SDK）
+      // - 消息含 abort（如 AbortSignal.timeout 的 "The operation was aborted due to timeout"）
+      // 漏判会让「被取消的调用」既不退还令牌又被记为异常，桶被白白抽干、后续排队加剧
+      const isAbort =
+        error.name === 'AbortError' ||
+        error.name === 'APIUserAbortError' ||
+        error.message === 'This operation was aborted' ||
+        /abort/i.test(String(error.message ?? ''));
 
       if (isAbort) {
         // abort 是正常行为（用户继续打字触发新请求），退还令牌避免耗尽
