@@ -13,10 +13,12 @@ import { z } from 'zod';
 import { hybridSearchKnowledgeBase } from '../vector-store';
 import { rewriteQuery, type RewrittenQuery } from '../vector-store/query-rewriter';
 import { multiHopSearch, type MultiHopResult } from '../vector-store/multi-hop-search';
+import { mergeRankedListsByRRF } from '../vector-store/multi-way-rrf';
 import { rerankResults, type RerankedResult } from '../vector-store/result-reranker';
 import { logger } from '../logger';
+import { config } from '../config';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
-import { enrichWithImageDescriptions } from '../rag-service';
+import { enrichWithImageDescriptions, dedupeByNormalizedContent } from '../rag-service';
 import { buildNormalizedCacheKey } from '../cache-key-normalizer';
 import { evaluateRewriteQuality } from '../query-rewriter-fallback';
 
@@ -35,8 +37,8 @@ export const searchKnowledgeBaseParamsSchema = z.object({
     .number()
     .int()
     .positive()
-    .default(3)
-    .describe('返回的最相关文档数量，默认3'),
+    .default(6)
+    .describe('返回的最相关文档数量，默认6'),
   document_id: z
     .number()
     .int()
@@ -152,6 +154,13 @@ export async function executeSearchKnowledgeBase(
   const topK = parsed.data.top_k;
   const documentId = parsed.data.document_id;
 
+  // 二段式检索（宽召回 → 精排 → 收口）：
+  // 召回阶段按 candidateCount 宽取（默认 30），交给 reranker 精排后在函数末尾
+  // 按 topK 截断返回 —— 最终返回条数与默认口径一致（top_k 默认 6），
+  // 只扩大精排的候选面，攻击 top-10 → top-3 的排序截断损失。
+  // 上下取 max 是为了兼容 LLM 显式要更多结果的场景（top_k > 候选池时以 LLM 为准）
+  const candidateCount = Math.max(topK, config.rerankCandidatePool);
+
   logger.info('FC工具 [search_knowledge_base] 开始执行（增强版）', {
     module: 'Tool:SearchKnowledgeBase',
     query,
@@ -160,9 +169,11 @@ export async function executeSearchKnowledgeBase(
     options: opts,
   });
 
-  const enableQueryRewrite = opts.enableQueryRewrite ?? true;
   const enableMultiHop = opts.enableMultiHop ?? true;
   const enableRerank = opts.enableRerank ?? true;
+  // 诊断开关（消融实验专用）：ERB_DISABLE_REWRITE=1 强制关闭查询改写（连级 HyDE 一并关闭），
+  // 用于评测 (off,off) 对照轮。生产环境不设置该变量，行为与之前完全一致。
+  const enableQueryRewrite = opts.enableQueryRewrite ?? process.env.ERB_DISABLE_REWRITE !== '1';
   const filter: Record<string, string> = {};
 
   if (documentId) {
@@ -246,58 +257,64 @@ export async function executeSearchKnowledgeBase(
       searchResult = await multiHopSearch(
         query,
         rewrittenQuery,
-        topK,
+        candidateCount,
         {
           maxHops: opts.maxHops ?? 2,
           enabled: true,
           modelId: opts.modelId,
           filter: Object.keys(filter).length > 0 ? filter : undefined,
           cacheKeyOverride,
+          // HyDE（S4.2）：semantic 类查询用假想答案做第 1 跳向量嵌入
+          vectorQueryText: rewrittenQuery?.hypotheticalAnswer || undefined,
         },
       );
     } else {
-      // 单跳：直接用改写后的查询检索
+      // 单跳：主路用改写后的主查询（替换模式，锚点轮已验证状态 0.760）；
+      // 增量模式（主路=原始查询）在 2026-09-18 验证轮 semantic 暴跌至 0.4231，已回滚。
       // 传入 cacheKeyOverride = 归一化 keywords 指纹，确保相同语义查询命中缓存
       // 传入 keywords + sessionId：Level 1 miss 时走 Level 2 模糊匹配
-      const effectiveQuery = rewrittenQuery?.mainQuery ?? query;
       const rawResults = await hybridSearchKnowledgeBase(
-        effectiveQuery,
-        topK,
+        rewrittenQuery?.mainQuery ?? query,
+        candidateCount,
         0.7,
         0.3,
         Object.keys(filter).length > 0 ? filter : undefined,
         cacheKeyOverride,
-        0.55,
+        config.retrievalMinSimilarity,
         // Level 2/3 参数：keywords 用于 Jaccard 模糊匹配，sessionId 用于按会话索引
         rewrittenQuery?.keywords,
         context?.sessionId,
+        // HyDE（S4.2）：假想答案作附加向量路，主向量路用主查询
+        rewrittenQuery?.hypotheticalAnswer || undefined,
       );
       searchResult = {
         results: rawResults.map(r => ({ ...r, hop: 1 })),
         hopsExecuted: 1,
-        hopDetails: [{ hop: 1, query: effectiveQuery, resultCount: rawResults.length }],
+        hopDetails: [{ hop: 1, query, resultCount: rawResults.length }],
       };
 
-      // 子查询也检索
+      // 子查询也检索（各子查询为独立一路，与主路统一 RRF 合并，禁止跨路 score 直接比较）
       if (rewrittenQuery?.subQueries && rewrittenQuery.subQueries.length > 0) {
+        const rankedLists: Array<typeof rawResults> = [rawResults];
         for (const subQ of rewrittenQuery.subQueries) {
           const subResults = await hybridSearchKnowledgeBase(
             subQ,
-            topK,
+            candidateCount,
             0.7,
             0.3,
             Object.keys(filter).length > 0 ? filter : undefined,
+            undefined,
+            config.retrievalMinSimilarity,
           );
-          for (const r of subResults) {
-            if (!searchResult.results.some(existing => existing.content === r.content)) {
-              searchResult.results.push({ ...r, hop: 1 });
-            }
-          }
+          rankedLists.push(subResults);
           searchResult.hopDetails.push({ hop: 1, query: subQ, resultCount: subResults.length });
         }
-        // 重新排序取 topK
-        searchResult.results.sort((a, b) => b.score - a.score);
-        searchResult.results = searchResult.results.slice(0, topK);
+        // 二次 RRF（主路加权 1.5，附加路 1.0）：权重倒挂修复——旧实现按 score 排序合并，
+        // 子查询满权向量路的 rank-1 分系统性压过主路（HyDE 集成时主向量路权重减半）。
+        // 截断到候选池上限（先不收口到 topK，留给 rerank 精排后统一截断）
+        searchResult.results = mergeRankedListsByRRF(rankedLists, 1.5)
+          .map((r) => ({ ...r, hop: 1 }))
+          .slice(0, candidateCount);
       }
     }
 
@@ -369,6 +386,25 @@ export async function executeSearchKnowledgeBase(
     }));
   }
 
+  // ==================== 二段式收口：父块去重 → 按 top_k 截断 ====================
+  // 先按归一化内容去重再截断：Parent-Child 架构下同一父块的多个子块可能同时进
+  // 精排池（content 均已替换为父块全文），不去重会浪费 topK 名额在重复文本上；
+  // 去重后让出的名额由唯一块补位，单次调用的可见信息面直接变大（生成侧提纯）。
+  // 宽召回池（candidateCount）精排完成后，按 LLM 请求的 top_k 截断返回，
+  // 最终返回条数与默认口径一致（top_k 默认 6），上下文不因宽召回而膨胀。
+  // 重排关闭/失败时同样生效（此时为原始 score 排序的前 topK 条）。
+  rerankedResults.sort((a, b) => b.score - a.score);
+  const beforeDedupCount = rerankedResults.length;
+  rerankedResults = dedupeByNormalizedContent(rerankedResults);
+  if (rerankedResults.length < beforeDedupCount) {
+    logger.info('FC工具 [search_knowledge_base] 精排后父块去重', {
+      module: 'Tool:SearchKnowledgeBase',
+      before: beforeDedupCount,
+      after: rerankedResults.length,
+    });
+  }
+  rerankedResults = rerankedResults.slice(0, topK);
+
   // ==================== 构建最终结果 ====================
   const totalDuration = Date.now() - totalStartTime;
   timings.total = totalDuration;
@@ -424,6 +460,10 @@ export async function executeSearchKnowledgeBase(
     duration: totalDuration,
     meta: finalResult.meta,
     resultScores: mappedResults.map(r => r.score.toFixed(4)),
+    // 生成侧提纯链路探针（每次检索必打，与触发条件无关，用于部署后确认新代码生效）：
+    // ver>=20260919 = 统一 RRF 合并 + 精排后父块去重 + 文档分组组装 三改动在线
+    ver: '20260919',
+    dedupedCount: beforeDedupCount - rerankedResults.length,
   });
 
   return finalResult;

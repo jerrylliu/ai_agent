@@ -22,6 +22,28 @@ import { LRUCache, searchCache } from '../cache.js';
 import { cacheFuzzyMatcher, type CacheSlots } from '../cache-fuzzy-matcher.js';
 import { cacheAliasLearner } from '../cache-alias-learner.js';
 
+// ==================== 基础设施失败计数（评测熔断判据） ====================
+
+/**
+ * 检索基础设施（Chroma 向量库 / BM25 索引）累计失败次数。
+ *
+ * 检索失败会在下方两个 catch 中被吞掉并返回空结果（生产弹性设计：单路失败不阻断
+ * 另一路），但评测场景下静默退化会污染数据——向量路 0 命中 → RRF 退化为纯 BM25
+ * 单路，题目不报错但 Document Recall 失真（2026-09-17 HyDE 第 4 轮实测 161 题污染）。
+ * 评测 runner 在每题开始前轮询此计数，超阈值即熔断中止（已有结果保留，--resume 续传）。
+ */
+let searchInfraFailureCount = 0;
+
+/** 读取检索基础设施累计失败次数（评测 runner 熔断判据） */
+export function getSearchInfraFailureCount(): number {
+  return searchInfraFailureCount;
+}
+
+/** 重置计数（评测 runner 启动时归零基线用） */
+export function resetSearchInfraFailureCount(): void {
+  searchInfraFailureCount = 0;
+}
+
 // ==================== 纯向量检索 ====================
 
 /**
@@ -144,11 +166,13 @@ export async function searchKnowledgeBase(
 
     return finalResults;
   } catch (error: any) {
+    searchInfraFailureCount++;
     logger.error('搜索失败', {
       module: 'VectorStore',
       query: query.substring(0, 100),
       error: error.message,
       errorStack: error.stack?.substring(0, 300),
+      infraFailureCount: searchInfraFailureCount,
     });
     return [];
   }
@@ -174,6 +198,10 @@ export async function searchKnowledgeBase(
  * @param minSimilarity 向量检索最小相似度阈值（cosine 距离，越小越相似），默认 0.55
  * @param keywords 查询关键词（Level 2 模糊匹配用，来自查询改写的 keywords 字段）
  * @param sessionId 会话 ID（Level 2 模糊匹配按会话维度索引）
+ * @param vectorQueryText 向量路独立嵌入文本（HyDE 假想答案，集成模式）：传入时主查询与
+   *        该文本各做一次向量检索并 RRF 融合（主查询信号永不丢失，假想答案为增量信号），
+   *        BM25 仍用 query（关键词匹配需要真实术语）。语义类查询问题与文档用词不重叠，
+   *        用假想答案嵌入与真文档的向量相似度更高。缺省 = 仅主查询单路（行为与改造前一致）。
  */
 export async function hybridSearchKnowledgeBase(
   query: string,
@@ -191,6 +219,8 @@ export async function hybridSearchKnowledgeBase(
   keywords?: string[],
   /** 会话 ID（Level 2 模糊匹配按会话维度索引） */
   sessionId?: string,
+  /** 向量路独立嵌入文本（HyDE 假想答案，可空）：非空时启用主查询+HyDE 双向量路 RRF 融合 */
+  vectorQueryText?: string,
 ): Promise<Array<{ content: string; metadata: any; score: number; vectorScore?: number; sources: string[] }>> {
   logger.info('混合搜索知识库', { module: 'VectorStore', query: query.substring(0, 100), vectorWeight, bm25Weight, cacheKeyOverride: cacheKeyOverride?.substring(0, 100), hasKeywords: !!(keywords && keywords.length > 0) });
 
@@ -213,9 +243,13 @@ export async function hybridSearchKnowledgeBase(
   }
 
   // ==================== 缓存 key 生成 ====================
+  // HyDE 状态必须参与缓存 key：同一请求第一次改写超时（无 HyDE）、第二次改写成功（有 HyDE）时，
+  // 若 key 不区分会命中 L1 缓存返回无 HyDE 的旧结果，增量信号被静默吞掉。
+  // 用布尔标志而非假想答案全文哈希——LLM 生成文本每次略有差异，全文哈希会让 FC 缓存几乎永久失效
+  const hydeText = vectorQueryText?.trim() || '';
   const cacheKey = cacheKeyOverride
-    ? LRUCache.makeKey(cacheKeyOverride, { ...filter, _type: 'hybrid', _vw: vw, _bw: bw })
-    : LRUCache.makeKey(query, { ...filter, _type: 'hybrid', _vw: vw, _bw: bw });
+    ? LRUCache.makeKey(cacheKeyOverride, { ...filter, _type: 'hybrid', _vw: vw, _bw: bw, _hyde: hydeText ? 1 : 0 })
+    : LRUCache.makeKey(query, { ...filter, _type: 'hybrid', _vw: vw, _bw: bw, _hyde: hydeText ? 1 : 0 });
   logger.info('混合搜索缓存key生成', {
     module: 'VectorStore',
     caller: cacheKeyOverride ? 'FC工具路径' : '非FC路径(子查询/2跳/RAG)',
@@ -252,6 +286,7 @@ export async function hybridSearchKnowledgeBase(
       vectorWeight: vw,
       bm25Weight: bw,
       type: 'hybrid',
+      hyde: !!hydeText,
     };
     const fuzzyMatch = cacheFuzzyMatcher.findFuzzyMatch(sessionId, keywords, slots);
     if (fuzzyMatch.matched && fuzzyMatch.cacheKey) {
@@ -287,16 +322,30 @@ export async function hybridSearchKnowledgeBase(
     }
   }
 
-  // 并行执行向量检索和 BM25 检索
-  // 向量检索内部也有缓存，传入 cacheKeyOverride 保持一致
-  const [vectorResults, bm25Results] = await Promise.all([
+  // 并行执行主查询向量、HyDE 向量与 BM25 三路检索
+  // 向量检索内部也有缓存，主查询传入 cacheKeyOverride 保持一致
+  // HyDE 集成模式（S4.2 第三轮迭代）：主查询与假想答案各检索一次、RRF 融合——
+  // 主查询信号永不丢失（keyword 题不受损），假想答案作为增量信号（semantic 题受益，
+  // 与真文档用词重叠度更高）；BM25 路仍用 query（关键词匹配需要真实术语）
+  if (hydeText) {
+    logger.info('混合检索启用 HyDE 集成模式（主查询+假想答案双向量路）', {
+      module: 'VectorStore',
+      hydeTextPreview: hydeText.substring(0, 100),
+      hydeTextLength: hydeText.length,
+    });
+  }
+  const [vectorResults, hydeVectorResults, bm25Results] = await Promise.all([
     searchKnowledgeBase(query, topK * 2, minSimilarity, filter, cacheKeyOverride),
+    hydeText
+      ? searchKnowledgeBase(hydeText, topK * 2, minSimilarity, filter)
+      : Promise.resolve([] as Array<{ content: string; metadata: any; score: number }>),
     bm25Search(query, topK * 2, filter),
   ]);
 
-  logger.info('混合搜索两路检索完成', {
+  logger.info('混合搜索多路检索完成', {
     module: 'VectorStore',
     vectorResultCount: vectorResults.length,
+    hydeVectorResultCount: hydeVectorResults.length,
     bm25ResultCount: bm25Results.length,
   });
 
@@ -309,11 +358,16 @@ export async function hybridSearchKnowledgeBase(
   // 统一"越大越相似"方向，避免上层把距离当相似度使用导致排序反转
   const fusedScores = new Map<string, { content: string; metadata: any; vectorRank?: number; bm25Rank?: number; score: number; vectorScore?: number }>();
 
-  // 向量检索结果
+  // 向量路权重分配（HyDE 集成模式）：有假想答案时主向量路与 HyDE 向量路各占 vw 的一半，
+  // 无假想答案时主向量路独占 vw（行为与改造前完全一致）
+  const mainVectorWeight = hydeText ? vw * 0.5 : vw;
+  const hydeVectorWeight = vw * 0.5;
+
+  // 主查询向量检索结果
   vectorResults.forEach((result, rank) => {
     const key = result.content;
     const existing = fusedScores.get(key);
-    const rrfScore = vw / (K + rank + 1);
+    const rrfScore = mainVectorWeight / (K + rank + 1);
 
     if (existing) {
       existing.vectorRank = rank + 1;
@@ -326,6 +380,31 @@ export async function hybridSearchKnowledgeBase(
         metadata: result.metadata,
         vectorRank: rank + 1,
         // result.score 是 searchKnowledgeBase 返回的 cosine 距离，转成相似度后存储
+        vectorScore: 1 - result.score,
+        score: rrfScore,
+      });
+    }
+  });
+
+  // HyDE 假想答案向量检索结果（增量信号：与主查询命中同一文档时 RRF 分数叠加）
+  hydeVectorResults.forEach((result, rank) => {
+    const key = result.content;
+    const existing = fusedScores.get(key);
+    const rrfScore = hydeVectorWeight / (K + rank + 1);
+
+    if (existing) {
+      // vectorRank/vectorScore 保留主向量路的值（上层阈值过滤以主查询口径为准），
+      // 仅当文档未被主查询命中时才采用 HyDE 路的分数
+      if (existing.vectorRank === undefined) {
+        existing.vectorRank = rank + 1;
+        existing.vectorScore = 1 - result.score;
+      }
+      existing.score += rrfScore;
+    } else {
+      fusedScores.set(key, {
+        content: result.content,
+        metadata: result.metadata,
+        vectorRank: rank + 1,
         vectorScore: 1 - result.score,
         score: rrfScore,
       });
@@ -359,6 +438,7 @@ export async function hybridSearchKnowledgeBase(
   logger.info('混合搜索完成', {
     module: 'VectorStore',
     vectorResultCount: vectorResults.length,
+    hydeVectorResultCount: hydeVectorResults.length,
     bm25ResultCount: bm25Results.length,
     fusedResultCount: results.length,
   });
@@ -397,6 +477,7 @@ export async function hybridSearchKnowledgeBase(
       vectorWeight: vw,
       bm25Weight: bw,
       type: 'hybrid',
+      hyde: !!hydeText,
     };
     cacheFuzzyMatcher.record(sessionId, cacheKey, keywords, slots);
     logger.debug('缓存模糊匹配索引已记录', {
@@ -495,11 +576,13 @@ async function bm25Search(
       return r;
     });
   } catch (error: any) {
+    searchInfraFailureCount++;
     logger.warn('BM25 搜索失败', {
       module: 'VectorStore',
       query: query.substring(0, 100),
       error: error.message,
       errorStack: error.stack?.substring(0, 300),
+      infraFailureCount: searchInfraFailureCount,
     });
     return [];
   }

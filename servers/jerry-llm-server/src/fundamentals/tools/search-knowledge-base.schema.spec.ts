@@ -44,19 +44,19 @@ describe('searchKnowledgeBaseSchema 结构', () => {
     expect(propKeys).not.toContain('_options');
   });
 
-  it('query 必填、top_k 默认 3、document_id optional', () => {
+  it('query 必填、top_k 默认 6、document_id optional', () => {
     const params = searchKnowledgeBaseSchema.function.parameters as any;
     expect(params.required).toEqual(['query']);
-    expect(params.properties.top_k.default).toBe(3);
+    expect(params.properties.top_k.default).toBe(6);
   });
 });
 
 describe('searchKnowledgeBaseParamsSchema 校验', () => {
-  it('合法 query 应通过', () => {
+  it('合法 query 应通过，top_k 缺省时取默认值 6', () => {
     const r = searchKnowledgeBaseParamsSchema.safeParse({ query: 'hello' });
     expect(r.success).toBe(true);
     if (r.success) {
-      expect(r.data.top_k).toBe(3);
+      expect(r.data.top_k).toBe(6);
     }
   });
 

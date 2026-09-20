@@ -65,6 +65,13 @@ jest.mock('./vector-store/bm25-index', () => ({
   initializeBM25Index: jest.fn(),
 }));
 
+// Mock BM25 引擎窄接口：默认无命中（与未初始化时 catch 返回 [] 的旧行为一致），
+// HyDE 集成模式测试用它断言「BM25 路仍用原始查询」
+const mockBm25Search = jest.fn();
+jest.mock('./vector-store/bm25-engine', () => ({
+  getBM25Engine: () => ({ search: mockBm25Search }),
+}));
+
 import { LRUCache, searchCache } from './cache';
 import { searchKnowledgeBase, hybridSearchKnowledgeBase } from './vector-store/vector-search';
 
@@ -284,6 +291,97 @@ describe('vector-search 缓存逻辑', () => {
       const k1 = LRUCache.makeKey('机器学习');
       const k2 = LRUCache.makeKey('深度学习');
       expect(k1).not.toBe(k2);
+    });
+  });
+
+  // ==================== HyDE 集成模式（双向量路 RRF 融合） ====================
+
+  describe('HyDE 集成模式', () => {
+    /** 按查询文本分流的向量检索 mock：query → [content, cosine距离] 列表 */
+    const mockVectorByQuery = (mapping: Record<string, Array<[string, number]>>) => {
+      mockSimilaritySearchWithScore.mockImplementation((query: string) => {
+        const entries = mapping[query];
+        if (!entries) return Promise.resolve([]);
+        return Promise.resolve(
+          entries.map(([content, score]) => [
+            { pageContent: content, metadata: { source: `${content}.txt`, versionStatus: 'active' } },
+            score,
+          ]),
+        );
+      });
+    };
+
+    beforeEach(() => {
+      mockBm25Search.mockReset();
+      mockBm25Search.mockResolvedValue([]);
+    });
+
+    it('传 vectorQueryText 时应做主查询 + HyDE 两次向量检索，BM25 仍用原始查询', async () => {
+      mockVectorByQuery({ '主查询': [['A', 0.1]], '假想答案': [['B', 0.2]] });
+
+      await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, undefined, 0.55, undefined, undefined, '假想答案');
+
+      const calls = mockSimilaritySearchWithScore.mock.calls;
+      expect(calls.length).toBe(2);
+      expect(calls[0][0]).toBe('主查询');
+      expect(calls[1][0]).toBe('假想答案');
+      // 关键词匹配需要真实术语：BM25 路不得使用假想答案
+      expect(mockBm25Search).toHaveBeenCalledWith('主查询', expect.anything());
+    });
+
+    it('双路命中同一文档时 RRF 分数叠加，排序高于单路命中，vectorScore 保留主查询口径', async () => {
+      mockVectorByQuery({
+        '主查询': [['A', 0.1], ['B', 0.2]],
+        '假想答案': [['B', 0.15], ['C', 0.3]],
+      });
+
+      const results = await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, undefined, 0.55, undefined, undefined, '假想答案');
+
+      expect(results.length).toBe(3);
+      // B 被主向量（rank2）与 HyDE 向量（rank1）同时命中，RRF 分数叠加应排第一
+      expect(results[0].content).toBe('B');
+      // vectorScore 守卫：双路命中时保留主查询的分数口径（0.2 距离 → 0.8 相似度），
+      // 不被 HyDE 路的分数（1 - 0.15）覆盖，保证上层阈值过滤语义一致
+      expect(results[0].vectorScore).toBeCloseTo(0.8, 5);
+      // A 仅主向量命中，C 仅 HyDE 命中：叠加后 B > A > C（RRF 权重各半）
+      expect(results[1].content).toBe('A');
+      expect(results[2].content).toBe('C');
+    });
+
+    it('不传 vectorQueryText 时只做一次向量检索（行为与改造前一致）', async () => {
+      mockVectorByQuery({ '主查询': [['A', 0.1]] });
+
+      await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3);
+
+      expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(1);
+    });
+
+    it('vectorQueryText 为空白时视为未传，单路回退', async () => {
+      mockVectorByQuery({ '主查询': [['A', 0.1]] });
+
+      await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, undefined, 0.55, undefined, undefined, '   ');
+
+      expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(1);
+    });
+
+    it('缓存 key 应区分 HyDE 状态：同 override 下无 HyDE 与有 HyDE 结果互不污染', async () => {
+      // 第一次：无 HyDE → 仅主查询结果
+      mockVectorByQuery({ '主查询': [['A', 0.1]] });
+      const r1 = await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, 'override');
+      expect(r1.map((r) => r.content)).toEqual(['A']);
+
+      // 第二次：同 override + HyDE → 外层缓存 key 含 _hyde 标志，不得命中第一次结果；
+      // 主向量路命中内部纯向量缓存（0 调用），仅 HyDE 路发起真实检索
+      mockVectorByQuery({ '主查询': [['A', 0.1]], '假想答案': [['B', 0.2]] });
+      mockSimilaritySearchWithScore.mockClear();
+      const r2 = await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, 'override', 0.55, undefined, undefined, '假想答案');
+      expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(1);
+      expect(r2.map((r) => r.content)).toEqual(expect.arrayContaining(['A', 'B']));
+
+      // 第三次：完全相同参数 → 命中写入的 HyDE 态外层缓存，0 次向量检索
+      mockSimilaritySearchWithScore.mockClear();
+      await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, 'override', 0.55, undefined, undefined, '假想答案');
+      expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(0);
     });
   });
 });

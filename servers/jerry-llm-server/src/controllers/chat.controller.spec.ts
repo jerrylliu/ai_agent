@@ -234,8 +234,11 @@ describe('ChatController', () => {
         { sessionId: 's1', role: 'user', content: 'hi' },
         { userId: 'u1' },
       );
-      // 第五个参数 documentCards 未传时为 undefined
-      expect(sessionService.saveChatHistory).toHaveBeenCalledWith('s1', 'user', 'hi', 'u1', undefined);
+      // 第五个参数 documentCards 未传时为 undefined；
+      // 第六/七个参数为 f0f5b5f 引入的（来源标记 'web'，workflowCards 未传 undefined）
+      expect(sessionService.saveChatHistory).toHaveBeenCalledWith(
+        's1', 'user', 'hi', 'u1', undefined, 'web', undefined,
+      );
     });
 
     it('应把 documentCards 透传给 SessionService', async () => {
@@ -244,7 +247,9 @@ describe('ChatController', () => {
         { sessionId: 's2', role: 'user', content: 'hello', documentCards: cards },
         { userId: 'u2' },
       );
-      expect(sessionService.saveChatHistory).toHaveBeenCalledWith('s2', 'user', 'hello', 'u2', cards);
+      expect(sessionService.saveChatHistory).toHaveBeenCalledWith(
+        's2', 'user', 'hello', 'u2', cards, 'web', undefined,
+      );
     });
 
     it('普通 Web 会话不应同步到飞书', async () => {

@@ -57,4 +57,32 @@ describe('config fail-fast', () => {
       expect(config.queryDb.allowedTables).toEqual(['users', 'orders']);
     });
   });
+
+  // ==================== SEMANTIC_CACHE_ENABLED（ERB 评测开关，方案 §5.2 坑 4） ====================
+
+  it('SEMANTIC_CACHE_ENABLED 未设置时默认 true（生产行为不变）', () => {
+    process.env.JWT_SECRET = 'test-secret-1234567890';
+    delete process.env.SEMANTIC_CACHE_ENABLED;
+
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { config } = require('./config');
+      expect(config.semanticCacheEnabled).toBe(true);
+    });
+  });
+
+  it.each([
+    ['false', false],
+    ['true', true],
+    ['TRUE', true],
+  ])('SEMANTIC_CACHE_ENABLED=%s 应解析为 %s', (raw, expected) => {
+    process.env.JWT_SECRET = 'test-secret-1234567890';
+    process.env.SEMANTIC_CACHE_ENABLED = raw;
+
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { config } = require('./config');
+      expect(config.semanticCacheEnabled).toBe(expected);
+    });
+  });
 });

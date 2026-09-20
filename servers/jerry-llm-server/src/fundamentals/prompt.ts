@@ -1045,6 +1045,14 @@ export interface UsageData {
   responseTimeMs: number;
   userMessage: string;
   assistantMessage?: string;
+  /**
+   * 本题检索命中的知识库文档 ID 集合（已去重，benchmark 评测用）
+   * FC 模式 = 跨全部工具轮次聚合的 search_knowledge_base 命中；
+   * RAG 注入模式 = retrievalResults 中带 documentId 的条目
+   */
+  retrievedDocumentIds?: string[];
+  /** 本题检索命中并参与生成的知识库上下文文本（benchmark 评测用，与上面一一对应但独立去重） */
+  retrievedContexts?: string[];
 }
 
 /**
@@ -1147,11 +1155,12 @@ ${toolList}
 4. 如果工具返回的结果与用户问题无关：
    - 对于通用知识问题（如"什么是光合作用"），可以说明后基于自身知识回答
    - 对于涉及用户文档/知识库的问题（如用户提到"文档""规范""规定"等），必须明确告知"知识库中未找到相关内容"，严禁基于自身知识编造文档中不存在的内容
-5. 每个工具在一次对话中最多调用一次，不要对同一个工具重复调用相同的参数
-6. 收到工具返回结果后，必须直接基于结果生成最终回答，不要再调用其他工具
+5. 同一个工具可以多次调用，但每次调用的参数必须对应不同的信息需求；禁止用相同或近似的参数重复调用同一工具
+6. 收到工具返回结果后，优先基于结果生成最终回答；只有当结果明显不足以回答（缺少关键实体/时间/数值等）时，才允许换用不同关键词补充检索 1~2 次，禁止为此反复调用其他无关工具
 7. 如果知识库搜索已返回相关结果，不要用相似的关键词重复查询。每次查询必须基于不同的信息需求
 8. 如果搜索结果不足以回答，尝试更换搜索策略（如缩短关键词、换用实体名称），而非简单添加修饰词
-9. 连续两次搜索结果相似时，直接基于已有信息回答，不要第三次查询`;
+9. 连续两次搜索结果相似时，直接基于已有信息回答，不要第三次查询
+10. 生成最终回答前自检：核对问题要求的每个要素（实体/数值/时间/条件）在已获取的资料中是否都有依据；依据齐全才作答，个别要素缺失时明确说明"资料中未提及该要素"，禁止用推测补齐缺失要素`;
 
   // 按工具追加专属规则
   if (availableTools.includes('search_knowledge_base')) {
@@ -1160,6 +1169,10 @@ ${toolList}
 - 如果 search_knowledge_base 返回空结果或结果与问题无关，必须如实告知用户"知识库中未找到相关内容"
 - 严禁在知识库没有相关内容时，凭自身知识编造文档中的具体条款、规范、数据等内容
 - 可以建议用户：检查文档是否已发布到知识库，或换一种关键词重新提问
+- 回答必须 100% 扎根于检索到的资料内容，不得用自身知识补充资料中不存在的条款、规范、数据
+- 资料中包含多条相关条目时，必须穷尽并逐条完整列出，不得省略、概括或只挑其中一条
+- 涉及名称、时间、数量、指标、步骤等细节时，按资料原文表述回答，不要改写为模糊描述
+- 若资料只覆盖问题的一部分，先列出已有信息，再明确说明"资料中未涉及：[具体缺失点]"
 - 工具结果中的【图片 N】块包含图片描述和可访问的图片 URL（格式：![图片 N](http://...)）。
   当回复涉及图片内容时，请直接使用该 URL 以 ![描述](URL) 格式在回答中展示图片，让用户能直接看到原图。
   不要使用 ![](images/xxx.jpg) 这种相对路径格式，必须使用工具结果中提供的完整 URL`;
@@ -1847,6 +1860,12 @@ async function promptWithFunctionCalling(
   let usedCalculate = false;
   let sessionAction: any = null;
   let fcKnowledgeBaseResult = ''; // 收集 FC 模式下已获取的知识库结果，降级时复用
+  // benchmark 评测用（UsageData.retrievedDocumentIds/Contexts）：跨全部工具轮次聚合
+  // search_knowledge_base 的结构化命中。fcKnowledgeBaseResult 只保留最后一轮文本，
+  // 无法满足评测「采集本题全部命中文档」的需求，故此处独立累计（原生 function calling 路径）。
+  const fcRetrievedDocIds = new Set<string>();
+  const fcRetrievedContexts: string[] = [];
+  const fcSeenContexts = new Set<string>();
   let collectedImages: Array<{ url: string; alt: string }> = []; // 收集工具生成的图片
   let collectedMindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }> = []; // 收集工具生成的思维导图
   let collectedChartOptions: Array<{ option: any; chartType?: string; imageUrl?: string }> = []; // 收集工具生成的图表 ECharts option
@@ -2295,6 +2314,15 @@ async function promptWithFunctionCalling(
               (toolCall.args?.query as string) || '',
               kbResults,
             );
+            // benchmark 评测采集：跨轮聚合本题全部命中（文档 ID 去重、上下文按内容去重）
+            for (const r of kbResults) {
+              if (r.documentId) fcRetrievedDocIds.add(r.documentId);
+              const ctx = typeof r.content === 'string' ? r.content.trim() : '';
+              if (ctx && !fcSeenContexts.has(ctx)) {
+                fcSeenContexts.add(ctx);
+                fcRetrievedContexts.push(ctx);
+              }
+            }
           }
 
           // 收集多模态资产（图片/图表/思维导图/文件卡片），流式输出时注入前端
@@ -2720,6 +2748,8 @@ async function promptWithFunctionCalling(
               responseTimeMs: Date.now() - fcStartTime,
               userMessage: promptText || '',
               assistantMessage: fcFullResponse,
+              retrievedDocumentIds: [...fcRetrievedDocIds],
+              retrievedContexts: fcRetrievedContexts,
             });
           }
         } catch (streamError: any) {
@@ -2755,6 +2785,26 @@ async function promptWithFunctionCalling(
           aiMessage.content = aiMessage.content.replace(/<think>[\s\S]*?<\/think>/gs, "");
           // DSML 原始工具调用块（标签 + 参数正文）整块抑制，不作为最终回答返回给调用方
           aiMessage.content = suppressRawToolCallBlocks(aiMessage.content).safeText;
+        }
+        // 非流式（headless）路径此前不上报用量；补齐回调以镜像流式分支字段，
+        // 供 benchmark runner 在 FC 模式下采集 answer 与检索命中（线上恒走流式分支，行为不受影响）
+        if (onUsageComplete) {
+          const fcAssistantContent = typeof aiMessage.content === 'string' ? aiMessage.content : '';
+          onUsageComplete({
+            userId: userId || 'default',
+            sessionId,
+            modelId: getCurrentModelId(),
+            inputTokens: estimateTokensFromMessages(messages),
+            outputTokens: estimateTokens(fcAssistantContent),
+            historyCount: recentHistory.length,
+            usedKnowledgeBase,
+            imageCount: images?.length || 0,
+            responseTimeMs: Date.now() - fcStartTime,
+            userMessage: promptText || '',
+            assistantMessage: fcAssistantContent,
+            retrievedDocumentIds: [...fcRetrievedDocIds],
+            retrievedContexts: fcRetrievedContexts,
+          });
         }
         return aiMessage;
       }
@@ -2863,6 +2913,8 @@ async function promptWithFunctionCalling(
           responseTimeMs: Date.now() - maxIterStartTime,
           userMessage: promptText || '',
           assistantMessage: fullResponse,
+          retrievedDocumentIds: [...fcRetrievedDocIds],
+          retrievedContexts: fcRetrievedContexts,
         });
       }
     } catch (streamError: any) {
@@ -2892,6 +2944,25 @@ async function promptWithFunctionCalling(
         finalResponse.content = finalResponse.content.replace(/<think>[\s\S]*?<\/think>/gs, '');
         // DSML 原始工具调用块（标签 + 参数正文）整块抑制
         finalResponse.content = suppressRawToolCallBlocks(finalResponse.content).safeText;
+      }
+      // 非流式（headless）路径补齐用量回调，镜像上方流式分支字段（benchmark runner 采集用）
+      if (onUsageComplete) {
+        const fcAssistantContent = typeof finalResponse.content === 'string' ? finalResponse.content : '';
+        onUsageComplete({
+          userId: userId || 'default',
+          sessionId,
+          modelId: getCurrentModelId(),
+          inputTokens: estimateTokensFromMessages(cleanedMessages),
+          outputTokens: estimateTokens(fcAssistantContent),
+          historyCount: recentHistory.length,
+          usedKnowledgeBase,
+          imageCount: images?.length || 0,
+          responseTimeMs: Date.now() - maxIterStartTime,
+          userMessage: promptText || '',
+          assistantMessage: fcAssistantContent,
+          retrievedDocumentIds: [...fcRetrievedDocIds],
+          retrievedContexts: fcRetrievedContexts,
+        });
       }
       return finalResponse;
     } catch (invokeError: any) {
@@ -3017,6 +3088,16 @@ export const promptTemplate = async (
     seenContextContents.add(normalizedContent);
     retrievalResults.push(result);
     return true;
+  };
+  // benchmark 评测采集（UsageData.retrievedDocumentIds）：从 retrievalResults 提取去重后的文档 ID。
+  // metadata 声明为 unknown，需窄化后读取；FC 降级复用结果（source=fc_fallback）带 documentId 时同样计入
+  const collectRetrievedDocumentIds = (): string[] => {
+    const ids = new Set<string>();
+    for (const r of retrievalResults) {
+      const docId = (r.metadata as { documentId?: unknown } | null)?.documentId;
+      if (typeof docId === 'string' && docId) ids.add(docId);
+    }
+    return [...ids];
   };
 
   if (fcFallbackKBResult) {
@@ -3271,6 +3352,8 @@ ${docList}
           responseTimeMs: Date.now() - ragStartTime,
           userMessage: promptText || '',
           assistantMessage: fullResponse,
+          retrievedDocumentIds: collectRetrievedDocumentIds(),
+          retrievedContexts: retrievalResults.map((r) => r.content.trim()),
         });
       }
     } catch (streamError: any) {
@@ -3326,6 +3409,8 @@ ${docList}
         responseTimeMs: Date.now() - nonStreamStartTime,
         userMessage: promptText || '',
         assistantMessage: assistantContent,
+        retrievedDocumentIds: collectRetrievedDocumentIds(),
+        retrievedContexts: retrievalResults.map((r) => r.content.trim()),
       });
     }
 

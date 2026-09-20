@@ -36,7 +36,7 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 // 避免重复执行向量检索 + BM25 混合搜索的开销。
 //
 // 设计取舍：
-//   - 仅缓存默认参数（topK=3, 无 filter）的检索结果，非默认参数跳过缓存
+//   - 仅缓存默认参数（topK=6, 无 filter）的检索结果，非默认参数跳过缓存
 //   - 嵌入计算依赖 Ollama，不可用时降级为"始终 miss"
 //   - 缓存条目上限 100，TTL 1 小时，相似度阈值 0.92
 type RagSearchResult = Array<{ content: string; metadata: any; score: number; vectorScore?: number }>;
@@ -73,19 +73,50 @@ const ragSemanticCache = new SemanticCache<RagSearchResult>(
 export function buildContextFromResults(
   results: Array<{ content: string; metadata?: Record<string, any> | unknown }>,
 ): string {
+  // 按文档分组组装（生成侧提纯）：
+  // 同一文档的多个块（同文档多段落命中 / 多个子块映射到同一父块）合并到同一
+  // 【文档 N】标题下，保持首次出现的排序位置 —— 模型能把同文档的分散信息当作
+  // 整体连贯阅读（intra-document 推理），同时消除逐块重复编号的头部噪声。
+  // 图片块不参与合并，仍按出现顺序独立编号。
+  interface ContextGroup {
+    kind: 'doc' | 'image';
+    items: Array<{ content: string; meta: Record<string, any> }>;
+  }
+  const groups: ContextGroup[] = [];
+  const docGroupIndex = new Map<string, number>();
+
+  for (const r of results) {
+    const meta = (r.metadata || {}) as Record<string, any>;
+    if (meta.chunk_type === 'image' || meta.chunk_role === 'image') {
+      groups.push({ kind: 'image', items: [{ content: r.content, meta }] });
+      continue;
+    }
+    const cleanedContent = r.content.replace(
+      /!\[[^\]]*\]\((?!https?:\/\/)([^)]+)\)/g,
+      '[图片]',
+    );
+    // 文档键优先 documentId，缺失时退化为 source / 内容前缀（保证不同块不误并同文档）
+    const docKey = String(meta.documentId || meta.source || r.content.slice(0, 50));
+    const existing = docGroupIndex.get(docKey);
+    if (existing === undefined) {
+      docGroupIndex.set(docKey, groups.length);
+      groups.push({ kind: 'doc', items: [{ content: cleanedContent, meta }] });
+    } else {
+      groups[existing].items.push({ content: cleanedContent, meta });
+    }
+  }
+
   let docIdx = 0;
   let imgIdx = 0;
-
-  const context = results
-    .map((r) => {
-      // 兼容 metadata 为 unknown 的类型（RagRetrievalResult 中 metadata: unknown）
-      const meta = (r.metadata || {}) as Record<string, any>;
-      if (meta.chunk_type === 'image' || meta.chunk_role === 'image') {
+  const context = groups
+    .map((g) => {
+      if (g.kind === 'image') {
         imgIdx++;
-        const imagePath = String(meta.image_path || '');
+        const meta = g.items[0].meta;
         // 拼接为可访问的完整 URL：http://localhost:3000/images/{docId}/img_{index}.png
         // 注意：image_path 存储时用 path.join，Windows 下为反斜杠（如 68\img_0.png），
         // 必须统一转为正斜杠，否则浏览器 URL 中 %5C 无法匹配静态文件路由
+        const imagePath = String(meta.image_path || '');
         const normalizedPath = imagePath.replace(/\\/g, '/');
         const imageUrl = normalizedPath
           ? `${config.serverBaseUrl}/images/${normalizedPath}`
@@ -93,25 +124,88 @@ export function buildContextFromResults(
         const imageMarkdown = imageUrl
           ? `\n![图片 ${imgIdx}](${imageUrl})`
           : '';
-        return `【图片 ${imgIdx}】\n${r.content}${imageMarkdown}`;
+        return `【图片 ${imgIdx}】\n${g.items[0].content}${imageMarkdown}`;
       }
       docIdx++;
-      // 清理文本块中的 MinerU 残留图片引用（旧文档兼容）
-      // 这些 ![](images/xxx.jpg) 是 MinerU 内部相对路径，前端无法访问
-      const cleanedContent = r.content.replace(
-        /!\[[^\]]*\]\((?!https?:\/\/)([^)]+)\)/g,
-        '[图片]',
-      );
-      return `【文档 ${docIdx}】\n${cleanedContent}`;
+      const body = g.items.map((it) => it.content).join('\n\n');
+      return `【文档 ${docIdx}】\n${body}`;
     })
     .join('\n\n');
 
+  let instructions = '';
+  // 冲突提示：多文档同时命中且含修正/更新标记时，提醒模型主动甄别版本冲突，
+  // 避免把过期记录（旧样本量、已被更正的数值）当作当前事实直接输出
+  if (hasConflictingSourceSignals(results)) {
+    instructions += CONFLICT_RESOLUTION_INSTRUCTION;
+  }
   // 检索内容属于不可信上下文：附加隔离指令，防止文档中的恶意指令覆盖系统规则（提示词注入纵深防御）
+  instructions += UNTRUSTED_CONTEXT_INSTRUCTION;
+
   if (context.trim().length > 0) {
-    return context + UNTRUSTED_CONTEXT_INSTRUCTION;
+    return context + instructions;
   }
   return context;
 }
+
+/**
+ * 按归一化内容去重（生成侧提纯，保持原有排序，先出现的优先保留）。
+ *
+ * Parent-Child 架构下子块命中时 content 已替换为父块全文（vector-search.ts），
+ * 同一父块的多个子块同时进候选池时会出现整段重复文本——在 topK 截断前去重，
+ * 让出的名额可由唯一块补位（多 gold 题型的可见信息面直接变大）。
+ * 归一化规则：连续空白折叠为单个空格 + 去首尾空白，可捕获仅格式差异的重复。
+ */
+export function dedupeByNormalizedContent<T extends { content: string }>(results: T[]): T[] {
+  const seen = new Set<string>();
+  const output: T[] = [];
+  for (const r of results) {
+    const key = r.content.replace(/\s+/g, ' ').trim();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(r);
+  }
+  return output;
+}
+
+/**
+ * 冲突/版本修正信号词（中英双语）：
+ * 企业知识库中同主题常存在「早期记录 vs 更正后记录」成对文档（如小样本初测 vs 更新后
+ * 的正式评测），两者同时被召回时模型可能采信过期值。此处用词面启发式做低成本检测，
+ * 命中即注入冲突处理指令（宁滥勿缺：指令是防御性的，误报只会多一句提醒）。
+ */
+const CONFLICT_MARKER_RE =
+  /\b(updated|previously|supersed\w*|corrected|deprecat\w*|no longer|outdated|revised|replaced|stale|older version)\b|(已更新|此前为|旧版|已作废|取代|已更正|已废弃|不再使用|以.{1,12}为准)/i;
+
+/**
+ * 检测检索结果是否满足「冲突注入」条件：
+ * ≥2 个不同文档 且 ≥2 个文档含修正/更新信号词（单文档的「previously」只是行文，不构成跨文档冲突）
+ */
+function hasConflictingSourceSignals(
+  results: Array<{ content: string; metadata?: Record<string, any> | unknown }>,
+): boolean {
+  const allDocs = new Set<string>();
+  const markedDocs = new Set<string>();
+  for (const r of results) {
+    const meta = (r.metadata || {}) as Record<string, any>;
+    if (meta.chunk_type === 'image' || meta.chunk_role === 'image') {
+      continue;
+    }
+    // 文档键优先 documentId，缺失时退化为 source / 内容前缀（保证不同块不误并同文档）
+    const docKey = String(meta.documentId || meta.source || r.content.slice(0, 50));
+    allDocs.add(docKey);
+    if (CONFLICT_MARKER_RE.test(r.content)) {
+      markedDocs.add(docKey);
+    }
+  }
+  return allDocs.size >= 2 && markedDocs.size >= 2;
+}
+
+/** 冲突处理指令（附加在上下文末尾、不可信上下文指令之前）。
+ * 措辞刻意轻量：只要求「简要说明 + 采用最新依据」，不强制逐一列举——
+ * 强制结构会挤占答案主体（2026-09-19 gate 实测 completeness 被稀释）。 */
+export const CONFLICT_RESOLUTION_INSTRUCTION = `\n\n冲突规则：参考资料中可能存在同一主题的不同版本记录（如早期小样本数据与更新后的正式数据、被更正的旧结论）。若不同文档的数值或结论相互矛盾，以标注为更新/更正后、样本量更大或更权威的来源为准作答，并用一句话简要提及存在旧版本数据；不得混用不同版本的数据。`;
 
 /**
  * 处理文档上传
@@ -837,8 +931,9 @@ export async function retrieveFromKnowledgeBase(
     });
   }
 
-  // L3 语义缓存：仅对默认参数（topK=3, 无 filter）启用
-  const cacheable = topK === 3 && !filter;
+  // L3 语义缓存：仅对默认参数（topK=6, 无 filter）启用；总开关 false 时整体短路（benchmark 评测用）
+  // topK 判定须与新默认值保持一致（3→6），否则默认调用静默失去缓存能力
+  const cacheable = config.semanticCacheEnabled && topK === 6 && !filter;
   if (cacheable) {
     const cached = await ragSemanticCache.get(query);
     if (cached) {
@@ -860,7 +955,7 @@ export async function retrieveFromKnowledgeBase(
 
   // 并行执行：常规检索 + 图片描述块精确检索（图片意图时）
   const searchPromises: Promise<Array<{ content: string; metadata: any; score: number }>>[] = [
-    hybridSearchKnowledgeBase(query, effectiveTopK, 0.7, 0.3, filter),
+    hybridSearchKnowledgeBase(query, effectiveTopK, 0.7, 0.3, filter, undefined, config.retrievalMinSimilarity),
   ];
 
   if (isImageQuery) {
@@ -952,9 +1047,11 @@ export async function hybridRetrieveFromKnowledgeBase(
     });
   }
 
-  // L3 语义缓存：仅对默认参数启用
+  // L3 语义缓存：仅对默认参数启用；总开关 false 时整体短路（benchmark 评测用）
+  // topK 判定须与新默认值保持一致（3→6），否则默认调用静默失去缓存能力
   const cacheable =
-    topK === 3 && vectorWeight === 0.7 && bm25Weight === 0.3 && !filter;
+    config.semanticCacheEnabled &&
+    topK === 6 && vectorWeight === 0.7 && bm25Weight === 0.3 && !filter;
   if (cacheable) {
     const cached = await ragSemanticCache.get(query);
     if (cached) {
@@ -977,7 +1074,7 @@ export async function hybridRetrieveFromKnowledgeBase(
 
   // 并行执行：常规检索 + 图片描述块精确检索（图片意图时）
   const searchPromises: Promise<Array<{ content: string; metadata: any; score: number; sources?: string[] }>>[] = [
-    hybridSearchKnowledgeBase(query, effectiveTopK, vectorWeight, bm25Weight, filter),
+    hybridSearchKnowledgeBase(query, effectiveTopK, vectorWeight, bm25Weight, filter, undefined, config.retrievalMinSimilarity),
   ];
 
   if (isImageQuery) {
@@ -1050,8 +1147,10 @@ export async function ragWithLLM(
   res?: Response,
 ): Promise<any> {
   // 1. 检索相关文档
+  // topK 3→6（2026-09-17 用户决策）：top-3 截断是 Completeness 题的天花板
+  // （平均 6.5 个 gold 文档，3 块上下文物理装不下），放大到 6 抬升生成侧覆盖面
   logger.info('执行 RAG 检索', { module: 'RagService' });
-  const retrieval = await retrieveFromKnowledgeBase(query, 3);
+  const retrieval = await retrieveFromKnowledgeBase(query, 6);
 
   if (retrieval.results.length === 0) {
     logger.warn('知识库中没有找到相关内容', { module: 'RagService' });
