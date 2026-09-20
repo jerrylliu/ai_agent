@@ -1,11 +1,11 @@
 {
-  "version": "0.1.7",
-  "pub_date": "2026-09-15T14:50:41Z",
-  "notes": "1. 修复手机端窄屏下文件卡片文字竖排扭曲、元信息被挤压变形的问题（窄屏改为上下两行布局并允许自动换行）\n2. 消息内容新增残留控制标签兜底清洗，复制消息不再带出异常字符\n3. 知识库检索引擎升级为 BM25 双引擎架构，检索召回更稳定\n4. 保留 0.1.6 的安卓安全区三层防线与 0.1.5 的屏幕密度换算修复",
+  "version": "0.1.8",
+  "pub_date": "2026-09-20T10:32:34Z",
+  "notes": "1. 知识库检索架构升级：多路召回统一 RRF 融合排序，检索准确率显著提升\n2. 上下文组装优化：父子块去重 + 同文档内容分组，回答更完整、引用更清晰\n3. 新增冲突信息主动提示与答前自检，矛盾信息明确说明、缺证据不臆测",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZVBIL0NZaE9yamUwQWtvYThxNzFkOHk2WDBmUTJkbjRJZ0dWcHJ3aWQ5bUtZbnNvQXRlVXloalJFTElNTkhtY2JzcEtyQ1haVXVwdnJBVHV5NS9hUUFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NDgzODQxCWZpbGU65Lul5aSq5b+G5qC4XzAuMS43X3g2NC1zZXR1cC5leGUKNGN0a3JRMjdUeXoyQWlJQmlHYUN6UjY2WGJ0YXp5MjB4enRTbzFsaHVGbERxME54bFArbXJDdjZHcXNXMEtLR1hCZ1gyRi9acy9hZWVpWC9kYTVWQ1E9PQo=",
-      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.7_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUpycXQwUkZOaGtONDA0ZDRtM2J5aDJNcUt6MHc1VGdTVVdRRlJNS2prYUZSa2YwM2lUNTJLZ01xNnFEQStWUWtRWDdabWRpSUtHcUhJK1piMXZMSFFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5OTAwMzU0CWZpbGU65Lul5aSq5b+G5qC4XzAuMS44X3g2NC1zZXR1cC5leGUKVTBlZ2tSYjB0QitOMVJ5bHEzeGhBQ2lVclhKV1pORndxQ01RZldaVlpndWkvWWs0YnVjbHM2Z0FvUXUwdnY2WDIvZEtqelRJL0JwVHZybTFoVFhaQnc9PQo=",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.8_x64-setup.exe"
     }
   }
 }
