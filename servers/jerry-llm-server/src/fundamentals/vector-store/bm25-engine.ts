@@ -18,7 +18,6 @@
 
 import { config } from '../config.js';
 import { MiniSearchBM25Engine } from './minisearch-engine.js';
-import { TantivyBM25Engine } from './tantivy-engine.js';
 
 // ==================== 类型定义 ====================
 
@@ -85,9 +84,20 @@ export function getBM25Engine(): BM25Engine {
     case 'minisearch':
       engineInstance = new MiniSearchBM25Engine();
       break;
-    case 'tantivy':
+    case 'tantivy': {
+      // 惰性加载（不能改成顶层静态 import）：
+      // @pngwasi/node-tantivy-binding@0.3.4 只发布 darwin/win32/linux-gnu 四个
+      // 平台二进制，没有 linux-x64-musl（npm 404），而生产镜像基于 node:22-alpine
+      // （musl）。顶层 import 会在启动期 require 原生绑定失败，直接炸掉整个进程，
+      // 连默认 minisearch 引擎都起不来。改为选中 tantivy 时才加载：生产（minisearch）
+      // 永不触碰该模块；真选 tantivy 且缺二进制时在首次调用处 fail-fast，报错更聚焦。
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { TantivyBM25Engine } = require('./tantivy-engine.js') as {
+        TantivyBM25Engine: new () => BM25Engine;
+      };
       engineInstance = new TantivyBM25Engine();
       break;
+    }
     default:
       throw new Error(`未知的 BM25 引擎类型: ${engineType}`);
   }
