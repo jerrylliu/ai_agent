@@ -229,7 +229,7 @@ interface BenchChunk {
   text: string;
   metadata: ErbChunkMetadata;
   documentId: string;
-  /** 所属父块全文，仅 S1.5 BM25 parent_content 对照用（默认不写入 metadata） */
+  /** 所属父块全文，仅 S1.5 BM25 parent_content 对照用（metadata.parent_content 已含同值） */
   parentText: string;
 }
 
@@ -249,7 +249,7 @@ async function buildCorpus(docs: ErbDoc[]): Promise<BenchChunk[]> {
         out.push({
           id: `${doc.documentId}__c${childIdx}`,
           text: ch.text,
-          metadata: buildChildChunkMeta(doc, ch.text, childIdx, parentId),
+          metadata: buildChildChunkMeta(doc, ch.text, childIdx, parentId, parentText),
           documentId: doc.documentId,
           parentText,
         });
@@ -387,8 +387,8 @@ interface Bm25Point {
  * 语料不够时循环复用真实 child 文本（不同 id）——内存/体积只取决于条数与文本大小，
  * 复用不影响量级结论。配置复刻 bm25-index.ts#createBM25Index。
  *
- * @param injectParentContent true 时给每个 chunk 的 metadata 塞入 `parent_content`（父块全文），
- *        镜像生产 vector-crud.ts#L467-L469 的写法，用于 S1.5 写/不写对照。
+ * @param injectParentContent true 时保留 metadata 里的 `parent_content`（父块全文，生产写法），
+ *        false 时剥掉该字段，用于 S1.5 写/不写对照（metadata 默认已含该字段）。
  */
 function measureBM25(
   corpus: BenchChunk[],
@@ -407,9 +407,11 @@ function measureBM25(
     while (added < target) {
       const src = corpus[cursor % corpus.length];
       cursor++;
-      const metadata = injectParentContent
-        ? { ...src.metadata, parent_content: src.parentText }
-        : (src.metadata as unknown as Record<string, unknown>);
+      let metadata = src.metadata as unknown as Record<string, unknown>;
+      if (!injectParentContent) {
+        const { parent_content: _omit, ...rest } = metadata;
+        metadata = rest;
+      }
       ms.add({ id: `bm25_${added}`, content: src.text, metadata });
       added++;
     }
@@ -441,14 +443,14 @@ function measureBM25(
  * 逐检查点输出 heapUsed / rss / json 的膨胀倍数，验证方案 3.2「砍约 2/3」是否成立。
  */
 function measureBM25Compare(corpus: BenchChunk[], checkpoints: number[]): void {
-  console.log('  [A] 不写 parent_content（benchmark 采用）：');
+  console.log('  [A] 剥掉 parent_content（旧 bench 口径，已废弃）：');
   const without = measureBM25(corpus, checkpoints, false);
   // 释放上一轮 MiniSearch，尽量让第二轮从干净基线开始
   if (typeof globalThis.gc === 'function') {
     globalThis.gc();
     globalThis.gc();
   }
-  console.log('  [B] 写 parent_content（镜像生产 vector-crud）：');
+  console.log('  [B] 保留 parent_content（现行 bench = 生产口径）：');
   const withPc = measureBM25(corpus, checkpoints, true);
 
   console.log('  —— 对照（B/A 膨胀倍数）——');

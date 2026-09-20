@@ -33,10 +33,9 @@
  *   生产环境保持默认 minisearch，两者互不影响（红线 #10/#11）。
  *
  * 其他与生产链路的刻意差异（方案 §4.3）：
- *   - 不写 parent_content：ERB 评测按 documentId 比对、不做父块展开，
- *     去掉后 BM25 内存与 ChromaDB 磁盘同时砍约 2/3；
  *   - 跳过内容 SHA 去重查询：抽样文档天然无重复，省去每 chunk 一次向量库往返；
  *   - 嵌入调用熔断：MAX_EMBED_CALLS（默认 8600）防止误操作烧穿云端免费额度（D7）。
+ *   （早期版本还刻意不写 parent_content，该差异已于 S4.0 移除 —— 见 erb-metadata.ts 头注释）
  *
  * 用法示例：
  *   # T0 档冒烟：只导 722 篇 gold（gold-first 抽样属 S2.6，此处先小批量验证管线）
@@ -81,8 +80,11 @@ import {
   walkDocs,
   readDocContent,
   ERB_SOURCE_TYPES,
+  GOLD_FIRST_TIERS,
+  goldFirstSample,
   type ErbDoc,
   type ErbSourceType,
+  type GoldFirstTier,
 } from './lib/erb-loader.js';
 import { buildChildChunkMeta, makeParentId } from './lib/erb-metadata.js';
 import {
@@ -137,10 +139,12 @@ const PROD_CHROMA_URL = 'http://localhost:8000';
 // ==================== CLI 参数 ====================
 
 interface CliOptions {
-  /** 限定单一 source_type；缺省遍历全部 9 类 */
+  /** 限定单一 source_type；缺省遍历全部 9 类（与 --tier 互斥） */
   sourceType?: ErbSourceType;
-  /** 最多导入多少篇文档 */
+  /** 最多导入多少篇文档（tier 模式下 = 本次运行的长度上限，不属于语料定义） */
   limit?: number;
+  /** gold-first 档位（方案 §3.0.1：T0=722 gold / T1=+9978 干扰 seed42 / T2=+49278 干扰 seed43） */
+  tier?: GoldFirstTier;
   /** 嵌入并发数（默认 8） */
   concurrency: number;
   /** 嵌入 HTTP 调用熔断上限（默认 8600，env MAX_EMBED_CALLS 可覆盖） */
@@ -157,12 +161,16 @@ function printUsageAndExit(code: number): never {
   console.log(`用法: pnpm bench:import -- [选项]
 
 选项:
-  --source-type <type>   限定单一 source_type（可选: ${ERB_SOURCE_TYPES.join(' | ')}）
-  --limit <n>            最多导入 n 篇文档
+  --source-type <type>   限定单一 source_type（可选: ${ERB_SOURCE_TYPES.join(' | ')}；与 --tier 互斥）
+  --tier <T0|T1|T2>      gold-first 档位（方案 §3.0.1）：
+                           T0 = 722 gold 基准（无干扰）
+                           T1 = gold + 9,978 干扰（seed=42，≈22.9 万 chunk）
+                           T2 = gold + 49,278 干扰（seed=43，≈105 万 chunk）
+  --limit <n>            本次运行最多导入 n 篇（tier 模式下为运行长度上限，可 --resume 逐段推进）
   --concurrency <n>      嵌入并发数（默认 ${DEFAULT_CONCURRENCY}）
-  --max-embed-calls <n>  嵌入 HTTP 调用熔断上限（默认 ${DEFAULT_MAX_EMBED_CALLS}）
+  --max-embed-calls <n>  嵌入 HTTP 调用熔断上限（默认 ${DEFAULT_MAX_EMBED_CALLS}；tier 模式默认按文档数 ×1.3 自动放大）
   --dry-run              只切分统计，不嵌入不写库
-  --resume               从 progress.json 断点续传（--source-type/--limit 必须与上次一致）
+  --resume               从 progress.json 断点续传（语料定义参数必须与上次一致）
   --min-free-gb <n>      磁盘熔断阈值 GB（默认 ${DEFAULT_MIN_FREE_GB}，env BENCH_MIN_FREE_GB 可覆盖）
   --help                 显示本帮助`);
   process.exit(code);
@@ -177,6 +185,8 @@ function parseArgs(): CliOptions {
     resume: false,
     minFreeGb: Number(process.env.BENCH_MIN_FREE_GB) || DEFAULT_MIN_FREE_GB,
   };
+  /** 用户是否显式设置过嵌入预算（tier 模式下未设置则按文档数自动放大） */
+  let embedCallsExplicit = Boolean(process.env.MAX_EMBED_CALLS);
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -198,6 +208,15 @@ function parseArgs(): CliOptions {
           process.exit(1);
         }
         opts.minFreeGb = n;
+        break;
+      }
+      case '--tier': {
+        const value = argv[++i];
+        if (!value || !(value in GOLD_FIRST_TIERS)) {
+          console.error(`无效的 --tier: ${value ?? '(缺失)'}，可选: ${Object.keys(GOLD_FIRST_TIERS).join(' | ')}`);
+          process.exit(1);
+        }
+        opts.tier = value as GoldFirstTier;
         break;
       }
       case '--source-type': {
@@ -234,6 +253,7 @@ function parseArgs(): CliOptions {
           process.exit(1);
         }
         opts.maxEmbedCalls = n;
+        embedCallsExplicit = true;
         break;
       }
       default:
@@ -244,6 +264,17 @@ function parseArgs(): CliOptions {
   if (opts.resume && opts.dryRun) {
     console.error('--resume 不能与 --dry-run 同用（干跑不产生 checkpoint）');
     process.exit(1);
+  }
+  if (opts.tier && opts.sourceType) {
+    console.error('--tier 不能与 --source-type 同用（档位语料定义 = gold 闭包 + 比例干扰，不接受单类限定）');
+    process.exit(1);
+  }
+  // tier 模式嵌入预算：实测为逐文档批量嵌入（≈1 次调用/篇，见冒烟 20 篇 → 21 次），
+  // 方案的 7,156 次估算按「32 chunk 跨文档批」推导偏乐观，故按文档数 ×1.3 自动放大，
+  // 防止 8,600 默认值在 T1（10,700 篇）中途误触发嵌入熔断
+  if (opts.tier && !embedCallsExplicit) {
+    const expectedDocs = 722 + GOLD_FIRST_TIERS[opts.tier].interference;
+    opts.maxEmbedCalls = Math.ceil(expectedDocs * 1.3);
   }
   return opts;
 }
@@ -440,18 +471,21 @@ async function importDoc(doc: ErbDoc, ctx: ImportContext): Promise<void> {
     fileType: '.txt',
   });
 
-  // 展平 child chunks（父块不入库，与生产 vector-crud 行为一致）
+  // 展平 child chunks（父块不入库，与生产 vector-crud 行为一致；
+  // 父块全文写入 child 的 parent_content，供检索命中后展开 —— 见 erb-metadata.ts 头注释）
   const ids: string[] = [];
   const texts: string[] = [];
   const metas: Array<Record<string, string | number | boolean>> = [];
   let childIdx = 0;
   for (let pIdx = 0; pIdx < parents.length; pIdx++) {
     const parentId = makeParentId(doc.documentId, pIdx);
+    const parentText = parents[pIdx].parent.text;
     for (const child of parents[pIdx].children) {
       ids.push(`${doc.documentId}__c${childIdx}`);
       texts.push(child.text);
-      // 🔴 metadata 不含 parent_content（方案 §4.4 最小集，见 erb-metadata.ts 头注释）
-      metas.push({ ...buildChildChunkMeta(doc, child.text, childIdx, parentId) });
+      // 展开为对象字面量：interface 无隐式索引签名，直接传 ErbChunkMetadata 无法赋给
+      // Array<Record<string, string | number | boolean>>（字面量展开则可）
+      metas.push({ ...buildChildChunkMeta(doc, child.text, childIdx, parentId, parentText) });
       childIdx++;
     }
   }
@@ -584,9 +618,12 @@ async function main(): Promise<void> {
   // ==================== 断点续传加载（方案 §4.3 / S2.4） ====================
 
   const progressPath = path.join(persistDir, PROGRESS_FILENAME);
+  // 指纹只记录「语料定义」：tier 模式下语料 = gold 闭包 + seed 干扰（确定性生成器），
+  // --limit 仅为本次运行的长度上限（S2.5 前缀试跑与全量续传共享同一语料定义），
+  // 因此 tier 模式 limit 恒记 null，允许 --limit 5000 试跑后不带 limit 续传
   const runFingerprint: RunFingerprint = {
-    sourceType: opts.sourceType ?? null,
-    limit: opts.limit ?? null,
+    sourceType: opts.tier ? `gold-first:${opts.tier}` : (opts.sourceType ?? null),
+    limit: opts.tier ? null : (opts.limit ?? null),
   };
   let progress: ImportProgress | null = null;
   /** 续传需跳过的文档数（walkDocs 遍历顺序在语料只读前提下确定性稳定） */
@@ -652,6 +689,13 @@ async function main(): Promise<void> {
   console.log(`CHROMA_URL         : ${config.chromaUrl}`);
   console.log(`CHROMA_PERSIST_DIR : ${config.chromaPersistDir}`);
   console.log(`BM25 引擎          : ${config.bm25Engine}（ERB 强制 tantivy）`);
+  if (opts.tier) {
+    const tierDef = GOLD_FIRST_TIERS[opts.tier];
+    console.log(
+      `抽样档位           : ${opts.tier}（gold-first：722 gold 常量 + ${tierDef.interference} 干扰` +
+        `${tierDef.interference > 0 ? `，seed=${tierDef.seed}` : ''}，方案 §3.0.1）`,
+    );
+  }
   console.log(`source_type        : ${opts.sourceType ?? '全部 9 类'}`);
   console.log(`limit              : ${opts.limit ?? '不限'}`);
   console.log(`concurrency        : ${opts.concurrency}`);
@@ -716,7 +760,19 @@ async function main(): Promise<void> {
     probeExisting: progress !== null,
   };
 
-  const docIterator = walkDocs({ sourceType: opts.sourceType, limit: opts.limit });
+  // 文档源：tier 模式走 gold-first 逆向抽样生成器（gold 在前、干扰在后，顺序确定），
+  // 普通模式走 walkDocs 全库遍历；--limit 为本次运行长度上限（tier 下可逐段 --resume）
+  const tier = opts.tier;
+  const docIterator: Iterator<ErbDoc> = tier
+    ? (function* (): Generator<ErbDoc> {
+        let emitted = 0;
+        for (const doc of goldFirstSample(GOLD_FIRST_TIERS[tier])) {
+          if (opts.limit !== undefined && emitted >= opts.limit) return;
+          yield doc;
+          emitted++;
+        }
+      })()
+    : walkDocs({ sourceType: opts.sourceType, limit: opts.limit });
 
   // 续传：跳过已消费文档（游标之后的文档才需要处理）
   for (let i = 0; i < docsToSkip; i++) {

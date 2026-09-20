@@ -30,9 +30,11 @@
     "eval:analyze": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/eval/analyze-queries.ts",
     "bench:verify-loader": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/verify-loader.ts",
     "bench:verify-progress": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/verify-progress.ts",
+    "bench:verify-import": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/verify-erb-import.ts",
     "bench:measure-expansion": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/measure-expansion.ts",
     "bench:measure-runtime": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/measure-runtime.ts",
     "bench:import": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/import-erb-corpus.ts",
+    "bench:backfill": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/backfill-parent-content.ts",
     "bench:eval": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/run-erb-eval.ts",
     "bench:metrics": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/internal-metrics.ts"
   },

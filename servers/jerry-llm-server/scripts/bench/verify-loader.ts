@@ -13,6 +13,8 @@
  *   5. toEvalSamples 字段映射
  *   6. 抽样：蓄水池抽样确定性 + 单类/分层抽样数量正确
  *   7. readDocContent 能读到非空正文
+ *   8. gold-first 逆向抽样（方案 §3.0.1）：gold 闭包 722、T0/T1-mini 数量与
+ *      确定性、干扰不与 gold 重叠（需多次全库遍历，约 1 分钟）
  *
  * 传 --full 时执行「全量交叉验证」：遍历 51 万文档，确认 500 题所有 gold 均命中。
  */
@@ -27,6 +29,8 @@ import {
   toEvalSamples,
   sampleSingleType,
   stratifiedSample,
+  goldFirstSample,
+  getGoldDocIdSet,
   type ErbSourceType,
 } from './lib/erb-loader.js';
 
@@ -254,6 +258,54 @@ function testReadContent(): void {
   console.log(`     ${doc.documentId} 正文长度=${content.length}`);
 }
 
+// ==================== 8. gold-first 逆向抽样 ====================
+
+function testGoldFirst(): void {
+  section('8. gold-first 逆向抽样（方案 §3.0.1）');
+  const goldIds = getGoldDocIdSet();
+  check('gold 并集 = 722 篇（方案实测值）', goldIds.size === 722, `实际=${goldIds.size}`);
+
+  // T0：gold-only 基准
+  const t0a = [...goldFirstSample({ interference: 0 })];
+  check('T0 = 722 篇', t0a.length === 722, `实际=${t0a.length}`);
+  check('T0 全部命中 gold 集合', t0a.every((d) => goldIds.has(d.documentId)));
+  check('T0 documentId 唯一', new Set(t0a.map((d) => d.documentId)).size === t0a.length);
+  check('T0 documentId 全部合法', t0a.every((d) => isValidDocumentId(d.documentId)));
+
+  // 确定性：两次生成序列一致
+  const t0b = [...goldFirstSample({ interference: 0 })];
+  check(
+    'T0 两次生成序列一致（确定性）',
+    t0a.map((d) => d.documentId).join() === t0b.map((d) => d.documentId).join(),
+  );
+
+  // T1-mini：干扰 200（seed=42）——gold 前缀恒定 + 干扰不与 gold 重叠
+  const t1mini = [...goldFirstSample({ interference: 200, seed: 42 })];
+  check('T1-mini = 922 篇（722 gold + 200 干扰）', t1mini.length === 922, `实际=${t1mini.length}`);
+  const goldPrefixOk = t1mini
+    .slice(0, 722)
+    .map((d) => d.documentId)
+    .join() === t0a.map((d) => d.documentId).join();
+  check('追加干扰时 gold 前缀恒定', goldPrefixOk);
+  check('干扰部分不与 gold 重叠', t1mini.slice(722).every((d) => !goldIds.has(d.documentId)));
+  check(
+    '干扰部分 documentId 唯一且 = 200',
+    new Set(t1mini.slice(722).map((d) => d.documentId)).size === 200,
+  );
+
+  // seed 可复现 + 不同 seed 结果不同
+  const t1mini2 = [...goldFirstSample({ interference: 200, seed: 42 })];
+  check(
+    'T1-mini 同 seed 两次生成一致（可复现）',
+    t1mini.map((d) => d.documentId).join() === t1mini2.map((d) => d.documentId).join(),
+  );
+  const t1mini3 = [...goldFirstSample({ interference: 200, seed: 43 })];
+  check(
+    '不同 seed 干扰序列不同',
+    t1mini.map((d) => d.documentId).join() !== t1mini3.map((d) => d.documentId).join(),
+  );
+}
+
 // ==================== 主流程 ====================
 
 function main(): void {
@@ -268,6 +320,7 @@ function main(): void {
   testEvalSampleMapping();
   testSampling();
   testReadContent();
+  testGoldFirst();
 
   console.log(`\n========== 结果：通过 ${passed}，失败 ${failed} ==========`);
   if (failed > 0) {

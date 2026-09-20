@@ -157,7 +157,8 @@ async function smokeMetadata(doc: ErbDoc): Promise<void> {
     return;
   }
   const parentId = makeParentId(doc.documentId, 0);
-  const meta = buildChildChunkMeta(doc, firstChild.text, 0, parentId);
+  const firstParent = chunks[0].parent.text;
+  const meta = buildChildChunkMeta(doc, firstChild.text, 0, parentId, firstParent);
 
   smokeAssert('documentId 保留 dsid_ 前缀', meta.documentId.startsWith('dsid_'), meta.documentId);
   smokeAssert('source 为文件名', meta.source.length > 0, meta.source);
@@ -170,8 +171,9 @@ async function smokeMetadata(doc: ErbDoc): Promise<void> {
     meta.chunk_hash.slice(0, 16) + '…',
   );
   smokeAssert(
-    '刻意不含 parent_content',
-    !('parent_content' in (meta as Record<string, unknown>)),
+    'parent_content = 父块全文（供检索展开）',
+    meta.parent_content === firstParent && meta.parent_content.length >= firstChild.text.length,
+    `len=${meta.parent_content.length}`,
   );
 }
 

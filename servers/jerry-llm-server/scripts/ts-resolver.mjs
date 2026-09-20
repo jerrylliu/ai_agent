@@ -11,6 +11,13 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 
 export async function resolve(specifier, context, nextResolve) {
+  // CJS 互操作垫片：node-sql-parser 的命名导出无法被 cjs-module-lexer 静态检测，
+  // 具名 import 会抛 SyntaxError（query-database.ts 等）。重定向到 createRequire
+  // 包装的垫片模块（scripts/shims/node-sql-parser.mjs），仅影响脚本链路。
+  if (specifier === 'node-sql-parser') {
+    return nextResolve(new URL('./shims/node-sql-parser.mjs', import.meta.url).href, context);
+  }
+
   // 只处理相对路径导入
   if (
     specifier.startsWith('./') ||
@@ -59,8 +66,14 @@ export async function load(url, context, nextLoad) {
     const fileDir = dirname(filePath);
     const source = result.source.toString();
 
-    // 在文件开头注入 CJS 全局变量
-    const shim = `const __filename = ${JSON.stringify(filePath)};\nconst __dirname = ${JSON.stringify(fileDir)};\n`;
+    // 在文件开头注入 CJS 全局变量 + require 垫片
+    // require：src 里存在模块顶层调用 require(...) 的文件（如 document-parser.ts），
+    // 纯 ESM 加载下 require 未定义；统一注入 createRequire 包装，与 __dirname 同理
+    const shim =
+      `import { createRequire as __createRequire } from 'node:module';\n` +
+      `const require = __createRequire(import.meta.url);\n` +
+      `const __filename = ${JSON.stringify(filePath)};\n` +
+      `const __dirname = ${JSON.stringify(fileDir)};\n`;
 
     return {
       ...result,
