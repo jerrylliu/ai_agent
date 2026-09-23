@@ -16,7 +16,12 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 
 // logger
 jest.mock('../fundamentals/logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // guards
@@ -55,7 +60,9 @@ jest.mock('../services/session.service', () => {
       createSession = jest.fn().mockResolvedValue({});
       deleteSession = jest.fn().mockResolvedValue({});
       toggleSessionPin = jest.fn().mockResolvedValue({});
-      exportSession = jest.fn().mockResolvedValue({ content: '', filename: 'x.json', messages: [] });
+      exportSession = jest
+        .fn()
+        .mockResolvedValue({ content: '', filename: 'x.json', messages: [] });
       getSessionBySessionId = jest.fn().mockResolvedValue({});
       updateSessionTitle = jest.fn().mockResolvedValue({});
       updateMessage = jest.fn().mockResolvedValue({});
@@ -72,7 +79,9 @@ jest.mock('../services/session.service', () => {
 
 // UsageService
 jest.mock('../services/usage.service', () => ({
-  UsageService: class { getLlmUsageStats = jest.fn().mockResolvedValue({}); },
+  UsageService: class {
+    getLlmUsageStats = jest.fn().mockResolvedValue({});
+  },
 }));
 
 // EvaluationService
@@ -85,7 +94,9 @@ jest.mock('../services/evaluation.service', () => ({
 
 // ToolUsageService
 jest.mock('../services/tool-usage.service', () => ({
-  ToolUsageService: class { getToolUsageStats = jest.fn().mockResolvedValue({}); },
+  ToolUsageService: class {
+    getToolUsageStats = jest.fn().mockResolvedValue({});
+  },
 }));
 
 // GeneratedDocumentService（防止 ESM 链式加载到 fundamentals/config.ts）
@@ -107,12 +118,15 @@ const mockUploadImage = jest.fn();
 const mockSendImageMessage = jest.fn();
 
 jest.mock('../fundamentals/feishu/feishu-chat-session.js', () => ({
-  findFeishuChatSessionBySessionId: (...args: unknown[]) => mockFindFeishuChatSessionBySessionId(...args),
-  deleteFeishuChatSessionBySessionId: (...args: unknown[]) => mockDeleteFeishuChatSessionBySessionId(...args),
+  findFeishuChatSessionBySessionId: (...args: unknown[]) =>
+    mockFindFeishuChatSessionBySessionId(...args),
+  deleteFeishuChatSessionBySessionId: (...args: unknown[]) =>
+    mockDeleteFeishuChatSessionBySessionId(...args),
 }));
 
 jest.mock('../fundamentals/feishu-notify.service.js', () => ({
-  sendPlainTextMessage: (...args: unknown[]) => mockSendPlainTextMessage(...args),
+  sendPlainTextMessage: (...args: unknown[]) =>
+    mockSendPlainTextMessage(...args),
   uploadImage: (...args: unknown[]) => mockUploadImage(...args),
   sendImageMessage: (...args: unknown[]) => mockSendImageMessage(...args),
 }));
@@ -164,9 +178,18 @@ describe('ChatController', () => {
         { provide: AppService, useValue: new (AppService as any)() },
         { provide: SessionService, useValue: new (SessionService as any)() },
         { provide: UsageService, useValue: new (UsageService as any)() },
-        { provide: EvaluationService, useValue: new (EvaluationService as any)() },
-        { provide: ToolUsageService, useValue: new (ToolUsageService as any)() },
-        { provide: GeneratedDocumentService, useValue: new (GeneratedDocumentService as any)() },
+        {
+          provide: EvaluationService,
+          useValue: new (EvaluationService as any)(),
+        },
+        {
+          provide: ToolUsageService,
+          useValue: new (ToolUsageService as any)(),
+        },
+        {
+          provide: GeneratedDocumentService,
+          useValue: new (GeneratedDocumentService as any)(),
+        },
         { provide: AuthService, useValue: new (AuthService as any)() },
       ],
     }).compile();
@@ -191,8 +214,15 @@ describe('ChatController', () => {
 
   describe('createSession', () => {
     it('应委托 SessionService.createSession', async () => {
-      await controller.createSession({ sessionId: 's1', title: 'T' }, { userId: 'u1' });
-      expect(sessionService.createSession).toHaveBeenCalledWith('s1', 'T', 'u1');
+      await controller.createSession(
+        { sessionId: 's1', title: 'T' },
+        { userId: 'u1' },
+      );
+      expect(sessionService.createSession).toHaveBeenCalledWith(
+        's1',
+        'T',
+        'u1',
+      );
     });
   });
 
@@ -200,7 +230,10 @@ describe('ChatController', () => {
     it('应委托 SessionService.deleteSession 并清理飞书映射', async () => {
       await controller.deleteSession('s1', { userId: 'u1' });
       expect(sessionService.deleteSession).toHaveBeenCalledWith('s1', 'u1');
-      expect(mockDeleteFeishuChatSessionBySessionId).toHaveBeenCalledWith('s1', 'u1');
+      expect(mockDeleteFeishuChatSessionBySessionId).toHaveBeenCalledWith(
+        's1',
+        'u1',
+      );
     });
   });
 
@@ -213,8 +246,16 @@ describe('ChatController', () => {
 
   describe('updateSessionTitle', () => {
     it('应委托 SessionService.updateSessionTitle', async () => {
-      await controller.updateSessionTitle('s1', { title: 'New' }, { userId: 'u1' });
-      expect(sessionService.updateSessionTitle).toHaveBeenCalledWith('s1', 'New', 'u1');
+      await controller.updateSessionTitle(
+        's1',
+        { title: 'New' },
+        { userId: 'u1' },
+      );
+      expect(sessionService.updateSessionTitle).toHaveBeenCalledWith(
+        's1',
+        'New',
+        'u1',
+      );
     });
   });
 
@@ -235,20 +276,42 @@ describe('ChatController', () => {
         { userId: 'u1' },
       );
       // 第五个参数 documentCards 未传时为 undefined；
-      // 第六/七个参数为 f0f5b5f 引入的（来源标记 'web'，workflowCards 未传 undefined）
+      // 第六/七个参数为 f0f5b5f 引入的（来源标记 'web'，workflowCards 未传 undefined）；
+      // 第八个参数 citations 为 k21 引用定位引入，未传 undefined
       expect(sessionService.saveChatHistory).toHaveBeenCalledWith(
-        's1', 'user', 'hi', 'u1', undefined, 'web', undefined,
+        's1',
+        'user',
+        'hi',
+        'u1',
+        undefined,
+        'web',
+        undefined,
+        undefined,
       );
     });
 
-    it('应把 documentCards 透传给 SessionService', async () => {
+    it('应把 documentCards / citations 透传给 SessionService', async () => {
       const cards = [{ id: 'c1', fileName: 'test.docx', sizeBytes: 1024 }];
+      const citations = [{ documentId: 7, chunkIndex: 2, quote: '引用原文' }];
       await controller.saveChatHistory(
-        { sessionId: 's2', role: 'user', content: 'hello', documentCards: cards },
+        {
+          sessionId: 's2',
+          role: 'user',
+          content: 'hello',
+          documentCards: cards,
+          citations,
+        },
         { userId: 'u2' },
       );
       expect(sessionService.saveChatHistory).toHaveBeenCalledWith(
-        's2', 'user', 'hello', 'u2', cards, 'web', undefined,
+        's2',
+        'user',
+        'hello',
+        'u2',
+        cards,
+        'web',
+        undefined,
+        citations,
       );
     });
 
@@ -259,7 +322,9 @@ describe('ChatController', () => {
       );
       await Promise.resolve();
 
-      expect(mockFindFeishuChatSessionBySessionId).toHaveBeenCalledWith('normal-session');
+      expect(mockFindFeishuChatSessionBySessionId).toHaveBeenCalledWith(
+        'normal-session',
+      );
       expect(mockSendPlainTextMessage).not.toHaveBeenCalled();
     });
 
@@ -318,16 +383,32 @@ describe('ChatController', () => {
       });
 
       await controller.saveChatHistory(
-        { sessionId: 'feishu-session', role: 'assistant', content: '生成好了\n![星空](https://example.com/star.png)' },
+        {
+          sessionId: 'feishu-session',
+          role: 'assistant',
+          content: '生成好了\n![星空](https://example.com/star.png)',
+        },
         { userId: 'u1' },
       );
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mockSendPlainTextMessage).toHaveBeenCalledWith('ou_1', 'open_id', '生成好了', expect.any(String));
-      expect(mockUploadImage).toHaveBeenCalledWith('https://example.com/star.png');
-      expect(mockSendImageMessage).toHaveBeenCalledWith('ou_1', 'open_id', 'img_key_1', expect.any(String));
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
+        'ou_1',
+        'open_id',
+        '生成好了',
+        expect.any(String),
+      );
+      expect(mockUploadImage).toHaveBeenCalledWith(
+        'https://example.com/star.png',
+      );
+      expect(mockSendImageMessage).toHaveBeenCalledWith(
+        'ou_1',
+        'open_id',
+        'img_key_1',
+        expect.any(String),
+      );
     });
 
     it('群聊 assistant 回复包含 Markdown 图片时应同步为群内原生图片', async () => {
@@ -339,16 +420,32 @@ describe('ChatController', () => {
       });
 
       await controller.saveChatHistory(
-        { sessionId: 'feishu-group-session', role: 'assistant', content: '生成好了\n![星空](https://example.com/group-star.png)' },
+        {
+          sessionId: 'feishu-group-session',
+          role: 'assistant',
+          content: '生成好了\n![星空](https://example.com/group-star.png)',
+        },
         { userId: 'u1' },
       );
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mockSendPlainTextMessage).toHaveBeenCalledWith('oc_group_1', 'chat_id', '生成好了', expect.any(String));
-      expect(mockUploadImage).toHaveBeenCalledWith('https://example.com/group-star.png');
-      expect(mockSendImageMessage).toHaveBeenCalledWith('oc_group_1', 'chat_id', 'img_key_1', expect.any(String));
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
+        'oc_group_1',
+        'chat_id',
+        '生成好了',
+        expect.any(String),
+      );
+      expect(mockUploadImage).toHaveBeenCalledWith(
+        'https://example.com/group-star.png',
+      );
+      expect(mockSendImageMessage).toHaveBeenCalledWith(
+        'oc_group_1',
+        'chat_id',
+        'img_key_1',
+        expect.any(String),
+      );
     });
 
     it('飞书图片上传失败时应降级发送图片链接', async () => {
@@ -358,18 +455,35 @@ describe('ChatController', () => {
         chatId: 'p2p:ou_1',
         senderOpenId: 'ou_1',
       });
-      mockUploadImage.mockResolvedValue({ success: false, error: 'download failed' });
+      mockUploadImage.mockResolvedValue({
+        success: false,
+        error: 'download failed',
+      });
 
       await controller.saveChatHistory(
-        { sessionId: 'feishu-session', role: 'assistant', content: '![星空](https://example.com/star.png)' },
+        {
+          sessionId: 'feishu-session',
+          role: 'assistant',
+          content: '![星空](https://example.com/star.png)',
+        },
         { userId: 'u1' },
       );
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mockSendPlainTextMessage).toHaveBeenCalledWith('ou_1', 'open_id', 'AI 生成了内容：', expect.any(String));
-      expect(mockSendPlainTextMessage).toHaveBeenCalledWith('ou_1', 'open_id', 'https://example.com/star.png', expect.any(String));
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
+        'ou_1',
+        'open_id',
+        'AI 生成了内容：',
+        expect.any(String),
+      );
+      expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
+        'ou_1',
+        'open_id',
+        'https://example.com/star.png',
+        expect.any(String),
+      );
     });
 
     it('飞书映射 owner 不匹配时不应同步到飞书', async () => {
@@ -502,7 +616,10 @@ describe('ChatController', () => {
   describe('getEvaluationStats', () => {
     it('应委托 EvaluationService.getEvaluationStats', async () => {
       await controller.getEvaluationStats('30', { userId: 'u1' });
-      expect(evaluationService.getEvaluationStats).toHaveBeenCalledWith('u1', 30);
+      expect(evaluationService.getEvaluationStats).toHaveBeenCalledWith(
+        'u1',
+        30,
+      );
     });
   });
 
@@ -515,19 +632,34 @@ describe('ChatController', () => {
 
   describe('submitFeedback', () => {
     it('应委托 EvaluationService.submitFeedback', async () => {
-      await controller.submitFeedback({
-        sessionId: 's1', userMessage: 'Q', assistantMessage: 'A', rating: 'positive',
-      }, { userId: 'u1' });
+      await controller.submitFeedback(
+        {
+          sessionId: 's1',
+          userMessage: 'Q',
+          assistantMessage: 'A',
+          rating: 'positive',
+        },
+        { userId: 'u1' },
+      );
       expect(evaluationService.submitFeedback).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'u1', sessionId: 's1', rating: 'positive' }),
+        expect.objectContaining({
+          userId: 'u1',
+          sessionId: 's1',
+          rating: 'positive',
+        }),
       );
     });
   });
 
   describe('handleConfirmation', () => {
     it('应委托 handleConfirmationResponse', async () => {
-      const { handleConfirmationResponse } = require('../fundamentals/human-in-the-loop');
-      const r = await controller.handleConfirmation({ confirmationId: 'c1', confirmed: true });
+      const {
+        handleConfirmationResponse,
+      } = require('../fundamentals/human-in-the-loop');
+      const r = await controller.handleConfirmation({
+        confirmationId: 'c1',
+        confirmed: true,
+      });
       expect(handleConfirmationResponse).toHaveBeenCalledWith('c1', true);
       expect(r.success).toBe(true);
     });
@@ -538,15 +670,31 @@ describe('ChatController', () => {
    * ==================================================================*/
   describe('updateSessionTags', () => {
     it('应委托 SessionService.updateSessionTags', async () => {
-      await controller.updateSessionTags('s1', { tags: ['ai'] }, { userId: 'u1' });
-      expect(sessionService.updateSessionTags).toHaveBeenCalledWith('s1', ['ai'], 'u1');
+      await controller.updateSessionTags(
+        's1',
+        { tags: ['ai'] },
+        { userId: 'u1' },
+      );
+      expect(sessionService.updateSessionTags).toHaveBeenCalledWith(
+        's1',
+        ['ai'],
+        'u1',
+      );
     });
   });
 
   describe('updateSessionCategory', () => {
     it('应委托 SessionService.updateSessionCategory', async () => {
-      await controller.updateSessionCategory('s1', { category: 'work' }, { userId: 'u1' });
-      expect(sessionService.updateSessionCategory).toHaveBeenCalledWith('s1', 'work', 'u1');
+      await controller.updateSessionCategory(
+        's1',
+        { category: 'work' },
+        { userId: 'u1' },
+      );
+      expect(sessionService.updateSessionCategory).toHaveBeenCalledWith(
+        's1',
+        'work',
+        'u1',
+      );
     });
   });
 
@@ -560,7 +708,10 @@ describe('ChatController', () => {
   describe('getSessionsByCategory', () => {
     it('应委托 SessionService.getSessionsByCategory', async () => {
       await controller.getSessionsByCategory('work', { userId: 'u1' });
-      expect(sessionService.getSessionsByCategory).toHaveBeenCalledWith('work', 'u1');
+      expect(sessionService.getSessionsByCategory).toHaveBeenCalledWith(
+        'work',
+        'u1',
+      );
     });
   });
 

@@ -1,4 +1,10 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 
 @Entity()
 export class ChatHistory {
@@ -35,6 +41,15 @@ export class ChatHistory {
    */
   @Column({ type: 'longtext', nullable: true })
   workflowCards: string | null;
+
+  /**
+   * 助手消息携带的引用来源（JSON 数组，可验证生成）
+   * 服务端从回答中的（【文档 X】）标注解析得出（SSE citations 事件推给前端），
+   * 前端随消息保存，历史加载后"参考来源"卡片可恢复
+   * 仅 role=assistant 的消息会有此字段
+   */
+  @Column({ type: 'longtext', nullable: true })
+  citations: string | null;
 
   @CreateDateColumn()
   createdAt: Date;

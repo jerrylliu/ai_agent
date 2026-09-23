@@ -3,7 +3,21 @@
 // 路由前缀：/chat
 
 // 从 @nestjs/common 导入控制器所需的装饰器
-import { Controller, Get, Head, Post, Put, Delete, Patch, Body, Query, Param, Res, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Head,
+  Post,
+  Put,
+  Delete,
+  Patch,
+  Body,
+  Query,
+  Param,
+  Res,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import * as crypto from 'crypto';
@@ -24,9 +38,15 @@ import {
 } from '../fundamentals/feishu/feishu-asset-sync.js';
 import { handleConfirmationResponse } from '../fundamentals/human-in-the-loop.js';
 import { logger } from '../fundamentals/logger';
-import { acquireLock, type DistributedLock } from '../fundamentals/distributed-lock';
+import {
+  acquireLock,
+  type DistributedLock,
+} from '../fundamentals/distributed-lock';
 import { isRedisReady } from '../fundamentals/redis-client';
-import { inspectPromptInjection, logPromptInjectionDetection } from '../fundamentals/prompt-injection-guard.js';
+import {
+  inspectPromptInjection,
+  logPromptInjectionDetection,
+} from '../fundamentals/prompt-injection-guard.js';
 import { z } from 'zod';
 import { ZodValidationPipe } from '../fundamentals/zod-validation.pipe.js';
 import {
@@ -78,7 +98,8 @@ export class ChatController {
   @UseGuards(OptionalAuthGuard, RateLimitGuard)
   async prompt(
     // @Body() 从请求体中提取参数
-    @Body() body: {
+    @Body()
+    body: {
       message?: string; // 用户输入的消息文本
       images?: string[]; // 用户上传的图片 URL 数组（多模态模型支持）
       history?: Array<{ role: string; content: string; images?: string[] }>; // 历史对话上下文
@@ -96,11 +117,15 @@ export class ChatController {
     // 高风险请求直接返回 JSON 拒绝包，避免响应头被预设为 text/event-stream
     // 导致前端按 SSE 协议解析 JSON 体
     const injectionDetection = inspectPromptInjection(body.message);
-    logPromptInjectionDetection(injectionDetection, { userId: req.userId, sessionId: body.sessionId });
+    logPromptInjectionDetection(injectionDetection, {
+      userId: req.userId,
+      sessionId: body.sessionId,
+    });
     if (injectionDetection.level === 'blocked') {
       res.status(400).json({
         success: false,
-        message: '检测到高风险 Prompt 注入请求，已拒绝处理。请去除要求忽略系统规则、泄露隐藏提示或绕过安全限制的内容后重试。',
+        message:
+          '检测到高风险 Prompt 注入请求，已拒绝处理。请去除要求忽略系统规则、泄露隐藏提示或绕过安全限制的内容后重试。',
       });
       return;
     }
@@ -131,7 +156,9 @@ export class ChatController {
       if (sessionLock) {
         sessionLock.release().catch(() => {});
       }
-      logger.info('客户端断开连接，已发送中断信号到 LLM 底层连接', { module: 'ChatController' });
+      logger.info('客户端断开连接，已发送中断信号到 LLM 底层连接', {
+        module: 'ChatController',
+      });
     });
 
     // ====== 会话级分布式锁：同一 sessionId 不能并发执行多个 LLM 请求 ======
@@ -139,7 +166,9 @@ export class ChatController {
     // 锁 TTL 5 分钟：覆盖最长流式响应时间（含工具调用 + 重试）；若业务超过 5 分钟，
     // 锁会自动过期，由后续请求接管（不会无限阻塞）
     // sessionId 为空时跳过锁（如匿名一次性请求），保持兼容
-    const lockNamespace = body.sessionId ? `chat:session:${body.sessionId}` : null;
+    const lockNamespace = body.sessionId
+      ? `chat:session:${body.sessionId}`
+      : null;
     // 锁 TTL 30 秒：覆盖单次 LLM 请求的合理时长，Ctrl+C 后最多等 30 秒而非 5 分钟
     sessionLock = lockNamespace ? await acquireLock(lockNamespace, 30) : null;
     // 注意：lockNamespace 非空但 sessionLock 为 null 有两种可能：
@@ -156,14 +185,26 @@ export class ChatController {
         return;
       }
       // Redis 不可用：降级放行，单实例下不影响
-      logger.debug('SessionLock: Redis 不可用，降级放行', { module: 'ChatController' });
+      logger.debug('SessionLock: Redis 不可用，降级放行', {
+        module: 'ChatController',
+      });
     }
 
     try {
       // 调用服务层的 prompt 方法，传入取消回调函数、userId、功能开关和 AbortController
       await this.appService.prompt(
-        body.message, body.images, body.history, res, body.sessionId, () => cancelled, req.userId,
-        body.memoryEnabled, body.summaryEnabled, body.injectMemory, llmAbortController, body.imageModel,
+        body.message,
+        body.images,
+        body.history,
+        res,
+        body.sessionId,
+        () => cancelled,
+        req.userId,
+        body.memoryEnabled,
+        body.summaryEnabled,
+        body.injectMemory,
+        llmAbortController,
+        body.imageModel,
         // 服务端自动落库：SSE 流结束时由服务端直接保存助手完整回复。
         // 为什么：此前助手回复依赖客户端流结束后调 POST /chat/history 保存，
         // 客户端网络抖动会导致回复已展示但未入库，随后被会话刷新"抹掉"（消失）。
@@ -178,18 +219,30 @@ export class ChatController {
             .saveChatHistory(sessionId, 'assistant', reply, uid)
             .then((saved) => {
               logger.info('服务端已自动落库助手回复', {
-                module: 'ChatController', sessionId, messageId: saved?.id, length: reply.length,
+                module: 'ChatController',
+                sessionId,
+                messageId: saved?.id,
+                length: reply.length,
               });
             })
             .catch((error: any) => {
               logger.error('服务端自动保存助手回复失败', {
-                module: 'ChatController', sessionId, error: error?.message || String(error),
+                module: 'ChatController',
+                sessionId,
+                error: error?.message || String(error),
               });
             });
           // 飞书同步与 /chat/history 入口保持同一通道（uuid 幂等，重复同步会被飞书侧去重）
-          void this.syncWebMessageToFeishu(sessionId, 'assistant', reply, uid).catch((error) => {
+          void this.syncWebMessageToFeishu(
+            sessionId,
+            'assistant',
+            reply,
+            uid,
+          ).catch((error) => {
             logger.warn('自动落库后飞书同步失败', {
-              module: 'ChatController', sessionId, error: error?.message || String(error),
+              module: 'ChatController',
+              sessionId,
+              error: error?.message || String(error),
             });
           });
         },
@@ -247,7 +300,9 @@ export class ChatController {
     res.flushHeaders?.();
 
     // 连接建立提示帧，让前端 onopen 后立即确认通道可用
-    res.write(`event: ready\ndata: ${JSON.stringify({ ownerUserId, at: Date.now() })}\n\n`);
+    res.write(
+      `event: ready\ndata: ${JSON.stringify({ ownerUserId, at: Date.now() })}\n\n`,
+    );
 
     const unsubscribe = subscribeChatHistoryEvents(ownerUserId, (event) => {
       if (res.writableEnded) return;
@@ -278,7 +333,15 @@ export class ChatController {
    */
   @Post('history') // 映射 POST 请求到 /chat/history
   async saveChatHistory(
-    @Body() body: { sessionId: string; role: string; content: string; documentCards?: unknown[]; workflowCards?: unknown[] },
+    @Body()
+    body: {
+      sessionId: string;
+      role: string;
+      content: string;
+      documentCards?: unknown[];
+      workflowCards?: unknown[];
+      citations?: unknown[];
+    },
     @Req() req: any,
   ) {
     const saved = await this.sessionService.saveChatHistory(
@@ -289,9 +352,15 @@ export class ChatController {
       body.documentCards,
       'web',
       body.workflowCards,
+      body.citations,
     );
 
-    void this.syncWebMessageToFeishu(body.sessionId, body.role, body.content, req.userId).catch((error) => {
+    void this.syncWebMessageToFeishu(
+      body.sessionId,
+      body.role,
+      body.content,
+      req.userId,
+    ).catch((error) => {
       logger.warn('Web 消息同步到飞书失败', {
         module: 'ChatController',
         sessionId: body.sessionId,
@@ -319,7 +388,8 @@ export class ChatController {
     // ownerUserId 在飞书映射表里是字符串，登录态 req.userId 可能是数字，统一转字符串比较
     if (!mapping || String(mapping.ownerUserId) !== String(userId)) return;
 
-    const receiveId = mapping.chatType === 'group' ? mapping.chatId : mapping.senderOpenId;
+    const receiveId =
+      mapping.chatType === 'group' ? mapping.chatId : mapping.senderOpenId;
     const receiveIdType = mapping.chatType === 'group' ? 'chat_id' : 'open_id';
 
     // 幂等基线：同一条 (session, role, 内容) 在 5 分钟窗口内生成同一个 uuid，
@@ -344,9 +414,15 @@ export class ChatController {
     const { text, imageUrls } = splitMarkdownImages(richStripped);
     const hasRichAssets = charts.length > 0 || mindmaps.length > 0;
     const textToSend =
-      text.trim() || (imageUrls.length > 0 || hasRichAssets ? 'AI 生成了内容：' : '');
+      text.trim() ||
+      (imageUrls.length > 0 || hasRichAssets ? 'AI 生成了内容：' : '');
     if (textToSend) {
-      const textResult = await sendPlainTextMessage(receiveId, receiveIdType, textToSend, `${baseUuid}t`);
+      const textResult = await sendPlainTextMessage(
+        receiveId,
+        receiveIdType,
+        textToSend,
+        `${baseUuid}t`,
+      );
       if (!textResult.success) {
         throw new Error(textResult.error || '飞书发送失败');
       }
@@ -372,7 +448,12 @@ export class ChatController {
           receiveIdType,
           imageKey: uploadResult.key,
         });
-        const imageResult = await sendImageMessage(receiveId, receiveIdType, uploadResult.key, imageUuid);
+        const imageResult = await sendImageMessage(
+          receiveId,
+          receiveIdType,
+          uploadResult.key,
+          imageUuid,
+        );
         if (imageResult.success) {
           logger.info('Web 图片同步飞书：图片消息发送成功', {
             module: 'ChatController',
@@ -402,7 +483,12 @@ export class ChatController {
         });
       }
 
-      const fallbackResult = await sendPlainTextMessage(receiveId, receiveIdType, imageUrl, `${imageUuid}f`);
+      const fallbackResult = await sendPlainTextMessage(
+        receiveId,
+        receiveIdType,
+        imageUrl,
+        `${imageUuid}f`,
+      );
       if (!fallbackResult.success) {
         throw new Error(fallbackResult.error || '飞书图片链接兜底发送失败');
       }
@@ -412,11 +498,17 @@ export class ChatController {
     let documents: AssetDocument[] = [];
     try {
       const since = Date.now() - 10 * 60 * 1000; // 只取最近 10 分钟内本会话生成的文档
-      const docEntities = await this.generatedDocumentService.listRecentBySession(sessionId, since);
+      const docEntities =
+        await this.generatedDocumentService.listRecentBySession(
+          sessionId,
+          since,
+        );
       const loaded = await Promise.all(
         docEntities.map(async (d) => {
           const read = await this.generatedDocumentService.read(d.key, null);
-          return read ? { key: d.key, filename: d.filename, buffer: read.buffer } : null;
+          return read
+            ? { key: d.key, filename: d.filename, buffer: read.buffer }
+            : null;
         }),
       );
       documents = loaded.filter((d): d is AssetDocument => d !== null);
@@ -446,7 +538,11 @@ export class ChatController {
    * 同一条 (sessionId, role, content) 在 5 分钟时间窗内得到相同值；
    * 飞书 uuid 仅允许 [0-9a-zA-Z]，最长 50，这里用 md5 hex（32 位）。
    */
-  private buildFeishuSyncUuid(sessionId: string, role: string, content: string): string {
+  private buildFeishuSyncUuid(
+    sessionId: string,
+    role: string,
+    content: string,
+  ): string {
     const timeWindow = Math.floor(Date.now() / (5 * 60 * 1000));
     const raw = `web-sync|${sessionId}|${role}|${content}|${timeWindow}`;
     return crypto.createHash('md5').update(raw).digest('hex');
@@ -490,7 +586,11 @@ export class ChatController {
     @Body() body: { sessionId: string; title: string },
     @Req() req: any,
   ) {
-    return this.sessionService.createSession(body.sessionId, body.title, req.userId);
+    return this.sessionService.createSession(
+      body.sessionId,
+      body.title,
+      req.userId,
+    );
   }
 
   /**
@@ -533,7 +633,11 @@ export class ChatController {
     @Body() body: { title: string },
     @Req() req: any,
   ) {
-    return this.sessionService.updateSessionTitle(sessionId, body.title, req.userId);
+    return this.sessionService.updateSessionTitle(
+      sessionId,
+      body.title,
+      req.userId,
+    );
   }
 
   /**
@@ -542,7 +646,10 @@ export class ChatController {
    */
   @Delete('sessions/:sessionId') // 映射 DELETE 请求到 /chat/sessions/:sessionId
   async deleteSession(@Param('sessionId') sessionId: string, @Req() req: any) {
-    const result = await this.sessionService.deleteSession(sessionId, req.userId);
+    const result = await this.sessionService.deleteSession(
+      sessionId,
+      req.userId,
+    );
     await deleteFeishuChatSessionBySessionId(sessionId, req.userId);
     return result;
   }
@@ -552,7 +659,10 @@ export class ChatController {
    * 切换会话的置顶状态
    */
   @Patch('sessions/:sessionId/pin') // 映射 PATCH 请求到 /chat/sessions/:sessionId/pin
-  async toggleSessionPin(@Param('sessionId') sessionId: string, @Req() req: any) {
+  async toggleSessionPin(
+    @Param('sessionId') sessionId: string,
+    @Req() req: any,
+  ) {
     return this.sessionService.toggleSessionPin(sessionId, req.userId);
   }
 
@@ -561,7 +671,10 @@ export class ChatController {
    * 复制会话
    */
   @Post('sessions/:sessionId/duplicate')
-  async duplicateSession(@Param('sessionId') sessionId: string, @Req() req: any) {
+  async duplicateSession(
+    @Param('sessionId') sessionId: string,
+    @Req() req: any,
+  ) {
     return this.sessionService.duplicateSession(sessionId, req.userId);
   }
 
@@ -648,10 +761,7 @@ export class ChatController {
    */
   @Head('documents/preview/:key')
   @Head('documents/download/:key')
-  async headGeneratedDocument(
-    @Param('key') key: string,
-    @Res() res: Response,
-  ) {
+  async headGeneratedDocument(@Param('key') key: string, @Res() res: Response) {
     const entity = await this.generatedDocumentService.findByKey(key);
     if (!entity) {
       res.status(404).end();
@@ -668,11 +778,11 @@ export class ChatController {
    * 用户主动删除文档（含磁盘文件 + DB 元数据）
    */
   @Delete('documents/:key')
-  async deleteGeneratedDocument(
-    @Param('key') key: string,
-    @Req() req: any,
-  ) {
-    const ok = await this.generatedDocumentService.deleteByKey(key, req.userId || null);
+  async deleteGeneratedDocument(@Param('key') key: string, @Req() req: any) {
+    const ok = await this.generatedDocumentService.deleteByKey(
+      key,
+      req.userId || null,
+    );
     if (!ok) {
       return { success: false, message: '文档不存在或无权删除' };
     }
@@ -726,7 +836,8 @@ export class ChatController {
         res.status(404).json({
           success: false,
           message: '文档不存在或已过期',
-          detail: '该文件的生成时间已超过保存期限，或被系统清理。请回到对话中要求 AI 重新生成。',
+          detail:
+            '该文件的生成时间已超过保存期限，或被系统清理。请回到对话中要求 AI 重新生成。',
         });
       } else {
         this.sendDocumentErrorPage(
@@ -736,7 +847,12 @@ export class ChatController {
           '该文件的生成时间已超过保存期限，或被系统清理。请回到对话中要求 AI 重新生成。',
         );
       }
-      logger.warn('文档访问失败', { module: 'ChatController', key, disposition, userId });
+      logger.warn('文档访问失败', {
+        module: 'ChatController',
+        key,
+        disposition,
+        userId,
+      });
       return;
     }
     const { entity, buffer } = result;
@@ -761,7 +877,12 @@ export class ChatController {
   }
 
   /** 发送美观的 HTML 错误页（含返回按钮） */
-  private sendDocumentErrorPage(res: Response, status: number, title: string, detail: string) {
+  private sendDocumentErrorPage(
+    res: Response,
+    status: number,
+    title: string,
+    detail: string,
+  ) {
     const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -824,10 +945,7 @@ export class ChatController {
    * 获取 LLM 调用用量统计
    */
   @Get('llm-usage')
-  async getLlmUsageStats(
-    @Query('days') days: string = '7',
-    @Req() req: any,
-  ) {
+  async getLlmUsageStats(@Query('days') days: string = '7', @Req() req: any) {
     const daysNum = parseInt(days, 10) || 7;
     return this.usageService.getLlmUsageStats(req.userId, daysNum);
   }
@@ -840,7 +958,8 @@ export class ChatController {
    */
   @Post('feedback')
   async submitFeedback(
-    @Body() body: {
+    @Body()
+    body: {
       sessionId: string;
       userMessage: string;
       assistantMessage: string;
@@ -862,10 +981,7 @@ export class ChatController {
    * 获取准确率评估统计
    */
   @Get('evaluation-stats')
-  async getEvaluationStats(
-    @Query('days') days: string = '7',
-    @Req() req: any,
-  ) {
+  async getEvaluationStats(@Query('days') days: string = '7', @Req() req: any) {
     const daysNum = parseInt(days, 10) || 7;
     return this.evaluationService.getEvaluationStats(req.userId, daysNum);
   }
@@ -876,12 +992,25 @@ export class ChatController {
   private static readonly SearchFeedbackSchema = z.object({
     sessionId: z.string().min(1).describe('会话 ID'),
     query: z.string().min(1).max(500).describe('用户原始查询'),
-    action: z.enum(['regenerate', 'followup', 'abandon', 'positive', 'negative']).describe('用户行为类型'),
-    retrievedDocIds: z.array(z.string()).optional().describe('检索到的文档 ID 列表'),
-    responseTimeMs: z.number().int().min(0).optional().describe('检索到回答的总耗时（ms）'),
+    action: z
+      .enum(['regenerate', 'followup', 'abandon', 'positive', 'negative'])
+      .describe('用户行为类型'),
+    retrievedDocIds: z
+      .array(z.string())
+      .optional()
+      .describe('检索到的文档 ID 列表'),
+    responseTimeMs: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('检索到回答的总耗时（ms）'),
     resultCount: z.number().int().min(0).optional().describe('检索结果数量'),
     modelId: z.string().optional().describe('使用的模型 ID'),
-    searchType: z.string().optional().describe('检索方式：hybrid / vector / bm25'),
+    searchType: z
+      .string()
+      .optional()
+      .describe('检索方式：hybrid / vector / bm25'),
     metadata: z.record(z.string(), z.any()).optional().describe('额外元数据'),
   });
 
@@ -897,7 +1026,11 @@ export class ChatController {
    */
   @Post('search-feedback')
   async submitSearchFeedback(
-    @Body(new ZodValidationPipe(ChatController.SearchFeedbackSchema, { label: 'SearchFeedback' }))
+    @Body(
+      new ZodValidationPipe(ChatController.SearchFeedbackSchema, {
+        label: 'SearchFeedback',
+      }),
+    )
     body: z.infer<typeof ChatController.SearchFeedbackSchema>,
     @Req() req: any,
   ) {
@@ -949,10 +1082,7 @@ export class ChatController {
    * 获取工具调用使用统计
    */
   @Get('tool-usage')
-  async getToolUsageStats(
-    @Query('days') days: string = '7',
-    @Req() req: any,
-  ) {
+  async getToolUsageStats(@Query('days') days: string = '7', @Req() req: any) {
     const daysNum = parseInt(days, 10) || 7;
     return this.toolUsageService.getToolUsageStats(req.userId, daysNum);
   }
@@ -967,7 +1097,10 @@ export class ChatController {
   async handleConfirmation(
     @Body() body: { confirmationId: string; confirmed: boolean },
   ) {
-    const success = handleConfirmationResponse(body.confirmationId, body.confirmed);
+    const success = handleConfirmationResponse(
+      body.confirmationId,
+      body.confirmed,
+    );
     return { success, confirmationId: body.confirmationId };
   }
 
@@ -983,7 +1116,11 @@ export class ChatController {
     @Body() body: { tags: string[] },
     @Req() req: any,
   ) {
-    return this.sessionService.updateSessionTags(sessionId, body.tags, req.userId);
+    return this.sessionService.updateSessionTags(
+      sessionId,
+      body.tags,
+      req.userId,
+    );
   }
 
   /**
@@ -996,7 +1133,11 @@ export class ChatController {
     @Body() body: { category: string },
     @Req() req: any,
   ) {
-    return this.sessionService.updateSessionCategory(sessionId, body.category, req.userId);
+    return this.sessionService.updateSessionCategory(
+      sessionId,
+      body.category,
+      req.userId,
+    );
   }
 
   /**
@@ -1004,10 +1145,7 @@ export class ChatController {
    * 按标签查询会话
    */
   @Get('sessions/by-tag/:tag')
-  async getSessionsByTag(
-    @Param('tag') tag: string,
-    @Req() req: any,
-  ) {
+  async getSessionsByTag(@Param('tag') tag: string, @Req() req: any) {
     return this.sessionService.getSessionsByTag(tag, req.userId);
   }
 

@@ -10,14 +10,25 @@
  * Mock 基础模块，防止级联 import 报错
  * ==================================================================*/
 jest.mock('../fundamentals/logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../fundamentals/config', () => ({
   config: {
     jwtSecret: 'test-jwt-secret',
     port: 3000,
-    db: { host: 'localhost', port: 3306, username: 'root', password: '', database: 'test' },
+    db: {
+      host: 'localhost',
+      port: 3306,
+      username: 'root',
+      password: '',
+      database: 'test',
+    },
     ollamaBaseUrl: 'http://localhost:11434',
     chromaUrl: 'http://localhost:8000',
     chromaHost: 'localhost',
@@ -64,7 +75,7 @@ jest.mock('@nestjs/typeorm', () => ({
 /* =====================================================================
  * 导入被测模块
  * ==================================================================*/
-import { SessionService } from './session.service';
+import { SessionService, safeParseJsonArray } from './session.service';
 import { NotFoundException } from '@nestjs/common';
 
 const mockSummaryService = {
@@ -146,16 +157,33 @@ describe('SessionService', () => {
 
       await service.saveChatHistory('s1', 'assistant', 'reply', 'u1');
 
-      expect(mockSummaryService.checkAndUpdateSummary).toHaveBeenCalledWith('s1', 'u1');
-      expect(mockMemoryService.checkAndExtractMemories).toHaveBeenCalledWith('s1', 'u1');
+      expect(mockSummaryService.checkAndUpdateSummary).toHaveBeenCalledWith(
+        's1',
+        'u1',
+      );
+      expect(mockMemoryService.checkAndExtractMemories).toHaveBeenCalledWith(
+        's1',
+        'u1',
+      );
     });
 
     it('与最后一条消息同角色同内容时应去重（服务端自动落库 + 旧客户端双写保护）', async () => {
       const service = createService();
-      const existing = { id: 7, sessionId: 's1', role: 'assistant', content: '同一条回复', workflowCards: null };
+      const existing = {
+        id: 7,
+        sessionId: 's1',
+        role: 'assistant',
+        content: '同一条回复',
+        workflowCards: null,
+      };
       chatRepo.findOne.mockResolvedValue(existing);
 
-      const result = await service.saveChatHistory('s1', 'assistant', '同一条回复', 'u1');
+      const result = await service.saveChatHistory(
+        's1',
+        'assistant',
+        '同一条回复',
+        'u1',
+      );
 
       // 不应插入新记录，直接返回已有消息
       expect(chatRepo.create).not.toHaveBeenCalled();
@@ -164,25 +192,132 @@ describe('SessionService', () => {
 
     it('重复保存携带 workflowCards 且已有记录缺失卡片时应富化更新而非插入', async () => {
       const service = createService();
-      const existing = { id: 7, sessionId: 's1', role: 'assistant', content: '同一条回复', workflowCards: null };
+      const existing = {
+        id: 7,
+        sessionId: 's1',
+        role: 'assistant',
+        content: '同一条回复',
+        workflowCards: null,
+      };
       chatRepo.findOne.mockResolvedValue(existing);
       chatRepo.save.mockImplementation(async (entity: any) => entity);
-      const cards = [{ workflowId: 'wf-1', name: '工作流', status: 'completed', steps: [] }];
+      const cards = [
+        { workflowId: 'wf-1', name: '工作流', status: 'completed', steps: [] },
+      ];
 
-      const result = await service.saveChatHistory('s1', 'assistant', '同一条回复', 'u1', undefined, 'web', cards);
+      const result = await service.saveChatHistory(
+        's1',
+        'assistant',
+        '同一条回复',
+        'u1',
+        undefined,
+        'web',
+        cards,
+      );
 
       // 不插入新记录，仅把卡片字段补充到已有消息上
       expect(chatRepo.create).not.toHaveBeenCalled();
-      expect(chatRepo.save).toHaveBeenCalledWith(expect.objectContaining({
-        id: 7,
-        workflowCards: JSON.stringify(cards),
-      }));
+      expect(chatRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 7,
+          workflowCards: JSON.stringify(cards),
+        }),
+      );
       expect(result.workflowCards).toBe(JSON.stringify(cards));
+    });
+
+    it('重复保存携带 citations 且已有记录缺失引用时应富化更新而非插入', async () => {
+      const service = createService();
+      const existing = {
+        id: 7,
+        sessionId: 's1',
+        role: 'assistant',
+        content: '同一条回复',
+        workflowCards: null,
+        citations: null,
+      };
+      chatRepo.findOne.mockResolvedValue(existing);
+      chatRepo.save.mockImplementation(async (entity: any) => entity);
+      const cites = [
+        { ref: 1, documentId: 'doc-a', title: '文档A', snippet: '依据片段' },
+      ];
+
+      const result = await service.saveChatHistory(
+        's1',
+        'assistant',
+        '同一条回复',
+        'u1',
+        undefined,
+        'web',
+        undefined,
+        cites,
+      );
+
+      // 不插入新记录，仅把引用字段补充到已有消息上
+      expect(chatRepo.create).not.toHaveBeenCalled();
+      expect(chatRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 7,
+          citations: JSON.stringify(cites),
+        }),
+      );
+      expect(result.citations).toBe(JSON.stringify(cites));
+    });
+
+    it('新消息携带 citations 时应序列化为 JSON 持久化', async () => {
+      const service = createService();
+      chatRepo.findOne.mockResolvedValue(null);
+      chatRepo.create.mockReturnValue({ id: 9 });
+      chatRepo.save.mockResolvedValue({ id: 9 });
+      sessionRepo.findOne.mockResolvedValue({ sessionId: 's1' });
+      const cites = [
+        { ref: 1, documentId: 'doc-a', title: '文档A', snippet: '片段1' },
+        { ref: 2, documentId: 'doc-b', title: '文档B', snippet: '片段2' },
+      ];
+
+      await service.saveChatHistory(
+        's1',
+        'assistant',
+        '带引用的回复',
+        'u1',
+        undefined,
+        'web',
+        undefined,
+        cites,
+      );
+
+      expect(chatRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          citations: JSON.stringify(cites),
+        }),
+      );
+    });
+
+    it('新消息不携带 citations 时 citations 字段落库为 null', async () => {
+      const service = createService();
+      chatRepo.findOne.mockResolvedValue(null);
+      chatRepo.create.mockReturnValue({ id: 10 });
+      chatRepo.save.mockResolvedValue({ id: 10 });
+      sessionRepo.findOne.mockResolvedValue({ sessionId: 's1' });
+
+      await service.saveChatHistory('s1', 'assistant', '无引用回复', 'u1');
+
+      expect(chatRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          citations: null,
+        }),
+      );
     });
 
     it('内容不同时不应误判为重复', async () => {
       const service = createService();
-      chatRepo.findOne.mockResolvedValue({ id: 7, sessionId: 's1', role: 'assistant', content: '上一条回复', workflowCards: null });
+      chatRepo.findOne.mockResolvedValue({
+        id: 7,
+        sessionId: 's1',
+        role: 'assistant',
+        content: '上一条回复',
+        workflowCards: null,
+      });
       chatRepo.create.mockReturnValue({ id: 8 });
       chatRepo.save.mockResolvedValue({ id: 8 });
       sessionRepo.findOne.mockResolvedValue({ sessionId: 's1' });
@@ -204,7 +339,11 @@ describe('SessionService', () => {
       const docRepo = getMockRepo('generatedDocument');
       const msgs = [
         { id: 1, role: 'user', createdAt: new Date('2024-01-01T00:00:00Z') },
-        { id: 2, role: 'assistant', createdAt: new Date('2024-01-01T00:00:01Z') },
+        {
+          id: 2,
+          role: 'assistant',
+          createdAt: new Date('2024-01-01T00:00:01Z'),
+        },
       ];
       repo.find.mockResolvedValue(msgs);
       // 没有附件场景：返回空数组，确保不影响消息顺序断言
@@ -216,6 +355,51 @@ describe('SessionService', () => {
         where: { sessionId: 's1' },
         order: { createdAt: 'ASC' },
       });
+    });
+
+    it('JSON 列脏数据不应炸掉历史加载（降级为 undefined，消息本体保留）', async () => {
+      const service = createService();
+      const repo = getMockRepo('chatHistory');
+      const docRepo = getMockRepo('generatedDocument');
+      repo.find.mockResolvedValue([
+        // 非法 JSON（如手工改库截断）
+        {
+          id: 1,
+          role: 'assistant',
+          content: '回复一',
+          citations: '{invalid json',
+          createdAt: new Date('2024-01-01T00:00:01Z'),
+        },
+        // 合法 JSON 但不是数组（如旧版本对象格式）
+        {
+          id: 2,
+          role: 'assistant',
+          content: '回复二',
+          citations: '{"not":"an array"}',
+          createdAt: new Date('2024-01-01T00:00:02Z'),
+        },
+        // 正常数组：应正常解析
+        {
+          id: 3,
+          role: 'assistant',
+          content: '回复三',
+          citations: '[{"ref":1,"documentId":"d","title":"t","snippet":"s"}]',
+          createdAt: new Date('2024-01-01T00:00:03Z'),
+        },
+      ]);
+      docRepo.find.mockResolvedValue([]);
+
+      const result = await service.getSessionHistory('s1');
+
+      // 三条消息全部返回，脏数据只损失附加字段
+      expect(result).toHaveLength(3);
+      expect(result[0].citations).toBeUndefined();
+      expect(result[1].citations).toBeUndefined();
+      expect(result[0].content).toBe('回复一');
+      // 正常数组不受影响
+      expect(result[2].citations).toEqual([
+        { ref: 1, documentId: 'd', title: 't', snippet: 's' },
+      ]);
     });
   });
 
@@ -249,7 +433,9 @@ describe('SessionService', () => {
 
       await service.createSession('new', 'Title', 'u1');
       expect(repo.create).toHaveBeenCalledWith({
-        sessionId: 'new', title: 'Title', userId: 'u1',
+        sessionId: 'new',
+        title: 'Title',
+        userId: 'u1',
       });
     });
   });
@@ -264,13 +450,24 @@ describe('SessionService', () => {
 
       await service.deleteSession('s1', 'u1');
 
-      expect(getMockRepo('sessionSummary').delete).toHaveBeenCalledWith({ sessionId: 's1' });
-      expect(getMockRepo('llmUsage').delete).toHaveBeenCalledWith({ sessionId: 's1' });
-      expect(getMockRepo('messageFeedback').delete).toHaveBeenCalledWith({ sessionId: 's1' });
-      expect(getMockRepo('autoEvaluation').delete).toHaveBeenCalledWith({ sessionId: 's1' });
-      expect(getMockRepo('chatHistory').delete).toHaveBeenCalledWith({ sessionId: 's1' });
+      expect(getMockRepo('sessionSummary').delete).toHaveBeenCalledWith({
+        sessionId: 's1',
+      });
+      expect(getMockRepo('llmUsage').delete).toHaveBeenCalledWith({
+        sessionId: 's1',
+      });
+      expect(getMockRepo('messageFeedback').delete).toHaveBeenCalledWith({
+        sessionId: 's1',
+      });
+      expect(getMockRepo('autoEvaluation').delete).toHaveBeenCalledWith({
+        sessionId: 's1',
+      });
+      expect(getMockRepo('chatHistory').delete).toHaveBeenCalledWith({
+        sessionId: 's1',
+      });
       expect(getMockRepo('session').delete).toHaveBeenCalledWith({
-        sessionId: 's1', userId: 'u1',
+        sessionId: 's1',
+        userId: 'u1',
       });
     });
   });
@@ -362,7 +559,9 @@ describe('SessionService', () => {
     it('原会话不存在时抛出 NotFound', async () => {
       const service = createService();
       getMockRepo('session').findOne.mockResolvedValue(null);
-      await expect(service.duplicateSession('ghost')).rejects.toThrow(NotFoundException);
+      await expect(service.duplicateSession('ghost')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -373,7 +572,10 @@ describe('SessionService', () => {
     it('导出 JSON 格式', async () => {
       const service = createService();
       getMockRepo('session').findOne.mockResolvedValue({
-        sessionId: 's1', title: 'T', createdAt: new Date(), updatedAt: new Date(),
+        sessionId: 's1',
+        title: 'T',
+        createdAt: new Date(),
+        updatedAt: new Date(),
       });
       getMockRepo('chatHistory').find.mockResolvedValue([
         { role: 'user', content: 'hi', createdAt: new Date('2025-01-01') },
@@ -386,7 +588,10 @@ describe('SessionService', () => {
     it('导出 markdown 格式', async () => {
       const service = createService();
       getMockRepo('session').findOne.mockResolvedValue({
-        sessionId: 's1', title: 'My Chat', createdAt: new Date(), updatedAt: new Date(),
+        sessionId: 's1',
+        title: 'My Chat',
+        createdAt: new Date(),
+        updatedAt: new Date(),
       });
       getMockRepo('chatHistory').find.mockResolvedValue([
         { role: 'user', content: '你好', createdAt: new Date() },
@@ -400,7 +605,36 @@ describe('SessionService', () => {
     it('会话不存在时抛出 NotFound', async () => {
       const service = createService();
       getMockRepo('session').findOne.mockResolvedValue(null);
-      await expect(service.exportSession('ghost')).rejects.toThrow(NotFoundException);
+      await expect(service.exportSession('ghost')).rejects.toThrow(
+        NotFoundException,
+      );
     });
+  });
+});
+
+/* =====================================================================
+ * safeParseJsonArray — 聊天记录 JSON 列安全反序列化（纯函数）
+ * ==================================================================*/
+describe('safeParseJsonArray', () => {
+  it('null / undefined / 空字符串应返回 undefined', () => {
+    expect(safeParseJsonArray(null)).toBeUndefined();
+    expect(safeParseJsonArray(undefined)).toBeUndefined();
+    expect(safeParseJsonArray('')).toBeUndefined();
+  });
+
+  it('合法 JSON 数组应正常解析', () => {
+    const arr = [{ ref: 1, title: '文档A' }];
+    expect(safeParseJsonArray(JSON.stringify(arr))).toEqual(arr);
+  });
+
+  it('非法 JSON 应返回 undefined 而非抛错', () => {
+    expect(safeParseJsonArray('{invalid json')).toBeUndefined();
+    expect(safeParseJsonArray('[1, 2')).toBeUndefined();
+  });
+
+  it('合法 JSON 但非数组（对象/字符串/数字）应返回 undefined', () => {
+    expect(safeParseJsonArray('{"not":"an array"}')).toBeUndefined();
+    expect(safeParseJsonArray('"just a string"')).toBeUndefined();
+    expect(safeParseJsonArray('42')).toBeUndefined();
   });
 });
