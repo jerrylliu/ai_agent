@@ -1,0 +1,30 @@
+# 统一行尾：所有文本文件在仓库和磁盘上均为 LF
+# 背景：仓库内文本文件历史存量为全 LF；core.autocrlf=true 会在 checkout 时
+# 把 LF 翻转成 CRLF，导致 VSCode/prettier 按 LF 保存的文件在 git status 中
+# 出现"假 M"（内容零差异、仅行尾风格不符）。此文件将行尾行为固化，
+# Windows / macOS / CI 三端 checkout 结果完全一致。
+* text=auto eol=lf
+
+# 明确声明的二进制类型（text=auto 已能自动识别，这里显式兜底防误判）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.pptx binary
+*.exe binary
+*.dll binary
+*.node binary
+*.wasm binary
+*.zip binary
+*.gz binary
