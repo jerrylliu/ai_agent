@@ -1,7 +1,7 @@
 // AppHandle 两端通用；其余窗口管理导入仅桌面端使用（Android 为单 Activity 架构，无多窗口概念）
 use tauri::AppHandle;
 #[cfg(desktop)]
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 #[cfg(desktop)]
 use tauri_plugin_decorum::WebviewWindowExt;
 
@@ -24,9 +24,12 @@ pub fn test() -> String {
 /// - `document_id`: 文档 ID；不传则进入草稿模式（label = `editor-new-{timestamp}`）
 /// - `title`: 窗口标题，不传时使用默认值
 /// - `transient_token`: 跨窗口传递内容的 token，会被附加到 URL query
+/// - `anchor`: 引用定位锚点文本（前端已 encodeURIComponent），附加到 URL query；
+///   编辑器窗口加载后滚动高亮到该片段所在位置（RAG 引用定位闭环）
 ///
 /// 行为：
-/// - 同一 documentId 的窗口已存在时 → 激活前置而非重复创建
+/// - 同一 documentId 的窗口已存在时 → 激活前置而非重复创建，
+///   并通过 `editor-anchor` 事件把新锚点推给已打开的窗口（前端监听后重新定位）
 /// - 草稿窗口每次都新建（label 带时间戳）
 /// - 默认尺寸 1200x800，最小 800x600，居中显示
 /// - 移动端（Android/iOS）单 Activity 架构无多窗口，返回降级提示，前端应走应用内路由打开编辑器
@@ -36,6 +39,7 @@ pub async fn open_editor_window(
     document_id: Option<i64>,
     title: Option<String>,
     transient_token: Option<String>,
+    anchor: Option<String>,
 ) -> Result<String, String> {
     #[cfg(desktop)]
     {
@@ -50,23 +54,30 @@ pub async fn open_editor_window(
             ),
         };
 
-        // 已存在则激活前置
+        // 已存在则激活前置，并通过事件推送新锚点（前端监听 editor-anchor 重新定位）
         if let Some(existing) = app.get_webview_window(&label) {
             existing.set_focus().map_err(|e| e.to_string())?;
             existing.unminimize().ok();
+            if let Some(a) = anchor {
+                let _ = existing.emit("editor-anchor", a);
+            }
             return Ok(label);
         }
 
         // 构造 hash 路由路径
-        // hash 内部约定：#/editor/{id}?windowMode=standalone&transientToken=xxx
+        // hash 内部约定：#/editor/{id}?windowMode=standalone&transientToken=xxx&anchor=xxx
         // router.ts parseHash 会从 hash 的 ? 之后解析 query
         let token_param = match &transient_token {
             Some(t) => format!("&transientToken={}", t),
             None => String::new(),
         };
+        let anchor_param = match &anchor {
+            Some(a) => format!("&anchor={}", a),
+            None => String::new(),
+        };
         let route_path = match document_id {
-            Some(id) => format!("/#/editor/{}?windowMode=standalone{}", id, token_param),
-            None => format!("/#/editor/new?windowMode=standalone{}", token_param),
+            Some(id) => format!("/#/editor/{}?windowMode=standalone{}{}", id, token_param, anchor_param),
+            None => format!("/#/editor/new?windowMode=standalone{}{}", token_param, anchor_param),
         };
 
         let window_title = title.unwrap_or_else(|| "文档编辑器 - 以太忆核".to_string());
@@ -92,7 +103,7 @@ pub async fn open_editor_window(
     #[cfg(mobile)]
     {
         // 移动端降级：无多窗口能力，吞掉未使用参数避免告警
-        let _ = (&app, &document_id, &title, &transient_token);
+        let _ = (&app, &document_id, &title, &transient_token, &anchor);
         Err("独立编辑器窗口为桌面端专属功能，移动端请通过应用内路由打开文档".to_string())
     }
 }

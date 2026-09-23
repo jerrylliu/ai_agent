@@ -326,6 +326,46 @@ describe('sse-parser', () => {
       expect(onWorkflowEvent).not.toHaveBeenCalled();
     });
 
+    it('应调用 onCitations 回调（RAG 引用列表）', () => {
+      const onCitations = vi.fn();
+      const data = JSON.stringify({
+        citations: [
+          { ref: 1, documentId: 'doc-1', title: '测试文档一', snippet: '这是第一份文档的片段' },
+          { ref: 2, documentId: 'doc-2', title: '测试文档二', snippet: '这是第二份文档的片段' },
+        ],
+      });
+      const events = [{ eventType: 'citations', eventData: data }];
+
+      handleSSEEvents(events, { onCitations });
+
+      expect(onCitations).toHaveBeenCalledWith({
+        citations: [
+          { ref: 1, documentId: 'doc-1', title: '测试文档一', snippet: '这是第一份文档的片段' },
+          { ref: 2, documentId: 'doc-2', title: '测试文档二', snippet: '这是第二份文档的片段' },
+        ],
+      });
+    });
+
+    it('citations 帧 应能通过 parseSSEFrames 正确解析', () => {
+      const data = JSON.stringify({
+        citations: [{ ref: 1, documentId: 'doc-1', title: '测试文档一', snippet: '片段' }],
+      });
+      const input = `event: citations\ndata: ${data}\n\n`;
+      const { events } = parseSSEFrames(input);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].eventType).toBe('citations');
+      expect(events[0].eventData).toBe(data);
+    });
+
+    it('citations JSON 解析失败时不应崩溃', () => {
+      const onCitations = vi.fn();
+      const events = [{ eventType: 'citations', eventData: '{invalid' }];
+
+      expect(() => handleSSEEvents(events, { onCitations })).not.toThrow();
+      expect(onCitations).not.toHaveBeenCalled();
+    });
+
     it('未知事件类型应被忽略', () => {
       const onContent = vi.fn();
       const events = [{ eventType: 'unknown_event', eventData: '"test"' }];

@@ -1,13 +1,13 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { Button } from "../ui/button";
-import { Database, ThumbsUp, ThumbsDown, Pencil, FileText, Download, FileCode, FileType } from "lucide-react";
+import { Database, ThumbsUp, ThumbsDown, Pencil, FileText, Download, FileCode, FileType, ExternalLink } from "lucide-react";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { FileCard } from "./FileCard";
 import { PopupMenu, type PopupMenuItem } from "../ui/popup-menu";
 import { formatTime, sanitizeMessageContent } from "../../lib/utils";
-import type { Message, MessageAttachment, MessageDocumentCard, WorkflowProgress } from "../../types/session";
+import type { Message, MessageAttachment, MessageDocumentCard, WorkflowProgress, CitationItem } from "../../types/session";
 import { submitFeedback, getDocumentVersions, exportVersion, getDocumentByTitle } from "../../lib/api";
-import { openEditorWithContent } from "../../lib/window";
+import { openEditorWithContent, openEditorWindow } from "../../lib/window";
 
 /* ============== 用户文档卡片辅助函数 ============== */
 
@@ -369,6 +369,95 @@ function WorkflowResultCard({ workflow }: { workflow: WorkflowProgress }) {
   );
 }
 
+/**
+ * 参考来源卡片列表（RAG 可验证生成）
+ * citations 非空时渲染在 AI 消息内容下方，与正文角标 [X] 编号对应；
+ * 每条默认两行截断，点击展开/收起完整片段
+ */
+function CitationSources({ citations }: { citations: CitationItem[] }) {
+  const [expandedRefs, setExpandedRefs] = useState<Set<number>>(() => new Set());
+
+  const toggleRef = useCallback((ref: number) => {
+    setExpandedRefs((prev) => {
+      const next = new Set(prev);
+      if (next.has(ref)) {
+        next.delete(ref);
+      } else {
+        next.add(ref);
+      }
+      return next;
+    });
+  }, []);
+
+  return (
+    <div className="mt-2 rounded-md border border-border bg-muted/40 p-2">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <FileText className="h-3 w-3" aria-hidden="true" />
+        参考来源（{citations.length}）
+      </div>
+      <div className="mt-1.5 space-y-1.5">
+        {citations.map((c) => {
+          const expanded = expandedRefs.has(c.ref);
+          // 还原数字文档 ID（后端入库时 String(documentId)）：非数字形态（防御性兜底值）不显示跳转入口
+          const docIdNum = Number.parseInt(c.documentId, 10);
+          const canOpenSource = Number.isFinite(docIdNum) && docIdNum > 0;
+          return (
+            <button
+              key={c.ref}
+              type="button"
+              onClick={() => toggleRef(c.ref)}
+              className="block w-full text-left rounded p-1.5 bg-card border border-border hover:bg-accent/50 transition-colors"
+              aria-expanded={expanded}
+              title={expanded ? "点击收起" : "点击展开完整片段"}
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="citation-chip shrink-0 inline-flex items-center px-1 rounded bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400 text-[10px] font-medium">
+                  [{c.ref}]
+                </span>
+                <span className="citation-glow min-w-0 text-xs font-medium truncate" title={c.title}>
+                  {c.title}
+                </span>
+                {/* 跳转原文入口：卡片根是 button，内部不能嵌套 button，用 span role=button + stopPropagation */}
+                {canOpenSource && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="citation-glow shrink-0 ml-auto inline-flex items-center gap-0.5 text-[11px] cursor-pointer hover:opacity-75 transition-opacity"
+                    title="在编辑器中查看原文档"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // 锚点取 snippet 前 60 字（原始文本，openEditorWindow 内部统一编码）：
+                      // 编辑器窗口打开后滚动高亮到该片段位置（引用定位闭环）
+                      void openEditorWindow(docIdNum, `${c.title} - 查看`, undefined, c.snippet.slice(0, 60));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void openEditorWindow(docIdNum, `${c.title} - 查看`, undefined, c.snippet.slice(0, 60));
+                      }
+                    }}
+                  >
+                    <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                    查看原文
+                  </span>
+                )}
+              </div>
+              <p
+                className={`mt-1 text-xs text-muted-foreground leading-relaxed break-words ${
+                  expanded ? "" : "line-clamp-2"
+                }`}
+              >
+                {c.snippet}
+              </p>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 interface ChatBubbleProps {
   message: Message;
   prevMessage: Message | undefined;
@@ -450,7 +539,11 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
             {/* AI消息：使用Markdown渲染 */}
             {message.role === "assistant" ? (
               <div className="min-w-0" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
-                <MarkdownRenderer>{message.content}</MarkdownRenderer>
+                <MarkdownRenderer citations={message.citations}>{message.content}</MarkdownRenderer>
+                {/* 参考来源卡片（RAG 引用定位，与正文角标 [X] 编号对应） */}
+                {message.citations && message.citations.length > 0 && (
+                  <CitationSources citations={message.citations} />
+                )}
                 {/* 工作流执行进度卡片（execute_workflow 完成后持久化，可回看） */}
                 {message.workflowCards && message.workflowCards.length > 0 && (
                   <div className="mt-2 space-y-2">

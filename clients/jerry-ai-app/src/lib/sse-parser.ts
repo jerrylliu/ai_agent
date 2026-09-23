@@ -16,9 +16,11 @@
  *   - confirmation_request:  工具调用人工确认请求
  *   - heartbeat:             保活心跳
  *   - content:               AI 回复文本
+ *   - citations:             RAG 引用列表（流结束后一次性发送）
  */
 
 import type { ToolStatusEvent, SessionAction } from './api';
+import type { CitationItem } from '@/types/session';
 
 export interface SSEEvent {
   eventType: string;
@@ -146,6 +148,7 @@ export function handleSSEEvents(
     onConfirmationResolved?: (event: { id: string; confirmed: boolean; source: 'web' | 'feishu' }) => void;
     onFileCard?: (event: FileCardEvent) => void;
     onWorkflowEvent?: (event: WorkflowEvent) => void;
+    onCitations?: (event: { citations: CitationItem[] }) => void;
     onContent?: (text: string) => void;
     onHeartbeat?: () => void;
   },
@@ -219,6 +222,15 @@ export function handleSSEEvents(
           callbacks.onWorkflowEvent?.({ ...workflowEvent, type: event.eventType } as WorkflowEvent);
         } catch (e) {
           console.warn(`解析 ${event.eventType} 事件失败:`, e);
+        }
+        break;
+      }
+      case 'citations': {
+        try {
+          const citationsEvent = JSON.parse(event.eventData) as { citations: CitationItem[] };
+          callbacks.onCitations?.(citationsEvent);
+        } catch (e) {
+          console.warn('解析 citations 事件失败:', e);
         }
         break;
       }

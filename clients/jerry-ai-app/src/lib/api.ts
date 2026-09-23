@@ -1,6 +1,7 @@
 // API 端点常量导入
 import { API_ENDPOINTS, API_BASE_URL } from "./constants";
 import { Session, Message } from "../types/session";
+import type { CitationItem } from "../types/session";
 import type { AppVersionInfo } from "../types/update";
 import {
   parseSSEFrames,
@@ -27,6 +28,8 @@ export interface ChatHistoryItem {
   documentCards?: unknown[];
   /** 助手消息携带的工作流进度卡片（execute_workflow 执行摘要，可回看） */
   workflowCards?: unknown[];
+  /** 助手消息携带的引用来源（可验证生成，随消息持久化供历史恢复） */
+  citations?: unknown[];
 }
 
 export interface ChatHistoryRecord extends ChatHistoryItem {
@@ -179,6 +182,8 @@ export interface AIStreamResponse {
   onToolStatus: ((event: ToolStatusEvent) => void) | null;
   /** 本轮 SSE 推送的文件卡片（generate_document 生成） */
   fileCards: FileCardEvent[];
+  /** 本轮 SSE 推送的引用列表（可验证生成，流结束后一次性推送） */
+  citations: CitationItem[];
 }
 
 /**
@@ -211,6 +216,7 @@ export async function getAIResponse(
         }) => void)
       | null;
     onFileCard?: ((event: FileCardEvent) => void) | null;
+    onCitations?: ((event: { citations: CitationItem[] }) => void) | null;
   },
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
@@ -232,7 +238,9 @@ export async function getAIResponse(
   const workflowEventCallback = options?.onWorkflowEvent ?? null;
   const confirmationResolvedCallback = options?.onConfirmationResolved ?? null;
   const fileCardCallback = options?.onFileCard ?? null;
+  const citationsCallback = options?.onCitations ?? null;
   const fileCards: FileCardEvent[] = [];
+  const citations: CitationItem[] = [];
 
   const modifiedStream = new ReadableStream<string>({
     async start(controller) {
@@ -283,6 +291,12 @@ export async function getAIResponse(
                 fileCardCallback(event);
               }
             },
+            onCitations: (event) => {
+              citations.push(...event.citations);
+              if (citationsCallback) {
+                citationsCallback(event);
+              }
+            },
             onContent: (text) => {
               controller.enqueue(text);
             },
@@ -302,6 +316,7 @@ export async function getAIResponse(
     sessionAction,
     onToolStatus: toolStatusCallback,
     fileCards,
+    citations,
   };
 }
 

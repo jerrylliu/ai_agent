@@ -398,6 +398,7 @@ describe('useChat', () => {
         sessionAction: null,
         onToolStatus: null,
         fileCards: [],
+        citations: [],
       });
 
       const { result } = renderHook(() => useChat(false));

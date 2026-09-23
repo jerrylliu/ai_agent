@@ -62,6 +62,8 @@ export interface Message {
   documentCards?: MessageDocumentCard[];
   /** AI 消息携带的工作流进度卡片（execute_workflow 执行摘要，完成后可回看） */
   workflowCards?: WorkflowProgress[];
+  /** AI 消息携带的引用来源（可验证生成：答案中（【文档 X】）标注的解析结果） */
+  citations?: CitationItem[];
   /**
    * @deprecated 请使用 documentCards
    * 历史字段：单一文档的 contentJson，保留兼容
@@ -69,6 +71,22 @@ export interface Message {
   documentContentJson?: unknown;
   /** @deprecated 请使用 documentCards */
   documentFileName?: string;
+}
+
+/**
+ * 单条引用来源（可验证生成）
+ * 服务端从 AI 回答中的（【文档 X】）标注解析得出，随 SSE citations 事件推送，
+ * 并随消息持久化，历史加载后"参考来源"卡片可恢复
+ */
+export interface CitationItem {
+  /** 与上下文中的【文档 N】编号一致（1 起），正文角标显示用 */
+  ref: number;
+  /** 来源文档唯一 id */
+  documentId: string;
+  /** 来源文档展示标题 */
+  title: string;
+  /** 来源内容片段预览（约 120 字符） */
+  snippet: string;
 }
 
 /**

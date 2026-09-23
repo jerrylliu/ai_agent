@@ -36,7 +36,7 @@ import {
   publishToVectorStore,
   type DocumentItem,
 } from '@/lib/api';
-import { consumeTransientContent } from '@/lib/window';
+import { consumeTransientContent, isTauri, readHashQueryValue } from '@/lib/window';
 
 export interface DocumentEditorPageProps {
   /** 要编辑的文档 ID；不传则进入草稿模式 */
@@ -86,6 +86,104 @@ export default function DocumentEditorPage({
     setCurrentDocId(documentId);
     console.log('[DocumentEditorPage] documentId 变化，同步 currentDocId', { old: currentDocId, new: documentId });
   }, [documentId]);
+
+  /**
+   * 待定位的引用锚点（RAG 可验证生成闭环）
+   * 两个来源统一进入 pending 队列，编辑器内容就绪后消费一次：
+   *   1. 独立窗口 URL query 的 anchor（新建窗口场景，URLSearchParams 已自动解码）
+   *   2. Tauri `editor-anchor` 事件（窗口已存在场景，payload 为 encodeURIComponent 串需手动解码）
+   */
+  const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
+
+  // 锚点来源 1：独立窗口 URL query（新建窗口场景；URLSearchParams.get 已自动解码）
+  useEffect(() => {
+    const anchor = readHashQueryValue('anchor');
+    if (anchor) setPendingAnchor(anchor);
+  }, []);
+
+  // 锚点来源 2：Tauri 事件（编辑器窗口已存在时，Rust 端 emit 推送新锚点）
+  // 仅 Tauri 桌面端注册；payload 是前端 encodeURIComponent 后的编码串，需手动解码
+  useEffect(() => {
+    if (!isTauri()) return;
+    // listen 注册是异步的：组件先卸载、监听器后注册成功时，
+    // 靠 disposed 标志在 resolve 后立即反注册，避免泄漏一个事件监听器
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<string>('editor-anchor', (e) => {
+          try {
+            setPendingAnchor(decodeURIComponent(e.payload));
+          } catch {
+            setPendingAnchor(e.payload);
+          }
+        }),
+      )
+      .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch((err) => console.warn('[DocumentEditorPage] 注册 editor-anchor 监听失败', err));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  /**
+   * 引用锚点定位：在编辑器文本块中查找 anchor 片段，命中后滚动居中并闪烁高亮；
+   * 未命中静默降级为普通打开（文档被编辑过 / 图片描述类引用不在原文中）。
+   * 归一化策略：去除全部空白后匹配，规避 PDF/Word 解析产生的换行与空格差异；
+   * 只取锚点前 60 字——chunk 片段开头大概率落在单个文本块内，跨块匹配失败率高。
+   */
+  const scrollToAnchorInEditor = useCallback((editor: Editor, anchor: string): void => {
+    try {
+      const normalize = (s: string): string => s.replace(/\s+/g, '');
+      const target = normalize(anchor).slice(0, 60);
+      if (!target) return;
+
+      let hitPos: number | null = null;
+      // descendants 回调返回 false 仅阻止深入子节点，无法中断整体遍历，靠 hitPos 短路
+      editor.state.doc.descendants((node, pos) => {
+        if (hitPos !== null) return false;
+        // 只在含文本的块级节点（段落/标题/列表项等）上匹配
+        if (!node.isTextblock) return true;
+        const text = node.textContent;
+        if (text && normalize(text).includes(target)) {
+          hitPos = pos;
+          return false;
+        }
+        return true;
+      });
+
+      if (hitPos === null) {
+        console.warn('[DocumentEditorPage] 引用锚点未命中（文档可能已被编辑，或为图片描述类引用）');
+        return;
+      }
+
+      const dom = editor.view.nodeDOM(hitPos);
+      if (dom instanceof HTMLElement) {
+        dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        dom.classList.add('citation-anchor-highlight');
+        window.setTimeout(() => dom.classList.remove('citation-anchor-highlight'), 2500);
+      }
+    } catch (err) {
+      // 定位失败静默降级为普通打开
+      console.warn('[DocumentEditorPage] 引用锚点定位失败', err);
+    }
+  }, []);
+
+  // 消费锚点：编辑器实例与内容都就绪后定位一次
+  // 时序保证：DocumentEditor 子组件的 value→Tiptap 同步 effect 先于本 effect 执行，
+  // 因此此处 editor.state.doc 已是最新 content
+  useEffect(() => {
+    if (!pendingAnchor || !editorInstance || loading) return;
+    scrollToAnchorInEditor(editorInstance, pendingAnchor);
+    setPendingAnchor(null);
+  }, [pendingAnchor, editorInstance, loading, scrollToAnchorInEditor]);
 
   // 标题展示
   const title = useMemo(() => {
