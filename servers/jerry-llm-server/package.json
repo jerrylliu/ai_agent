@@ -36,7 +36,9 @@
     "bench:import": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/import-erb-corpus.ts",
     "bench:backfill": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/backfill-parent-content.ts",
     "bench:eval": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/run-erb-eval.ts",
-    "bench:metrics": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/internal-metrics.ts"
+    "bench:metrics": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/internal-metrics.ts",
+    "bench:kg-spike": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/kg-link-spike.ts",
+    "bench:kg-online-check": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/kg-online-link-check.ts"
   },
   "dependencies": {
     "@langchain/classic": "^1.0.29",
