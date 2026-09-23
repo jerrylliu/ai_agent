@@ -229,15 +229,32 @@ function parseArgs(argv: string[]): CliOptions {
       return argv[++i];
     };
     switch (arg) {
-      case '--limit':
-        opts.limit = Number(next());
+      case '--limit': {
+        // 必须校验：NaN 会让 qids.slice(0, NaN) 变成 0 题，
+        // 最终报「未定位到任何 gold 文档」，错误信息与真实原因完全无关
+        const raw = next();
+        const v = Number(raw);
+        if (!Number.isInteger(v) || v < 1) {
+          console.error(`--limit 需为正整数，收到：${raw}`);
+          process.exit(1);
+        }
+        opts.limit = v;
         break;
+      }
       case '--model':
         opts.model = next();
         break;
-      case '--concurrency':
-        opts.concurrency = Number(next());
+      case '--concurrency': {
+        // 必须校验：NaN 会让抽取并发池的 worker 数为 0，抽取阶段静默全跳过
+        const raw = next();
+        const v = Number(raw);
+        if (!Number.isInteger(v) || v < 1) {
+          console.error(`--concurrency 需为正整数，收到：${raw}`);
+          process.exit(1);
+        }
+        opts.concurrency = v;
         break;
+      }
       case '--out-dir':
         opts.outDir = next();
         break;
@@ -1712,13 +1729,33 @@ async function main(): Promise<void> {
   }
 
   // 6. 阶段 2+3：逐题链接 → 图扩展 → 归因
-  const mentionsCacheRaw = fs.existsSync(mentionsPath)
-    ? (JSON.parse(fs.readFileSync(mentionsPath, 'utf8')) as Record<
+  // mention 缓存是整份 JSON.parse：半写损坏或结构漂移不能让整轮崩掉
+  // （抽取结果才是付费产物，链接阶段可重跑）。逐条 zod 校验，非法条目剔除后重算。
+  const mentionsCache = new Map<string, QuestionMentions>();
+  if (fs.existsSync(mentionsPath)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(mentionsPath, 'utf8')) as Record<
         string,
-        QuestionMentions
-      >)
-    : {};
-  const mentionsCache = new Map(Object.entries(mentionsCacheRaw));
+        unknown
+      >;
+      for (const [qid, value] of Object.entries(raw)) {
+        const parsed = QuestionMentionsSchema.safeParse(value);
+        if (parsed.success) {
+          mentionsCache.set(qid, parsed.data);
+        } else {
+          console.warn(
+            `⚠️ mention 缓存条目 ${qid} 校验失败，已剔除并将重算：` +
+              `${parsed.error?.issues.map((i) => i.message).join('; ') ?? 'unknown'}`,
+          );
+        }
+      }
+    } catch (error: unknown) {
+      console.error(
+        `🔴 mention 缓存解析失败（${errMsg(error)}），忽略全部缓存并重跑链接阶段：${mentionsPath}`,
+      );
+      mentionsCache.clear();
+    }
+  }
   if (mentionsCache.size > 0) {
     console.log(
       `mention 缓存命中 ${mentionsCache.size} 题（变量控制：与上一轮同一 mention 集合，分母一致）`,
