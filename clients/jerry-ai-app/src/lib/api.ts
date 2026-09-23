@@ -2694,3 +2694,110 @@ export async function fetchLatestVersion(): Promise<AppVersionInfo | null> {
     return null;
   }
 }
+
+// ==================== KG 知识图谱（只读查询） ====================
+
+/** 聚合图节点（跨文档按 key 合并，与后端 GraphNode 对应） */
+export interface KgGraphNode {
+  /** 归一化实体键（normEntity 口径） */
+  key: string;
+  /** 展示名（首现原始表述） */
+  label: string;
+  /** 实体类型（person/team/product/model 等） */
+  type: string;
+  /** 别名并集（上限 8 个） */
+  aliases: string[];
+  /** 出现过的文档 id 列表 */
+  docIds: number[];
+  /** 跨文档出现次数（>=2 即 hub 节点） */
+  docCount: number;
+}
+
+/** 聚合图边（无向关系对合并计数） */
+export interface KgGraphEdge {
+  source: string;
+  target: string;
+  relation: string;
+  count: number;
+}
+
+/** GET /api/kg/graph 响应（全局聚合图） */
+export interface KgGraphResponse {
+  /** KG 在线链路开关（false 时数据仍可查，仅提示不生效） */
+  enabled: boolean;
+  /** 节点数超限被截断 */
+  truncated: boolean;
+  nodeCount: number;
+  edgeCount: number;
+  nodes: KgGraphNode[];
+  edges: KgGraphEdge[];
+}
+
+/** 单文档子图节点（implicit = 仅出现在三元组端点、无实体行） */
+export interface KgDocGraphNode {
+  key: string;
+  label: string;
+  type: string;
+  aliases: string[];
+  implicit?: boolean;
+}
+
+/** GET /api/kg/graph/document/:documentId 响应（单文档子图，不聚合） */
+export interface KgDocGraphResponse {
+  enabled: boolean;
+  documentId: number;
+  nodes: KgDocGraphNode[];
+  edges: { source: string; target: string; relation: string }[];
+}
+
+/** GET /api/kg/stats 响应（面板轻量统计） */
+export interface KgStatsResponse {
+  enabled: boolean;
+  entities: {
+    rows: number;
+    distinctKeys: number;
+    withEmbedding: number;
+    documents: number;
+  };
+  triples: {
+    rows: number;
+    topRelations: { relation: string; count: number }[];
+  };
+  ops: {
+    pending: number;
+    processing: number;
+    completed: number;
+    failed: number;
+  };
+  index: {
+    ready: boolean;
+    builtAt: number | null;
+  };
+}
+
+/** 拉取全局聚合图谱（limit 为节点数上限，超限按 hub 优先截断） */
+export async function getKgGraph(limit: number = 300): Promise<KgGraphResponse> {
+  const response = await fetch(`${API_ENDPOINTS.KG_GRAPH}?limit=${limit}`, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<KgGraphResponse>(response);
+}
+
+/** 拉取单文档子图（不聚合，一实体行一节点、一三元组行一边） */
+export async function getKgDocumentGraph(
+  documentId: number,
+): Promise<KgDocGraphResponse> {
+  const response = await fetch(
+    `${API_ENDPOINTS.KG_GRAPH}/document/${documentId}`,
+    { headers: getAuthHeaders() },
+  );
+  return handleResponse<KgDocGraphResponse>(response);
+}
+
+/** 拉取 KG 统计（实体/三元组规模、嵌入覆盖率、top 关系、队列状态、索引快照） */
+export async function getKgStats(): Promise<KgStatsResponse> {
+  const response = await fetch(API_ENDPOINTS.KG_STATS, {
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<KgStatsResponse>(response);
+}
