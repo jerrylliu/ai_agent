@@ -15,6 +15,7 @@ import { SpeechController } from './controllers/speech.controller.js';
 import { AiWritingController } from './controllers/ai-writing.controller.js';
 import { FeishuEventController } from './controllers/feishu-event.controller.js';
 import { MetricsController } from './controllers/metrics.controller.js';
+import { KgGraphController } from './controllers/kg-graph.controller.js';
 import { SpeechService } from './services/speech.service.js';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -163,6 +164,8 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     AiWritingController,
     FeishuEventController,
     MetricsController,
+    // KG 图谱只读查询（档位3 可视化面板数据源，直查库不依赖 KG 开关）
+    KgGraphController,
   ],
   providers: [
     AppService,
