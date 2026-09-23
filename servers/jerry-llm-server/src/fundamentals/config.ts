@@ -251,7 +251,11 @@ const KgSchema = z.object({
   // 离线抽取 LLM 并发数（照抄 document-scan judge 的保守并发）
   extractConcurrency: z.coerce.number().int().positive().default(2),
   // 单次抽取 LLM 调用超时（AbortSignal.timeout 真正取消在途请求，避免幽灵调用消耗 token）
-  extractTimeoutMs: z.coerce.number().int().positive().default(60000),
+  // 默认 180000：抽取已固定用 deepseek-v4-flash（thinking 模型，见 kg-extract.service.ts
+  // 的 KG_EXTRACT_MODEL），单次 8000 字符抽取实测会超过旧的 60s 默认值而被 abort。
+  // ⚠️ 此值是请求生命周期护栏，非门闩锁定的召回/链接口径（kg-link-spike 本身无此超时），
+  // 调整它不会使门闩结论失效；但与 linkTimeoutMs 保持同源模型时延口径。
+  extractTimeoutMs: z.coerce.number().int().positive().default(180000),
   // 在线实体链接单次 LLM 调用超时（mention 抽取 / 链接确认各一次）；超时即静默降级纯基线检索。
   // 默认 180000：6 题在线链路复验实测单题全程 42~170s（deepseek-v4-flash 两次调用 + 嵌入），
   // 若沿用 20s 默认值，生产环境 KG 在线链路几乎必然超时降级（等效不生效）。

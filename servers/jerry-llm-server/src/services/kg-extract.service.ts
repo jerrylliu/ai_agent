@@ -36,7 +36,10 @@ import {
 import { config } from '../fundamentals/config.js';
 import { logger } from '../fundamentals/logger.js';
 import { parseLlmJson } from '../fundamentals/llm-json-parser.js';
-import { createRateLimitedLLM } from '../fundamentals/model-provider.js';
+import {
+  buildModelConfig,
+  createRateLimitedLLM,
+} from '../fundamentals/model-provider.js';
 import {
   getActiveModelName,
   getEmbeddings,
@@ -52,6 +55,17 @@ import type { DocEntityRow } from '../fundamentals/kg/kg-index.js';
 import { DocumentService } from './document.service.js';
 
 const MODULE = 'KgExtractService';
+
+/**
+ * KG 抽取固定使用的模型 id。
+ *
+ * 门闩（30 题 kg-link-spike v2）在 deepseek:deepseek-v4-flash 上验证，
+ * extractDocChars=8000（~4700 token）依赖其大上下文；若吃运行时当前模型
+ * （默认 ollama:minicpm，非 FC 模式 numCtx=4096），8000 字符必然爆窗。
+ * 用 buildModelConfig（纯函数）而非 switchModel——后者会改全局 currentModelId，
+ * 后台任务调用会劫持用户在 UI 选定的聊天模型。
+ */
+const KG_EXTRACT_MODEL = 'deepseek:deepseek-v4-flash';
 
 // ==================== 抽取提示词（spike v2 原样移植，勿改口径） ====================
 
@@ -285,9 +299,11 @@ export class KgExtractService implements OnModuleInit {
     );
 
     // LLM 实例单轮共享（createRateLimitedLLM 自带限流保护，fast 池）
+    // 固定用门闩同款模型，不吃运行时当前模型（避免小上下文模型爆窗）
     let llm: BaseChatModel | null = null;
     const getLlm = (): BaseChatModel => {
-      if (!llm) llm = createRateLimitedLLM(undefined, 'fast');
+      if (!llm)
+        llm = createRateLimitedLLM(buildModelConfig(KG_EXTRACT_MODEL), 'fast');
       return llm;
     };
 
