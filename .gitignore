@@ -17,6 +17,17 @@ PACKAGING_RUNBOOK.md
 dist/
 build/
 
+# 评测/实验临时产物（.tmp 下含 ERB 题目文本与 gold doc id，公开即构成自我泄题，永不提交）
+# 说明：此前仅由 servers/jerry-llm-server/.gitignore 兜住，根级显式声明防误改
+.tmp/
+
+# 客户端发布物二进制（安装包/演示视频，体积大且由打包流程产出，不入库）
+# 同目录下的 html/json/png 是下载页与图标资源，需保留跟踪，故只忽略二进制后缀
+servers/jerry-llm-server/docker/data/download/*.apk
+servers/jerry-llm-server/docker/data/download/*.exe
+servers/jerry-llm-server/docker/data/download/*.sig
+servers/jerry-llm-server/docker/data/download/*.mp4
+
 # IDE 配置
 .vscode/
 .idea/

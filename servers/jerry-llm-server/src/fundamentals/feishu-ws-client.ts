@@ -20,7 +20,10 @@
  */
 import * as Lark from '@larksuiteoapi/node-sdk';
 import { logger } from './logger.js';
-import { processCardAction, processIncomingMessage } from './feishu-event-processor.js';
+import {
+  processCardAction,
+  processIncomingMessage,
+} from './feishu-event-processor.js';
 
 let wsClient: Lark.WSClient | null = null;
 let started = false;
@@ -80,7 +83,6 @@ export function startFeishuWsClient(opts: {
   // card.action.trigger 不在 IHandles 类型表里（运行时支持，类型未补全），
   // 这里用宽松类型注册。
   const dispatcher = new Lark.EventDispatcher({}).register({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     'card.action.trigger': async (data: any) => {
       try {
         // SDK 会把 handler 返回值通过 WebSocket 回包给飞书后端，
@@ -104,7 +106,7 @@ export function startFeishuWsClient(opts: {
     },
     // D1/D2：入站消息（私聊 + 群里 @ AI）
     // 飞书要求 handler 3 秒内返回，所以这里立刻返回，业务用 setImmediate 异步化
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     'im.message.receive_v1': async (data: any) => {
       setImmediate(() => {
         processIncomingMessage(data, wsLoggerAdapter, 'FeishuWSClient').catch(
@@ -119,7 +121,6 @@ export function startFeishuWsClient(opts: {
       });
       // 长连接无 ACK body，return undefined
     },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any);
 
   // 异步建立长连接，不阻塞 NestJS 启动

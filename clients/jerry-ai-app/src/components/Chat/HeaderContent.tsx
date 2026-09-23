@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Button } from "../ui/button";
-import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star, Wrench, RefreshCw, Menu } from "lucide-react";
+import { MoreHorizontal, Database, Trash2, Brain, FileText, Layers, Bell, BarChart3, Star, Wrench, RefreshCw, Menu, Network } from "lucide-react";
 import { ConfirmDialog } from "../ui/confirm-dialog";
 
 interface KbFeedback {
@@ -26,6 +26,7 @@ interface HeaderContentProps {
     onOpenTokenUsage?: () => void;
     onOpenToolUsage?: () => void;
     onOpenEvaluation?: () => void;
+    onOpenKgGraph?: () => void;
     onRefreshAppData?: () => void;
     isRecovering?: boolean;
     /** 移动端：打开侧边栏抽屉（md 以下显示汉堡按钮） */
@@ -33,7 +34,7 @@ interface HeaderContentProps {
 }
 
 const HeaderContent: React.FC<HeaderContentProps> = (props) => {
-    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager, onOpenTokenUsage, onOpenToolUsage, onOpenEvaluation, onRefreshAppData, isRecovering, onOpenSidebar } = props;
+    const { knowledgeBaseStatus, showMoreMenu, onToggleMoreMenu, onClearKnowledgeBase, onCheckKnowledgeBaseStatus, onKbFeedback, onOpenMemorySummary, onOpenDocumentManager, onOpenKnowledgeSourceManager, onOpenTokenUsage, onOpenToolUsage, onOpenEvaluation, onOpenKgGraph, onRefreshAppData, isRecovering, onOpenSidebar } = props;
 
     // 重置知识库确认弹窗状态
     const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
@@ -174,6 +175,12 @@ const HeaderContent: React.FC<HeaderContentProps> = (props) => {
                                     onClick={() => { onToggleMoreMenu(); onOpenEvaluation?.(); }}
                                 >
                                     <Star className="h-4 w-4 mr-2" />准确率评估
+                                </button>
+                                <button
+                                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700 flex items-center cyberpunk-menu-item"
+                                    onClick={() => { onToggleMoreMenu(); onOpenKgGraph?.(); }}
+                                >
+                                    <Network className="h-4 w-4 mr-2" />知识图谱
                                 </button>
                                 <button
                                     className="w-full px-4 py-2 text-left text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 flex items-center"

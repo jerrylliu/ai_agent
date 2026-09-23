@@ -116,22 +116,19 @@ __CHUNK__
 async function judgeChunk(
   llm: BaseChatModel,
   chunkText: string,
-): Promise<{ ok: true; data: ChunkJudgeResult } | { ok: false; reason: string }> {
+): Promise<
+  { ok: true; data: ChunkJudgeResult } | { ok: false; reason: string }
+> {
   const prompt = JUDGE_PROMPT_TEMPLATE.replace('__CHUNK__', chunkText);
-  // 超时定时器句柄：LLM 可能先于超时返回，必须在 finally 中清除，
-  // 否则每次判定都会遗留一个最长 30 秒的悬挂定时器
-  let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+  // 超时必须「真正取消在途请求」：原实现用 Promise.race 只放弃等待、不取消请求，
+  // 被放弃的 invoke 仍会跑完并消耗模型 API token（与 query-rewriter 踩过的幽灵调用是同一问题）。
+  // AbortSignal.timeout 交给 fetch 层强制中断，限流器捕获 abort 后会退还令牌。
   try {
-    const rawResult = await Promise.race([
-      llm.invoke([new HumanMessage(prompt)]),
-      new Promise<never>((_resolve, reject) => {
-        timeoutTimer = setTimeout(
-          () => reject(new Error(`LLM judge 超时（超过 ${JUDGE_TIMEOUT_MS}ms）`)),
-          JUDGE_TIMEOUT_MS,
-        );
-      }),
-    ]);
-    const content = typeof rawResult.content === 'string' ? rawResult.content : '';
+    const rawResult = await llm.invoke([new HumanMessage(prompt)], {
+      signal: AbortSignal.timeout(JUDGE_TIMEOUT_MS),
+    });
+    const content =
+      typeof rawResult.content === 'string' ? rawResult.content : '';
     const parsed = parseLlmJson(content, ChunkJudgeSchema, {
       module: 'DocumentScanService',
     });
@@ -140,9 +137,19 @@ async function judgeChunk(
     }
     return { ok: true, data: parsed.data };
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
-  } finally {
-    if (timeoutTimer) clearTimeout(timeoutTimer);
+    const aborted =
+      err instanceof Error &&
+      (err.name === 'AbortError' ||
+        err.name === 'APIUserAbortError' ||
+        /abort/i.test(err.message));
+    return {
+      ok: false,
+      reason: aborted
+        ? `LLM judge 超时（超过 ${JUDGE_TIMEOUT_MS}ms）`
+        : err instanceof Error
+          ? err.message
+          : String(err),
+    };
   }
 }
 
@@ -170,7 +177,10 @@ async function mapWithConcurrency<T, R>(
  * 使用 adaptive profile 的 childChunkSize / childChunkOverlap，
  * 保证"扫描到的块"与"入库的块"粒度一致
  */
-async function splitIntoScanChunks(text: string, fileType: string): Promise<string[]> {
+async function splitIntoScanChunks(
+  text: string,
+  fileType: string,
+): Promise<string[]> {
   const profile = getAdaptiveChunkingProfile({ fileType, content: text });
   const splitter = getSplitterByFileType(fileType, false, {
     chunkSize: profile.childChunkSize,
@@ -245,7 +255,8 @@ export class DocumentScanService {
     if (config.docScan.llmJudgeEnabled && text.trim().length > 0) {
       const chunks = await splitIntoScanChunks(text, fileType);
       const maxChunks = config.docScan.maxChunksPerDocument;
-      const judgedChunks = chunks.length > maxChunks ? chunks.slice(0, maxChunks) : chunks;
+      const judgedChunks =
+        chunks.length > maxChunks ? chunks.slice(0, maxChunks) : chunks;
       if (chunks.length > maxChunks) {
         logger.warn('文档分块数超过扫描上限，仅扫描前 N 个分块', {
           module: 'DocumentScanService',
@@ -307,7 +318,9 @@ export class DocumentScanService {
   private deriveVerdict(findings: ScanFinding[]): TextScanResult['verdict'] {
     if (findings.some((f) => f.severity === 'blocked')) return 'blocked';
     if (findings.some((f) => f.severity === 'suspicious')) {
-      return config.docScan.suspiciousAction === 'block' ? 'blocked' : 'needs_review';
+      return config.docScan.suspiciousAction === 'block'
+        ? 'blocked'
+        : 'needs_review';
     }
     return 'passed';
   }
@@ -328,11 +341,16 @@ export class DocumentScanService {
     operator: string = 'anonymous',
   ): Promise<PublishWithScanGateResult> {
     if (!config.docScan.enabled) {
-      const version = await this.documentService.publishToVectorStore(versionId, operator);
+      const version = await this.documentService.publishToVectorStore(
+        versionId,
+        operator,
+      );
       return { version, scanGate: null };
     }
 
-    const version = await this.versionRepo.findOne({ where: { id: versionId } });
+    const version = await this.versionRepo.findOne({
+      where: { id: versionId },
+    });
     if (!version) throw new NotFoundException(`版本 ${versionId} 不存在`);
     if (version.status === VersionStatus.ARCHIVED) {
       throw new BadRequestException('归档版本不能发布，请使用回滚功能');
@@ -352,7 +370,8 @@ export class DocumentScanService {
 
     // 快速路径：已通过扫描且内容未变 → 跳过重扫直接发布
     const alreadyScanned =
-      version.scanStatus === ScanStatus.PASSED || version.scanStatus === ScanStatus.APPROVED;
+      version.scanStatus === ScanStatus.PASSED ||
+      version.scanStatus === ScanStatus.APPROVED;
     if (alreadyScanned && textHash && version.scannedTextHash === textHash) {
       const published = await this.documentService.publishToVectorStore(
         versionId,
@@ -406,7 +425,10 @@ export class DocumentScanService {
         operator,
         text,
       );
-      return { version: published, scanGate: { verdict: 'passed', findings: result.findings } };
+      return {
+        version: published,
+        scanGate: { verdict: 'passed', findings: result.findings },
+      };
     }
 
     if (result.verdict === 'needs_review') {
@@ -441,7 +463,10 @@ export class DocumentScanService {
       operator,
       `扫描命中拦截级内容（${result.findings.length} 项发现），拒绝发布`,
     );
-    return { version, scanGate: { verdict: 'blocked', findings: result.findings } };
+    return {
+      version,
+      scanGate: { verdict: 'blocked', findings: result.findings },
+    };
   }
 
   // ==================== 人工复核 ====================
@@ -451,10 +476,22 @@ export class DocumentScanService {
    *
    * TOCTOU 校验：当前文本哈希必须与扫描时一致，
    * 不一致说明复核期间内容被修改，拒绝通过并要求重新发布触发重扫。
+   *
+   * 并发防护：与 publishWithScanGate 的 SCANNING 锁同款条件更新——
+   * 原实现「读 → 检查 NEEDS_REVIEW → 写 APPROVED」存在竞态窗口，
+   * 两个并发复核请求都能通过检查，导致双份审计日志 + 第二个发布撞
+   * parsingStatus 锁误报「正在处理中」。这里改为条件更新原子占位，
+   * 只有首个请求能完成 NEEDS_REVIEW → APPROVED 的流转。
    */
-  async approveVersion(versionId: number, operator: string = 'anonymous'): Promise<DocumentVersion> {
-    const version = await this.versionRepo.findOne({ where: { id: versionId } });
+  async approveVersion(
+    versionId: number,
+    operator: string = 'anonymous',
+  ): Promise<DocumentVersion> {
+    const version = await this.versionRepo.findOne({
+      where: { id: versionId },
+    });
     if (!version) throw new NotFoundException(`版本 ${versionId} 不存在`);
+    // 快速失败（提升体验）；真正的并发防护是下方 NEEDS_REVIEW → APPROVED 的条件更新
     if (version.scanStatus !== ScanStatus.NEEDS_REVIEW) {
       throw new BadRequestException('仅待人工复核的版本可以执行通过操作');
     }
@@ -465,14 +502,26 @@ export class DocumentScanService {
     }
     const textHash = computeContentHash(text);
     if (!textHash || version.scannedTextHash !== textHash) {
-      version.scanStatus = ScanStatus.PENDING;
-      version.scannedTextHash = null;
-      await this.versionRepo.save(version);
-      throw new BadRequestException('文档内容在扫描后已被修改，请重新发布以重新触发安全扫描');
+      // 条件更新回退：仅当仍处于 NEEDS_REVIEW 时才置回 PENDING，避免覆盖并发方的状态
+      await this.versionRepo.update(
+        { id: versionId, scanStatus: ScanStatus.NEEDS_REVIEW },
+        { scanStatus: ScanStatus.PENDING, scannedTextHash: null },
+      );
+      throw new BadRequestException(
+        '文档内容在扫描后已被修改，请重新发布以重新触发安全扫描',
+      );
     }
 
+    // 原子占位：并发请求中只有首个能完成 NEEDS_REVIEW → APPROVED 的流转
+    const claimResult = await this.versionRepo.update(
+      { id: versionId, scanStatus: ScanStatus.NEEDS_REVIEW },
+      { scanStatus: ScanStatus.APPROVED },
+    );
+    if ((claimResult.affected ?? 0) === 0) {
+      throw new ConflictException('该版本不在待复核状态，请刷新后重试');
+    }
     version.scanStatus = ScanStatus.APPROVED;
-    await this.versionRepo.save(version);
+
     await this.writeAuditLog(
       version.documentId,
       versionId,
@@ -491,7 +540,9 @@ export class DocumentScanService {
     operator: string = 'anonymous',
     reason?: string,
   ): Promise<DocumentVersion> {
-    const version = await this.versionRepo.findOne({ where: { id: versionId } });
+    const version = await this.versionRepo.findOne({
+      where: { id: versionId },
+    });
     if (!version) throw new NotFoundException(`版本 ${versionId} 不存在`);
     if (version.scanStatus !== ScanStatus.NEEDS_REVIEW) {
       throw new BadRequestException('仅待人工复核的版本可以执行拒绝操作');
@@ -531,9 +582,14 @@ export class DocumentScanService {
    * blocked 和 suspicious 页面都跳过向量化，跳过原因由调用方写入同步日志。
    * 被跳过的页面照常持久化内容哈希，内容不变则持续拒绝。
    */
-  async scanKnowledgePages<T extends { title: string; content: string; url: string }>(
+  async scanKnowledgePages<
+    T extends { title: string; content: string; url: string },
+  >(
     pages: T[],
-  ): Promise<{ passed: T[]; skipped: Array<{ title: string; url: string; reason: string }> }> {
+  ): Promise<{
+    passed: T[];
+    skipped: Array<{ title: string; url: string; reason: string }>;
+  }> {
     if (!config.docScan.enabled) {
       return { passed: pages, skipped: [] };
     }

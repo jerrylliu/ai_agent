@@ -566,6 +566,37 @@ button.decorum-tb-btn {
   color: #000000 !important;
 }
 
+/* ---------- cyberpunk-citation：RAG 引用角标/来源（可验证生成） ---------- */
+
+/* 引用角标 [X]（正文内 + 弹框/卡片内）：沿用 cyberpunk-unauth 的 #ff5247 颜色 + 发光。
+   !important 覆盖组件上的 Tailwind 蓝色系原子类（非 cyberpunk 模式仍由原子类兜底） */
+.cyberpunk .citation-chip {
+  color: #ff5247 !important;
+  text-shadow: 0 0 4px #ff524766, 0 0 8px #ff524733;
+  background-color: rgba(255, 82, 71, 0.08) !important;
+}
+
+.cyberpunk .citation-chip:hover {
+  background-color: rgba(255, 82, 71, 0.16) !important;
+}
+
+/* 引用来源文档名（弹框/参考来源卡片）：纯文字发光，不带背景 */
+.cyberpunk .citation-glow {
+  color: #ff5247;
+  text-shadow: 0 0 4px #ff524766, 0 0 8px #ff524733;
+}
+
+/* 引用锚点定位命中块：滚动到原文位置后的闪烁高亮（编辑器内，非 cyberpunk 作用域） */
+@keyframes citation-anchor-pulse {
+  0%, 100% { background-color: transparent; }
+  35% { background-color: rgba(255, 82, 71, 0.22); }
+}
+
+.citation-anchor-highlight {
+  animation: citation-anchor-pulse 1.2s ease-in-out 2;
+  border-radius: 4px;
+}
+
 /* ---------- cyberpunk-parse：文档解析进度条样式 ---------- */
 /* 沿用 cyberpunk-unauth 的 #ff5247 颜色 + 发光 */
 

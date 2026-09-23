@@ -44,13 +44,22 @@ jest.mock('../vector-store', () => ({
 jest.mock('../runtime-config.js', () => ({
   getRuntimeConfig: () => ({
     cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+    },
     // store-state.ts 在模块加载时会读取 embedding.localEnabled 推导初始生效模式，
     // mock 必须提供该字段；测试环境无 Ollama，置为 false 直接走云端分支，避免网络探测
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   }),
   updateRuntimeConfig: jest.fn(),
@@ -72,7 +81,14 @@ jest.mock('../cache.js', () => ({
     get: jest.fn().mockReturnValue(undefined),
     set: jest.fn(),
     clear: jest.fn(),
-    getStats: jest.fn().mockReturnValue({ hits: 0, misses: 0, hitRate: 0, size: 0, maxSize: 200, memoryUsageKB: 0 }),
+    getStats: jest.fn().mockReturnValue({
+      hits: 0,
+      misses: 0,
+      hitRate: 0,
+      size: 0,
+      maxSize: 200,
+      memoryUsageKB: 0,
+    }),
   },
   getCacheStats: jest.fn(),
   getCacheConfig: jest.fn(),
@@ -92,6 +108,14 @@ jest.mock('../config.js', () => ({
   // 检索增强链路会间接加载 file-storage / rag-service，它们读取该字段取上传根目录；
   // 与真实实现一致锚定项目根，避免测试在系统临时目录创建垃圾目录
   runtimePaths: { uploads: require('path').resolve(process.cwd(), 'uploads') },
+}));
+
+// KG 图补充位不在本测试关注范围：mock 掉避免拉起 kg-core/kg-index（模块加载期读 config.kg）。
+// 返回空补充 = kgEnabled 关闭时的等价行为，检索链路与纯基线一致。
+jest.mock('../kg/kg-link.js', () => ({
+  collectBaselineDocIds: jest.fn().mockReturnValue([]),
+  resolveGraphSupplements: jest.fn().mockResolvedValue([]),
+  fuseGraphSupplements: jest.fn((baseline: unknown[]) => baseline),
 }));
 
 // Mock global fetch for DashScope Reranker tests
@@ -147,7 +171,8 @@ describe('query-rewriter', () => {
 
     it('LLM 返回 markdown 代码块时应正确提取 JSON', async () => {
       mockLLMInvoke.mockResolvedValue({
-        content: '```json\n{"main_query": "RAG 检索增强", "sub_queries": [], "keywords": ["RAG"]}\n```',
+        content:
+          '```json\n{"main_query": "RAG 检索增强", "sub_queries": [], "keywords": ["RAG"]}\n```',
       });
 
       const result = await rewriteQuery('什么是RAG');
@@ -172,7 +197,9 @@ describe('query-rewriter', () => {
     });
 
     it('简单关键词提取应过滤停用词', async () => {
-      const result = await rewriteQuery('如何配置数据库连接', { enabled: false });
+      const result = await rewriteQuery('如何配置数据库连接', {
+        enabled: false,
+      });
       expect(result.keywords.length).toBeGreaterThan(0);
       expect(result.keywords).not.toContain('如何');
     });
@@ -289,7 +316,9 @@ describe('result-reranker', () => {
         { content: '文档A', metadata: {}, score: 0.9 },
         { content: '文档B', metadata: {}, score: 0.5 },
       ];
-      const reranked = await rerankResults('测试', results, { strategy: 'llm' });
+      const reranked = await rerankResults('测试', results, {
+        strategy: 'llm',
+      });
       expect(reranked).toHaveLength(2);
     });
   });
@@ -357,9 +386,7 @@ describe('result-reranker', () => {
         }),
       });
 
-      const results = [
-        { content: '文档A', metadata: {}, score: 0.9 },
-      ];
+      const results = [{ content: '文档A', metadata: {}, score: 0.9 }];
       const reranked = await rerankResults('测试', results, {
         strategy: 'dashscope',
       });
@@ -370,10 +397,12 @@ describe('result-reranker', () => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
-          output: { results: [
-            { index: 0, relevance_score: 0.8 },
-            { index: 1, relevance_score: 0.3 },
-          ] },
+          output: {
+            results: [
+              { index: 0, relevance_score: 0.8 },
+              { index: 1, relevance_score: 0.3 },
+            ],
+          },
           usage: { total_tokens: 50 },
         }),
       });
@@ -409,13 +438,27 @@ describe('multi-hop-search', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockHybridSearch.mockResolvedValue([
-      { content: '测试文档1', metadata: { source: 'test' }, score: 0.8, vectorScore: 0.8, sources: ['test'] },
-      { content: '测试文档2', metadata: { source: 'test' }, score: 0.6, vectorScore: 0.6, sources: ['test'] },
+      {
+        content: '测试文档1',
+        metadata: { source: 'test' },
+        score: 0.8,
+        vectorScore: 0.8,
+        sources: ['test'],
+      },
+      {
+        content: '测试文档2',
+        metadata: { source: 'test' },
+        score: 0.6,
+        vectorScore: 0.6,
+        sources: ['test'],
+      },
     ]);
   });
 
   it('禁用多跳时应执行单跳检索', async () => {
-    const result = await multiHopSearch('测试查询', undefined, 3, { enabled: false });
+    const result = await multiHopSearch('测试查询', undefined, 3, {
+      enabled: false,
+    });
     expect(result.hopsExecuted).toBe(1);
     expect(result.results.length).toBeGreaterThan(0);
   });
@@ -425,7 +468,10 @@ describe('multi-hop-search', () => {
       mainQuery: '数据库 连接 配置',
       subQueries: ['数据库连接方法'],
       keywords: ['数据库', '连接'],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
 
     // LLM 判断无需追问
     mockLLMInvoke.mockResolvedValue({
@@ -478,9 +524,13 @@ describe('multi-hop-search', () => {
   });
 
   it('结果应按分数降序排列', async () => {
-    const result = await multiHopSearch('测试查询', undefined, 3, { enabled: false });
+    const result = await multiHopSearch('测试查询', undefined, 3, {
+      enabled: false,
+    });
     for (let i = 1; i < result.results.length; i++) {
-      expect(result.results[i - 1].score).toBeGreaterThanOrEqual(result.results[i].score);
+      expect(result.results[i - 1].score).toBeGreaterThanOrEqual(
+        result.results[i].score,
+      );
     }
   });
 });
@@ -507,8 +557,20 @@ describe('search-knowledge-base (增强版集成)', () => {
     });
 
     mockHybridSearch.mockResolvedValue([
-      { content: '数据库连接配置文档', metadata: { source: 'db-guide.pdf', documentId: '1', versionId: 'v1' }, score: 0.8, vectorScore: 0.8, sources: ['db-guide.pdf'] },
-      { content: 'API 接口说明文档', metadata: { source: 'api-docs.pdf', documentId: '2', versionId: 'v1' }, score: 0.5, vectorScore: 0.5, sources: ['api-docs.pdf'] },
+      {
+        content: '数据库连接配置文档',
+        metadata: { source: 'db-guide.pdf', documentId: '1', versionId: 'v1' },
+        score: 0.8,
+        vectorScore: 0.8,
+        sources: ['db-guide.pdf'],
+      },
+      {
+        content: 'API 接口说明文档',
+        metadata: { source: 'api-docs.pdf', documentId: '2', versionId: 'v1' },
+        score: 0.5,
+        vectorScore: 0.5,
+        sources: ['api-docs.pdf'],
+      },
     ]);
   });
 
@@ -562,7 +624,8 @@ describe('search-knowledge-base (增强版集成)', () => {
     });
     // hybridSearchKnowledgeBase(query, topK, vectorWeight, bm25Weight, filter, cacheKeyOverride)
     // filter 是第 5 个参数（index 4）
-    const lastCall = mockHybridSearch.mock.calls[mockHybridSearch.mock.calls.length - 1];
+    const lastCall =
+      mockHybridSearch.mock.calls[mockHybridSearch.mock.calls.length - 1];
     expect(lastCall[4]).toEqual({ documentId: '42' });
   });
 });
@@ -603,7 +666,8 @@ describe('parent-child-chunking', () => {
     });
 
     it('子块文本应包含在父块文本中', async () => {
-      const text = '人工智能是计算机科学的一个分支，它企图了解智能的实质，并生产出一种新的能以人类智能相似的方式做出反应的智能机器。研究领域包括机器人、语言识别、图像识别、自然语言处理等。';
+      const text =
+        '人工智能是计算机科学的一个分支，它企图了解智能的实质，并生产出一种新的能以人类智能相似的方式做出反应的智能机器。研究领域包括机器人、语言识别、图像识别、自然语言处理等。';
       const result = await parentChildSplit(text, {
         parentChunkSize: 200,
         parentChunkOverlap: 30,

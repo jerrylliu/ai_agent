@@ -11,16 +11,33 @@
 
 import { z } from 'zod';
 import { hybridSearchKnowledgeBase } from '../vector-store';
-import { rewriteQuery, type RewrittenQuery } from '../vector-store/query-rewriter';
-import { multiHopSearch, type MultiHopResult } from '../vector-store/multi-hop-search';
+import {
+  rewriteQuery,
+  type RewrittenQuery,
+} from '../vector-store/query-rewriter';
+import {
+  multiHopSearch,
+  type MultiHopResult,
+} from '../vector-store/multi-hop-search';
 import { mergeRankedListsByRRF } from '../vector-store/multi-way-rrf';
-import { rerankResults, type RerankedResult } from '../vector-store/result-reranker';
+import {
+  rerankResults,
+  type RerankedResult,
+} from '../vector-store/result-reranker';
 import { logger } from '../logger';
 import { config } from '../config';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
-import { enrichWithImageDescriptions, dedupeByNormalizedContent } from '../rag-service';
+import {
+  enrichWithImageDescriptions,
+  dedupeByNormalizedContent,
+} from '../rag-service';
 import { buildNormalizedCacheKey } from '../cache-key-normalizer';
 import { evaluateRewriteQuality } from '../query-rewriter-fallback';
+import {
+  collectBaselineDocIds,
+  fuseGraphSupplements,
+  resolveGraphSupplements,
+} from '../kg/kg-link.js';
 
 // ==================== Zod Schema（仅暴露给 LLM 的字段）====================
 
@@ -47,7 +64,9 @@ export const searchKnowledgeBaseParamsSchema = z.object({
     .describe('限定搜索的文档ID，不传则搜索所有文档'),
 });
 
-export type SearchKnowledgeBaseLLMParams = z.infer<typeof searchKnowledgeBaseParamsSchema>;
+export type SearchKnowledgeBaseLLMParams = z.infer<
+  typeof searchKnowledgeBaseParamsSchema
+>;
 
 // ==================== OpenAI Function Calling Schema ====================
 
@@ -123,7 +142,9 @@ export async function executeSearchKnowledgeBase(
   context?: { originalQuery?: string; sessionId?: string },
 ): Promise<SearchKnowledgeBaseResult> {
   const totalStartTime = Date.now();
-  const timings: NonNullable<SearchKnowledgeBaseResult['meta']>['timings'] = { total: 0 };
+  const timings: NonNullable<SearchKnowledgeBaseResult['meta']>['timings'] = {
+    total: 0,
+  };
 
   // 1. 用 zod 校验 LLM 暴露字段（query / top_k / document_id）
   const parsed = safeParseToolParams(searchKnowledgeBaseParamsSchema, params);
@@ -173,7 +194,8 @@ export async function executeSearchKnowledgeBase(
   const enableRerank = opts.enableRerank ?? true;
   // 诊断开关（消融实验专用）：ERB_DISABLE_REWRITE=1 强制关闭查询改写（连级 HyDE 一并关闭），
   // 用于评测 (off,off) 对照轮。生产环境不设置该变量，行为与之前完全一致。
-  const enableQueryRewrite = opts.enableQueryRewrite ?? process.env.ERB_DISABLE_REWRITE !== '1';
+  const enableQueryRewrite =
+    opts.enableQueryRewrite ?? process.env.ERB_DISABLE_REWRITE !== '1';
   const filter: Record<string, string> = {};
 
   if (documentId) {
@@ -229,10 +251,10 @@ export async function executeSearchKnowledgeBase(
   // 导致相同语义的查询归一化后 key 不同，缓存无法命中。
   // keywords 是 LLM 提取的核心实体（如 ["干员","液氮","技能"]），稳定可复现。
   const cacheKeySource = rewriteEvaluation.useRewritten
-    ? (rewrittenQuery!.keywords.length > 0
-        ? rewrittenQuery!.keywords.join(' ')
-        : rewrittenQuery!.mainQuery)
-    : (context?.originalQuery || query);
+    ? rewrittenQuery!.keywords.length > 0
+      ? rewrittenQuery!.keywords.join(' ')
+      : rewrittenQuery!.mainQuery
+    : context?.originalQuery || query;
   const normalizedFingerprint = buildNormalizedCacheKey(cacheKeySource);
   // 归一化可能返回空（如查询全是停用词），此时回退到原始文本作 key
   const cacheKeyOverride = normalizedFingerprint || cacheKeySource;
@@ -248,7 +270,9 @@ export async function executeSearchKnowledgeBase(
       ? 'rewritten(mainQuery)'
       : `fallback(${rewriteEvaluation.fallbackReason})`,
     useRewritten: rewriteEvaluation.useRewritten,
-    similarity: rewriteEvaluation.similarity ? Number(rewriteEvaluation.similarity.toFixed(3)) : undefined,
+    similarity: rewriteEvaluation.similarity
+      ? Number(rewriteEvaluation.similarity.toFixed(3))
+      : undefined,
     usedNormalizedKey: normalizedFingerprint.length > 0,
   });
 
@@ -288,7 +312,7 @@ export async function executeSearchKnowledgeBase(
         rewrittenQuery?.hypotheticalAnswer || undefined,
       );
       searchResult = {
-        results: rawResults.map(r => ({ ...r, hop: 1 })),
+        results: rawResults.map((r) => ({ ...r, hop: 1 })),
         hopsExecuted: 1,
         hopDetails: [{ hop: 1, query, resultCount: rawResults.length }],
       };
@@ -307,7 +331,11 @@ export async function executeSearchKnowledgeBase(
             config.retrievalMinSimilarity,
           );
           rankedLists.push(subResults);
-          searchResult.hopDetails.push({ hop: 1, query: subQ, resultCount: subResults.length });
+          searchResult.hopDetails.push({
+            hop: 1,
+            query: subQ,
+            resultCount: subResults.length,
+          });
         }
         // 二次 RRF（主路加权 1.5，附加路 1.0）：权重倒挂修复——旧实现按 score 排序合并，
         // 子查询满权向量路的 rank-1 分系统性压过主路（HyDE 集成时主向量路权重减半）。
@@ -348,15 +376,11 @@ export async function executeSearchKnowledgeBase(
   if (enableRerank && searchResult.results.length > 1) {
     const rerankStart = Date.now();
     try {
-      rerankedResults = await rerankResults(
-        query,
-        searchResult.results,
-        {
-          enabled: true,
-          strategy: opts.rerankStrategy ?? 'dashscope',
-          modelId: opts.modelId,
-        },
-      );
+      rerankedResults = await rerankResults(query, searchResult.results, {
+        enabled: true,
+        strategy: opts.rerankStrategy ?? 'dashscope',
+        modelId: opts.modelId,
+      });
       timings.rerank = Date.now() - rerankStart;
       wasReranked = true;
 
@@ -364,7 +388,9 @@ export async function executeSearchKnowledgeBase(
         module: 'Tool:SearchKnowledgeBase',
         resultCount: rerankedResults.length,
         duration: timings.rerank,
-        topRerankScores: rerankedResults.slice(0, 3).map(r => r.rerankScore.toFixed(3)),
+        topRerankScores: rerankedResults
+          .slice(0, 3)
+          .map((r) => r.rerankScore.toFixed(3)),
       });
     } catch (error: any) {
       timings.rerank = Date.now() - rerankStart;
@@ -372,14 +398,14 @@ export async function executeSearchKnowledgeBase(
         module: 'Tool:SearchKnowledgeBase',
         error: error.message,
       });
-      rerankedResults = searchResult.results.map(r => ({
+      rerankedResults = searchResult.results.map((r) => ({
         ...r,
         originalScore: r.score,
         rerankScore: r.score,
       }));
     }
   } else {
-    rerankedResults = searchResult.results.map(r => ({
+    rerankedResults = searchResult.results.map((r) => ({
       ...r,
       originalScore: r.score,
       rerankScore: r.score,
@@ -405,6 +431,38 @@ export async function executeSearchKnowledgeBase(
   }
   rerankedResults = rerankedResults.slice(0, topK);
 
+  // ==================== KG 图补充位（基线优先，图只占末尾 supplementSlots 个槽位） ====================
+  // document_id 限定时不补充：调用方显式收窄到单文档，图补充块来自其他文档，注入即越界。
+  // 位置刻意放在 slice(0, topK) 之后、enrichWithImageDescriptions 之前，
+  // 让补充块里的 [图片] 占位符同样能走图片补查。
+  // 链接用原始 query（不改写）——30 题门闩验证口径。
+  // kgEnabled=false / 索引未加载 / 链接失败时 supplements 为 []，行为与纯基线完全一致。
+  if (!documentId) {
+    const supplements = await resolveGraphSupplements(
+      query,
+      collectBaselineDocIds(rerankedResults),
+    );
+    if (supplements.length > 0) {
+      const baselineCount = rerankedResults.length;
+      rerankedResults = fuseGraphSupplements(
+        rerankedResults,
+        supplements.map((s) => ({
+          ...s,
+          originalScore: s.score,
+          rerankScore: s.score,
+        })),
+        topK,
+      );
+      logger.info('FC工具 [search_knowledge_base] KG 图补充位已融合', {
+        module: 'Tool:SearchKnowledgeBase',
+        baselineCount,
+        supplementCount: supplements.length,
+        mergedCount: rerankedResults.length,
+        topK,
+      });
+    }
+  }
+
   // ==================== 构建最终结果 ====================
   const totalDuration = Date.now() - totalStartTime;
   timings.total = totalDuration;
@@ -414,7 +472,8 @@ export async function executeSearchKnowledgeBase(
   await enrichWithImageDescriptions(rerankedResults, query);
 
   const mappedResults = rerankedResults.map((r, idx) => {
-    const contentPreview = r.content.length > 100 ? r.content.substring(0, 100) + '...' : r.content;
+    const contentPreview =
+      r.content.length > 100 ? r.content.substring(0, 100) + '...' : r.content;
     logger.debug(`FC工具 [search_knowledge_base] 结果 #${idx + 1}`, {
       module: 'Tool:SearchKnowledgeBase',
       index: idx + 1,
@@ -446,7 +505,9 @@ export async function executeSearchKnowledgeBase(
     query,
     meta: {
       queryRewritten: rewrittenQuery?.wasRewritten ?? false,
-      rewrittenQuery: rewrittenQuery?.wasRewritten ? rewrittenQuery.mainQuery : undefined,
+      rewrittenQuery: rewrittenQuery?.wasRewritten
+        ? rewrittenQuery.mainQuery
+        : undefined,
       hopsExecuted: searchResult.hopsExecuted,
       reranked: wasReranked,
       timings,
@@ -459,7 +520,7 @@ export async function executeSearchKnowledgeBase(
     totalResults: finalResult.total,
     duration: totalDuration,
     meta: finalResult.meta,
-    resultScores: mappedResults.map(r => r.score.toFixed(4)),
+    resultScores: mappedResults.map((r) => r.score.toFixed(4)),
     // 生成侧提纯链路探针（每次检索必打，与触发条件无关，用于部署后确认新代码生效）：
     // ver>=20260919 = 统一 RRF 合并 + 精排后父块去重 + 文档分组组装 三改动在线
     ver: '20260919',

@@ -15,9 +15,11 @@
  *   - tool_status:    工具调用进度
  *   - heartbeat:      保活心跳
  *   - content:        AI 回复文本（JSON.stringify 编码）
+ *   - citations:      RAG 引用列表（流式回答结束后、res.end() 前一次性发送）
  */
 
 import type { Response } from 'express';
+import { CitationsEventSchema } from './citations.js';
 
 // 工具名称到中文标签的映射
 const TOOL_LABELS: Record<string, string> = {
@@ -81,15 +83,41 @@ export function stopHeartbeat(timer: NodeJS.Timeout | null) {
 /**
  * 发送 metadata 事件
  */
-export function sendMetadata(res: Response | undefined, metadata: Record<string, any>) {
+export function sendMetadata(
+  res: Response | undefined,
+  metadata: Record<string, any>,
+) {
   if (!res || res.writableEnded) return;
   res.write(`event: metadata\ndata: ${JSON.stringify(metadata)}\n\n`);
 }
 
 /**
+ * 发送 citations 事件（RAG 引用列表）
+ *
+ * 流式回答结束后、res.end() 前一次性发送；出口处 zod parse 校验载荷，
+ * 防止结构异常事件流入前端（校验失败抛错，由上层 catch 统一处理）。
+ */
+export function sendCitations(
+  res: Response | undefined,
+  citations: Array<{
+    ref: number;
+    documentId: string;
+    title: string;
+    snippet: string;
+  }>,
+) {
+  if (!res || res.writableEnded) return;
+  const data = CitationsEventSchema.parse({ citations });
+  res.write(`event: citations\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
  * 发送 session_action 事件
  */
-export function sendSessionAction(res: Response | undefined, action: Record<string, any>) {
+export function sendSessionAction(
+  res: Response | undefined,
+  action: Record<string, any>,
+) {
   if (!res || res.writableEnded) return;
   res.write(`event: session_action\ndata: ${JSON.stringify(action)}\n\n`);
 }
@@ -169,7 +197,11 @@ export function sendFileCard(
  */
 export function sendWorkflowEvent(
   res: Response | undefined,
-  eventType: 'workflow_start' | 'workflow_step_start' | 'workflow_step_done' | 'workflow_complete',
+  eventType:
+    | 'workflow_start'
+    | 'workflow_step_start'
+    | 'workflow_step_done'
+    | 'workflow_complete',
   data: Record<string, any>,
 ) {
   if (!res || res.writableEnded) return;
@@ -180,9 +212,11 @@ export function sendWorkflowEvent(
  * 解析 SSE 帧文本，提取 event 和 data 字段
  * 用于客户端测试
  */
-export function parseSSEFrame(frame: string): { eventType: string; eventData: string }[] {
+export function parseSSEFrame(
+  frame: string,
+): { eventType: string; eventData: string }[] {
   const results: { eventType: string; eventData: string }[] = [];
-  const frames = frame.split('\n\n').filter(f => f.trim());
+  const frames = frame.split('\n\n').filter((f) => f.trim());
 
   for (const f of frames) {
     let eventType = '';

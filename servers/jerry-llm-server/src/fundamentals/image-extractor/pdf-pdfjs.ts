@@ -98,7 +98,7 @@ export async function extractImagesFromPdfjs(
     const page = await pdfDocument.getPage(pageNum);
     const pageWithOps = page as unknown as PdfPageWithOps;
     try {
-      const opList = (await pageWithOps.getOperatorList()) as unknown as OperatorList;
+      const opList = (await pageWithOps.getOperatorList()) as OperatorList;
       const pageImages = await extractImagesFromPage(
         pageWithOps,
         opList,
@@ -161,7 +161,11 @@ async function extractImagesFromPage(
     if (!args || args.length === 0) continue;
 
     try {
-      const imgObj = await resolveImageObject(page, args, fn === ops.paintInlineImageXObject);
+      const imgObj = await resolveImageObject(
+        page,
+        args,
+        fn === ops.paintInlineImageXObject,
+      );
       if (!imgObj || !isValidImageObject(imgObj)) continue;
 
       const pngBuffer = encodeRgbToPng(imgObj);
@@ -411,7 +415,11 @@ const CRC_TABLE = (() => {
 })();
 
 /** 计算 buffer 的 CRC32（PNG 规范要求） */
-function crc32(buf: Buffer | Uint8Array, offset: number, length: number): number {
+function crc32(
+  buf: Buffer | Uint8Array,
+  offset: number,
+  length: number,
+): number {
   let crc = 0xffffffff;
   for (let i = 0; i < length; i++) {
     crc = CRC_TABLE[(crc ^ buf[offset + i]) & 0xff] ^ (crc >>> 8);

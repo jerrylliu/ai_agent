@@ -439,6 +439,8 @@ export function useChat(
           workflowCards: Array.isArray(msg.workflowCards)
             ? msg.workflowCards
             : undefined,
+          // 还原持久化的引用来源（可验证生成，后端已反序列化为数组）
+          citations: Array.isArray(msg.citations) ? msg.citations : undefined,
         }));
         setMessages(formattedMessages);
         messagesCacheRef.current.set(sessionId, formattedMessages);
@@ -884,6 +886,21 @@ export function useChat(
       setToolStatuses([]);
       setWorkflowStatus(null);
 
+      // 挂引用来源：citations 事件在流关闭前已全部到达（服务端在 res.end() 前发送），
+      // getAIResponse 收集完毕，这里直接取用；空值防护兼容异常路径下的 undefined
+      const streamCitations = aiResponse.citations;
+      if (streamCitations && streamCitations.length > 0) {
+        setMessages((prev) => {
+          const next = prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, citations: streamCitations }
+              : msg,
+          );
+          messagesCacheRef.current.set(currentSessionId, next);
+          return next;
+        });
+      }
+
       // 助手回复由服务端在 SSE 流结束时直接落库（数据完整性不依赖客户端网络），
       // 前端不再常规保存，避免网络抖动导致"回复已展示但未入库→被刷新抹掉"。
       // 仅当本条消息携带工作流卡片时补一次富化保存——
@@ -896,6 +913,19 @@ export function useChat(
           workflowCards: workflowCardsCollected,
         }).catch((saveError) => {
           console.warn("工作流卡片富化保存失败（不影响回复展示）:", saveError);
+        });
+      }
+
+      // 携带引用来源时同理补一次富化保存（可验证生成的历史恢复依赖此保存）
+      // 空值防护：与上方挂载分支同理，异常路径下 citations 可能缺失，避免 TypeError 中断尾部流程
+      if (streamCitations && streamCitations.length > 0) {
+        void saveChatHistoryWithRetry({
+          sessionId: currentSessionId,
+          role: "assistant",
+          content: fullResponse,
+          citations: streamCitations,
+        }).catch((saveError) => {
+          console.warn("引用来源富化保存失败（不影响回复展示）:", saveError);
         });
       }
 

@@ -15,6 +15,7 @@ import { SpeechController } from './controllers/speech.controller.js';
 import { AiWritingController } from './controllers/ai-writing.controller.js';
 import { FeishuEventController } from './controllers/feishu-event.controller.js';
 import { MetricsController } from './controllers/metrics.controller.js';
+import { KgGraphController } from './controllers/kg-graph.controller.js';
 import { SpeechService } from './services/speech.service.js';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -39,6 +40,9 @@ import { ToolUsage } from './entities/tool-usage.entity.js';
 import { GeneratedDocument } from './entities/generated-document.entity.js';
 import { FeishuChatSession } from './entities/feishu-chat-session.entity.js';
 import { ImageDescription } from './entities/image-description.entity.js';
+import { KgEntity } from './entities/kg-entity.entity.js';
+import { KgTriple } from './entities/kg-triple.entity.js';
+import { KgExtractOp } from './entities/kg-extract-op.entity.js';
 import { DocumentService } from './services/document.service.js';
 import { DocumentScanService } from './services/document-scan.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
@@ -53,6 +57,7 @@ import { EvaluationService } from './services/evaluation.service.js';
 import { ToolUsageService } from './services/tool-usage.service.js';
 import { GeneratedDocumentService } from './services/generated-document.service.js';
 import { GeneratedDocumentSchedulerService } from './services/generated-document-scheduler.service.js';
+import { KgExtractService } from './services/kg-extract.service.js';
 import { HealthService } from './services/health.service.js';
 import { AuthModule } from './auth/auth.module.js';
 import { WinstonLoggerModule } from './fundamentals/logger.js';
@@ -105,6 +110,9 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
         GeneratedDocument,
         FeishuChatSession,
         ImageDescription,
+        KgEntity,
+        KgTriple,
+        KgExtractOp,
       ],
       // 不在 NestJS 启动时加载 migrations：
       // 1. NestJS 运行在 ESM 模式，TypeORM 同步 require 加载 ESM 迁移文件会崩
@@ -135,6 +143,9 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
       GeneratedDocument,
       FeishuChatSession,
       ImageDescription,
+      KgEntity,
+      KgTriple,
+      KgExtractOp,
     ]),
     AuthModule,
   ],
@@ -153,6 +164,8 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     AiWritingController,
     FeishuEventController,
     MetricsController,
+    // KG 图谱只读查询（档位3 可视化面板数据源，直查库不依赖 KG 开关）
+    KgGraphController,
   ],
   providers: [
     AppService,
@@ -171,6 +184,8 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     ToolUsageService,
     GeneratedDocumentService,
     GeneratedDocumentSchedulerService,
+    // KG 离线抽取管道（KG_ENABLED=false 时调度直接 return，零开销）
+    KgExtractService,
     SpeechService,
     HealthService,
   ],

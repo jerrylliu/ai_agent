@@ -233,6 +233,56 @@ const DocScanSchema = z.object({
   suspiciousAction: z.enum(['review', 'block']).default('review'),
 });
 
+// 知识图谱（KG）实体链接与图补充位配置
+// 总开关默认关闭（灰度）：关闭时离线抽取管道不消费、在线链路完全透传基线检索结果。
+// 数值默认值 = 30 题门闩验证（kg-link-spike v2）使用的同一组口径，
+// ⚠️ 修改召回/链接类参数会使门闩结论失效，调整后必须重跑门闩复核。
+const KgSchema = z.object({
+  // 总开关：离线抽取管道 + 在线图补充位（false = 全链路关闭，基线行为零变化）
+  enabled: zBoolFromString(false),
+  // 图补充位数量：基线保留 topK - slots 条，图补充不重复的 slots 条（门闩验证值 = 1）
+  supplementSlots: z.coerce.number().int().min(0).max(3).default(1),
+  // LLM 链接确认置信度阈值（主口径；matchType != related 且 confidence >= 阈值才计入链接）
+  linkConfThreshold: z.coerce.number().min(0).max(1).default(0.6),
+  // 单文档抽取的正文截断长度（控制离线抽取的 token 成本）
+  extractDocChars: z.coerce.number().int().positive().default(8000),
+  // 单文档最大抽取实体数（prompt 内声明 + schema 上限 = 2 倍冗余）
+  maxEntitiesPerDoc: z.coerce.number().int().positive().default(20),
+  // 离线抽取 LLM 并发数（照抄 document-scan judge 的保守并发）
+  extractConcurrency: z.coerce.number().int().positive().default(2),
+  // 单次抽取 LLM 调用超时（AbortSignal.timeout 真正取消在途请求，避免幽灵调用消耗 token）
+  // 默认 180000：抽取已固定用 deepseek-v4-flash（thinking 模型，见 kg-extract.service.ts
+  // 的 KG_EXTRACT_MODEL），单次 8000 字符抽取实测会超过旧的 60s 默认值而被 abort。
+  // ⚠️ 此值是请求生命周期护栏，非门闩锁定的召回/链接口径（kg-link-spike 本身无此超时），
+  // 调整它不会使门闩结论失效；但与 linkTimeoutMs 保持同源模型时延口径。
+  extractTimeoutMs: z.coerce.number().int().positive().default(180000),
+  // 在线实体链接单次 LLM 调用超时（mention 抽取 / 链接确认各一次）；超时即静默降级纯基线检索。
+  // 默认 180000：6 题在线链路复验实测单题全程 42~170s（deepseek-v4-flash 两次调用 + 嵌入），
+  // 若沿用 20s 默认值，生产环境 KG 在线链路几乎必然超时降级（等效不生效）。
+  // ⚠️ 调小此值前必须确认所用模型的实测时延，否则等于关闭 KG 在线补充位。
+  linkTimeoutMs: z.coerce.number().int().positive().default(180000),
+  // 抽取队列调度间隔（扫描 ACTIVE 版本差集入队 + 消费 pending op）
+  extractIntervalMs: z.coerce.number().int().positive().default(300000),
+  // 单文档抽取失败最大重试次数（超限置 failed，留 errorMessage 供排查）
+  maxRetries: z.coerce.number().int().min(0).default(3),
+  // 单次调度最多消费的 op 数（防止存量回填时长时间阻塞调度线程）
+  maxOpsPerTick: z.coerce.number().int().positive().default(10),
+  // 词汇召回候选 top-K（v1 同口径，不得改动）
+  candidateTopK: z.coerce.number().int().positive().default(8),
+  // 词汇召回最低分（v1 同口径，不得改动）
+  candidateMinScore: z.coerce.number().min(0).max(1).default(0.3),
+  // 通用 token 倒排剪枝上限（posting 超过此长度的 token 不参与召回，避免候选爆炸）
+  tokenPostingCap: z.coerce.number().int().positive().default(200),
+  // 语义补充通道最低余弦相似度（刻意宽松：召回只负责送候选进池，链接由 LLM 确认把关）
+  embedMinSim: z.coerce.number().min(0).max(1).default(0.5),
+  // 语义补充通道最多补充的候选槽位数
+  embedSupplementSlots: z.coerce.number().int().min(0).default(4),
+  // 嵌入批量大小（getEmbeddings().embedDocuments 分批）
+  embedBatchSize: z.coerce.number().int().positive().default(32),
+  // 1 跳邻居实体扩展权重（链接实体本身 = 1.0）
+  hopNeighborWeight: z.coerce.number().min(0).max(1).default(0.5),
+});
+
 // ==================== 顶层 Schema ====================
 
 const RootSchema = z.object({
@@ -327,6 +377,7 @@ const RootSchema = z.object({
   formula: FormulaSchema,
   scannedPdf: ScannedPdfSchema,
   docScan: DocScanSchema,
+  kg: KgSchema,
 });
 
 // ==================== 解析 process.env ====================
@@ -472,6 +523,26 @@ function buildRawConfig() {
       maxChunksPerDocument: env.DOC_SCAN_MAX_CHUNKS_PER_DOC,
       suspiciousAction: env.DOC_SCAN_SUSPICIOUS_ACTION,
     },
+    kg: {
+      enabled: env.KG_ENABLED,
+      supplementSlots: env.KG_SUPPLEMENT_SLOTS,
+      linkConfThreshold: env.KG_LINK_CONF_THRESHOLD,
+      extractDocChars: env.KG_EXTRACT_DOC_CHARS,
+      maxEntitiesPerDoc: env.KG_MAX_ENTITIES_PER_DOC,
+      extractConcurrency: env.KG_EXTRACT_CONCURRENCY,
+      extractTimeoutMs: env.KG_EXTRACT_TIMEOUT_MS,
+      linkTimeoutMs: env.KG_LINK_TIMEOUT_MS,
+      extractIntervalMs: env.KG_EXTRACT_INTERVAL_MS,
+      maxRetries: env.KG_MAX_RETRIES,
+      maxOpsPerTick: env.KG_MAX_OPS_PER_TICK,
+      candidateTopK: env.KG_CANDIDATE_TOP_K,
+      candidateMinScore: env.KG_CANDIDATE_MIN_SCORE,
+      tokenPostingCap: env.KG_TOKEN_POSTING_CAP,
+      embedMinSim: env.KG_EMBED_MIN_SIM,
+      embedSupplementSlots: env.KG_EMBED_SUPPLEMENT_SLOTS,
+      embedBatchSize: env.KG_EMBED_BATCH_SIZE,
+      hopNeighborWeight: env.KG_HOP_NEIGHBOR_WEIGHT,
+    },
   };
 }
 
@@ -595,6 +666,7 @@ export const config = {
   formula: parsed.formula,
   scannedPdf: parsed.scannedPdf,
   docScan: parsed.docScan,
+  kg: parsed.kg,
 } as const;
 
 export type AppConfig = typeof config;

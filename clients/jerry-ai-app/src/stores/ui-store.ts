@@ -13,6 +13,7 @@ interface UIState {
   showTokenUsage: boolean;
   showToolUsage: boolean;
   showEvaluation: boolean;
+  showKgGraph: boolean;
   showMoreMenu: boolean;
   showHistoryList: boolean;
   showRecentQuestions: boolean;
@@ -42,6 +43,7 @@ interface UIState {
   setShowTokenUsage: (v: boolean) => void;
   setShowToolUsage: (v: boolean) => void;
   setShowEvaluation: (v: boolean) => void;
+  setShowKgGraph: (v: boolean) => void;
   setShowSettings: (v: boolean) => void;
   setShowDocumentManager: (v: boolean) => void;
   setShowKnowledgeSourceManager: (v: boolean) => void;
@@ -62,6 +64,7 @@ export const useUIStore = create<UIState>()((set) => ({
   showTokenUsage: false,
   showToolUsage: false,
   showEvaluation: false,
+  showKgGraph: false,
   showMoreMenu: false,
   showHistoryList: true,
   showRecentQuestions: true,
@@ -88,6 +91,7 @@ export const useUIStore = create<UIState>()((set) => ({
   setShowTokenUsage: (v) => set({ showTokenUsage: v }),
   setShowToolUsage: (v) => set({ showToolUsage: v }),
   setShowEvaluation: (v) => set({ showEvaluation: v }),
+  setShowKgGraph: (v) => set({ showKgGraph: v }),
   setShowSettings: (v) => set({ showSettings: v }),
   setShowDocumentManager: (v) => set({ showDocumentManager: v }),
   setShowKnowledgeSourceManager: (v) => set({ showKnowledgeSourceManager: v }),

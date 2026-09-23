@@ -55,6 +55,7 @@ import {
   TokenUsagePanel,
   ToolUsagePanel,
   EvaluationPanel,
+  KgGraphPanel,
 } from "../components/Chat";
 
 import { useUIStore } from "../stores/ui-store";
@@ -96,6 +97,8 @@ const ChatAgent: React.FC = () => {
     setShowToolUsage,
     showEvaluation,
     setShowEvaluation,
+    showKgGraph,
+    setShowKgGraph,
     showSettings,
     setShowSettings,
     showDocumentManager,
@@ -138,6 +141,8 @@ const ChatAgent: React.FC = () => {
       setShowToolUsage: state.setShowToolUsage,
       showEvaluation: state.showEvaluation,
       setShowEvaluation: state.setShowEvaluation,
+      showKgGraph: state.showKgGraph,
+      setShowKgGraph: state.setShowKgGraph,
       showSettings: state.showSettings,
       setShowSettings: state.setShowSettings,
       showDocumentManager: state.showDocumentManager,
@@ -576,6 +581,7 @@ const ChatAgent: React.FC = () => {
             onOpenTokenUsage={() => setShowTokenUsage(true)}
             onOpenToolUsage={() => setShowToolUsage(true)}
             onOpenEvaluation={() => setShowEvaluation(true)}
+            onOpenKgGraph={() => setShowKgGraph(true)}
             onRefreshAppData={() =>
               recovery.refreshNow("manual", { force: true })
             }
@@ -739,6 +745,10 @@ const ChatAgent: React.FC = () => {
       <EvaluationPanel
         open={showEvaluation}
         onClose={() => setShowEvaluation(false)}
+      />
+      <KgGraphPanel
+        open={showKgGraph}
+        onClose={() => setShowKgGraph(false)}
       />
       <SettingsDialog
         open={showSettings}

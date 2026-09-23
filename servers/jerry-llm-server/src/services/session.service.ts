@@ -9,10 +9,44 @@ import { MessageFeedback } from '../entities/message-feedback.entity';
 import { AutoEvaluation } from '../entities/auto-evaluation.entity';
 import { GeneratedDocument } from '../entities/generated-document.entity';
 import { logger } from '../fundamentals/logger';
-import { publishChatHistoryEvent, publishSessionDeletedEvent } from '../fundamentals/chat-event-bus';
-import { containsRawToolCallFormat, suppressRawToolCallBlocks } from '../fundamentals/dsml-tool-call';
+import {
+  publishChatHistoryEvent,
+  publishSessionDeletedEvent,
+} from '../fundamentals/chat-event-bus';
+import {
+  containsRawToolCallFormat,
+  suppressRawToolCallBlocks,
+} from '../fundamentals/dsml-tool-call';
 import { SummaryService } from './summary.service';
 import { MemoryService } from './memory.service';
+
+/**
+ * 安全反序列化聊天记录的 JSON 列（documentCards / workflowCards / citations）
+ *
+ * 为什么需要：这些列由客户端 POST /chat/history 写入，手工改库、旧版本格式、
+ * 异常序列化都可能产生非法 JSON 或非数组值。裸 JSON.parse 一旦抛错，
+ * 整个会话的历史加载会 500，用户看不到任何消息；降级为忽略该字段
+ * 只损失附加卡片/引用，消息本体仍完整可读。
+ *
+ * @param value 数据库中的 JSON 字符串（可空）
+ * @returns 解析成功且为数组时返回数组，否则返回 undefined
+ */
+export function safeParseJsonArray(
+  value: string | null | undefined,
+): unknown[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch (error: any) {
+    logger.warn('聊天记录 JSON 列反序列化失败，已忽略该字段', {
+      module: 'SessionService',
+      rawLength: value.length,
+      error: error?.message || String(error),
+    });
+    return undefined;
+  }
+}
 
 @Injectable()
 export class SessionService {
@@ -44,8 +78,14 @@ export class SessionService {
     documentCards?: unknown[],
     source: 'web' | 'feishu' = 'web',
     workflowCards?: unknown[],
+    citations?: unknown[],
   ) {
-    logger.debug('保存聊天记录', { module: 'SessionService', sessionId, role, contentLength: content.length });
+    logger.debug('保存聊天记录', {
+      module: 'SessionService',
+      sessionId,
+      role,
+      contentLength: content.length,
+    });
 
     // ==================== 写边界 sanitize（出口契约兜底） ====================
     // 为什么需要：即使上游某条路径（非流式 / 回退 / 未来新增路径）漏掉抑制，
@@ -74,9 +114,22 @@ export class SessionService {
       where: { sessionId },
       order: { id: 'DESC' },
     });
-    if (lastMessage && lastMessage.role === role && lastMessage.content === content) {
-      if (workflowCards && workflowCards.length > 0 && !lastMessage.workflowCards) {
+    if (
+      lastMessage &&
+      lastMessage.role === role &&
+      lastMessage.content === content
+    ) {
+      if (
+        workflowCards &&
+        workflowCards.length > 0 &&
+        !lastMessage.workflowCards
+      ) {
         lastMessage.workflowCards = JSON.stringify(workflowCards);
+        await this.chatHistoryRepository.save(lastMessage);
+      }
+      // citations 富化同构 workflowCards：客户端保存的重复消息若携带引用且已有记录缺失，仅补充
+      if (citations && citations.length > 0 && !lastMessage.citations) {
+        lastMessage.citations = JSON.stringify(citations);
         await this.chatHistoryRepository.save(lastMessage);
       }
       return lastMessage;
@@ -88,13 +141,18 @@ export class SessionService {
       role,
       content,
       // documentCards 以 JSON 字符串形式持久化，仅 user 消息携带
-      documentCards: documentCards && documentCards.length > 0
-        ? JSON.stringify(documentCards)
-        : null,
+      documentCards:
+        documentCards && documentCards.length > 0
+          ? JSON.stringify(documentCards)
+          : null,
       // workflowCards 以 JSON 字符串形式持久化，仅 assistant 消息携带（工作流执行摘要）
-      workflowCards: workflowCards && workflowCards.length > 0
-        ? JSON.stringify(workflowCards)
-        : null,
+      workflowCards:
+        workflowCards && workflowCards.length > 0
+          ? JSON.stringify(workflowCards)
+          : null,
+      // citations 以 JSON 字符串形式持久化，仅 assistant 消息携带（可验证生成的引用来源）
+      citations:
+        citations && citations.length > 0 ? JSON.stringify(citations) : null,
     });
     const savedHistory = await this.chatHistoryRepository.save(chatHistory);
 
@@ -115,14 +173,18 @@ export class SessionService {
       // 更新会话的 updatedAt
       await this.sessionRepository.update(
         { sessionId },
-        { updatedAt: new Date() }
+        { updatedAt: new Date() },
       );
     }
 
     // 异步检查并更新摘要和记忆（不阻塞主流程）
     if (role === 'assistant') {
-      this.summaryService.checkAndUpdateSummary(sessionId, userId).catch(() => {});
-      this.memoryService.checkAndExtractMemories(sessionId, userId).catch(() => {});
+      this.summaryService
+        .checkAndUpdateSummary(sessionId, userId)
+        .catch(() => {});
+      this.memoryService
+        .checkAndExtractMemories(sessionId, userId)
+        .catch(() => {});
     }
 
     // 发布实时事件：通知该用户的 Web 端有新消息落库（替代轮询为主路径）
@@ -165,10 +227,10 @@ export class SessionService {
       return messages.map((m) => ({
         ...m,
         attachments: [] as any[],
-        // documentCards 从 JSON 字符串反序列化为对象
-        documentCards: m.documentCards ? JSON.parse(m.documentCards) : undefined,
-        // workflowCards 从 JSON 字符串反序列化为对象
-        workflowCards: m.workflowCards ? JSON.parse(m.workflowCards) : undefined,
+        // JSON 列安全反序列化：脏数据降级为 undefined 而非炸掉历史加载
+        documentCards: safeParseJsonArray(m.documentCards),
+        workflowCards: safeParseJsonArray(m.workflowCards),
+        citations: safeParseJsonArray(m.citations),
       }));
     }
 
@@ -176,11 +238,16 @@ export class SessionService {
     const enriched = messages.map((m) => ({
       ...m,
       attachments: [] as any[],
-      documentCards: m.documentCards ? JSON.parse(m.documentCards) : undefined,
-      workflowCards: m.workflowCards ? JSON.parse(m.workflowCards) : undefined,
+      documentCards: safeParseJsonArray(m.documentCards),
+      workflowCards: safeParseJsonArray(m.workflowCards),
+      citations: safeParseJsonArray(m.citations),
     }));
     const assistantIdxList = enriched
-      .map((m, idx) => ({ idx, role: m.role, createdAt: new Date(m.createdAt as any) }))
+      .map((m, idx) => ({
+        idx,
+        role: m.role,
+        createdAt: new Date(m.createdAt as any),
+      }))
       .filter((x) => x.role === 'assistant');
 
     for (const doc of docs) {
@@ -195,7 +262,8 @@ export class SessionService {
           break;
         }
       }
-      if (target === -1 && assistantIdxList.length > 0) target = assistantIdxList[0].idx;
+      if (target === -1 && assistantIdxList.length > 0)
+        target = assistantIdxList[0].idx;
       if (target !== -1) {
         enriched[target].attachments.push({
           key: doc.key,
@@ -225,7 +293,11 @@ export class SessionService {
   }
 
   // 创建新会话
-  async createSession(sessionId: string, title: string, userId: string = 'default') {
+  async createSession(
+    sessionId: string,
+    title: string,
+    userId: string = 'default',
+  ) {
     const session = this.sessionRepository.create({
       sessionId,
       title,
@@ -304,7 +376,11 @@ export class SessionService {
   }
 
   // 更新会话分类
-  async updateSessionCategory(sessionId: string, category: string, userId?: string) {
+  async updateSessionCategory(
+    sessionId: string,
+    category: string,
+    userId?: string,
+  ) {
     const where: any = { sessionId };
     if (userId) {
       where.userId = userId;
@@ -319,7 +395,7 @@ export class SessionService {
       where: { userId },
       order: { isPinned: 'DESC', updatedAt: 'DESC' },
     });
-    return sessions.filter(s => s.tags && s.tags.includes(tag));
+    return sessions.filter((s) => s.tags && s.tags.includes(tag));
   }
 
   // 按分类查询会话
@@ -346,10 +422,7 @@ export class SessionService {
 
   // 更新消息
   async updateMessage(id: string, content: string) {
-    return this.chatHistoryRepository.update(
-      { id: parseInt(id) },
-      { content }
-    );
+    return this.chatHistoryRepository.update({ id: parseInt(id) }, { content });
   }
 
   // 删除消息
@@ -365,7 +438,10 @@ export class SessionService {
   }
 
   // 复制会话
-  async duplicateSession(sessionId: string, userId: string = 'default'): Promise<Session> {
+  async duplicateSession(
+    sessionId: string,
+    userId: string = 'default',
+  ): Promise<Session> {
     const originalSession = await this.sessionRepository.findOne({
       where: { sessionId },
     });
@@ -402,13 +478,19 @@ export class SessionService {
   }
 
   // 导出会话
-  async exportSession(sessionId: string, format: string = 'json'): Promise<any> {
+  async exportSession(
+    sessionId: string,
+    format: string = 'json',
+  ): Promise<any> {
     try {
       const session = await this.sessionRepository.findOne({
         where: { sessionId },
       });
       if (!session) {
-        logger.warn('导出会话失败: 会话不存在', { module: 'SessionService', sessionId });
+        logger.warn('导出会话失败: 会话不存在', {
+          module: 'SessionService',
+          sessionId,
+        });
         throw new NotFoundException('会话不存在');
       }
 
@@ -417,7 +499,12 @@ export class SessionService {
         order: { createdAt: 'ASC' },
       });
 
-      logger.info('导出会话', { module: 'SessionService', sessionId, format, messageCount: messages.length });
+      logger.info('导出会话', {
+        module: 'SessionService',
+        sessionId,
+        format,
+        messageCount: messages.length,
+      });
 
       if (format === 'markdown') {
         let md = `# ${session.title}\n\n`;
@@ -453,7 +540,7 @@ export class SessionService {
           createdAt: session.createdAt,
           updatedAt: session.updatedAt,
         },
-        messages: messages.map(msg => ({
+        messages: messages.map((msg) => ({
           role: msg.role,
           content: msg.content,
           createdAt: msg.createdAt,
@@ -465,7 +552,12 @@ export class SessionService {
       if (error instanceof NotFoundException) {
         throw error;
       }
-      logger.error('导出会话异常', { module: 'SessionService', sessionId, format, error: String(error) });
+      logger.error('导出会话异常', {
+        module: 'SessionService',
+        sessionId,
+        format,
+        error: String(error),
+      });
       throw error;
     }
   }

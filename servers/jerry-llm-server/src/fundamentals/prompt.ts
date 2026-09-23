@@ -22,7 +22,12 @@
 // SystemMessage  —— 角色 system 的消息封装（系统级指令）
 // ToolMessage    —— 角色 tool 的消息封装（工具调用结果回填给 LLM）
 // 第三方包路径不带 .js 后缀，由 Node 的 package exports 解析。
-import { HumanMessage, AIMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
+import {
+  HumanMessage,
+  AIMessage,
+  SystemMessage,
+  ToolMessage,
+} from '@langchain/core/messages';
 
 // 【type-only 导入】`import type` 只拉取类型，不会出现在运行时产物中（被 TS 编译期擦除）。
 // Response 是 Express 的响应对象类型，仅用于 SSE 流式响应的参数标注。
@@ -30,15 +35,24 @@ import type { Response } from 'express';
 
 // 【命名空间导入】`import * as X from 'pkg'` 将整个模块作为对象导入，访问 X.method() 形式。
 // 这里全部为 Node 内置模块（不需要安装）。
-import * as path from 'path';   // 处理跨平台文件路径拼接（path.join、path.resolve）
-import * as fs from 'fs';       // 同步/异步文件系统读写
+import * as path from 'path'; // 处理跨平台文件路径拼接（path.join、path.resolve）
+import * as fs from 'fs'; // 同步/异步文件系统读写
 import * as https from 'https'; // HTTPS 请求客户端（用于下载远程资源）
 
 // 【相对路径导入】具名导入项目内部模块的若干工具函数。
 // 注意：本项目运行在 NestJS 11 ESM 模式下，相对路径理论上需要带 .js 后缀，
 //       但本文件历史上未带后缀（被 ts-node-dev 等工具兼容处理），保持现状。
 // sse-writer 提供 SSE 协议层的统一事件写入函数。
-import { sendToolStatus, startHeartbeat, stopHeartbeat, sendMetadata, sendSessionAction, sendContent, sendFileCard } from './sse-writer';
+import {
+  sendToolStatus,
+  startHeartbeat,
+  stopHeartbeat,
+  sendMetadata,
+  sendSessionAction,
+  sendContent,
+  sendFileCard,
+  sendCitations,
+} from './sse-writer';
 
 // prompt-message-cleaner 提供"达到最大轮数强制总结"时的消息清理纯函数。
 // 单独提取成文件是为了可测试性（避免测试时加载整个 prompt.ts 的重依赖）。
@@ -69,7 +83,13 @@ import * as http from 'http';
 
 // 【RAG 链路】retrieveFromKnowledgeBase：执行向量召回 + 重排，返回拼接好的上下文文本。
 // buildContextFromResults：把检索结果构建为 LLM 上下文（图片块附加可访问 URL）。
-import { retrieveFromKnowledgeBase, buildContextFromResults } from './rag-service';
+import {
+  retrieveFromKnowledgeBase,
+  buildContextFromResults,
+  buildContextWithSources,
+  type DocSource,
+} from './rag-service';
+import { resolveCitations } from './citations.js';
 // 【向量库统计】getKnowledgeBaseStats：返回当前知识库文档数等元信息（用于路由决策）。
 import { getKnowledgeBaseStats } from './vector-store';
 // 【模型工厂】批量解构 6 个函数：
@@ -79,23 +99,45 @@ import { getKnowledgeBaseStats } from './vector-store';
 //   getCurrentModelId    —— 读取当前活跃模型 ID（环境变量或运行时切换）
 //   getModelInfo         —— 查询模型元信息（厂商、定价等）
 //   getModelCapabilities —— 查询模型能力（context length / 是否支持 FC / 是否多模态）
-import { createLLM, createRateLimitedLLM, buildModelConfig, getCurrentModelId, getModelInfo, getModelCapabilities } from './model-provider';
+import {
+  createLLM,
+  createRateLimitedLLM,
+  buildModelConfig,
+  getCurrentModelId,
+  getModelInfo,
+  getModelCapabilities,
+} from './model-provider';
 // 【工具中心】LangChain Tool 注册管理：
 //   getToolSchemasForModel —— 拿到该模型可见的所有 tool JSON Schema（function calling 使用）
 //   executeTool            —— 根据 tool 名 + 参数执行具体工具实现
 //   hasTool                —— 校验某个 tool 名是否存在
 //   getAvailableToolNames  —— 列出所有已注册的工具名
-import { getToolSchemasForModel, executeTool, hasTool, getAvailableToolNames } from './tools';
+import {
+  getToolSchemasForModel,
+  executeTool,
+  hasTool,
+  getAvailableToolNames,
+} from './tools';
 // 【Plan-and-Execute 调度】把多步任务拆为 plan，逐步执行：
 //   resolveDataBindings —— 解析步骤间数据绑定（${step1.output} 这类引用）
 //   getSessionPlan      —— 读取会话当前的 plan 对象
 //   storeStepOutput     —— 把某步骤产出存入会话上下文，供后续步骤引用
 //   findMatchingStep    —— 根据 tool 调用反查所属 plan step
-import { resolveDataBindings, getSessionPlan, storeStepOutput, findMatchingStep, preloadSessionPlan } from './tools/plan-execute';
+import {
+  resolveDataBindings,
+  getSessionPlan,
+  storeStepOutput,
+  findMatchingStep,
+  preloadSessionPlan,
+} from './tools/plan-execute';
 // 【智能路由】根据用户输入判断走哪条链路（普通 chat / RAG / Agent）：
 //   routeRequest             —— 给定 query，返回路由决策
 //   applyAgentToolWhitelist  —— 按 Agent 类型筛掉禁用的工具
-import { routeRequest, applyAgentToolWhitelist, getAgent } from './router/agent-router';
+import {
+  routeRequest,
+  applyAgentToolWhitelist,
+  getAgent,
+} from './router/agent-router';
 // 【搜索结果格式化】把搜索引擎原始 JSON 转成模型友好的 Markdown 摘要。
 import { formatSearchResultAsSummary } from './tools/search-web';
 // 【日志器 & 配置】项目级单例：
@@ -137,7 +179,11 @@ import { MultiLevelCache } from './multi-level-cache';
 //   buildPromptInjectionSafetyInstruction —— 生成防注入的系统提示
 //   inspectPromptInjection                —— 检查输入是否包含可疑注入模式
 //   UNTRUSTED_CONTEXT_INSTRUCTION         —— 标准化的「不可信上下文」提示常量
-import { buildPromptInjectionSafetyInstruction, inspectPromptInjection, UNTRUSTED_CONTEXT_INSTRUCTION } from './prompt-injection-guard.js';
+import {
+  buildPromptInjectionSafetyInstruction,
+  inspectPromptInjection,
+  UNTRUSTED_CONTEXT_INSTRUCTION,
+} from './prompt-injection-guard.js';
 import { stripMarkdownImages } from './feishu/feishu-markdown-image.js';
 import { SemanticDedupTracker } from './semantic-dedup.js';
 import { SearchResultDedupTracker } from './search-result-dedup.js';
@@ -199,17 +245,31 @@ metrics.registerCacheInstance('session-asset', sessionAssetCache);
 async function saveSessionAssets(
   sessionId: string | undefined,
   collectedImages: Array<{ url: string; alt: string }>,
-  collectedChartOptions: Array<{ option: any; chartType?: string; imageUrl?: string }>,
-  collectedMindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }>,
-  collectedFileCards: Array<{ key: string; filename: string; format: string }> = [],
+  collectedChartOptions: Array<{
+    option: any;
+    chartType?: string;
+    imageUrl?: string;
+  }>,
+  collectedMindmaps: Array<{
+    mermaidCode: string;
+    title: string;
+    imageUrl?: string;
+  }>,
+  collectedFileCards: Array<{
+    key: string;
+    filename: string;
+    format: string;
+  }> = [],
 ) {
   if (!sessionId) {
-    logger.debug('FC资产缓存：跳过保存（sessionId 为空）', { module: 'PromptService' });
+    logger.debug('FC资产缓存：跳过保存（sessionId 为空）', {
+      module: 'PromptService',
+    });
     return;
   }
   const charts = collectedChartOptions
-    .filter(c => c.imageUrl)
-    .map(c => ({ imageUrl: c.imageUrl!, chartType: c.chartType }));
+    .filter((c) => c.imageUrl)
+    .map((c) => ({ imageUrl: c.imageUrl!, chartType: c.chartType }));
   // 思维导图：优先用工具返回的 imageUrl，否则通过 mindmapImageUrl() 生成
   // mindmapImageUrl 现在是 async（L2 Redis 写入需要 await），用 Promise.all 并发处理
   const mindmaps = await Promise.all(
@@ -219,7 +279,7 @@ async function saveSessionAssets(
     })),
   );
   // 文档：把 key 转为 fc://document/{key} 内部协议（与 send_notification.attachments 链路一致）
-  const fileCards = collectedFileCards.map(f => ({
+  const fileCards = collectedFileCards.map((f) => ({
     fileUrl: `fc://document/${f.key}`,
     filename: f.filename,
     format: f.format,
@@ -229,7 +289,10 @@ async function saveSessionAssets(
   // 场景：第 1 轮生成内容 → 第 2 轮发邮件（无新资产）→ 第 3 轮再次发邮件
   // 若直接覆盖，第 3 轮会读到空数组，导致模型重新生成
   const hasNewAssets =
-    collectedImages.length > 0 || charts.length > 0 || mindmaps.length > 0 || fileCards.length > 0;
+    collectedImages.length > 0 ||
+    charts.length > 0 ||
+    mindmaps.length > 0 ||
+    fileCards.length > 0;
   if (!hasNewAssets) {
     // touch：仅续期，不覆盖内容；若 key 已不存在则什么都不做（多级缓存内部保证降级安全）
     await sessionAssetCache.touch(sessionId);
@@ -257,27 +320,45 @@ async function saveSessionAssets(
 }
 
 /** 获取会话资产并清理过期项 */
-async function getSessionAssets(sessionId: string | undefined): Promise<string | null> {
+async function getSessionAssets(
+  sessionId: string | undefined,
+): Promise<string | null> {
   if (!sessionId) return null;
   const entry = await sessionAssetCache.get(sessionId);
   if (!entry) return null;
 
   const parts: string[] = [];
   if (entry.images.length > 0) {
-    parts.push('图片：\n' + entry.images.map((img, i) => `  ${i + 1}. ${img.url}`).join('\n'));
+    parts.push(
+      '图片：\n' +
+        entry.images.map((img, i) => `  ${i + 1}. ${img.url}`).join('\n'),
+    );
   }
   if (entry.charts.length > 0) {
-    parts.push('图表：\n' + entry.charts.map((ch, i) => `  ${i + 1}. imageUrl: ${ch.imageUrl}`).join('\n'));
+    parts.push(
+      '图表：\n' +
+        entry.charts
+          .map((ch, i) => `  ${i + 1}. imageUrl: ${ch.imageUrl}`)
+          .join('\n'),
+    );
   }
   if (entry.mindmaps.length > 0) {
-    parts.push('思维导图：\n' + entry.mindmaps.map((mm, i) => `  ${i + 1}. imageUrl: ${mm.imageUrl}`).join('\n'));
+    parts.push(
+      '思维导图：\n' +
+        entry.mindmaps
+          .map((mm, i) => `  ${i + 1}. imageUrl: ${mm.imageUrl}`)
+          .join('\n'),
+    );
   }
   if (entry.fileCards.length > 0) {
     parts.push(
       '文档（PDF/Word/HTML）：\n' +
-      entry.fileCards
-        .map((f, i) => `  ${i + 1}. filename: "${f.filename}"，format: ${f.format}，fileUrl: ${f.fileUrl}`)
-        .join('\n'),
+        entry.fileCards
+          .map(
+            (f, i) =>
+              `  ${i + 1}. filename: "${f.filename}"，format: ${f.format}，fileUrl: ${f.fileUrl}`,
+          )
+          .join('\n'),
     );
   }
   if (parts.length === 0) return null;
@@ -326,35 +407,48 @@ export function detectToolIntent(userMessage: string): ToolIntentDetection {
 
   // ---- 动词集合：表示"创造、产出某物"的所有常见说法 ----
   // 中英文混合，覆盖正式/口语/敬语/祈使
-  const createVerbs = '生成|创建|制作|做(?:一|个|出)?|画|绘制|帮我.{0,5}(?:做|画|生成|搞|弄|来)|给我.{0,5}(?:做|画|生成|来)|来.{0,3}个|来.{0,3}张|输出|产出|create|generate|make|draw|build|design';
+  const createVerbs =
+    '生成|创建|制作|做(?:一|个|出)?|画|绘制|帮我.{0,5}(?:做|画|生成|搞|弄|来)|给我.{0,5}(?:做|画|生成|来)|来.{0,3}个|来.{0,3}张|输出|产出|create|generate|make|draw|build|design';
 
   // ---- 1. generate_image：图片/图像/照片/海报/封面/插画 ----
   // 兼容 "XX图"（风景图、星空图、海报图等任意 N 字定语 + 图）
   // 兼容英文 image/photo/picture/poster/illustration
   const imagePattern = new RegExp(
     `(?:${createVerbs}).{0,20}(?:图片|图像|照片|海报|封面|插画|插图|画作|画|壁纸|头像|logo|图$|图[，。、；！？\\s]|image|photo|picture|poster|illustration|wallpaper|avatar)`,
-    'i'
+    'i',
   );
   if (imagePattern.test(text)) {
-    return { shouldForce: true, specificTool: 'generate_image', reason: '匹配图片生成关键词' };
+    return {
+      shouldForce: true,
+      specificTool: 'generate_image',
+      reason: '匹配图片生成关键词',
+    };
   }
 
   // ---- 2. create_mindmap：思维导图/脑图/知识图谱（结构化） ----
   const mindmapPattern = new RegExp(
     `(?:${createVerbs}).{0,20}(?:思维导图|脑图|知识图谱|结构图|大纲图|mindmap|mind map)`,
-    'i'
+    'i',
   );
   if (mindmapPattern.test(text)) {
-    return { shouldForce: true, specificTool: 'create_mindmap', reason: '匹配思维导图关键词' };
+    return {
+      shouldForce: true,
+      specificTool: 'create_mindmap',
+      reason: '匹配思维导图关键词',
+    };
   }
 
   // ---- 3. generate_chart：图表/折线图/柱状图/饼图/雷达图/趋势图 ----
   const chartPattern = new RegExp(
     `(?:${createVerbs}).{0,20}(?:图表|折线图|柱状图|条形图|饼图|雷达图|散点图|趋势图|分布图|占比图|chart|line chart|bar chart|pie chart|radar chart)`,
-    'i'
+    'i',
   );
   if (chartPattern.test(text)) {
-    return { shouldForce: true, specificTool: 'generate_chart', reason: '匹配图表生成关键词' };
+    return {
+      shouldForce: true,
+      specificTool: 'generate_chart',
+      reason: '匹配图表生成关键词',
+    };
   }
 
   // ---- 4. send_notification：发邮件/发送到邮箱（明确动作 + 邮箱实体） ----
@@ -362,7 +456,11 @@ export function detectToolIntent(userMessage: string): ToolIntentDetection {
   const sendEmailPattern = /(?:发送?|寄|email).{0,30}(?:邮箱|邮件|email|@)/i;
   const hasEmailAction = sendEmailPattern.test(text);
   if (hasEmailAction) {
-    return { shouldForce: true, specificTool: 'send_notification', reason: '匹配邮件发送关键词' };
+    return {
+      shouldForce: true,
+      specificTool: 'send_notification',
+      reason: '匹配邮件发送关键词',
+    };
   }
 
   // ---- 兜底：用户明确说"调用工具"等元描述（罕见但存在） ----
@@ -401,7 +499,7 @@ const GREETING_PATTERNS: RegExp[] = [
 function isPureGreeting(text: string): boolean {
   const trimmed = text.trim();
   if (trimmed.length === 0) return false;
-  return GREETING_PATTERNS.some(p => p.test(trimmed));
+  return GREETING_PATTERNS.some((p) => p.test(trimmed));
 }
 
 function isSubstantiveQuery(text: string): boolean {
@@ -464,19 +562,17 @@ const TOOL_ARTIFACT_MARKERS: Record<string, RegExp[]> = {
     /https?:\/\/[^\s)]+\.(?:pdf|docx?|html?|md)/i,
   ],
   // send_notification：发送成功确认
-  send_notification: [
-    /已发送|发送成功|邮件已发送|消息已发送/i,
-  ],
+  send_notification: [/已发送|发送成功|邮件已发送|消息已发送/i],
 };
 
 /**
  * 通用产物标记（不限工具）：回复中出现这些模式，大概率有实际交付物
  */
 const GENERIC_ARTIFACT_PATTERNS: RegExp[] = [
-  /!\[.*?\]\(https?:\/\/.*?\)/i,        // Markdown 图片
+  /!\[.*?\]\(https?:\/\/.*?\)/i, // Markdown 图片
   /https?:\/\/[^\s)]+\.(?:png|jpg|jpeg|webp|gif|pdf|docx?)/i, // 文件 URL
-  /fc:\/\/document\//i,                   // 内部文档协议
-  /```mermaid[\s\S]*?```/i,              // mermaid 代码块
+  /fc:\/\/document\//i, // 内部文档协议
+  /```mermaid[\s\S]*?```/i, // mermaid 代码块
   /【图片】|【图表】|【思维导图】|【文件卡片】/, // 中文产物标记
 ];
 
@@ -495,14 +591,14 @@ function hasArtifactMarkers(
   expectedTools?: string[],
 ): boolean {
   // 1. 检查通用产物标记（不限工具）
-  if (GENERIC_ARTIFACT_PATTERNS.some(p => p.test(aiResponse))) {
+  if (GENERIC_ARTIFACT_PATTERNS.some((p) => p.test(aiResponse))) {
     return true;
   }
   // 2. 检查预期工具的专属产物标记
   if (expectedTools && expectedTools.length > 0) {
     for (const toolName of expectedTools) {
       const markers = TOOL_ARTIFACT_MARKERS[toolName];
-      if (markers && markers.some(p => p.test(aiResponse))) {
+      if (markers && markers.some((p) => p.test(aiResponse))) {
         return true;
       }
     }
@@ -535,22 +631,31 @@ async function llmArtifactJudge(
   aiResponse: string,
   expectedTools: string[],
   abortController?: AbortController,
-): Promise<{ hasDelivered: boolean; confidence: 'high' | 'low'; reason: string }> {
+): Promise<{
+  hasDelivered: boolean;
+  confidence: 'high' | 'low';
+  reason: string;
+}> {
   // 构建预期产物描述（先过滤出有产物标记的工具，避免 filter 后索引错位）
   const descMap: Record<string, string> = {
     generate_image: '图片URL、Markdown图片语法 ![](url)、【图片】标记',
     generate_chart: '图表图片URL、【图表】标记',
     create_mindmap: '思维导图图片URL、【思维导图】标记、mermaid代码块',
-    generate_document: 'fc://document/ 协议链接、【文件卡片】标记、文件下载链接',
+    generate_document:
+      'fc://document/ 协议链接、【文件卡片】标记、文件下载链接',
     send_notification: '"已发送""发送成功"等确认信息',
   };
   const artifactDescriptions = expectedTools
-    .filter(t => TOOL_ARTIFACT_MARKERS[t])
-    .map(toolName => `${toolName}: ${descMap[toolName] || '该工具的产物'}`);
+    .filter((t) => TOOL_ARTIFACT_MARKERS[t])
+    .map((toolName) => `${toolName}: ${descMap[toolName] || '该工具的产物'}`);
 
   if (artifactDescriptions.length === 0) {
     // 没有已知的产物型工具，Layer 2 无法判断，回退到 Layer 3
-    return { hasDelivered: false, confidence: 'low', reason: '无已知的产物型工具' };
+    return {
+      hasDelivered: false,
+      confidence: 'low',
+      reason: '无已知的产物型工具',
+    };
   }
 
   const compressedUser = compressForJudge(userMessage, 200);
@@ -576,7 +681,9 @@ ${artifactDescriptions.map((d, i) => `  ${i + 1}. ${d}`).join('\n')}
 {"has_delivered": true/false, "confidence": "high"/"low", "reason": "一句话理由"}`;
 
   try {
-    const llm = createLLM(buildModelConfig(getCurrentModelId(), { isFCMode: false }));
+    const llm = createLLM(
+      buildModelConfig(getCurrentModelId(), { isFCMode: false }),
+    );
     const judgePromise = llm.invoke([new HumanMessage(judgePrompt)], {
       signal: abortController?.signal,
     });
@@ -584,9 +691,10 @@ ${artifactDescriptions.map((d, i) => `  ${i + 1}. ${d}`).join('\n')}
       setTimeout(() => reject(new Error('LLM-ArtifactJudge timeout')), 5000),
     );
     const judgeResp = await Promise.race([judgePromise, timeoutPromise]);
-    const judgeText = typeof (judgeResp as any).content === 'string'
-      ? (judgeResp as any).content
-      : JSON.stringify((judgeResp as any).content);
+    const judgeText =
+      typeof (judgeResp as any).content === 'string'
+        ? (judgeResp as any).content
+        : JSON.stringify((judgeResp as any).content);
 
     const judgeSchema = z.object({
       has_delivered: z.boolean(),
@@ -597,7 +705,11 @@ ${artifactDescriptions.map((d, i) => `  ${i + 1}. ${d}`).join('\n')}
       module: 'PromptService:ArtifactJudge',
     });
     if (!parsed.success) {
-      return { hasDelivered: false, confidence: 'low', reason: `产物判断器输出无法解析: ${parsed.reason}` };
+      return {
+        hasDelivered: false,
+        confidence: 'low',
+        reason: `产物判断器输出无法解析: ${parsed.reason}`,
+      };
     }
     return {
       hasDelivered: parsed.data.has_delivered,
@@ -646,7 +758,10 @@ async function detectMouthCannonLayer3(
   // ==================== Layer 2：LLM 产物存在性判断 ====================
   if (expectedTools.length > 0) {
     const artifactResult = await llmArtifactJudge(
-      userMessage, aiResponse, expectedTools, abortController,
+      userMessage,
+      aiResponse,
+      expectedTools,
+      abortController,
     );
     if (artifactResult.confidence === 'high') {
       logger.info('防线3-Layer2：产物存在性判断完成', {
@@ -654,7 +769,10 @@ async function detectMouthCannonLayer3(
         hasDelivered: artifactResult.hasDelivered,
         reason: artifactResult.reason,
       });
-      return { isMouthCannon: !artifactResult.hasDelivered, reason: artifactResult.reason };
+      return {
+        isMouthCannon: !artifactResult.hasDelivered,
+        reason: artifactResult.reason,
+      };
     }
     // confidence='low' -> 回退到 Layer 3
     logger.debug('防线3-Layer2：置信度低，回退到 Layer 3', {
@@ -687,8 +805,10 @@ async function llmAsToolIntentJudge(
   abortController?: AbortController,
 ): Promise<{ isMouthCannon: boolean; reason: string }> {
   // 截断输入，避免长上下文影响 judge LLM 的判断
-  const truncatedUser = userMessage.length > 400 ? userMessage.slice(0, 400) + '...' : userMessage;
-  const truncatedAi = aiResponse.length > 400 ? aiResponse.slice(0, 400) + '...' : aiResponse;
+  const truncatedUser =
+    userMessage.length > 400 ? userMessage.slice(0, 400) + '...' : userMessage;
+  const truncatedAi =
+    aiResponse.length > 400 ? aiResponse.slice(0, 400) + '...' : aiResponse;
 
   const judgePrompt = `你是一个对话质量审核员。请判断下面的"AI回复"是否属于"嘴炮"。
 
@@ -708,7 +828,9 @@ AI 回复：
   try {
     // 复用主 LLM（无 tools 绑定，纯文本判断）
     // 不用 isFCMode=true，避免 tools schema 干扰；temperature 留默认值
-    const llm = createLLM(buildModelConfig(getCurrentModelId(), { isFCMode: false }));
+    const llm = createLLM(
+      buildModelConfig(getCurrentModelId(), { isFCMode: false }),
+    );
     const judgePromise = llm.invoke([new HumanMessage(judgePrompt)], {
       signal: abortController?.signal,
     });
@@ -717,9 +839,10 @@ AI 回复：
       setTimeout(() => reject(new Error('LLM-as-Judge timeout')), 5000),
     );
     const judgeResp = await Promise.race([judgePromise, timeoutPromise]);
-    const judgeText = typeof (judgeResp as any).content === 'string'
-      ? (judgeResp as any).content
-      : JSON.stringify((judgeResp as any).content);
+    const judgeText =
+      typeof (judgeResp as any).content === 'string'
+        ? (judgeResp as any).content
+        : JSON.stringify((judgeResp as any).content);
 
     // zod schema 校验 LLM 输出，替代裸 JSON.parse
     const judgeSchema = z.object({
@@ -731,7 +854,10 @@ AI 回复：
     });
     if (!parsed.success) {
       // fail-open：判断失败不阻塞主回复
-      return { isMouthCannon: false, reason: `判断器输出无法解析: ${parsed.reason}` };
+      return {
+        isMouthCannon: false,
+        reason: `判断器输出无法解析: ${parsed.reason}`,
+      };
     }
     return {
       isMouthCannon: parsed.data.is_mouth_cannon === true,
@@ -754,7 +880,10 @@ AI 回复：
  * 推理模型（如 DeepSeek-R1）会输出 <think 块，需要正确过滤掉
  * 简单的正则替换无法处理标签跨 chunk 的情况
  */
-function filterThinkTags(content: string, inThinkBlock: boolean): { text: string; inThinkBlock: boolean } {
+function filterThinkTags(
+  content: string,
+  inThinkBlock: boolean,
+): { text: string; inThinkBlock: boolean } {
   let remaining = content;
   let result = '';
   let inThink = inThinkBlock;
@@ -826,7 +955,11 @@ function estimateTokens(text: string): number {
  * search_web：使用结构化摘要（保留url，去掉engine/total，snippet完整，Top-K限制）
  * 其他工具：保持原始内容不变
  */
-function formatToolResult(toolName: string, content: string, modelId: string): string {
+function formatToolResult(
+  toolName: string,
+  content: string,
+  modelId: string,
+): string {
   if (toolName === 'search_web') {
     const parsed = parseToolResultJson(content, searchWebResultSchema, {
       module: 'PromptService:formatToolResult',
@@ -855,7 +988,10 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
       const imageCount = data.images.length;
       // 保留图片 URL，LLM 可传给 send_notification.attachments
       const imageUrlLines = data.images
-        .map((img, i: number) => `图片${imageCount > 1 ? ` ${i + 1}` : ''} URL：${img.url}`)
+        .map(
+          (img, i: number) =>
+            `图片${imageCount > 1 ? ` ${i + 1}` : ''} URL：${img.url}`,
+        )
         .join('\n');
       return `图片生成成功！共生成 ${imageCount} 张图片，实际使用模型：${data.model || '未知'}。\n${imageUrlLines}\n\n请用文字描述图片内容，并告知用户实际使用的模型名称。如果用户要求发邮件，把上面的图片 URL 传给 send_notification 的 attachments 字段即可。重要：图片已自动展示给用户，不要在回答中再输出任何 ![...](...) 格式的图片 Markdown，只需文字描述即可。`;
     }
@@ -937,10 +1073,7 @@ function formatToolResult(toolName: string, content: string, modelId: string): s
     } catch {
       // JSON 解析失败，直接清理字符串
     }
-    return content.replace(
-      /!\[[^\]]*\]\((?!https?:\/\/)([^)]+)\)/g,
-      '[图片]',
-    );
+    return content.replace(/!\[[^\]]*\]\((?!https?:\/\/)([^)]+)\)/g, '[图片]');
   }
 
   // 其他工具保持原始内容
@@ -961,14 +1094,15 @@ function computeTotalBudgetForModel(isFCMode: boolean): number {
   const systemPromptTokens = isSmallContext ? 800 : 1500;
   const toolSchemaTokens = isFCMode ? (isSmallContext ? 600 : 1500) : 0;
   const outputReserve = isSmallContext ? 800 : 2000;
-  const budget = modelCtx - systemPromptTokens - toolSchemaTokens - outputReserve;
+  const budget =
+    modelCtx - systemPromptTokens - toolSchemaTokens - outputReserve;
   return Math.max(budget, 500); // 至少保留 500
 }
 
 interface HistoryBudget {
-  maxRounds: number;        // 允许传入的历史轮数（1轮 = user + assistant）
-  budgetUsed: number;       // 已被知识库/图片占用的预算
-  budgetRemaining: number;  // 剩余可用于历史的预算
+  maxRounds: number; // 允许传入的历史轮数（1轮 = user + assistant）
+  budgetUsed: number; // 已被知识库/图片占用的预算
+  budgetRemaining: number; // 剩余可用于历史的预算
 }
 
 /**
@@ -1115,9 +1249,11 @@ function buildFCSystemPrompt(): string {
   const toolDescriptions: Record<string, string> = {
     search_knowledge_base: '搜索知识库中与查询相关的文档内容',
     search_web: '联网搜索实时信息',
-    get_weather: '查询指定城市的天气信息（实时天气、7天预报、24小时逐小时预报）',
+    get_weather:
+      '查询指定城市的天气信息（实时天气、7天预报、24小时逐小时预报）',
     calculate: '执行精确的数学计算（支持大数运算、科学计算、三角函数、对数等）',
-    manage_session: '管理用户的会话（对话），包括创建、删除、重命名、置顶/取消置顶、切换、查询列表等',
+    manage_session:
+      '管理用户的会话（对话），包括创建、删除、重命名、置顶/取消置顶、切换、查询列表等',
     create_plan: '为复杂多步骤任务创建执行计划',
     update_plan_step: '更新计划中某个步骤的状态（完成/失败/跳过）',
     get_plan: '查看当前执行计划的进度',
@@ -1126,20 +1262,25 @@ function buildFCSystemPrompt(): string {
     update_document: '更新知识库中已有文档的内容',
     summarize_document: '对指定文档生成摘要',
     compare_documents: '对比两个文档的差异',
-    generate_chart: '根据数据生成图表（折线图、柱状图、饼图等），返回 imageUrl 可嵌入邮件',
+    generate_chart:
+      '根据数据生成图表（折线图、柱状图、饼图等），返回 imageUrl 可嵌入邮件',
     generate_image: '根据文字描述生成图片（文生图）',
     create_mindmap: '生成思维导图，返回 imageUrl 可嵌入邮件',
-    generate_document: '把回复正文导出为 PDF / Word(docx) / HTML / Markdown(md) 文件；调用时只需 title + format，正文写在回复正文里由系统自动取用，生成后返回 fileUrl 可作邮件附件',
+    generate_document:
+      '把回复正文导出为 PDF / Word(docx) / HTML / Markdown(md) 文件；调用时只需 title + format，正文写在回复正文里由系统自动取用，生成后返回 fileUrl 可作邮件附件',
     // ---------------- 外部 API 集成工具（方案 A） ----------------
-    send_notification: '发送通知到飞书消息、邮件、Webhook（钉钉/企业微信群机器人），用于把任务结果主动推送给用户或团队',
-    query_database: '查询外部业务数据库（仅支持 SELECT 语句），自动经过 SQL 安全网关校验，可用于统计订单/用户/销售等业务数据',
-    mcp_proxy: '通过 MCP（Model Context Protocol）调用外部生态工具（如 GitHub、文件系统、Slack、Notion 等），用于扩展能力',
+    send_notification:
+      '发送通知到飞书消息、邮件、Webhook（钉钉/企业微信群机器人），用于把任务结果主动推送给用户或团队',
+    query_database:
+      '查询外部业务数据库（仅支持 SELECT 语句），自动经过 SQL 安全网关校验，可用于统计订单/用户/销售等业务数据',
+    mcp_proxy:
+      '通过 MCP（Model Context Protocol）调用外部生态工具（如 GitHub、文件系统、Slack、Notion 等），用于扩展能力',
   };
 
   // 工具列表
   const toolList = availableTools
-    .filter(name => toolDescriptions[name])
-    .map(name => `- ${name}：${toolDescriptions[name]}`)
+    .filter((name) => toolDescriptions[name])
+    .map((name) => `- ${name}：${toolDescriptions[name]}`)
     .join('\n');
 
   // 通用规则（始终包含）
@@ -1392,15 +1533,25 @@ async function downloadImageAsBase64(imageUrl: string): Promise<string> {
  * @returns 处理后的图片 URL（base64 或原始 URL）
  */
 async function processImageUrl(imageUrl: string): Promise<string> {
-  if (imageUrl.startsWith(`${config.serverBaseUrl}/files/`) ||
-    imageUrl.startsWith(config.serverBaseUrl.replace('http://', 'https://') + '/files/')) {
-    logger.info('检测到本地图片，开始下载', { module: 'PromptService', imageUrl });
+  if (
+    imageUrl.startsWith(`${config.serverBaseUrl}/files/`) ||
+    imageUrl.startsWith(
+      config.serverBaseUrl.replace('http://', 'https://') + '/files/',
+    )
+  ) {
+    logger.info('检测到本地图片，开始下载', {
+      module: 'PromptService',
+      imageUrl,
+    });
     try {
       const base64DataUrl = await downloadImageAsBase64(imageUrl);
       logger.info('本地图片转换成功', { module: 'PromptService' });
       return base64DataUrl;
     } catch (error) {
-      logger.error('本地图片下载失败，使用原始 URL', { module: 'PromptService', error: String(error) });
+      logger.error('本地图片下载失败，使用原始 URL', {
+        module: 'PromptService',
+        error: String(error),
+      });
       return imageUrl;
     }
   }
@@ -1416,16 +1567,23 @@ async function processImageUrl(imageUrl: string): Promise<string> {
  * @param text 用户输入的文本（可能包含 Markdown 图片语法）
  * @returns LangChain 消息内容格式（数组，包含文本和图片）
  */
-async function convertToMultimodalContent(text: string): Promise<Array<{ type: string; text?: string; image_url?: string }>> {
-  logger.debug('开始转换多模态内容', { module: 'PromptService', textLength: text.length });
+async function convertToMultimodalContent(
+  text: string,
+): Promise<Array<{ type: string; text?: string; image_url?: string }>> {
+  logger.debug('开始转换多模态内容', {
+    module: 'PromptService',
+    textLength: text.length,
+  });
 
   // 正则表达式匹配 Markdown 图片语法：![alt](url)
   const markdownImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
 
   // 如果没有匹配到图片，返回纯文本格式
   if (!markdownImageRegex.test(text)) {
-    logger.debug('未检测到 Markdown 图片语法，返回纯文本', { module: 'PromptService' });
-    return [{ type: "text", text }];
+    logger.debug('未检测到 Markdown 图片语法，返回纯文本', {
+      module: 'PromptService',
+    });
+    return [{ type: 'text', text }];
   }
 
   // 重置正则表达式的 lastIndex
@@ -1434,7 +1592,11 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
   logger.info('检测到 Markdown 图片语法', { module: 'PromptService' });
 
   // 用于存储转换后的内容块
-  const contentBlocks: Array<{ type: string; text?: string; image_url?: string }> = [];
+  const contentBlocks: Array<{
+    type: string;
+    text?: string;
+    image_url?: string;
+  }> = [];
 
   // 用于追踪已处理的文本位置
   let lastIndex = 0;
@@ -1447,7 +1609,7 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
 
     // 如果有文本内容，添加为文本块
     if (beforeText.trim()) {
-      contentBlocks.push({ type: "text", text: beforeText });
+      contentBlocks.push({ type: 'text', text: beforeText });
     }
 
     // 获取图片 URL
@@ -1455,31 +1617,41 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
     logger.debug('检测到图片 URL', { module: 'PromptService', imageUrl });
 
     // 检查是否是本地服务器的图片
-    if (imageUrl.startsWith(`${config.serverBaseUrl}/files/`) ||
-      imageUrl.startsWith(config.serverBaseUrl.replace('http://', 'https://') + '/files/')) {
+    if (
+      imageUrl.startsWith(`${config.serverBaseUrl}/files/`) ||
+      imageUrl.startsWith(
+        config.serverBaseUrl.replace('http://', 'https://') + '/files/',
+      )
+    ) {
       try {
         // 下载图片并转换为 base64 格式
         logger.info('开始下载图片并转换为 base64', { module: 'PromptService' });
         const base64DataUrl = await downloadImageAsBase64(imageUrl);
-        logger.info('图片下载并转换成功', { module: 'PromptService', base64Length: base64DataUrl.length });
+        logger.info('图片下载并转换成功', {
+          module: 'PromptService',
+          base64Length: base64DataUrl.length,
+        });
         contentBlocks.push({
-          type: "image_url",
-          image_url: base64DataUrl  // 使用 base64 数据 URL
+          type: 'image_url',
+          image_url: base64DataUrl, // 使用 base64 数据 URL
         });
       } catch (error) {
         // 如果下载失败，记录错误但仍然添加原始 URL
-        logger.error('下载图片失败', { module: 'PromptService', error: String(error) });
+        logger.error('下载图片失败', {
+          module: 'PromptService',
+          error: String(error),
+        });
         contentBlocks.push({
-          type: "image_url",
-          image_url: imageUrl  // 降级使用原始 URL
+          type: 'image_url',
+          image_url: imageUrl, // 降级使用原始 URL
         });
       }
     } else {
       // 对于外部 URL，直接使用原始 URL
       logger.debug('使用外部图片 URL', { module: 'PromptService' });
       contentBlocks.push({
-        type: "image_url",
-        image_url: imageUrl
+        type: 'image_url',
+        image_url: imageUrl,
       });
     }
 
@@ -1490,10 +1662,13 @@ async function convertToMultimodalContent(text: string): Promise<Array<{ type: s
   // 处理最后剩余的文本
   const remainingText = text.substring(lastIndex);
   if (remainingText.trim()) {
-    contentBlocks.push({ type: "text", text: remainingText });
+    contentBlocks.push({ type: 'text', text: remainingText });
   }
 
-  logger.debug('多模态内容转换完成', { module: 'PromptService', blockCount: contentBlocks.length });
+  logger.debug('多模态内容转换完成', {
+    module: 'PromptService',
+    blockCount: contentBlocks.length,
+  });
 
   return contentBlocks;
 }
@@ -1507,7 +1682,7 @@ async function createUserMessage(promptText: string): Promise<HumanMessage> {
   const content = await convertToMultimodalContent(promptText);
 
   return new HumanMessage({
-    content: content
+    content: content,
   });
 }
 
@@ -1603,20 +1778,24 @@ async function promptWithFunctionCalling(
   //       自动切回 general Agent（不限制工具），保证用户能拿到结果。
   const intentDetection = detectToolIntent(promptText || '');
   if (intentDetection.shouldForce && intentDetection.specificTool) {
-    const whitelist = routing.agent.toolWhitelist;  // general 为 undefined = 不限制
-    const toolAvailable = !whitelist || whitelist.includes(intentDetection.specificTool);
+    const whitelist = routing.agent.toolWhitelist; // general 为 undefined = 不限制
+    const toolAvailable =
+      !whitelist || whitelist.includes(intentDetection.specificTool);
     if (!toolAvailable) {
       const originalAgentRole = routing.agent.role;
       const originalAgentName = routing.agent.name;
       routing.agent = getAgent('general');
-      logger.info('FC模式：用户意图工具不在当前 Agent 白名单，fallback 到 general Agent', {
-        module: 'PromptService',
-        originalAgentRole,
-        originalAgentName,
-        fallbackAgentRole: routing.agent.role,
-        requestedTool: intentDetection.specificTool,
-        reason: intentDetection.reason,
-      });
+      logger.info(
+        'FC模式：用户意图工具不在当前 Agent 白名单，fallback 到 general Agent',
+        {
+          module: 'PromptService',
+          originalAgentRole,
+          originalAgentName,
+          fallbackAgentRole: routing.agent.role,
+          requestedTool: intentDetection.specificTool,
+          reason: intentDetection.reason,
+        },
+      );
       // 追加上下文提示，让模型知道用户原意，避免重复询问
       fcSystemPrompt += `\n\n注意：用户最初意图是调用 ${intentDetection.specificTool} 工具，请直接帮用户完成该操作。`;
     }
@@ -1633,18 +1812,26 @@ async function promptWithFunctionCalling(
 
   const currentDate = new Date();
   const dateStr = `${currentDate.getFullYear()}年${currentDate.getMonth() + 1}月${currentDate.getDate()}日`;
-  const weekDay = ['日', '一', '二', '三', '四', '五', '六'][currentDate.getDay()];
+  const weekDay = ['日', '一', '二', '三', '四', '五', '六'][
+    currentDate.getDay()
+  ];
   fcSystemPrompt += `\n\n当前日期：${dateStr} 星期${weekDay}`;
 
   if (sessionSummary && sessionSummary.trim()) {
     fcSystemPrompt += `\n\n=== 之前对话的摘要 ===\n${sessionSummary}\n=== 摘要结束 ===\n\n请注意：以上摘要是之前对话的压缩版本，请结合摘要和最近的对话来理解用户的意图。`;
-    logger.info('FC模式：已注入对话摘要', { module: 'PromptService', summaryLength: sessionSummary.length });
+    logger.info('FC模式：已注入对话摘要', {
+      module: 'PromptService',
+      summaryLength: sessionSummary.length,
+    });
   }
 
   if (userMemories && userMemories.length > 0) {
     const memoryText = userMemories.map((m, i) => `${i + 1}. ${m}`).join('\n');
     fcSystemPrompt += `\n\n=== 关于用户的记忆 ===\n以下是从历史对话中了解到的关于用户的信息，请在回答时参考：\n${memoryText}\n=== 用户记忆结束 ===`;
-    logger.info('FC模式：已注入用户记忆', { module: 'PromptService', memoryCount: userMemories.length });
+    logger.info('FC模式：已注入用户记忆', {
+      module: 'PromptService',
+      memoryCount: userMemories.length,
+    });
   }
 
   // 注入上一轮 FC 循环中已生成的多媒体资源 URL（图片/图表/思维导图）
@@ -1653,22 +1840,29 @@ async function promptWithFunctionCalling(
   const sessionAssets = await getSessionAssets(sessionId);
   if (sessionAssets) {
     fcSystemPrompt += sessionAssets;
-    logger.info('FC模式：已注入上一轮的多媒体资源 URL', { module: 'PromptService', sessionId });
+    logger.info('FC模式：已注入上一轮的多媒体资源 URL', {
+      module: 'PromptService',
+      sessionId,
+    });
   }
 
-  const messages: Array<SystemMessage | HumanMessage | AIMessage | ToolMessage> = [
-    new SystemMessage(fcSystemPrompt),
-  ];
+  const messages: Array<
+    SystemMessage | HumanMessage | AIMessage | ToolMessage
+  > = [new SystemMessage(fcSystemPrompt)];
 
   let effectiveImages = images;
   if (effectiveImages && effectiveImages.length > 0 && !supportsVision) {
-    logger.warn('当前模型不支持图片输入，已忽略图片', { module: 'PromptService', modelId: getCurrentModelId(), imageCount: effectiveImages.length });
+    logger.warn('当前模型不支持图片输入，已忽略图片', {
+      module: 'PromptService',
+      modelId: getCurrentModelId(),
+      imageCount: effectiveImages.length,
+    });
     effectiveImages = undefined;
   }
 
   const { maxRounds: MAX_ROUNDS } = computeHistoryBudget({
     totalBudget: computeTotalBudgetForModel(true),
-    knowledgeContextLength: 0,  // FC 模式知识库通过工具调用，不走 RAG 注入
+    knowledgeContextLength: 0, // FC 模式知识库通过工具调用，不走 RAG 注入
     imageCount: effectiveImages?.length || 0,
     history: history || [],
   });
@@ -1678,7 +1872,11 @@ async function promptWithFunctionCalling(
   const recentHistory = sliceHistoryByRounds(history || [], MAX_ROUNDS);
 
   if (recentHistory.length > 0) {
-    logger.info('FC模式：添加历史消息', { module: 'PromptService', historyCount: recentHistory.length, maxRounds: MAX_ROUNDS });
+    logger.info('FC模式：添加历史消息', {
+      module: 'PromptService',
+      historyCount: recentHistory.length,
+      maxRounds: MAX_ROUNDS,
+    });
     for (const msg of recentHistory) {
       if (msg.role === 'user') {
         let content: any;
@@ -1686,7 +1884,10 @@ async function promptWithFunctionCalling(
           content = [];
           for (const imgUrl of msg.images) {
             const processedUrl = await processImageUrl(imgUrl);
-            content.push({ type: 'image_url', image_url: { url: processedUrl } });
+            content.push({
+              type: 'image_url',
+              image_url: { url: processedUrl },
+            });
           }
           if (msg.content) {
             content.unshift({ type: 'text', text: msg.content });
@@ -1716,12 +1917,22 @@ async function promptWithFunctionCalling(
   }
   messages.push(new HumanMessage({ content: userContent }));
 
-  const llm = createRateLimitedLLM(buildModelConfig(getCurrentModelId(), { isFCMode: true }), 'streaming');
+  const llm = createRateLimitedLLM(
+    buildModelConfig(getCurrentModelId(), { isFCMode: true }),
+    'streaming',
+  );
   const currentModelId = getCurrentModelId();
   const caps = getModelCapabilities(currentModelId);
-  const toolSchemas = await getToolSchemasForModel(currentModelId, { contextLength: caps.contextLength, supportsFC: caps.supportsFC, query: promptText });
+  const toolSchemas = await getToolSchemasForModel(currentModelId, {
+    contextLength: caps.contextLength,
+    supportsFC: caps.supportsFC,
+    query: promptText,
+  });
   // 应用 Agent 工具白名单：在 general Agent 下不过滤，专业 Agent 下只暴露其专长工具
-  const filteredToolSchemas = applyAgentToolWhitelist(toolSchemas, routing.agent);
+  const filteredToolSchemas = applyAgentToolWhitelist(
+    toolSchemas,
+    routing.agent,
+  );
   if (!llm.bindTools) {
     throw new FCFallbackError('当前模型不支持 bindTools', '');
   }
@@ -1734,14 +1945,24 @@ async function promptWithFunctionCalling(
   //       必须用 caps.supportsToolChoice 守卫，否则整个 FC 调用会失败降级到 RAG。
   // 注意：intentDetection 已在上方"Agent 能力协商"中提前声明，此处直接复用，避免重复调用
   let toolChoiceParam: any = 'auto';
-  if (intentDetection.shouldForce && caps.supportsFC && caps.supportsToolChoice && filteredToolSchemas.length > 0) {
+  if (
+    intentDetection.shouldForce &&
+    caps.supportsFC &&
+    caps.supportsToolChoice &&
+    filteredToolSchemas.length > 0
+  ) {
     // 检查锁定的具体工具是否在白名单内（防止 Agent 路由删掉了该工具）
     const targetToolAvailable = intentDetection.specificTool
-      ? filteredToolSchemas.some(s => s?.function?.name === intentDetection.specificTool)
+      ? filteredToolSchemas.some(
+          (s) => s?.function?.name === intentDetection.specificTool,
+        )
       : false;
     if (intentDetection.specificTool && targetToolAvailable) {
       // 用户意图非常明确（如"生成一张图片"），且工具确实可用，锁定到具体工具
-      toolChoiceParam = { type: 'function', function: { name: intentDetection.specificTool } };
+      toolChoiceParam = {
+        type: 'function',
+        function: { name: intentDetection.specificTool },
+      };
       logger.info('FC模式：检测到强烈工具意图，锁定 tool_choice 到具体工具', {
         module: 'PromptService',
         tool: intentDetection.specificTool,
@@ -1754,16 +1975,20 @@ async function promptWithFunctionCalling(
       logger.info('FC模式：检测到工具意图，设置 tool_choice = required', {
         module: 'PromptService',
         reason: intentDetection.reason,
-        specificToolUnavailable: !!intentDetection.specificTool && !targetToolAvailable,
+        specificToolUnavailable:
+          !!intentDetection.specificTool && !targetToolAvailable,
       });
     }
   } else if (intentDetection.shouldForce && !caps.supportsToolChoice) {
     // 模型不支持 tool_choice，但仍记录意图，由防线 2/3 兜底
-    logger.info('FC模式：检测到工具意图但当前模型不支持 tool_choice，跳过强制（依赖防线 2/3 兜底）', {
-      module: 'PromptService',
-      reason: intentDetection.reason,
-      modelId: getCurrentModelId(),
-    });
+    logger.info(
+      'FC模式：检测到工具意图但当前模型不支持 tool_choice，跳过强制（依赖防线 2/3 兜底）',
+      {
+        module: 'PromptService',
+        reason: intentDetection.reason,
+        modelId: getCurrentModelId(),
+      },
+    );
   }
 
   // ==================== 知识库强制调用：防止 LLM 跳过知识库直接编造 ====================
@@ -1771,14 +1996,27 @@ async function promptWithFunctionCalling(
   //       不调 search_knowledge_base 就直接用训练数据回答 → 幻觉。
   // 方案：当 search_knowledge_base 可用且用户消息是实质问题时，强制首轮调用它。
   //       LLM 必须先查知识库，拿到结果后再回答——有结果就基于结果，没结果就说"未找到"。
-  if (toolChoiceParam === 'auto' && caps.supportsFC && caps.supportsToolChoice && filteredToolSchemas.length > 0) {
-    const hasKBTool = filteredToolSchemas.some(s => s?.function?.name === 'search_knowledge_base');
+  if (
+    toolChoiceParam === 'auto' &&
+    caps.supportsFC &&
+    caps.supportsToolChoice &&
+    filteredToolSchemas.length > 0
+  ) {
+    const hasKBTool = filteredToolSchemas.some(
+      (s) => s?.function?.name === 'search_knowledge_base',
+    );
     if (hasKBTool && isSubstantiveQuery(promptText || '')) {
-      toolChoiceParam = { type: 'function', function: { name: 'search_knowledge_base' } };
-      logger.info('FC模式：强制首轮调用 search_knowledge_base（防止跳过知识库编造）', {
-        module: 'PromptService',
-        reason: '用户消息是实质性问题，且知识库工具可用',
-      });
+      toolChoiceParam = {
+        type: 'function',
+        function: { name: 'search_knowledge_base' },
+      };
+      logger.info(
+        'FC模式：强制首轮调用 search_knowledge_base（防止跳过知识库编造）',
+        {
+          module: 'PromptService',
+          reason: '用户消息是实质性问题，且知识库工具可用',
+        },
+      );
     }
   }
 
@@ -1793,19 +2031,29 @@ async function promptWithFunctionCalling(
   //       检测——否则模型正常回复"你好，有什么可以帮你"会被误判为嘴炮，强制重试
   //       后模型被迫调用工具，越弄越糟。
   let greetingRound = false;
-  if (toolChoiceParam === 'auto' && caps.supportsFC && isPureGreeting(promptText || '')) {
+  if (
+    toolChoiceParam === 'auto' &&
+    caps.supportsFC &&
+    isPureGreeting(promptText || '')
+  ) {
     greetingRound = true;
     if (caps.supportsToolChoice) {
       toolChoiceParam = 'none';
-      logger.info('FC模式：检测到纯寒暄，禁用首轮工具调用（tool_choice=none）', {
-        module: 'PromptService',
-        preview: (promptText || '').slice(0, 30),
-      });
+      logger.info(
+        'FC模式：检测到纯寒暄，禁用首轮工具调用（tool_choice=none）',
+        {
+          module: 'PromptService',
+          preview: (promptText || '').slice(0, 30),
+        },
+      );
     } else {
-      logger.info('FC模式：检测到纯寒暄（模型不支持 tool_choice，跳过防嘴炮检测）', {
-        module: 'PromptService',
-        preview: (promptText || '').slice(0, 30),
-      });
+      logger.info(
+        'FC模式：检测到纯寒暄（模型不支持 tool_choice，跳过防嘴炮检测）',
+        {
+          module: 'PromptService',
+          preview: (promptText || '').slice(0, 30),
+        },
+      );
     }
   }
 
@@ -1814,8 +2062,8 @@ async function promptWithFunctionCalling(
   // 注意：tool_choice='required' 或锁定具体工具，仅应在"首轮模型调用"生效，
   //   否则后续轮次模型也被强制反复调工具，会死循环。
   //   因此我们额外维护一个 'auto' 版本的 llmWithToolsAuto，从第二轮起切换。
-  let llmWithTools;       // 首轮用（可能带 required / 锁定工具）
-  let llmWithToolsAuto;   // 第二轮起用（始终 auto），避免死循环
+  let llmWithTools; // 首轮用（可能带 required / 锁定工具）
+  let llmWithToolsAuto; // 第二轮起用（始终 auto），避免死循环
   try {
     if (!caps.supportsFC) {
       llmWithTools = llm.bindTools(filteredToolSchemas);
@@ -1830,11 +2078,14 @@ async function promptWithFunctionCalling(
       }
       llmWithToolsAuto = llmWithTools;
     } else {
-      llmWithTools = llm.bindTools(filteredToolSchemas, { tool_choice: toolChoiceParam });
+      llmWithTools = llm.bindTools(filteredToolSchemas, {
+        tool_choice: toolChoiceParam,
+      });
       // 仅当首轮真的设置了非 auto 的 toolChoiceParam 时才需要单独的 auto 版本
-      llmWithToolsAuto = toolChoiceParam === 'auto'
-        ? llmWithTools
-        : llm.bindTools(filteredToolSchemas, { tool_choice: 'auto' });
+      llmWithToolsAuto =
+        toolChoiceParam === 'auto'
+          ? llmWithTools
+          : llm.bindTools(filteredToolSchemas, { tool_choice: 'auto' });
     }
   } catch (bindError: any) {
     logger.warn('FC模式：bindTools 失败，降级到RAG注入模式', {
@@ -1847,9 +2098,9 @@ async function promptWithFunctionCalling(
 
   const MAX_TOOL_ITERATIONS = 10;
   const MAX_NO_PROGRESS_ROUNDS = 2; // 连续无进展轮数上限
-  let noProgressCount = 0;          // 连续无进展计数器
-  let stoppedByNoProgress = false;  // 是否由无进展检测触发退出
-  let toolCallsMade: Array<{ name: string; args: any }> = [];
+  let noProgressCount = 0; // 连续无进展计数器
+  let stoppedByNoProgress = false; // 是否由无进展检测触发退出
+  const toolCallsMade: Array<{ name: string; args: any }> = [];
   // 语义去重追踪器：检测同一工具用相似参数反复调用（如换措辞查知识库）
   const semanticDedupTracker = new SemanticDedupTracker();
   // 检索结果去重追踪器：检测连续两次检索返回高度重叠的文档（防"换关键词查同一批文档"）
@@ -1866,10 +2117,31 @@ async function promptWithFunctionCalling(
   const fcRetrievedDocIds = new Set<string>();
   const fcRetrievedContexts: string[] = [];
   const fcSeenContexts = new Set<string>();
-  let collectedImages: Array<{ url: string; alt: string }> = []; // 收集工具生成的图片
-  let collectedMindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }> = []; // 收集工具生成的思维导图
-  let collectedChartOptions: Array<{ option: any; chartType?: string; imageUrl?: string }> = []; // 收集工具生成的图表 ECharts option
-  let collectedFileCards: Array<{ key: string; filename: string; format: string; sizeBytes: number; downloadUrl: string; previewUrl: string; expiresAt: number; favorited: boolean }> = []; // 收集 generate_document 生成的文件卡片
+  // 引用来源映射（FC 主路径可验证生成）：【文档 N】编号 → 文档元数据。
+  // 与 fcRetrievedContexts 同一循环、同一去重条件产出，编号严格同源；
+  // 流结束后 resolveCitations 据此把模型输出的（【文档 X】）解析为引用列表推给前端
+  const fcDocSources: DocSource[] = [];
+  const collectedImages: Array<{ url: string; alt: string }> = []; // 收集工具生成的图片
+  const collectedMindmaps: Array<{
+    mermaidCode: string;
+    title: string;
+    imageUrl?: string;
+  }> = []; // 收集工具生成的思维导图
+  const collectedChartOptions: Array<{
+    option: any;
+    chartType?: string;
+    imageUrl?: string;
+  }> = []; // 收集工具生成的图表 ECharts option
+  const collectedFileCards: Array<{
+    key: string;
+    filename: string;
+    format: string;
+    sizeBytes: number;
+    downloadUrl: string;
+    previewUrl: string;
+    expiresAt: number;
+    favorited: boolean;
+  }> = []; // 收集 generate_document 生成的文件卡片
   // P1：请求级文档导出意图（每次请求独立创建，绝不放到模块作用域，避免并发请求互相污染）。
   // 模型调用 generate_document 只给 title + format 时登记在这里，流式结束后用本轮回复正文落盘。
   const docIntents: GenerateDocumentIntent[] = [];
@@ -1878,7 +2150,11 @@ async function promptWithFunctionCalling(
   // invoke 循环与流式期 DSML 解析执行两条路径共用，保证资产收集口径一致。
   const collectToolAssets = (toolName: string, result: any): void => {
     // 收集图片生成结果，流式输出时直接注入到前端
-    if (toolName === 'generate_image' && result?.type === 'image' && result?.images) {
+    if (
+      toolName === 'generate_image' &&
+      result?.type === 'image' &&
+      result?.images
+    ) {
       for (const img of result.images) {
         if (img.url) {
           collectedImages.push({ url: img.url, alt: '生成的图片' });
@@ -1888,12 +2164,24 @@ async function promptWithFunctionCalling(
 
     // 收集图表 echartsOption：稍后注入 ```echarts 代码块给前端渲染（交互式图表）
     if (toolName === 'generate_chart' && result?.echartsOption) {
-      collectedChartOptions.push({ option: result.echartsOption, chartType: result.chartType, imageUrl: result?.imageUrl });
+      collectedChartOptions.push({
+        option: result.echartsOption,
+        chartType: result.chartType,
+        imageUrl: result?.imageUrl,
+      });
     }
 
     // 收集思维导图结果，流式输出时直接注入到前端
-    if (toolName === 'create_mindmap' && result?.type === 'mindmap' && result?.mermaidCode) {
-      collectedMindmaps.push({ mermaidCode: result.mermaidCode, title: result.title, imageUrl: result?.imageUrl });
+    if (
+      toolName === 'create_mindmap' &&
+      result?.type === 'mindmap' &&
+      result?.mermaidCode
+    ) {
+      collectedMindmaps.push({
+        mermaidCode: result.mermaidCode,
+        title: result.title,
+        imageUrl: result?.imageUrl,
+      });
     }
 
     // 收集 generate_document 生成的文件卡片：稍后通过 SSE file_card 事件推送。
@@ -1941,7 +2229,10 @@ async function promptWithFunctionCalling(
     }
   }
 
-  logger.info('FC模式：开始工具调用循环', { module: 'PromptService', modelId: getCurrentModelId() });
+  logger.info('FC模式：开始工具调用循环', {
+    module: 'PromptService',
+    modelId: getCurrentModelId(),
+  });
 
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     if (isCancelled && isCancelled()) {
@@ -1957,7 +2248,7 @@ async function promptWithFunctionCalling(
         module: 'PromptService',
         iteration: iteration + 1,
         noProgressCount,
-        toolCallsMade: toolCallsMade.map(tc => tc.name),
+        toolCallsMade: toolCallsMade.map((tc) => tc.name),
       });
       stoppedByNoProgress = true;
       break;
@@ -1965,7 +2256,11 @@ async function promptWithFunctionCalling(
 
     let iterationHadProgress = false; // 本轮工具调用是否有任何进展
 
-    logger.info('FC模式：调用模型', { module: 'PromptService', iteration: iteration + 1, messageCount: messages.length });
+    logger.info('FC模式：调用模型', {
+      module: 'PromptService',
+      iteration: iteration + 1,
+      messageCount: messages.length,
+    });
 
     // 通知客户端：模型正在思考
     sendToolStatus(res, 'thinking', 'calling', { iteration: iteration + 1 });
@@ -1979,7 +2274,10 @@ async function promptWithFunctionCalling(
         signal: abortController?.signal,
       });
     } catch (invokeError: any) {
-      if (invokeError.name === 'AbortError' || invokeError.code === 'ABORT_ERR') {
+      if (
+        invokeError.name === 'AbortError' ||
+        invokeError.code === 'ABORT_ERR'
+      ) {
         logger.info('FC模式：LLM调用被中断', { module: 'PromptService' });
         stopHeartbeat(heartbeatTimer);
         if (res && !res.writableEnded) res.end();
@@ -1988,13 +2286,18 @@ async function promptWithFunctionCalling(
 
       // 终极安全网：如果 provider 不支持 tool_choice（如 DeepSeek Thinking mode 报 400），
       // 自动创建无 tool_choice 绑定重试一次，覆盖所有未知模型
-      const isToolChoiceError = /tool_choice/i.test(invokeError.message || invokeError.toString());
+      const isToolChoiceError = /tool_choice/i.test(
+        invokeError.message || invokeError.toString(),
+      );
       if (isToolChoiceError) {
-        logger.warn('FC模式：LLM 调用报 tool_choice 错误，自动重试无 tool_choice', {
-          module: 'PromptService',
-          error: invokeError.message,
-          modelId: getCurrentModelId(),
-        });
+        logger.warn(
+          'FC模式：LLM 调用报 tool_choice 错误，自动重试无 tool_choice',
+          {
+            module: 'PromptService',
+            error: invokeError.message,
+            modelId: getCurrentModelId(),
+          },
+        );
         try {
           const llmNoToolChoice = llm.bindTools(filteredToolSchemas);
           response = await llmNoToolChoice.invoke(messages, {
@@ -2003,7 +2306,9 @@ async function promptWithFunctionCalling(
           // 同时修正常驻绑定，避免后续迭代再次失败
           llmWithTools = llmNoToolChoice;
           llmWithToolsAuto = llmNoToolChoice;
-          logger.info('FC模式：无 tool_choice 重试成功', { module: 'PromptService' });
+          logger.info('FC模式：无 tool_choice 重试成功', {
+            module: 'PromptService',
+          });
         } catch (retryError: any) {
           logger.error('FC模式：无 tool_choice 重试也失败，降级到 RAG', {
             module: 'PromptService',
@@ -2012,7 +2317,10 @@ async function promptWithFunctionCalling(
           throw new FCFallbackError(retryError.message, fcKnowledgeBaseResult);
         }
       } else {
-        logger.error('FC模式：LLM调用失败，降级到RAG注入模式', { module: 'PromptService', error: invokeError.message });
+        logger.error('FC模式：LLM调用失败，降级到RAG注入模式', {
+          module: 'PromptService',
+          error: invokeError.message,
+        });
         throw new FCFallbackError(invokeError.message, fcKnowledgeBaseResult);
       }
     }
@@ -2024,7 +2332,8 @@ async function promptWithFunctionCalling(
     // 直接解析文本构造 tool_calls 走正常执行路径，而不是重试赌模型改用原生 FC
     // （不支持原生 FC 的模型重试永远失败，10 轮全废后 DSML 泄漏给用户）
     if (!aiMessage.tool_calls || aiMessage.tool_calls.length === 0) {
-      const rawText = typeof aiMessage.content === 'string' ? aiMessage.content : '';
+      const rawText =
+        typeof aiMessage.content === 'string' ? aiMessage.content : '';
       const dsmlCalls = parseDSMLToolCalls(rawText, getAvailableToolNames());
       if (dsmlCalls.length > 0) {
         aiMessage.tool_calls = dsmlCalls.map((c, i) => ({
@@ -2037,12 +2346,16 @@ async function promptWithFunctionCalling(
         logger.info('FC模式：从 DSML 文本解析出工具调用，走正常执行路径', {
           module: 'PromptService',
           iteration: iteration + 1,
-          parsedCalls: dsmlCalls.map(c => ({ name: c.name, args: JSON.stringify(c.args).substring(0, 100) })),
+          parsedCalls: dsmlCalls.map((c) => ({
+            name: c.name,
+            args: JSON.stringify(c.args).substring(0, 100),
+          })),
         });
       }
     }
 
-    const hasToolCalls = aiMessage.tool_calls && aiMessage.tool_calls.length > 0;
+    const hasToolCalls =
+      aiMessage.tool_calls && aiMessage.tool_calls.length > 0;
 
     logger.info('FC模式：模型响应分析', {
       module: 'PromptService',
@@ -2050,7 +2363,8 @@ async function promptWithFunctionCalling(
       hasToolCalls,
       toolCallCount: aiMessage.tool_calls?.length || 0,
       contentType: typeof aiMessage.content,
-      contentLength: typeof aiMessage.content === 'string' ? aiMessage.content.length : -1,
+      contentLength:
+        typeof aiMessage.content === 'string' ? aiMessage.content.length : -1,
       responseKeys: Object.keys(response || {}),
     });
 
@@ -2076,21 +2390,29 @@ async function promptWithFunctionCalling(
       // 语义去重：同一工具用相似参数（如换措辞查知识库）的调用拦截
       // 在精确去重之后、熔断之前执行，提前拦截避免浪费 API 调用
       const semanticFilteredCalls = deduplicatedCalls.filter((toolCall) => {
-        const dupResult = semanticDedupTracker.check(sessionId || '', toolCall.name, toolCall.args);
+        const dupResult = semanticDedupTracker.check(
+          sessionId || '',
+          toolCall.name,
+          toolCall.args,
+        );
         if (dupResult.isDuplicate) {
           logger.info('FC模式：语义去重拦截，返回提示让模型基于已有信息回答', {
             module: 'PromptService',
             toolName: toolCall.name,
             similarity: Number(dupResult.similarity.toFixed(3)),
           });
-          messages.push(new ToolMessage({
-            content: JSON.stringify({
-              error: false,
-              message: `你上一轮已查询过相似内容（相似度 ${(dupResult.similarity * 100).toFixed(0)}%），请勿用相似关键词重复查询。请直接基于已有信息回答用户问题。`,
+          messages.push(
+            new ToolMessage({
+              content: JSON.stringify({
+                error: false,
+                message: `你上一轮已查询过相似内容（相似度 ${(dupResult.similarity * 100).toFixed(0)}%），请勿用相似关键词重复查询。请直接基于已有信息回答用户问题。`,
+              }),
+              tool_call_id:
+                toolCall.id ||
+                `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+              name: toolCall.name,
             }),
-            tool_call_id: toolCall.id || `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-            name: toolCall.name,
-          }));
+          );
           return false;
         }
         return true;
@@ -2120,11 +2442,19 @@ async function promptWithFunctionCalling(
           maxTotal: MAX_TOTAL_TOOL_CALLS,
         });
         for (const toolCall of semanticFilteredCalls) {
-          messages.push(new ToolMessage({
-            content: JSON.stringify({ error: true, message: '工具调用总次数已达上限，请基于已有信息直接回答用户问题，不要再调用任何工具。' }),
-            tool_call_id: toolCall.id || `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-            name: toolCall.name,
-          }));
+          messages.push(
+            new ToolMessage({
+              content: JSON.stringify({
+                error: true,
+                message:
+                  '工具调用总次数已达上限，请基于已有信息直接回答用户问题，不要再调用任何工具。',
+              }),
+              tool_call_id:
+                toolCall.id ||
+                `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+              name: toolCall.name,
+            }),
+          );
         }
         continue; // 继续下一轮迭代，模型会看到失败结果后生成最终回答
       }
@@ -2140,11 +2470,18 @@ async function promptWithFunctionCalling(
             maxPerTool: MAX_PER_TOOL,
           });
           // 为被熔断的工具调用添加失败 ToolMessage
-          messages.push(new ToolMessage({
-            content: JSON.stringify({ error: true, message: `工具 ${toolCall.name} 调用次数已达上限，请基于已有信息回答。` }),
-            tool_call_id: toolCall.id || `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-            name: toolCall.name,
-          }));
+          messages.push(
+            new ToolMessage({
+              content: JSON.stringify({
+                error: true,
+                message: `工具 ${toolCall.name} 调用次数已达上限，请基于已有信息回答。`,
+              }),
+              tool_call_id:
+                toolCall.id ||
+                `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+              name: toolCall.name,
+            }),
+          );
           return false;
         }
         return true;
@@ -2157,7 +2494,9 @@ async function promptWithFunctionCalling(
 
       // 并行执行所有工具调用，减少总等待时间
       const toolCallPromises = circuitBrokenCalls.map(async (toolCall) => {
-        const toolCallId = toolCall.id || `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        const toolCallId =
+          toolCall.id ||
+          `tc_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
         logger.info('FC模式：执行工具调用', {
           module: 'PromptService',
           iteration: iteration + 1,
@@ -2222,8 +2561,16 @@ async function promptWithFunctionCalling(
         }
 
         try {
-          const result = await executeTool(toolCall.name, effectiveArgs, { userId, sessionId, res, imageModel, originalQuery: promptText, docIntents });
-          const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+          const result = await executeTool(toolCall.name, effectiveArgs, {
+            userId,
+            sessionId,
+            res,
+            imageModel,
+            originalQuery: promptText,
+            docIntents,
+          });
+          const resultStr =
+            typeof result === 'string' ? result : JSON.stringify(result);
 
           // 数据绑定：将工具结果存入匹配的计划步骤的 output 字段，供后续步骤引用
           if (matchedStepId !== undefined && sessionId) {
@@ -2241,7 +2588,13 @@ async function promptWithFunctionCalling(
           // 通知客户端：工具执行完成
           sendToolStatus(res, toolCall.name, 'done');
 
-          return { toolCall, toolCallId, success: true, content: resultStr, result };
+          return {
+            toolCall,
+            toolCallId,
+            success: true,
+            content: resultStr,
+            result,
+          };
         } catch (toolError: any) {
           logger.error('FC模式：工具执行失败，构造错误 ToolMessage', {
             module: 'PromptService',
@@ -2254,7 +2607,10 @@ async function promptWithFunctionCalling(
             toolCall,
             toolCallId,
             success: false,
-            content: JSON.stringify({ error: true, message: `工具执行失败: ${toolError.message}` }),
+            content: JSON.stringify({
+              error: true,
+              message: `工具执行失败: ${toolError.message}`,
+            }),
             result: null,
           };
         }
@@ -2263,20 +2619,34 @@ async function promptWithFunctionCalling(
       const toolResults = await Promise.all(toolCallPromises);
 
       // 按顺序处理结果，构造 ToolMessage 和收集元数据
-      for (const { toolCall, toolCallId, success, content, result } of toolResults) {
+      for (const {
+        toolCall,
+        toolCallId,
+        success,
+        content,
+        result,
+      } of toolResults) {
         // Layer 2 检索结果去重：若本次检索与历史高度重叠，生成的警告文本（追加到 ToolMessage）
         let overlapWarning: string | null = null;
         // 只在工具实际执行成功时记录到 metadata
         if (success) {
           toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
           // 记录到语义去重追踪器，供后续轮次比对
-          semanticDedupTracker.record(sessionId || '', toolCall.name, toolCall.args);
+          semanticDedupTracker.record(
+            sessionId || '',
+            toolCall.name,
+            toolCall.args,
+          );
           iterationHadProgress = true; // 本轮有工具调用成功
         }
 
         if (success && result) {
           // 收集 manage_session 返回的前端操作指令
-          if (toolCall.name === 'manage_session' && result?.frontend_action && !sessionAction) {
+          if (
+            toolCall.name === 'manage_session' &&
+            result?.frontend_action &&
+            !sessionAction
+          ) {
             sessionAction = result.frontend_action;
             logger.info('FC模式：收集到前端会话操作指令', {
               module: 'PromptService',
@@ -2291,8 +2661,12 @@ async function promptWithFunctionCalling(
             fcKnowledgeBaseResult = content;
 
             // 检测当前检索结果是否与历史结果高度重叠（防"换关键词查同一批文档"）
-            const kbResults: Array<{ documentId?: string; content?: string }> =
-              Array.isArray(result?.results) ? result.results : [];
+            const kbResults: Array<{
+              documentId?: string;
+              content?: string;
+              source?: string;
+              metadata?: Record<string, any>;
+            }> = Array.isArray(result?.results) ? result.results : [];
             const overlapResult = searchResultDedupTracker.check(
               sessionId || '',
               (toolCall.args?.query as string) || '',
@@ -2300,13 +2674,16 @@ async function promptWithFunctionCalling(
             );
             if (overlapResult.isHighOverlap) {
               overlapWarning = `【检索去重提示】你上一轮已检索到 ${overlapResult.overlapCount} 篇相同文档（重叠率 ${(overlapResult.overlapRate * 100).toFixed(0)}%），请勿用不同关键词重复检索同一批内容。请直接基于已有信息回答用户问题。`;
-              logger.info('FC模式：检索结果去重检测到高度重叠，追加警告到 ToolMessage', {
-                module: 'PromptService',
-                toolName: toolCall.name,
-                overlapRate: Number(overlapResult.overlapRate.toFixed(3)),
-                overlapCount: overlapResult.overlapCount,
-                currentCount: overlapResult.currentCount,
-              });
+              logger.info(
+                'FC模式：检索结果去重检测到高度重叠，追加警告到 ToolMessage',
+                {
+                  module: 'PromptService',
+                  toolName: toolCall.name,
+                  overlapRate: Number(overlapResult.overlapRate.toFixed(3)),
+                  overlapCount: overlapResult.overlapCount,
+                  currentCount: overlapResult.currentCount,
+                },
+              );
             }
             // 记录本次检索结果指纹，供后续轮次比对
             searchResultDedupTracker.record(
@@ -2321,6 +2698,23 @@ async function promptWithFunctionCalling(
               if (ctx && !fcSeenContexts.has(ctx)) {
                 fcSeenContexts.add(ctx);
                 fcRetrievedContexts.push(ctx);
+                // 引用来源与上文 fcRetrievedContexts 严格同源：同一去重分支内产出编号，
+                // 保证【文档 N】↔ 片段映射不错位。title 退化链：documentTitle → source → 文档 N
+                const srcMeta = r.metadata;
+                const docIdx = fcDocSources.length + 1;
+                fcDocSources.push({
+                  index: docIdx,
+                  documentId:
+                    r.documentId ||
+                    (typeof r.source === 'string' && r.source) ||
+                    `fc-${docIdx}`,
+                  title:
+                    (typeof srcMeta?.documentTitle === 'string' &&
+                      srcMeta.documentTitle) ||
+                    (typeof r.source === 'string' && r.source) ||
+                    `文档 ${docIdx}`,
+                  snippet: ctx.length > 120 ? `${ctx.slice(0, 120)}...` : ctx,
+                });
               }
             }
           }
@@ -2330,16 +2724,37 @@ async function promptWithFunctionCalling(
         }
 
         // 构造最终 content：如果有检索重叠警告，追加到结果末尾提示模型
-        let finalContent = success ? formatToolResult(toolCall.name, content, getCurrentModelId()) : content;
+        let finalContent = success
+          ? formatToolResult(toolCall.name, content, getCurrentModelId())
+          : content;
         if (overlapWarning) {
           finalContent = `${finalContent}\n\n${overlapWarning}`;
         }
+        // 引用编号对照 + 标注规则（FC 主路径可验证生成）：
+        // 工具结果是多轮动态到达的，没有统一参考资料块，因此在每轮检索的 ToolMessage 末尾
+        // 追加全量【文档 N】↔ 片段对照（fcDocSources 已跨轮去重，编号累计稳定），
+        // 模型生成最终回答时按对照表标注（【文档 X】），流结束后 resolveCitations 据此解析。
+        // 对照表片段截断为 120 字（完整内容已在工具结果原文里，此处仅供编号定位）。
+        // 加 res 判定：headless 非流式路径（bench 评测）不注入，保证评测基线行为不因本功能漂移
+        if (
+          toolCall.name === 'search_knowledge_base' &&
+          success &&
+          fcDocSources.length > 0 &&
+          res
+        ) {
+          const citationGuide = fcDocSources
+            .map((s) => `【文档 ${s.index}】${s.title}：${s.snippet}`)
+            .join('\n');
+          finalContent += `\n\n=== 引用编号对照（当前已检索到的全部片段） ===\n${citationGuide}\n=== 回答规则：最终回答中每个依据句/段落末尾用（【文档 X】）标注来源，涉及多个来源写（【文档 1】【文档 3】）。编号必须来自上述对照表，不得编造 ===`;
+        }
 
-        messages.push(new ToolMessage({
-          content: finalContent,
-          tool_call_id: toolCallId,
-          name: toolCall.name,
-        }));
+        messages.push(
+          new ToolMessage({
+            content: finalContent,
+            tool_call_id: toolCallId,
+            name: toolCall.name,
+          }),
+        );
       }
 
       logger.info('FC模式：本轮工具调用完成，继续下一轮模型调用', {
@@ -2358,13 +2773,17 @@ async function promptWithFunctionCalling(
     } else {
       // 检测模型输出疑似工具调用意图的文本（如"调用 search_web"）
       // 策略：只检测"明确说要调用工具但没调"的情况，不检测"描述已有结果"的情况
-      const textContent = typeof aiMessage.content === 'string' ? aiMessage.content : '';
+      const textContent =
+        typeof aiMessage.content === 'string' ? aiMessage.content : '';
       const toolNamePattern = getAvailableToolNames().join('|');
 
       // 第一类：模型明确说要调用某个工具但没实际调用（始终检测）
       // 例如："调用 search_web 工具"、"使用 generate_image 来生成"
       const explicitIntent = toolNamePattern
-        ? new RegExp(`(?:调用|使用|执行|运行)\\s*(?:工具)?\\s*(?:${toolNamePattern})`, 'i').test(textContent)
+        ? new RegExp(
+            `(?:调用|使用|执行|运行)\\s*(?:工具)?\\s*(?:${toolNamePattern})`,
+            'i',
+          ).test(textContent)
         : false;
 
       // ==================== 防嘴炮·防线 2：宽松正则 + 复用意图检测 ====================
@@ -2375,34 +2794,56 @@ async function promptWithFunctionCalling(
       // 这种情况不算嘴炮，应放行让前端展示给用户
       const isAskingUser = /[?？]\s*$/.test(textContent.trim());
       // 复用 detectToolIntent（防线 1 同款逻辑），保证两处判断口径一致
-      const aiTextIntent = !alreadyUsedTools && !isAskingUser ? detectToolIntent(textContent) : null;
+      const aiTextIntent =
+        !alreadyUsedTools && !isAskingUser
+          ? detectToolIntent(textContent)
+          : null;
       // 兜底正则：捕捉 detectToolIntent 漏掉的"自我宣言"模式
       // 这些是 LLM"嘴炮"的典型话术，覆盖 90% 中文 LLM 行为
-      const selfDeclarationPattern = !alreadyUsedTools && !isAskingUser && (
+      const selfDeclarationPattern =
+        !alreadyUsedTools &&
+        !isAskingUser &&
         // 1. "我(来|会|将|马上|这就|这便|稍等)... 生成/画/创建/做"
-        /(?:我(?:来|会|将|马上|这就|这便|稍等|帮你|给你|为你|来给你|来帮你)).{0,30}(?:生成|画|绘制|创建|制作|做|输出|展示|展现|设计|准备)/i.test(textContent)
-        // 2. "让我... 先/来 + 调用/试试/帮你/给你"
-        || /(?:让我|请允许我|稍等).{0,15}(?:先|来|帮你|给你|尝试|试试|调用)/i.test(textContent)
-        // 3. "下面(是|为你|给你)..."、"接下来(我会)..."、"现在(开始)..."（嘴炮但还没动）
-        || /(?:下面|接下来|现在|马上).{0,10}(?:是|为|给|开始|就).{0,20}(?:生成|创建|制作|画|绘制|展示|输出|演示)/i.test(textContent)
-        // 4. "需要/可以... 工具/调用 + 帮你..."
-        || /(?:需要|可以|能够).{0,10}(?:调用|使用).{0,10}(?:工具|功能|api|插件)/i.test(textContent)
-        // 5. 英文兜底
-        || /\b(?:i(?:'ll| will| am going to| can| shall)|let me|i'm going to)\b.{0,30}(?:generate|create|make|draw|design|build|use.{0,5}tool|call.{0,5}function)/i.test(textContent)
-      );
-      const implicitIntent = (aiTextIntent?.shouldForce ?? false) || selfDeclarationPattern;
+        (/(?:我(?:来|会|将|马上|这就|这便|稍等|帮你|给你|为你|来给你|来帮你)).{0,30}(?:生成|画|绘制|创建|制作|做|输出|展示|展现|设计|准备)/i.test(
+          textContent,
+        ) ||
+          // 2. "让我... 先/来 + 调用/试试/帮你/给你"
+          /(?:让我|请允许我|稍等).{0,15}(?:先|来|帮你|给你|尝试|试试|调用)/i.test(
+            textContent,
+          ) ||
+          // 3. "下面(是|为你|给你)..."、"接下来(我会)..."、"现在(开始)..."（嘴炮但还没动）
+          /(?:下面|接下来|现在|马上).{0,10}(?:是|为|给|开始|就).{0,20}(?:生成|创建|制作|画|绘制|展示|输出|演示)/i.test(
+            textContent,
+          ) ||
+          // 4. "需要/可以... 工具/调用 + 帮你..."
+          /(?:需要|可以|能够).{0,10}(?:调用|使用).{0,10}(?:工具|功能|api|插件)/i.test(
+            textContent,
+          ) ||
+          // 5. 英文兜底
+          /\b(?:i(?:'ll| will| am going to| can| shall)|let me|i'm going to)\b.{0,30}(?:generate|create|make|draw|design|build|use.{0,5}tool|call.{0,5}function)/i.test(
+            textContent,
+          ));
+      const implicitIntent =
+        (aiTextIntent?.shouldForce ?? false) || selfDeclarationPattern;
 
       const suspectedIntent = explicitIntent || implicitIntent;
 
-      if (!greetingRound && suspectedIntent && iteration < MAX_TOOL_ITERATIONS - 1) {
+      if (
+        !greetingRound &&
+        suspectedIntent &&
+        iteration < MAX_TOOL_ITERATIONS - 1
+      ) {
         logger.info('FC模式：检测到疑似工具调用意图文本，添加提示重试', {
           module: 'PromptService',
           textPreview: textContent.substring(0, 200),
         });
         messages.push(aiMessage);
-        messages.push(new HumanMessage({
-          content: '请直接使用工具调用功能来执行上述操作，而不是用文字描述。如果你需要调用工具，请使用正确的工具调用格式。',
-        }));
+        messages.push(
+          new HumanMessage({
+            content:
+              '请直接使用工具调用功能来执行上述操作，而不是用文字描述。如果你需要调用工具，请使用正确的工具调用格式。',
+          }),
+        );
         continue; // 继续下一轮迭代
       }
 
@@ -2410,16 +2851,24 @@ async function promptWithFunctionCalling(
       // 如果前两道防线都没命中，但模型既没调用工具又输出了较长内容（>30 字符）
       // 且当前对话开头还没动过任何工具，可能是被前面正则漏掉的嘴炮形式。
       // isAskingUser 时跳过：反问句几乎不会是嘴炮，省一次 LLM 调用
-      const shouldRunJudge = !alreadyUsedTools
-        && !isAskingUser
-        && textContent.length > 30
-        && iteration < MAX_TOOL_ITERATIONS - 1;
+      const shouldRunJudge =
+        !alreadyUsedTools &&
+        !isAskingUser &&
+        textContent.length > 30 &&
+        iteration < MAX_TOOL_ITERATIONS - 1;
       if (shouldRunJudge) {
         // 检查是否已被取消，避免在用户中断后还跑 judge
         if (isCancelled && isCancelled()) {
-          logger.info('FC模式：防线3跳过（已取消）', { module: 'PromptService' });
+          logger.info('FC模式：防线3跳过（已取消）', {
+            module: 'PromptService',
+          });
         } else {
-          const judgeResult = await detectMouthCannonLayer3(promptText || '', textContent, intentDetection, abortController);
+          const judgeResult = await detectMouthCannonLayer3(
+            promptText || '',
+            textContent,
+            intentDetection,
+            abortController,
+          );
           if (judgeResult.isMouthCannon) {
             logger.warn('FC模式：LLM-as-Judge 判定为嘴炮，强制重试', {
               module: 'PromptService',
@@ -2427,9 +2876,11 @@ async function promptWithFunctionCalling(
               textPreview: textContent.substring(0, 200),
             });
             messages.push(aiMessage);
-            messages.push(new HumanMessage({
-              content: `用户的请求需要你实际调用工具来完成（${judgeResult.reason}）。请立即使用 function calling 调用对应的工具，不要再用文字描述要做什么。`,
-            }));
+            messages.push(
+              new HumanMessage({
+                content: `用户的请求需要你实际调用工具来完成（${judgeResult.reason}）。请立即使用 function calling 调用对应的工具，不要再用文字描述要做什么。`,
+              }),
+            );
             continue; // 继续下一轮迭代
           }
         }
@@ -2438,18 +2889,27 @@ async function promptWithFunctionCalling(
       // 这说明模型的 function calling 失败了，需要重试
       const hasRawToolCallFormat = containsRawToolCallFormat(textContent);
       if (hasRawToolCallFormat && iteration < MAX_TOOL_ITERATIONS - 1) {
-        logger.warn('FC模式：检测到原始工具调用格式文本，function calling 可能失败，添加提示重试', {
-          module: 'PromptService',
-          textPreview: textContent.substring(0, 300),
-        });
+        logger.warn(
+          'FC模式：检测到原始工具调用格式文本，function calling 可能失败，添加提示重试',
+          {
+            module: 'PromptService',
+            textPreview: textContent.substring(0, 300),
+          },
+        );
         // 不推送原始格式文本，直接要求重试
-        messages.push(new HumanMessage({
-          content: '你上一次的回复包含了工具调用的原始格式文本，这不是正确的工具调用方式。请使用工具调用功能（function calling）来执行操作，或者直接用自然语言回答用户问题。不要输出任何工具调用格式的文本。',
-        }));
+        messages.push(
+          new HumanMessage({
+            content:
+              '你上一次的回复包含了工具调用的原始格式文本，这不是正确的工具调用方式。请使用工具调用功能（function calling）来执行操作，或者直接用自然语言回答用户问题。不要输出任何工具调用格式的文本。',
+          }),
+        );
         continue; // 继续下一轮迭代
       }
 
-      logger.info('FC模式：获得最终回答，切换流式输出', { module: 'PromptService', toolCallCount: toolCallsMade.length });
+      logger.info('FC模式：获得最终回答，切换流式输出', {
+        module: 'PromptService',
+        toolCallCount: toolCallsMade.length,
+      });
 
       // 流式输出阶段不再需要心跳，停止定时器
       stopHeartbeat(heartbeatTimer);
@@ -2462,11 +2922,16 @@ async function promptWithFunctionCalling(
           usedWebSearch,
           usedWeather,
           usedCalculate,
-          contextCount: toolCallsMade.filter(tc => tc.name === 'search_knowledge_base').length,
-          webSearchCount: toolCallsMade.filter(tc => tc.name === 'search_web').length,
-          weatherCount: toolCallsMade.filter(tc => tc.name === 'get_weather').length,
-          calculateCount: toolCallsMade.filter(tc => tc.name === 'calculate').length,
-          toolCalls: toolCallsMade.map(tc => tc.name),
+          contextCount: toolCallsMade.filter(
+            (tc) => tc.name === 'search_knowledge_base',
+          ).length,
+          webSearchCount: toolCallsMade.filter((tc) => tc.name === 'search_web')
+            .length,
+          weatherCount: toolCallsMade.filter((tc) => tc.name === 'get_weather')
+            .length,
+          calculateCount: toolCallsMade.filter((tc) => tc.name === 'calculate')
+            .length,
+          toolCalls: toolCallsMade.map((tc) => tc.name),
         };
         try {
           // 先发送 metadata 和 session_action 事件
@@ -2498,7 +2963,8 @@ async function promptWithFunctionCalling(
             }
             if (assetCursor.mindmaps < collectedMindmaps.length) {
               for (const mm of collectedMindmaps.slice(assetCursor.mindmaps)) {
-                const mermaidContent = '```mermaid\n' + mm.mermaidCode + '\n```\n\n';
+                const mermaidContent =
+                  '```mermaid\n' + mm.mermaidCode + '\n```\n\n';
                 sendContent(res, mermaidContent);
                 process.stdout.write(mermaidContent);
                 injected += mermaidContent;
@@ -2506,7 +2972,9 @@ async function promptWithFunctionCalling(
               assetCursor.mindmaps = collectedMindmaps.length;
             }
             if (assetCursor.charts < collectedChartOptions.length) {
-              for (const ch of collectedChartOptions.slice(assetCursor.charts)) {
+              for (const ch of collectedChartOptions.slice(
+                assetCursor.charts,
+              )) {
                 const optionJson = JSON.stringify(ch.option, null, 2);
                 const chartContent = '```echarts\n' + optionJson + '\n```\n\n';
                 sendContent(res, chartContent);
@@ -2539,7 +3007,11 @@ async function promptWithFunctionCalling(
           let chunkCount = 0;
           let dsmlStreamCancelled = false;
 
-          for (let streamRound = 1; streamRound <= MAX_DSML_STREAM_ROUNDS; streamRound++) {
+          for (
+            let streamRound = 1;
+            streamRound <= MAX_DSML_STREAM_ROUNDS;
+            streamRound++
+          ) {
             const stream = await llm.stream(messages, {
               signal: abortController?.signal,
             });
@@ -2561,7 +3033,8 @@ async function promptWithFunctionCalling(
               imageMarkdownBuffer += text;
               const lastOpen = imageMarkdownBuffer.lastIndexOf('![');
               const hasUnclosedImage =
-                lastOpen !== -1 && imageMarkdownBuffer.indexOf(')', lastOpen) === -1;
+                lastOpen !== -1 &&
+                imageMarkdownBuffer.indexOf(')', lastOpen) === -1;
               if (hasUnclosedImage && imageMarkdownBuffer.length < 2000) return;
               const cleaned = stripMarkdownImages(imageMarkdownBuffer);
               imageMarkdownBuffer = '';
@@ -2574,12 +3047,17 @@ async function promptWithFunctionCalling(
 
             for await (const chunk of stream) {
               if (isCancelled && isCancelled()) {
-                logger.info('FC模式流式：检测到取消信号，停止生成', { module: 'PromptService' });
+                logger.info('FC模式流式：检测到取消信号，停止生成', {
+                  module: 'PromptService',
+                });
                 dsmlStreamCancelled = true;
                 break;
               }
               chunkCount++;
-              const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
+              const filtered = filterThinkTags(
+                chunk.content?.toString() || '',
+                inThinkBlock,
+              );
               inThinkBlock = filtered.inThinkBlock;
               if (!filtered.text) continue;
               // 抑制器返回可安全输出的文本；DSML 标签/块被整块吞入捕获区，绝不透出
@@ -2602,7 +3080,9 @@ async function promptWithFunctionCalling(
 
             // ==================== DSML 捕获块：解析 → 去重 → 真实执行 → 续写 ====================
             const captured = suppressor.getCaptured();
-            const dsmlCalls = captured ? parseDSMLToolCalls(captured, getAvailableToolNames()) : [];
+            const dsmlCalls = captured
+              ? parseDSMLToolCalls(captured, getAvailableToolNames())
+              : [];
             const freshCalls = dsmlCalls.filter((call) => {
               const key = `${call.name}:${JSON.stringify(call.args ?? {})}`;
               if (dsmlSeenCalls.has(key)) return false;
@@ -2611,42 +3091,59 @@ async function promptWithFunctionCalling(
             });
             if (freshCalls.length === 0) break;
 
-            logger.warn('FC模式流式：检测到 DSML 文本格式工具调用，整块抑制并真实执行', {
-              module: 'PromptService',
-              streamRound,
-              tools: freshCalls.map((c) => c.name),
-              capturedLength: captured.length,
-            });
+            logger.warn(
+              'FC模式流式：检测到 DSML 文本格式工具调用，整块抑制并真实执行',
+              {
+                module: 'PromptService',
+                streamRound,
+                tools: freshCalls.map((c) => c.name),
+                capturedLength: captured.length,
+              },
+            );
 
             // 并行执行 DSML 解析出的工具调用（与 invoke 循环同一执行入口）
             const resultSummaries: string[] = [];
-            await Promise.all(freshCalls.map(async (call) => {
-              sendToolStatus(res, call.name, 'executing');
-              try {
-                const result = await executeTool(call.name, call.args, {
-                  userId, sessionId, res, imageModel, originalQuery: promptText, docIntents,
-                });
-                const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                collectToolAssets(call.name, result);
-                toolCallsMade.push({ name: call.name, args: call.args });
-                sendToolStatus(res, call.name, 'done');
-                logger.info('FC模式流式：DSML 工具执行成功', {
-                  module: 'PromptService',
-                  toolName: call.name,
-                  resultLength: resultStr.length,
-                });
-                // 截断防续写 prompt 爆炸（文档类结果很长，摘要足够模型续写）
-                resultSummaries.push(`- ${call.name}：${resultStr.slice(0, 500)}`);
-              } catch (toolError: any) {
-                logger.error('FC模式流式：DSML 工具执行失败', {
-                  module: 'PromptService',
-                  toolName: call.name,
-                  error: toolError.message,
-                });
-                sendToolStatus(res, call.name, 'done', { error: true });
-                resultSummaries.push(`- ${call.name}：执行失败（${toolError.message}）`);
-              }
-            }));
+            await Promise.all(
+              freshCalls.map(async (call) => {
+                sendToolStatus(res, call.name, 'executing');
+                try {
+                  const result = await executeTool(call.name, call.args, {
+                    userId,
+                    sessionId,
+                    res,
+                    imageModel,
+                    originalQuery: promptText,
+                    docIntents,
+                  });
+                  const resultStr =
+                    typeof result === 'string'
+                      ? result
+                      : JSON.stringify(result);
+                  collectToolAssets(call.name, result);
+                  toolCallsMade.push({ name: call.name, args: call.args });
+                  sendToolStatus(res, call.name, 'done');
+                  logger.info('FC模式流式：DSML 工具执行成功', {
+                    module: 'PromptService',
+                    toolName: call.name,
+                    resultLength: resultStr.length,
+                  });
+                  // 截断防续写 prompt 爆炸（文档类结果很长，摘要足够模型续写）
+                  resultSummaries.push(
+                    `- ${call.name}：${resultStr.slice(0, 500)}`,
+                  );
+                } catch (toolError: any) {
+                  logger.error('FC模式流式：DSML 工具执行失败', {
+                    module: 'PromptService',
+                    toolName: call.name,
+                    error: toolError.message,
+                  });
+                  sendToolStatus(res, call.name, 'done', { error: true });
+                  resultSummaries.push(
+                    `- ${call.name}：执行失败（${toolError.message}）`,
+                  );
+                }
+              }),
+            );
 
             // 把本轮新产生的资产发送给客户端（正文注入 + 文件卡片事件）
             fcFullResponse += emitNewAssets();
@@ -2655,13 +3152,19 @@ async function promptWithFunctionCalling(
             if (streamRound >= MAX_DSML_STREAM_ROUNDS) break;
 
             // 续写：占位 AIMessage 保持消息序列合法，HumanMessage 携带结果摘要让模型基于结果继续回答
-            messages.push(new AIMessage({ content: '（工具调用已由系统解析并执行完成，结果见下方）' }));
-            messages.push(new HumanMessage({
-              content:
-                '你上一条回复中的工具调用已由系统实际执行完成，结果如下：\n' +
-                resultSummaries.join('\n') +
-                '\n请基于上述结果继续完成对用户问题的回答。直接输出正文内容，不要再输出任何工具调用格式的文本。',
-            }));
+            messages.push(
+              new AIMessage({
+                content: '（工具调用已由系统解析并执行完成，结果见下方）',
+              }),
+            );
+            messages.push(
+              new HumanMessage({
+                content:
+                  '你上一条回复中的工具调用已由系统实际执行完成，结果如下：\n' +
+                  resultSummaries.join('\n') +
+                  '\n请基于上述结果继续完成对用户问题的回答。直接输出正文内容，不要再输出任何工具调用格式的文本。',
+              }),
+            );
           }
 
           // ==================== 延迟文档落盘（P1：正文与格式分离） ====================
@@ -2725,13 +3228,47 @@ async function promptWithFunctionCalling(
           // （放在轮次循环之后，覆盖 DSML 解析执行新产生的资产）
           // 用 fire-and-forget：缓存写入失败不应阻塞 LLM 流式响应（业务核心路径）
           // L1 内存写是同步完成的，仅 L2 Redis 写为异步；最坏情况 Redis 失败也只丢 L2，L1 已生效
-          saveSessionAssets(sessionId, collectedImages, collectedChartOptions, collectedMindmaps, collectedFileCards)
-            .catch((e) => logger.warn('saveSessionAssets 失败（已忽略）', {
+          saveSessionAssets(
+            sessionId,
+            collectedImages,
+            collectedChartOptions,
+            collectedMindmaps,
+            collectedFileCards,
+          ).catch((e) =>
+            logger.warn('saveSessionAssets 失败（已忽略）', {
               module: 'PromptService',
               err: e?.message || String(e),
-            }));
+            }),
+          );
 
-          logger.info('FC模式流式响应完成', { module: 'PromptService', chunkCount, fcFullResponseLength: fcFullResponse.length, estimatedOutputTokens: estimateTokens(fcFullResponse) });
+          logger.info('FC模式流式响应完成', {
+            module: 'PromptService',
+            chunkCount,
+            fcFullResponseLength: fcFullResponse.length,
+            estimatedOutputTokens: estimateTokens(fcFullResponse),
+          });
+
+          // ==================== 引用解析（可验证生成，FC 主路径） ====================
+          // 与 RAG 注入路径同构：从完整回答提取（【文档 X】）→ 映射 fcDocSources → 一次性推送。
+          // 必须在 res.end() 之前：res.writableEnded 后 sendCitations 会静默丢弃
+          if (fcDocSources.length > 0) {
+            const resolvedCitations = resolveCitations(
+              fcFullResponse,
+              fcDocSources,
+            );
+            if (resolvedCitations.invalidRefs.length > 0) {
+              logger.warn(
+                'FC模式：模型输出了参考资料中不存在的文档编号，已剔除',
+                {
+                  module: 'PromptService',
+                  invalidRefs: resolvedCitations.invalidRefs,
+                },
+              );
+            }
+            if (resolvedCitations.citations.length > 0) {
+              sendCitations(res, resolvedCitations.citations);
+            }
+          }
           res.end();
 
           // 记录 token 用量
@@ -2753,17 +3290,30 @@ async function promptWithFunctionCalling(
             });
           }
         } catch (streamError: any) {
-          if (streamError.name === 'AbortError' || streamError.code === 'ABORT_ERR') {
-            logger.info('FC模式流式：LLM推理已被中断', { module: 'PromptService' });
+          if (
+            streamError.name === 'AbortError' ||
+            streamError.code === 'ABORT_ERR'
+          ) {
+            logger.info('FC模式流式：LLM推理已被中断', {
+              module: 'PromptService',
+            });
             if (!res.writableEnded) res.end();
           } else {
-            logger.error('FC模式流式输出失败，回退一次性输出', { module: 'PromptService', error: streamError.message });
-            let fallbackContent = typeof aiMessage.content === 'string'
-              ? aiMessage.content
-              : JSON.stringify(aiMessage.content);
-            fallbackContent = fallbackContent.replace(/<think[\s\S]*?<\/think>/gs, "");
+            logger.error('FC模式流式输出失败，回退一次性输出', {
+              module: 'PromptService',
+              error: streamError.message,
+            });
+            let fallbackContent =
+              typeof aiMessage.content === 'string'
+                ? aiMessage.content
+                : JSON.stringify(aiMessage.content);
+            fallbackContent = fallbackContent.replace(
+              /<think[\s\S]*?<\/think>/gs,
+              '',
+            );
             // 整块抑制原始工具调用格式（含标签间的参数正文，如文档全文），而非仅删标签
-            fallbackContent = suppressRawToolCallBlocks(fallbackContent).safeText;
+            fallbackContent =
+              suppressRawToolCallBlocks(fallbackContent).safeText;
             // 图片唯一来源是服务端注入，回退路径同样剥离 LLM 输出的图片 Markdown
             if (collectedImages.length > 0) {
               fallbackContent = stripMarkdownImages(fallbackContent);
@@ -2776,20 +3326,36 @@ async function promptWithFunctionCalling(
               }
               sendContent(res, fallbackContent);
               process.stdout.write(fallbackContent);
+              // fallback 一次性输出路径同样推送引用（与主流式路径口径一致）
+              if (fcDocSources.length > 0) {
+                const resolvedCitations = resolveCitations(
+                  fallbackContent,
+                  fcDocSources,
+                );
+                if (resolvedCitations.citations.length > 0) {
+                  sendCitations(res, resolvedCitations.citations);
+                }
+              }
               res.end();
             }
           }
         }
       } else {
         if (typeof aiMessage.content === 'string') {
-          aiMessage.content = aiMessage.content.replace(/<think>[\s\S]*?<\/think>/gs, "");
+          aiMessage.content = aiMessage.content.replace(
+            /<think>[\s\S]*?<\/think>/gs,
+            '',
+          );
           // DSML 原始工具调用块（标签 + 参数正文）整块抑制，不作为最终回答返回给调用方
-          aiMessage.content = suppressRawToolCallBlocks(aiMessage.content).safeText;
+          aiMessage.content = suppressRawToolCallBlocks(
+            aiMessage.content,
+          ).safeText;
         }
         // 非流式（headless）路径此前不上报用量；补齐回调以镜像流式分支字段，
         // 供 benchmark runner 在 FC 模式下采集 answer 与检索命中（线上恒走流式分支，行为不受影响）
         if (onUsageComplete) {
-          const fcAssistantContent = typeof aiMessage.content === 'string' ? aiMessage.content : '';
+          const fcAssistantContent =
+            typeof aiMessage.content === 'string' ? aiMessage.content : '';
           onUsageComplete({
             userId: userId || 'default',
             sessionId,
@@ -2816,7 +3382,7 @@ async function promptWithFunctionCalling(
     logger.warn('FC模式：无进展检测退出，强制生成最终回答', {
       module: 'PromptService',
       iterations: toolCallsMade.length,
-      toolCalls: toolCallsMade.map(tc => tc.name),
+      toolCalls: toolCallsMade.map((tc) => tc.name),
     });
   } else {
     logger.warn('FC模式：达到最大工具调用次数，强制生成最终回答', {
@@ -2837,20 +3403,28 @@ async function promptWithFunctionCalling(
   //       历史 bug：旧代码移除了所有 ToolMessage，导致模型完全看不到工具结果只能编造
   const cleanedMessages = cleanMessagesForFinalSummary(messages);
 
-  cleanedMessages.push(new HumanMessage({
-    content: '请根据以上信息，直接用自然语言给出最终回答。注意：不要输出任何工具调用格式，不要提及工具名称，只需直接回答问题。',
-  }));
+  cleanedMessages.push(
+    new HumanMessage({
+      content:
+        '请根据以上信息，直接用自然语言给出最终回答。注意：不要输出任何工具调用格式，不要提及工具名称，只需直接回答问题。',
+    }),
+  );
 
   const ragMetadata = {
     usedKnowledgeBase,
     usedWebSearch,
     usedWeather,
     usedCalculate,
-    contextCount: toolCallsMade.filter(tc => tc.name === 'search_knowledge_base').length,
-    webSearchCount: toolCallsMade.filter(tc => tc.name === 'search_web').length,
-    weatherCount: toolCallsMade.filter(tc => tc.name === 'get_weather').length,
-    calculateCount: toolCallsMade.filter(tc => tc.name === 'calculate').length,
-    toolCalls: toolCallsMade.map(tc => tc.name),
+    contextCount: toolCallsMade.filter(
+      (tc) => tc.name === 'search_knowledge_base',
+    ).length,
+    webSearchCount: toolCallsMade.filter((tc) => tc.name === 'search_web')
+      .length,
+    weatherCount: toolCallsMade.filter((tc) => tc.name === 'get_weather')
+      .length,
+    calculateCount: toolCallsMade.filter((tc) => tc.name === 'calculate')
+      .length,
+    toolCalls: toolCallsMade.map((tc) => tc.name),
   };
   if (res) {
     try {
@@ -2874,7 +3448,10 @@ async function promptWithFunctionCalling(
           break;
         }
         chunkCount++;
-        const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
+        const filtered = filterThinkTags(
+          chunk.content?.toString() || '',
+          inThinkBlock,
+        );
         inThinkBlock = filtered.inThinkBlock;
         if (!filtered.text) continue;
         const safeText = suppressor.push(filtered.text);
@@ -2891,12 +3468,27 @@ async function promptWithFunctionCalling(
         process.stdout.write(tailSafe);
       }
       if (suppressor.hasCaptured()) {
-        logger.warn('FC模式：强制回答阶段检测到 DSML 文本工具调用，已整块抑制（不再执行工具）', {
-          module: 'PromptService',
-          capturedLength: suppressor.getCaptured().length,
-        });
+        logger.warn(
+          'FC模式：强制回答阶段检测到 DSML 文本工具调用，已整块抑制（不再执行工具）',
+          {
+            module: 'PromptService',
+            capturedLength: suppressor.getCaptured().length,
+          },
+        );
       }
-      logger.info('FC模式：达到最大迭代后强制生成回答完成', { module: 'PromptService', chunkCount, fullResponseLength: fullResponse.length });
+      logger.info('FC模式：达到最大迭代后强制生成回答完成', {
+        module: 'PromptService',
+        chunkCount,
+        fullResponseLength: fullResponse.length,
+      });
+
+      // 强制回答路径同样推送引用（口径与主流式路径一致）
+      if (fcDocSources.length > 0) {
+        const resolvedCitations = resolveCitations(fullResponse, fcDocSources);
+        if (resolvedCitations.citations.length > 0) {
+          sendCitations(res, resolvedCitations.citations);
+        }
+      }
       res.end();
 
       // 记录 token 用量
@@ -2918,17 +3510,26 @@ async function promptWithFunctionCalling(
         });
       }
     } catch (streamError: any) {
-      if (streamError.name === 'AbortError' || streamError.code === 'ABORT_ERR') {
+      if (
+        streamError.name === 'AbortError' ||
+        streamError.code === 'ABORT_ERR'
+      ) {
         if (!res.writableEnded) res.end();
       } else {
-        logger.error('FC模式：达到最大迭代后流式输出失败', { module: 'PromptService', error: streamError.message });
+        logger.error('FC模式：达到最大迭代后流式输出失败', {
+          module: 'PromptService',
+          error: streamError.message,
+        });
         if (!res.writableEnded) {
           // fallback 时也需要发送 metadata
           sendMetadata(res, ragMetadata);
           if (sessionAction) {
             sendSessionAction(res, sessionAction);
           }
-          sendContent(res, '抱歉，工具调用次数已达上限，请简化您的问题后重试。');
+          sendContent(
+            res,
+            '抱歉，工具调用次数已达上限，请简化您的问题后重试。',
+          );
           res.end();
         }
       }
@@ -2941,13 +3542,21 @@ async function promptWithFunctionCalling(
       if (typeof finalResponse.content === 'string') {
         // 原 正则 /<tool_call>[\s\S]*?<\/think>/gs 是笔误（开头 tool_call 结尾 think，永不匹配），
         // 修正为过滤 think 块 + DSML 原始工具调用格式
-        finalResponse.content = finalResponse.content.replace(/<think>[\s\S]*?<\/think>/gs, '');
+        finalResponse.content = finalResponse.content.replace(
+          /<think>[\s\S]*?<\/think>/gs,
+          '',
+        );
         // DSML 原始工具调用块（标签 + 参数正文）整块抑制
-        finalResponse.content = suppressRawToolCallBlocks(finalResponse.content).safeText;
+        finalResponse.content = suppressRawToolCallBlocks(
+          finalResponse.content,
+        ).safeText;
       }
       // 非流式（headless）路径补齐用量回调，镜像上方流式分支字段（benchmark runner 采集用）
       if (onUsageComplete) {
-        const fcAssistantContent = typeof finalResponse.content === 'string' ? finalResponse.content : '';
+        const fcAssistantContent =
+          typeof finalResponse.content === 'string'
+            ? finalResponse.content
+            : '';
         onUsageComplete({
           userId: userId || 'default',
           sessionId,
@@ -2966,7 +3575,9 @@ async function promptWithFunctionCalling(
       }
       return finalResponse;
     } catch (invokeError: any) {
-      return new AIMessage('抱歉，工具调用次数已达上限，请简化您的问题后重试。');
+      return new AIMessage(
+        '抱歉，工具调用次数已达上限，请简化您的问题后重试。',
+      );
     }
   }
 }
@@ -2996,7 +3607,7 @@ async function promptWithFunctionCalling(
 export const promptTemplate = async (
   promptText?: string,
   images?: string[],
-  history?: Array<{ role: string, content: string, images?: string[] }>,
+  history?: Array<{ role: string; content: string; images?: string[] }>,
   res?: Response,
   sessionSummary?: string,
   userMemories?: string[],
@@ -3011,23 +3622,46 @@ export const promptTemplate = async (
   let fcError: any = null;
 
   if (modelInfo.supportsFunctionCalling) {
-    logger.info('当前模型支持Function Calling，使用FC模式', { module: 'PromptService', modelId: getCurrentModelId() });
+    logger.info('当前模型支持Function Calling，使用FC模式', {
+      module: 'PromptService',
+      modelId: getCurrentModelId(),
+    });
     try {
       return await promptWithFunctionCalling(
-        promptText, images, history, res, sessionSummary, userMemories, isCancelled, abortController, userId, sessionId, onUsageComplete, imageModel,
+        promptText,
+        images,
+        history,
+        res,
+        sessionSummary,
+        userMemories,
+        isCancelled,
+        abortController,
+        userId,
+        sessionId,
+        onUsageComplete,
+        imageModel,
       );
     } catch (err: any) {
       fcError = err;
-      logger.warn('FC模式失败，降级到RAG注入模式', { module: 'PromptService', error: err.message });
+      logger.warn('FC模式失败，降级到RAG注入模式', {
+        module: 'PromptService',
+        error: err.message,
+      });
     }
   } else {
-    logger.info('当前模型不支持Function Calling，使用RAG注入模式', { module: 'PromptService', modelId: getCurrentModelId() });
+    logger.info('当前模型不支持Function Calling，使用RAG注入模式', {
+      module: 'PromptService',
+      modelId: getCurrentModelId(),
+    });
   }
 
   // 检查 FC 降级时是否已获取知识库结果。降级时采用“复用 + 补检索”策略：
   // 1. 复用 FC 已拿到的知识库结果，避免失败现场的有用信息丢失；
   // 2. 同时用用户原始问题再检索一次，弥补 FC 工具 query 过窄或只保留最后一次结果导致的上下文不全。
-  const fcFallbackKBResult = (fcError instanceof FCFallbackError && fcError.knowledgeBaseResult) ? fcError.knowledgeBaseResult : '';
+  const fcFallbackKBResult =
+    fcError instanceof FCFallbackError && fcError.knowledgeBaseResult
+      ? fcError.knowledgeBaseResult
+      : '';
 
   const conversions: Array<SystemMessage | HumanMessage | AIMessage> = [];
 
@@ -3035,21 +3669,44 @@ export const promptTemplate = async (
   let retrievedContext = '';
   let hasRetrievedContent = false;
   let ragContextCount = 0;
-  type RagRetrievalResult = { content: string; metadata: unknown; score: number; vectorScore?: number };
+  type RagRetrievalResult = {
+    content: string;
+    metadata: unknown;
+    score: number;
+    vectorScore?: number;
+  };
   const retrievalResults: RagRetrievalResult[] = [];
   const seenContextContents = new Set<string>();
-  const extractFCFallbackRetrievalResults = (rawContent: string): RagRetrievalResult[] => {
+  const extractFCFallbackRetrievalResults = (
+    rawContent: string,
+  ): RagRetrievalResult[] => {
     try {
       const parsed: unknown = JSON.parse(rawContent);
-      if (typeof parsed !== 'object' || parsed === null || !('results' in parsed)) {
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        !('results' in parsed)
+      ) {
         // vectorScore 留 undefined：表示无向量分数，不参与相似度过滤。
         // fallback 文档来自 FC 模式复用结果，不应被 vectorScore 阈值过滤
-        return [{ content: rawContent, metadata: { source: 'fc_fallback' }, score: 0 }];
+        return [
+          {
+            content: rawContent,
+            metadata: { source: 'fc_fallback' },
+            score: 0,
+          },
+        ];
       }
 
       const results = (parsed as { results?: unknown }).results;
       if (!Array.isArray(results)) {
-        return [{ content: rawContent, metadata: { source: 'fc_fallback' }, score: 0 }];
+        return [
+          {
+            content: rawContent,
+            metadata: { source: 'fc_fallback' },
+            score: 0,
+          },
+        ];
       }
 
       return results.flatMap((item): RagRetrievalResult[] => {
@@ -3066,18 +3723,23 @@ export const promptTemplate = async (
         const source = (item as { source?: unknown }).source;
         const documentId = (item as { documentId?: unknown }).documentId;
         const versionId = (item as { versionId?: unknown }).versionId;
-        return [{
-          content,
-          metadata: {
-            source: typeof source === 'string' ? source : 'fc_fallback',
-            documentId: typeof documentId === 'string' ? documentId : undefined,
-            versionId: typeof versionId === 'string' ? versionId : undefined,
+        return [
+          {
+            content,
+            metadata: {
+              source: typeof source === 'string' ? source : 'fc_fallback',
+              documentId:
+                typeof documentId === 'string' ? documentId : undefined,
+              versionId: typeof versionId === 'string' ? versionId : undefined,
+            },
+            score: typeof score === 'number' ? score : 0,
           },
-          score: typeof score === 'number' ? score : 0,
-        }];
+        ];
       });
     } catch {
-      return [{ content: rawContent, metadata: { source: 'fc_fallback' }, score: 0 }];
+      return [
+        { content: rawContent, metadata: { source: 'fc_fallback' }, score: 0 },
+      ];
     }
   };
   const appendRetrievalResult = (result: RagRetrievalResult): boolean => {
@@ -3101,9 +3763,16 @@ export const promptTemplate = async (
   };
 
   if (fcFallbackKBResult) {
-    logger.info('RAG模式：复用FC模式已获取的知识库结果，并继续用原始问题补充检索', { module: 'PromptService' });
-    const fallbackResults = extractFCFallbackRetrievalResults(fcFallbackKBResult);
-    const addedCount = fallbackResults.reduce((count, result) => appendRetrievalResult(result) ? count + 1 : count, 0);
+    logger.info(
+      'RAG模式：复用FC模式已获取的知识库结果，并继续用原始问题补充检索',
+      { module: 'PromptService' },
+    );
+    const fallbackResults =
+      extractFCFallbackRetrievalResults(fcFallbackKBResult);
+    const addedCount = fallbackResults.reduce(
+      (count, result) => (appendRetrievalResult(result) ? count + 1 : count),
+      0,
+    );
     logger.info('RAG模式：FC复用结果解析完成', {
       module: 'PromptService',
       fallbackResultCount: fallbackResults.length,
@@ -3113,24 +3782,37 @@ export const promptTemplate = async (
 
   if (promptText && promptText.trim()) {
     try {
-      logger.info('正在从知识库检索相关文档', { module: 'PromptService', hasFCFallbackContext: !!fcFallbackKBResult });
+      logger.info('正在从知识库检索相关文档', {
+        module: 'PromptService',
+        hasFCFallbackContext: !!fcFallbackKBResult,
+      });
       const retrieval = await retrieveFromKnowledgeBase(promptText.trim(), 3);
 
       if (retrieval.results && retrieval.results.length > 0) {
-        const relevantResults: RagRetrievalResult[] = retrieval.results.filter((r: RagRetrievalResult) => {
-          // vectorScore 已统一为 cosine 相似度（= 1 - 距离，越大越相似），
-          // 阈值 0.45 等价于原先的距离阈值 0.55（1 - 0.55 = 0.45）。
-          // undefined 表示无向量分数（仅 BM25 命中或 FC fallback 复用），不参与过滤，
-          // 避免误删关键词精确命中或 FC 模式已获取的结果
-          if (r.vectorScore !== undefined && r.vectorScore < 0.45) {
-            logger.debug('过滤不相关结果', { module: 'PromptService', vectorScore: r.vectorScore.toFixed(4), content: r.content.substring(0, 40) });
-            return false;
-          }
-          return true;
-        });
+        const relevantResults: RagRetrievalResult[] = retrieval.results.filter(
+          (r: RagRetrievalResult) => {
+            // vectorScore 已统一为 cosine 相似度（= 1 - 距离，越大越相似），
+            // 阈值 0.45 等价于原先的距离阈值 0.55（1 - 0.55 = 0.45）。
+            // undefined 表示无向量分数（仅 BM25 命中或 FC fallback 复用），不参与过滤，
+            // 避免误删关键词精确命中或 FC 模式已获取的结果
+            if (r.vectorScore !== undefined && r.vectorScore < 0.45) {
+              logger.debug('过滤不相关结果', {
+                module: 'PromptService',
+                vectorScore: r.vectorScore.toFixed(4),
+                content: r.content.substring(0, 40),
+              });
+              return false;
+            }
+            return true;
+          },
+        );
 
         if (relevantResults.length > 0) {
-          const addedCount = relevantResults.reduce((count: number, result: RagRetrievalResult) => appendRetrievalResult(result) ? count + 1 : count, 0);
+          const addedCount = relevantResults.reduce(
+            (count: number, result: RagRetrievalResult) =>
+              appendRetrievalResult(result) ? count + 1 : count,
+            0,
+          );
           logger.info('知识库检索完成', {
             module: 'PromptService',
             resultCount: relevantResults.length,
@@ -3139,23 +3821,30 @@ export const promptTemplate = async (
             reusedFCFallbackContext: !!fcFallbackKBResult,
           });
         } else {
-          logger.info('知识库检索到结果但均不相关，将使用已有FC复用内容或模型自身知识回答', { module: 'PromptService' });
+          logger.info(
+            '知识库检索到结果但均不相关，将使用已有FC复用内容或模型自身知识回答',
+            { module: 'PromptService' },
+          );
         }
       } else {
         logger.info('知识库中没有找到相关内容', { module: 'PromptService' });
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      logger.warn('知识库检索失败（可能未启动）', { module: 'PromptService', error: message });
+      logger.warn('知识库检索失败（可能未启动）', {
+        module: 'PromptService',
+        error: message,
+      });
     }
   }
 
   if (retrievalResults.length > 0) {
     hasRetrievedContent = true;
     ragContextCount = retrievalResults.length;
-    retrievedContext = retrievalResults
-      .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
-      .join('\n\n') + UNTRUSTED_CONTEXT_INSTRUCTION;
+    retrievedContext =
+      retrievalResults
+        .map((r, i) => `【文档 ${i + 1}】\n${r.content}`)
+        .join('\n\n') + UNTRUSTED_CONTEXT_INSTRUCTION;
   }
 
   // ==================== 步骤2: 构建系统提示词 ====================
@@ -3165,18 +3854,24 @@ export const promptTemplate = async (
     systemPrompt += buildPromptInjectionSafetyInstruction(injectionDetection);
   }
 
+  // 引用来源映射：【文档 N】编号 → 文档元数据（buildContextWithSources 产出）。
+  // 流结束后 resolveCitations 据此把模型输出的（【文档 X】）解析为引用列表推给前端
+  let docSources: DocSource[] = [];
+
   if (hasRetrievedContent) {
-    // 使用 buildContextFromResults 构建上下文：
+    // 使用 buildContextWithSources 构建上下文（同时产出引用来源映射）：
     // - 图片块附加可访问的 URL（http://localhost:3000/images/{docId}/img_{idx}.png）
     // - 文本块清理 MinerU 残留的无效图片引用（旧文档兼容）
     // - LLM 可直接在回复中用 ![图片 N](url) 引用原图
-    const docList = buildContextFromResults(retrievalResults);
+    const { context: docList, sources } =
+      buildContextWithSources(retrievalResults);
+    docSources = sources;
 
     let kbStatsInfo = '';
     try {
       const stats = await getKnowledgeBaseStats();
       kbStatsInfo = `\n知识库统计：共 ${stats.documentCount} 个文档块`;
-    } catch { }
+    } catch {}
 
     systemPrompt = `你是一个问答助手。请仔细阅读以下参考资料，然后回答用户问题。
 ${kbStatsInfo}
@@ -3185,7 +3880,7 @@ ${docList}
 === 参考资料结束 ===
 
 回答规则：
-1. 优先使用参考资料中的信息回答，回答时在括号内标注来源，格式为：（【文档 X】）
+1. 优先使用参考资料中的信息回答，每个依据句/段落的末尾用（【文档 X】）标注来源；涉及多个来源时写（【文档 1】【文档 3】）。标注的编号必须来自参考资料中真实存在的【文档 N】，不得编造编号
 2. 如果参考资料只覆盖问题的一部分，先列出资料中的信息，再说明"资料中未涉及以下方面：[缺失点]"
 3. 如果参考资料与用户问题完全无关：
    - 对于通用知识问题（如"什么是光合作用"），可以回复"知识库中未找到相关信息，以下基于通用知识回答："后用自己的知识回答
@@ -3205,7 +3900,10 @@ ${docList}
   // 摘要覆盖了早期对话的关键信息，使 AI 即使不看完整历史也能理解上下文
   if (sessionSummary && sessionSummary.trim()) {
     systemPrompt += `\n\n=== 之前对话的摘要 ===\n${sessionSummary}\n=== 摘要结束 ===\n\n请注意：以上摘要是之前对话的压缩版本，请结合摘要和最近的对话来理解用户的意图。`;
-    logger.info('已注入对话摘要', { module: 'PromptService', summaryLength: sessionSummary.length });
+    logger.info('已注入对话摘要', {
+      module: 'PromptService',
+      summaryLength: sessionSummary.length,
+    });
   }
 
   // ==================== 步骤2.6: 注入用户记忆（长期记忆） ====================
@@ -3213,7 +3911,10 @@ ${docList}
   if (userMemories && userMemories.length > 0) {
     const memoryText = userMemories.map((m, i) => `${i + 1}. ${m}`).join('\n');
     systemPrompt += `\n\n=== 关于用户的记忆 ===\n以下是从历史对话中了解到的关于用户的信息，请在回答时参考：\n${memoryText}\n=== 用户记忆结束 ===`;
-    logger.info('已注入用户记忆', { module: 'PromptService', memoryCount: userMemories.length });
+    logger.info('已注入用户记忆', {
+      module: 'PromptService',
+      memoryCount: userMemories.length,
+    });
   }
 
   conversions.push(new SystemMessage(systemPrompt));
@@ -3221,7 +3922,11 @@ ${docList}
   const supportsVision = modelInfo.supportsVision;
 
   if (images && images.length > 0 && !supportsVision) {
-    logger.warn('当前模型不支持图片输入，已忽略图片', { module: 'PromptService', modelId: getCurrentModelId(), imageCount: images.length });
+    logger.warn('当前模型不支持图片输入，已忽略图片', {
+      module: 'PromptService',
+      modelId: getCurrentModelId(),
+      imageCount: images.length,
+    });
     images = undefined;
   }
 
@@ -3234,7 +3939,11 @@ ${docList}
   const recentHistory = sliceHistoryByRounds(history || [], MAX_ROUNDS);
 
   if (recentHistory.length > 0) {
-    logger.info('添加历史消息', { module: 'PromptService', historyCount: recentHistory.length, maxRounds: MAX_ROUNDS });
+    logger.info('添加历史消息', {
+      module: 'PromptService',
+      historyCount: recentHistory.length,
+      maxRounds: MAX_ROUNDS,
+    });
     for (const msg of recentHistory) {
       if (msg.role === 'user') {
         let content: any;
@@ -3242,7 +3951,10 @@ ${docList}
           content = [];
           for (const imgUrl of msg.images) {
             const processedUrl = await processImageUrl(imgUrl);
-            content.push({ type: 'image_url', image_url: { url: processedUrl } });
+            content.push({
+              type: 'image_url',
+              image_url: { url: processedUrl },
+            });
           }
           if (msg.content) {
             content.unshift({ type: 'text', text: msg.content });
@@ -3273,11 +3985,17 @@ ${docList}
 
   conversions.push(new HumanMessage({ content: userContent }));
 
-  logger.debug('对话消息列表构建完成', { module: 'PromptService', messageCount: conversions.length });
+  logger.debug('对话消息列表构建完成', {
+    module: 'PromptService',
+    messageCount: conversions.length,
+  });
 
   if (res) {
     // 流式调用
-    logger.info('开始流式调用模型', { module: 'PromptService', modelId: getCurrentModelId() });
+    logger.info('开始流式调用模型', {
+      module: 'PromptService',
+      modelId: getCurrentModelId(),
+    });
 
     const llm = createRateLimitedLLM(undefined, 'streaming');
     const ragStartTime = Date.now();
@@ -3286,7 +4004,11 @@ ${docList}
       usedKnowledgeBase: hasRetrievedContent,
       contextCount: hasRetrievedContent ? ragContextCount : 0,
     };
-    logger.debug('发送 RAG 元数据', { module: 'PromptService', usedKnowledgeBase: hasRetrievedContent, contextCount: ragMetadata.contextCount });
+    logger.debug('发送 RAG 元数据', {
+      module: 'PromptService',
+      usedKnowledgeBase: hasRetrievedContent,
+      contextCount: ragMetadata.contextCount,
+    });
 
     try {
       // 先发送 metadata 事件
@@ -3313,7 +4035,10 @@ ${docList}
           break;
         }
         chunkCount++;
-        const filtered = filterThinkTags(chunk.content?.toString() || '', inThinkBlock);
+        const filtered = filterThinkTags(
+          chunk.content?.toString() || '',
+          inThinkBlock,
+        );
         inThinkBlock = filtered.inThinkBlock;
         if (!filtered.text) continue;
         const safeText = suppressor.push(filtered.text);
@@ -3330,12 +4055,38 @@ ${docList}
         process.stdout.write(tailSafe);
       }
       if (suppressor.hasCaptured()) {
-        logger.warn('RAG模式：检测到 DSML 文本工具调用，已整块抑制（该模式不执行工具）', {
-          module: 'PromptService',
-          capturedLength: suppressor.getCaptured().length,
-        });
+        logger.warn(
+          'RAG模式：检测到 DSML 文本工具调用，已整块抑制（该模式不执行工具）',
+          {
+            module: 'PromptService',
+            capturedLength: suppressor.getCaptured().length,
+          },
+        );
       }
-      logger.info('流式响应完成', { module: 'PromptService', chunkCount, fullResponseLength: fullResponse.length, estimatedOutputTokens: estimateTokens(fullResponse) });
+      logger.info('流式响应完成', {
+        module: 'PromptService',
+        chunkCount,
+        fullResponseLength: fullResponse.length,
+        estimatedOutputTokens: estimateTokens(fullResponse),
+      });
+
+      // ==================== 引用解析（可验证生成） ====================
+      // 从完整回答中提取（【文档 X】）标注 → 映射为可定位引用 → 一次性推送前端。
+      // 必须在 res.end() 之前：res.writableEnded 后 sendCitations 会静默丢弃。
+      if (hasRetrievedContent && docSources.length > 0) {
+        const resolved = resolveCitations(fullResponse, docSources);
+        if (resolved.invalidRefs.length > 0) {
+          // 模型幻觉编号：剔除并留痕（引用可信度观测点，后续可做引用有效率指标）
+          logger.warn('RAG模式：模型输出了参考资料中不存在的文档编号，已剔除', {
+            module: 'PromptService',
+            invalidRefs: resolved.invalidRefs,
+          });
+        }
+        if (resolved.citations.length > 0) {
+          sendCitations(res, resolved.citations);
+        }
+      }
+
       res.end();
 
       // 记录 token 用量
@@ -3358,15 +4109,24 @@ ${docList}
       }
     } catch (streamError: any) {
       // AbortError 是用户主动取消导致的，属于正常流程，不需要报错
-      if (streamError.name === 'AbortError' || streamError.code === 'ABORT_ERR') {
-        logger.info('LLM 推理已被中断（客户端断开连接），底层 HTTP 连接已销毁', { module: 'PromptService' });
+      if (
+        streamError.name === 'AbortError' ||
+        streamError.code === 'ABORT_ERR'
+      ) {
+        logger.info(
+          'LLM 推理已被中断（客户端断开连接），底层 HTTP 连接已销毁',
+          { module: 'PromptService' },
+        );
         res.end();
       } else {
-        logger.error('流式调用失败', { module: 'PromptService', error: streamError.message });
+        logger.error('流式调用失败', {
+          module: 'PromptService',
+          error: streamError.message,
+        });
         if (!res.headersSent) {
           res.status(500).json({
             error: '模型调用失败',
-            message: streamError.message
+            message: streamError.message,
           });
         } else {
           res.end();
@@ -3379,7 +4139,7 @@ ${docList}
     const result = await llm.invoke(conversions);
     // 去除 think 标签
     if (typeof result.content === 'string') {
-      result.content = result.content.replace(/<think>[\s\S]*?<\/think>/gs, "");
+      result.content = result.content.replace(/<think>[\s\S]*?<\/think>/gs, '');
       // 出口契约：非流式路径同样整块抑制文本协议工具调用块。
       // 否则原始 DSML 标签会经 onUsageComplete(assistantMessage) 进入落库链路，
       // 污染行一旦入库，历史会话会持续渲染泄漏文本
@@ -3396,7 +4156,8 @@ ${docList}
 
     // 记录 token 用量
     if (onUsageComplete) {
-      const assistantContent = typeof result.content === 'string' ? result.content : '';
+      const assistantContent =
+        typeof result.content === 'string' ? result.content : '';
       onUsageComplete({
         userId: userId || 'default',
         sessionId,
@@ -3416,4 +4177,4 @@ ${docList}
 
     return result;
   }
-}
+};

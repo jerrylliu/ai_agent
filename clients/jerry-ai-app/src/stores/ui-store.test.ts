@@ -15,6 +15,7 @@ describe('useUIStore', () => {
       showMemorySummary: false,
       showTokenUsage: false,
       showEvaluation: false,
+      showKgGraph: false,
       showMoreMenu: false,
       showHistoryList: true,
       showRecentQuestions: true,
@@ -51,6 +52,7 @@ describe('useUIStore', () => {
       expect(state.showMemorySummary).toBe(false);
       expect(state.showTokenUsage).toBe(false);
       expect(state.showEvaluation).toBe(false);
+      expect(state.showKgGraph).toBe(false);
       expect(state.showMoreMenu).toBe(false);
     });
 
@@ -121,6 +123,11 @@ describe('useUIStore', () => {
     it('setShowEvaluation 应切换评估面板', () => {
       useUIStore.getState().setShowEvaluation(true);
       expect(useUIStore.getState().showEvaluation).toBe(true);
+    });
+
+    it('setShowKgGraph 应切换知识图谱面板', () => {
+      useUIStore.getState().setShowKgGraph(true);
+      expect(useUIStore.getState().showKgGraph).toBe(true);
     });
 
     it('setShowMoreMenu 应切换更多菜单', () => {

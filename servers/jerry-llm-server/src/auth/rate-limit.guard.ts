@@ -62,7 +62,13 @@
  *   - Retry-After: 触发限流时返回，提示客户端多久后重试（秒）
  */
 
-import { CanActivate, ExecutionContext, Injectable, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  HttpException,
+  HttpStatus,
+} from '@nestjs/common';
 import { config } from '../fundamentals/config';
 import { logger } from '../fundamentals/logger';
 import { getRedis, isRedisReady } from '../fundamentals/redis-client';
@@ -84,9 +90,19 @@ export class RateLimitGuard implements CanActivate {
     // 注意：要让 RateLimitGuard 在 OptionalAuthGuard 之后执行，请在 Controller 上
     //       @UseGuards(OptionalAuthGuard, RateLimitGuard) 按顺序声明
     const userId = request.userId || 'anonymous';
-    const clientIp = (request.ip || request.headers['x-forwarded-for'] || 'unknown').toString().split(',')[0].trim();
+    const clientIp = (
+      request.ip ||
+      request.headers['x-forwarded-for'] ||
+      'unknown'
+    )
+      .toString()
+      .split(',')[0]
+      .trim();
     // 已登录：按 userId 限流；未登录：按 IP 限流（防 default 用户互相影响）
-    const subject = userId !== 'default' && userId !== 'anonymous' ? `u:${userId}` : `ip:${clientIp}`;
+    const subject =
+      userId !== 'default' && userId !== 'anonymous'
+        ? `u:${userId}`
+        : `ip:${clientIp}`;
 
     const redis = getRedis();
     if (!redis || !isRedisReady()) {
@@ -130,12 +146,15 @@ export class RateLimitGuard implements CanActivate {
         return this.handleRedisFailure(subject);
       }
 
-      const used = (currentCount as number) + 1; // +1 因为本次刚入队
+      const used = currentCount + 1; // +1 因为本次刚入队
       const remaining = Math.max(0, limit - used);
       // 设置标准响应头，便于前端展示与重试控制
       response.setHeader('X-RateLimit-Limit', String(limit));
       response.setHeader('X-RateLimit-Remaining', String(remaining));
-      response.setHeader('X-RateLimit-Reset', String(Math.ceil((now + WINDOW_MS) / 1000)));
+      response.setHeader(
+        'X-RateLimit-Reset',
+        String(Math.ceil((now + WINDOW_MS) / 1000)),
+      );
 
       if (used > limit) {
         // 超限：本次请求已经被 ZADD 进去了，但仍然要拒绝
@@ -176,7 +195,10 @@ export class RateLimitGuard implements CanActivate {
 
   private handleRedisFailure(subject: string): boolean {
     if (config.rateLimit.failOpen) {
-      logger.debug('RateLimit: fail-open 放行', { module: 'RateLimitGuard', subject });
+      logger.debug('RateLimit: fail-open 放行', {
+        module: 'RateLimitGuard',
+        subject,
+      });
       return true;
     }
     throw new HttpException(

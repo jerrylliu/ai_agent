@@ -159,7 +159,9 @@ function sanitizeConfigForLog(cfg: RuntimeConfig): RuntimeConfig {
       ...cfg.embedding,
       cloud: {
         ...cfg.embedding.cloud,
-        apiKeyEncrypted: cfg.embedding.cloud.apiKeyEncrypted ? '<encrypted>' : '',
+        apiKeyEncrypted: cfg.embedding.cloud.apiKeyEncrypted
+          ? '<encrypted>'
+          : '',
       },
     },
   };
@@ -172,7 +174,9 @@ function sanitizeConfigForLog(cfg: RuntimeConfig): RuntimeConfig {
 export function loadRuntimeConfig(): RuntimeConfig {
   try {
     if (!existsSync(CONFIG_FILE)) {
-      logger.info('运行时配置文件不存在，使用默认配置', { module: 'RuntimeConfig' });
+      logger.info('运行时配置文件不存在，使用默认配置', {
+        module: 'RuntimeConfig',
+      });
       return { ...DEFAULT_RUNTIME_CONFIG };
     }
 
@@ -205,10 +209,14 @@ export function loadRuntimeConfig(): RuntimeConfig {
     // 深度合并：默认值 + 文件中的值
     const config: RuntimeConfig = {
       cache: { ...DEFAULT_RUNTIME_CONFIG.cache, ...saved.cache },
-      rateLimiter: { ...DEFAULT_RUNTIME_CONFIG.rateLimiter, ...saved.rateLimiter },
+      rateLimiter: {
+        ...DEFAULT_RUNTIME_CONFIG.rateLimiter,
+        ...saved.rateLimiter,
+      },
       embedding: {
         localEnabled:
-          saved.embedding?.localEnabled ?? DEFAULT_RUNTIME_CONFIG.embedding.localEnabled,
+          saved.embedding?.localEnabled ??
+          DEFAULT_RUNTIME_CONFIG.embedding.localEnabled,
         ollama: {
           ...DEFAULT_RUNTIME_CONFIG.embedding.ollama,
           ...saved.embedding?.ollama,
@@ -254,7 +262,7 @@ export function saveRuntimeConfig(config: RuntimeConfig): void {
 
 // ==================== 内存中的当前配置 ====================
 
-let currentConfig: RuntimeConfig = loadRuntimeConfig();
+const currentConfig: RuntimeConfig = loadRuntimeConfig();
 
 /**
  * 获取当前运行时配置
@@ -296,14 +304,23 @@ export function updateRuntimeConfig(partial: {
     currentConfig.cache = mergeDefined(currentConfig.cache, partial.cache);
   }
   if (partial.rateLimiter) {
-    currentConfig.rateLimiter = mergeDefined(currentConfig.rateLimiter, partial.rateLimiter);
+    currentConfig.rateLimiter = mergeDefined(
+      currentConfig.rateLimiter,
+      partial.rateLimiter,
+    );
   }
   if (partial.embedding) {
     currentConfig.embedding = {
       localEnabled:
         partial.embedding.localEnabled ?? currentConfig.embedding.localEnabled,
-      ollama: mergeDefined(currentConfig.embedding.ollama, partial.embedding.ollama),
-      cloud: mergeDefined(currentConfig.embedding.cloud, partial.embedding.cloud),
+      ollama: mergeDefined(
+        currentConfig.embedding.ollama,
+        partial.embedding.ollama,
+      ),
+      cloud: mergeDefined(
+        currentConfig.embedding.cloud,
+        partial.embedding.cloud,
+      ),
     };
   }
   saveRuntimeConfig(currentConfig);

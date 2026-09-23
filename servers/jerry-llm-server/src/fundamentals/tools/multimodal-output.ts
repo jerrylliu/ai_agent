@@ -87,7 +87,9 @@ async function cacheChartOption(option: Record<string, any>): Promise<string> {
 }
 
 /** 从缓存读取 ECharts option（L1 → L2 → null） */
-export async function getCachedChartOption(key: string): Promise<Record<string, any> | null> {
+export async function getCachedChartOption(
+  key: string,
+): Promise<Record<string, any> | null> {
   return chartCache.get(key);
 }
 
@@ -102,7 +104,9 @@ export const generateChartParamsSchema = z.object({
   echartsOption: z
     .record(z.string(), z.unknown())
     .optional()
-    .describe('ECharts 完整配置 JSON（如果提供此参数，将忽略 title 和 chartType）'),
+    .describe(
+      'ECharts 完整配置 JSON（如果提供此参数，将忽略 title 和 chartType）',
+    ),
   data: z
     .record(z.string(), z.unknown())
     .optional()
@@ -146,7 +150,7 @@ function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
   // data 字段在 zod schema 中为自由结构（z.record(z.string(), z.unknown())），
   // 业务侧按图表类型读取 data.labels / data.series / data.items 等具体字段，
   // 这里统一断言为 any，保留历史逻辑形态
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   const data = params.data as any;
 
   // 基础配置
@@ -184,41 +188,47 @@ function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
     }
     case 'pie': {
       const items = data.items || [];
-      option.series = [{
-        type: 'pie',
-        radius: '50%',
-        data: items.map((item: any) => ({
-          name: item.name,
-          value: item.value,
-        })),
-        emphasis: {
-          itemStyle: {
-            shadowBlur: 10,
-            shadowOffsetX: 0,
-            shadowColor: 'rgba(0, 0, 0, 0.5)',
+      option.series = [
+        {
+          type: 'pie',
+          radius: '50%',
+          data: items.map((item: any) => ({
+            name: item.name,
+            value: item.value,
+          })),
+          emphasis: {
+            itemStyle: {
+              shadowBlur: 10,
+              shadowOffsetX: 0,
+              shadowColor: 'rgba(0, 0, 0, 0.5)',
+            },
           },
         },
-      }];
+      ];
       break;
     }
     case 'scatter': {
       const scatterData = data.values || [];
       option.xAxis = { type: 'value' };
       option.yAxis = { type: 'value' };
-      option.series = [{
-        type: 'scatter',
-        data: scatterData,
-      }];
+      option.series = [
+        {
+          type: 'scatter',
+          data: scatterData,
+        },
+      ];
       break;
     }
     case 'radar': {
       const indicators = data.indicators || [];
       const radarValues = data.values || [];
       option.radar = { indicator: indicators };
-      option.series = [{
-        type: 'radar',
-        data: radarValues,
-      }];
+      option.series = [
+        {
+          type: 'radar',
+          data: radarValues,
+        },
+      ];
       break;
     }
     default: {
@@ -235,7 +245,9 @@ function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
 const CHART_URL_PREFIX = 'fc://chart/';
 
 /** 生成图表的内部 imageUrl（短地址，供 send_notification 用） */
-export async function chartImageUrl(echartsOption: Record<string, any>): Promise<string> {
+export async function chartImageUrl(
+  echartsOption: Record<string, any>,
+): Promise<string> {
   const key = await cacheChartOption(echartsOption);
   return `${CHART_URL_PREFIX}${key}`;
 }
@@ -246,7 +258,9 @@ export function isChartImageUrl(url: string): boolean {
 }
 
 /** 从内部图表 URL 取回 ECharts option */
-export async function parseChartImageUrl(url: string): Promise<Record<string, any> | null> {
+export async function parseChartImageUrl(
+  url: string,
+): Promise<Record<string, any> | null> {
   if (!isChartImageUrl(url)) return null;
   const key = url.slice(CHART_URL_PREFIX.length);
   return getCachedChartOption(key);
@@ -262,17 +276,19 @@ export async function getBrowser(): Promise<Browser> {
   // 并发场景下避免重复 launch
   if (browserPromise) return browserPromise;
 
-  browserPromise = launchBrowser().then((b) => {
-    cachedBrowser = b;
-    b.on('disconnected', () => {
-      cachedBrowser = null;
+  browserPromise = launchBrowser()
+    .then((b) => {
+      cachedBrowser = b;
+      b.on('disconnected', () => {
+        cachedBrowser = null;
+        browserPromise = null;
+      });
+      return b;
+    })
+    .catch((err) => {
       browserPromise = null;
+      throw err;
     });
-    return b;
-  }).catch((err) => {
-    browserPromise = null;
-    throw err;
-  });
 
   return browserPromise;
 }
@@ -280,7 +296,11 @@ export async function getBrowser(): Promise<Browser> {
 // 进程退出时关闭浏览器
 const closeBrowserOnExit = async () => {
   if (cachedBrowser) {
-    try { await cachedBrowser.close(); } catch { /* ignore */ }
+    try {
+      await cachedBrowser.close();
+    } catch {
+      /* ignore */
+    }
     cachedBrowser = null;
   }
 };
@@ -299,11 +319,19 @@ export async function chartPngDataUri(
 ): Promise<string | null> {
   let lastError: any;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await chartPngDataUriOnce(echartsOption, width, height, attempt);
+    const result = await chartPngDataUriOnce(
+      echartsOption,
+      width,
+      height,
+      attempt,
+    );
     if (result !== null) return result;
     lastError = new Error('chartPngDataUri attempt failed');
   }
-  logger.warn('图表 PNG 渲染：2 次尝试均失败', { module: 'Tool:MultiModal', error: String(lastError) });
+  logger.warn('图表 PNG 渲染：2 次尝试均失败', {
+    module: 'Tool:MultiModal',
+    error: String(lastError),
+  });
   return null;
 }
 
@@ -353,11 +381,18 @@ async function chartPngDataUriOnce(
     // domcontentloaded：HTML 解析完成即可；CDN 加载较慢（尤其国内访问 jsdelivr），
     // 由 waitForFunction 兜底等待 ECharts 渲染完成（含 CDN 加载 + setOption + finished）
     // 超时 30s：覆盖 CDN 首次加载（国内网络下 jsdelivr 可能需 10-20s）+ 渲染时间
-    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.setContent(html, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
     // 等待 ECharts 渲染完成（包含 CDN 加载 + setOption + finished 事件）
-    await page.waitForFunction('window.__renderDone === true', { timeout: 25000 });
+    await page.waitForFunction('window.__renderDone === true', {
+      timeout: 25000,
+    });
 
-    const renderError = await page.evaluate('window.__renderError').catch(() => null);
+    const renderError = await page
+      .evaluate('window.__renderError')
+      .catch(() => null);
     if (renderError) {
       logger.warn('图表 PNG 渲染：浏览器内 ECharts 报错', {
         module: 'Tool:MultiModal',
@@ -374,18 +409,28 @@ async function chartPngDataUriOnce(
     });
 
     // puppeteer screenshot 返回 Uint8Array，Buffer.from 直接处理
-    const base64 = Buffer.from(screenshot as Uint8Array).toString('base64');
+    const base64 = Buffer.from(screenshot).toString('base64');
     return `data:image/png;base64,${base64}`;
   } catch (e: any) {
     if (attempt === 0) {
-      logger.info('图表 PNG 渲染：首次尝试失败（可能 CDN 未缓存），将重试', { module: 'Tool:MultiModal', error: e.message });
+      logger.info('图表 PNG 渲染：首次尝试失败（可能 CDN 未缓存），将重试', {
+        module: 'Tool:MultiModal',
+        error: e.message,
+      });
     } else {
-      logger.warn('图表 PNG 渲染失败（puppeteer，2 次均失败）', { module: 'Tool:MultiModal', error: e.message });
+      logger.warn('图表 PNG 渲染失败（puppeteer，2 次均失败）', {
+        module: 'Tool:MultiModal',
+        error: e.message,
+      });
     }
     return null;
   } finally {
     if (page) {
-      try { await page.close(); } catch { /* ignore */ }
+      try {
+        await page.close();
+      } catch {
+        /* ignore */
+      }
     }
   }
 }
@@ -407,7 +452,7 @@ export async function executeGenerateChart(
       message: `参数校验失败: ${parsed.error}`,
     };
   }
-  const params = parsed.data as GenerateChartParams;
+  const params = parsed.data;
 
   const echartsOption = buildEChartsOption(params);
   // 内部协议 URL：send_notification 收到后用 puppeteer 渲染 PNG 嵌入邮件
@@ -445,10 +490,7 @@ function convertToDashScopeSize(size: string, _model: string): string {
 // ==================== Zod Schema: generate_image ====================
 
 export const generateImageParamsSchema = z.object({
-  prompt: z
-    .string()
-    .min(1)
-    .describe('图片描述（中文或英文），越详细效果越好'),
+  prompt: z.string().min(1).describe('图片描述（中文或英文），越详细效果越好'),
   model: z
     .enum(['wan2.7-image-pro', 'wan2.7-image'])
     .default('wan2.7-image')
@@ -522,7 +564,8 @@ export async function executeGenerateImage(
       type: 'image',
       images: [],
       model,
-      message: '文生图功能未配置：DASHSCOPE_API_KEY 未设置。请在 .env 文件中配置 DASHSCOPE_API_KEY。',
+      message:
+        '文生图功能未配置：DASHSCOPE_API_KEY 未设置。请在 .env 文件中配置 DASHSCOPE_API_KEY。',
     };
   }
 
@@ -548,9 +591,7 @@ export async function executeGenerateImage(
         messages: [
           {
             role: 'user',
-            content: [
-              { text: params.prompt },
-            ],
+            content: [{ text: params.prompt }],
           },
         ],
       },
@@ -564,7 +605,7 @@ export async function executeGenerateImage(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify(requestBody),
     });
@@ -585,11 +626,15 @@ export async function executeGenerateImage(
     }
 
     const responseText = await response.text();
-    const parsed = parseToolResultJson(responseText, ImageGenerationResponseSchema, {
-      module: 'Tool:MultiModal',
-      api: 'image-generation',
-      model,
-    });
+    const parsed = parseToolResultJson(
+      responseText,
+      ImageGenerationResponseSchema,
+      {
+        module: 'Tool:MultiModal',
+        api: 'image-generation',
+        model,
+      },
+    );
     if (!parsed.success) {
       logger.error('FC工具 [generate_image] 响应结构异常', {
         module: 'Tool:MultiModal',
@@ -649,9 +694,10 @@ export async function executeGenerateImage(
       type: 'image',
       images,
       model,
-      message: images.length > 0
-        ? `已使用 ${model} 生成 ${images.length} 张图片`
-        : '图片生成完成但未返回有效图片URL',
+      message:
+        images.length > 0
+          ? `已使用 ${model} 生成 ${images.length} 张图片`
+          : '图片生成完成但未返回有效图片URL',
     };
   } catch (error: any) {
     logger.error('FC工具 [generate_image] 生成图片异常', {
@@ -722,7 +768,9 @@ async function cacheMindmapCode(code: string): Promise<string> {
   return key;
 }
 
-export async function getCachedMindmapCode(key: string): Promise<string | null> {
+export async function getCachedMindmapCode(
+  key: string,
+): Promise<string | null> {
   return mindmapCache.get(key);
 }
 
@@ -735,7 +783,9 @@ export function isMindmapImageUrl(url: string): boolean {
   return url.startsWith(MINDMAP_URL_PREFIX);
 }
 
-export async function parseMindmapImageUrl(url: string): Promise<string | null> {
+export async function parseMindmapImageUrl(
+  url: string,
+): Promise<string | null> {
   if (!isMindmapImageUrl(url)) return null;
   const key = url.slice(MINDMAP_URL_PREFIX.length);
   return getCachedMindmapCode(key);
@@ -755,11 +805,19 @@ export async function mindmapPngDataUri(
 ): Promise<string | null> {
   let lastError: any;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await mindmapPngDataUriOnce(mermaidCode, width, height, attempt);
+    const result = await mindmapPngDataUriOnce(
+      mermaidCode,
+      width,
+      height,
+      attempt,
+    );
     if (result !== null) return result;
     lastError = new Error('mindmapPngDataUri attempt failed');
   }
-  logger.warn('思维导图 PNG 渲染：2 次尝试均失败', { module: 'Tool:MultiModal', error: String(lastError) });
+  logger.warn('思维导图 PNG 渲染：2 次尝试均失败', {
+    module: 'Tool:MultiModal',
+    error: String(lastError),
+  });
   return null;
 }
 
@@ -810,10 +868,17 @@ async function mindmapPngDataUriOnce(
 </html>`;
 
     // setContent 超时 30s + waitForFunction 超时 25s，覆盖 CDN 首次加载 + mermaid 渲染
-    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForFunction('window.__renderDone === true', { timeout: 25000 });
+    await page.setContent(html, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
+    await page.waitForFunction('window.__renderDone === true', {
+      timeout: 25000,
+    });
 
-    const renderError = await page.evaluate('window.__renderError').catch(() => null);
+    const renderError = await page
+      .evaluate('window.__renderError')
+      .catch(() => null);
     if (renderError) {
       logger.warn('思维导图 PNG 渲染：浏览器内 Mermaid 报错', {
         module: 'Tool:MultiModal',
@@ -831,18 +896,28 @@ async function mindmapPngDataUriOnce(
       encoding: 'binary',
     });
 
-    const base64 = Buffer.from(screenshot as Uint8Array).toString('base64');
+    const base64 = Buffer.from(screenshot).toString('base64');
     return `data:image/png;base64,${base64}`;
   } catch (e: any) {
     if (attempt === 0) {
-      logger.info('思维导图 PNG 渲染：首次尝试失败（可能 CDN 未缓存），将重试', { module: 'Tool:MultiModal', error: e.message });
+      logger.info(
+        '思维导图 PNG 渲染：首次尝试失败（可能 CDN 未缓存），将重试',
+        { module: 'Tool:MultiModal', error: e.message },
+      );
     } else {
-      logger.warn('思维导图 PNG 渲染失败（puppeteer，2 次均失败）', { module: 'Tool:MultiModal', error: e.message });
+      logger.warn('思维导图 PNG 渲染失败（puppeteer，2 次均失败）', {
+        module: 'Tool:MultiModal',
+        error: e.message,
+      });
     }
     return null;
   } finally {
     if (page) {
-      try { await page.close(); } catch { /* ignore */ }
+      try {
+        await page.close();
+      } catch {
+        /* ignore */
+      }
     }
   }
 }
@@ -875,7 +950,10 @@ export async function executeCreateMindmap(
 
   // 如果内容不以 mindmap 开头，自动包装
   if (!mermaidCode.startsWith('mindmap')) {
-    mermaidCode = `mindmap\n  root((${params.title}))\n${mermaidCode.split('\n').map(line => '    ' + line).join('\n')}`;
+    mermaidCode = `mindmap\n  root((${params.title}))\n${mermaidCode
+      .split('\n')
+      .map((line) => '    ' + line)
+      .join('\n')}`;
   }
 
   const imageUrl = await mindmapToImageUrl(mermaidCode);

@@ -31,6 +31,13 @@ export function isStandaloneWindow(): boolean {
 }
 
 /**
+ * 从当前 URL 的 hash query 中读取参数（供外部模块读取自定义 query，如引用定位的 anchor）
+ */
+export function readHashQueryValue(name: string): string | null {
+  return readHashQuery(name);
+}
+
+/**
  * 从当前 URL 的 hash query 中读取参数
  */
 function readHashQuery(name: string): string | null {
@@ -47,13 +54,18 @@ function readHashQuery(name: string): string | null {
  * @param documentId 文档 ID；不传则进入草稿模式
  * @param title 窗口标题（仅 Tauri 桌面端生效）
  * @param transientToken 跨窗口传递内容的 token（可选）
+ * @param anchor 引用定位锚点文本（可选，原始未编码文本，函数内部统一 encodeURIComponent）；
+ *               编辑器窗口加载后滚动高亮到该片段位置（RAG 引用定位闭环）
  * @returns 窗口 label（Tauri）或空字符串（浏览器）
  */
 export async function openEditorWindow(
   documentId?: number,
   title?: string,
   transientToken?: string,
+  anchor?: string,
 ): Promise<string> {
+  const encodedAnchor = anchor ? encodeURIComponent(anchor) : null;
+
   if (isTauri()) {
     // 动态 import 避免 Web 环境构建报错
     const { invoke } = await import('@tauri-apps/api/core');
@@ -62,6 +74,7 @@ export async function openEditorWindow(
         documentId: documentId ?? null,
         title: title ?? null,
         transientToken: transientToken ?? null,
+        anchor: encodedAnchor,
       });
       return label;
     } catch (err) {
@@ -73,7 +86,8 @@ export async function openEditorWindow(
   // 浏览器环境兜底
   const id = documentId ?? 'new';
   const tokenParam = transientToken ? `&transientToken=${encodeURIComponent(transientToken)}` : '';
-  const url = `${window.location.pathname}#/editor/${id}?windowMode=standalone${tokenParam}`;
+  const anchorParam = encodedAnchor ? `&anchor=${encodedAnchor}` : '';
+  const url = `${window.location.pathname}#/editor/${id}?windowMode=standalone${tokenParam}${anchorParam}`;
   const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
   if (!newWindow) {
     console.warn('[window] 浏览器拦截了新标签页，请检查弹窗权限');

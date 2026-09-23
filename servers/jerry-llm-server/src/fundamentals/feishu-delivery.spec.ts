@@ -45,7 +45,9 @@ describe('feishu-delivery（F4：重试 + 限流 + 死信）', () => {
 
   describe('deliverWithRetry', () => {
     it('首次成功直接返回，不重试', async () => {
-      const fn = jest.fn().mockResolvedValue({ code: 0, httpStatus: 200 } as FeishuApiResult);
+      const fn = jest
+        .fn()
+        .mockResolvedValue({ code: 0, httpStatus: 200 } as FeishuApiResult);
       const r = await deliverWithRetry(fn, { op: 'test' });
       expect(r.code).toBe(0);
       expect(fn).toHaveBeenCalledTimes(1);
@@ -62,7 +64,10 @@ describe('feishu-delivery（F4：重试 + 限流 + 死信）', () => {
     });
 
     it('不可重试错误：立即返回，不重试，不进死信', async () => {
-      const fn = jest.fn().mockResolvedValue({ code: 230002, httpStatus: 200 } as FeishuApiResult);
+      const fn = jest.fn().mockResolvedValue({
+        code: 230002,
+        httpStatus: 200,
+      } as FeishuApiResult);
       const r = await deliverWithRetry(fn, { op: 'test' });
       expect(r.code).toBe(230002);
       expect(fn).toHaveBeenCalledTimes(1);
@@ -70,7 +75,9 @@ describe('feishu-delivery（F4：重试 + 限流 + 死信）', () => {
     });
 
     it('可重试错误重试耗尽：进入死信队列', async () => {
-      const fn = jest.fn().mockResolvedValue({ code: 0, httpStatus: 503 } as FeishuApiResult);
+      const fn = jest
+        .fn()
+        .mockResolvedValue({ code: 0, httpStatus: 503 } as FeishuApiResult);
       await deliverWithRetry(fn, { op: 'sendCardMessage', receiveId: 'oc_1' });
       // 首次 + 3 次重试 = 4 次
       expect(fn).toHaveBeenCalledTimes(4);

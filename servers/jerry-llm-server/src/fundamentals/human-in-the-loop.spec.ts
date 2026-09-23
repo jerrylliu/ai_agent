@@ -7,13 +7,20 @@
  */
 
 jest.mock('./logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // 飞书双通道审批仅在配置了 NOTIFY_FEISHU_HITL_USER 时启用，
 // 测试中 mock 掉避免模块加载时触发 config 解析（fail-fast 缺少 JWT_SECRET）
 jest.mock('./feishu-notify.service', () => ({
-  sendCardMessage: jest.fn().mockResolvedValue({ success: false, error: 'mocked' }),
+  sendCardMessage: jest
+    .fn()
+    .mockResolvedValue({ success: false, error: 'mocked' }),
   buildCardJson: jest.fn().mockReturnValue({}),
   detectReceiveIdType: jest.fn().mockReturnValue('email'),
   updateCard: jest.fn().mockResolvedValue({ success: true }),
@@ -53,14 +60,24 @@ describe('HumanInTheLoop', () => {
 
     it('manage_session 的只读操作应返回 false', () => {
       // list/search/list_tags 不在 actionFilter 中
-      expect(mod.requiresConfirmation('manage_session', { action: 'list' })).toBe(false);
-      expect(mod.requiresConfirmation('manage_session', { action: 'search' })).toBe(false);
+      expect(
+        mod.requiresConfirmation('manage_session', { action: 'list' }),
+      ).toBe(false);
+      expect(
+        mod.requiresConfirmation('manage_session', { action: 'search' }),
+      ).toBe(false);
     });
 
     it('manage_session 的破坏性操作应返回 true', () => {
-      expect(mod.requiresConfirmation('manage_session', { action: 'delete' })).toBe(true);
-      expect(mod.requiresConfirmation('manage_session', { action: 'create' })).toBe(true);
-      expect(mod.requiresConfirmation('manage_session', { action: 'pin' })).toBe(true);
+      expect(
+        mod.requiresConfirmation('manage_session', { action: 'delete' }),
+      ).toBe(true);
+      expect(
+        mod.requiresConfirmation('manage_session', { action: 'create' }),
+      ).toBe(true);
+      expect(
+        mod.requiresConfirmation('manage_session', { action: 'pin' }),
+      ).toBe(true);
     });
   });
 
@@ -113,12 +130,17 @@ describe('HumanInTheLoop', () => {
 
     it('handleConfirmationResponse 确认时应 resolve true', async () => {
       await loadModule();
-      const promise = mod.requestConfirmation('query_database', { sql: 'SELECT 1' });
-      const id = (promise as any).confirmationId;
+      const promise = mod.requestConfirmation('query_database', {
+        sql: 'SELECT 1',
+      });
+      const id = promise.confirmationId;
 
       let resolved = false;
       let resolvedValue: any = undefined;
-      promise.then((v: any) => { resolved = true; resolvedValue = v; });
+      promise.then((v: any) => {
+        resolved = true;
+        resolvedValue = v;
+      });
 
       mod.handleConfirmationResponse(id, true);
       await Promise.resolve(); // flush microtasks
@@ -129,11 +151,16 @@ describe('HumanInTheLoop', () => {
 
     it('handleConfirmationResponse 拒绝时应 resolve false', async () => {
       await loadModule();
-      const promise = mod.requestConfirmation('mcp_proxy', { server: 'git', tool: 'push' });
-      const id = (promise as any).confirmationId;
+      const promise = mod.requestConfirmation('mcp_proxy', {
+        server: 'git',
+        tool: 'push',
+      });
+      const id = promise.confirmationId;
 
       let resolvedValue: any = undefined;
-      promise.then((v: any) => { resolvedValue = v; });
+      promise.then((v: any) => {
+        resolvedValue = v;
+      });
 
       mod.handleConfirmationResponse(id, false);
       await Promise.resolve();
@@ -148,10 +175,14 @@ describe('HumanInTheLoop', () => {
 
     it('超时后应自动拒绝', async () => {
       await loadModule();
-      const promise = mod.requestConfirmation('send_notification', { channel: 'email' });
+      const promise = mod.requestConfirmation('send_notification', {
+        channel: 'email',
+      });
 
       let resolvedValue: any = null;
-      promise.then((v: any) => { resolvedValue = v; });
+      promise.then((v: any) => {
+        resolvedValue = v;
+      });
 
       // 快进 6 分钟（超过 5 分钟超时）
       jest.advanceTimersByTime(6 * 60 * 1000);
@@ -173,9 +204,11 @@ describe('HumanInTheLoop', () => {
     afterEach(() => jest.useRealTimers());
 
     it('应返回待确认请求的信息', () => {
-      // eslint-disable-next-line @typescript-eslint/no-floating-promises
-      const promise = mod.requestConfirmation('query_database', { sql: 'SELECT 1', purpose: '测试' });
-      const id = (promise as any).confirmationId;
+      const promise = mod.requestConfirmation('query_database', {
+        sql: 'SELECT 1',
+        purpose: '测试',
+      });
+      const id = promise.confirmationId;
 
       const info = mod.getPendingConfirmationInfo(id);
       expect(info).toBeDefined();
