@@ -18,6 +18,11 @@ import { calculateChecksum, computeContentHash } from './file-storage.js';
 import { SemanticCache } from './semantic-cache.js';
 import { getEmbeddings } from './vector-store/store-state.js';
 import { UNTRUSTED_CONTEXT_INSTRUCTION } from './prompt-injection-guard.js';
+import {
+  collectBaselineDocIds,
+  fuseGraphSupplements,
+  resolveGraphSupplements,
+} from './kg/kg-link.js';
 import mysql from 'mysql2/promise';
 
 // 配置（项目根/uploads，与 main.ts 的 /files 静态服务目录同源）
@@ -39,7 +44,12 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 //   - 仅缓存默认参数（topK=6, 无 filter）的检索结果，非默认参数跳过缓存
 //   - 嵌入计算依赖 Ollama，不可用时降级为"始终 miss"
 //   - 缓存条目上限 100，TTL 1 小时，相似度阈值 0.92
-type RagSearchResult = Array<{ content: string; metadata: any; score: number; vectorScore?: number }>;
+type RagSearchResult = Array<{
+  content: string;
+  metadata: any;
+  score: number;
+  vectorScore?: number;
+}>;
 
 const ragSemanticCache = new SemanticCache<RagSearchResult>(
   {
@@ -56,12 +66,7 @@ const ragSemanticCache = new SemanticCache<RagSearchResult>(
 );
 
 /**
- * 从检索结果构建 LLM 上下文
- *
- * 区分文本块和图片块：
- * - 文本块：`【文档 N】\n{content}`
-/**
- * 把检索结果构建为 LLM 上下文
+ * 把检索结果构建为 LLM 上下文（含引用来源映射）
  *
  * 格式：
  * - 文档块：`【文档 N】\n{content}`
@@ -70,18 +75,38 @@ const ragSemanticCache = new SemanticCache<RagSearchResult>(
  * 图片块的原图路径会转换为可访问的完整 URL（通过 /images 静态文件服务），
  * 并以 Markdown 图片语法附加在描述后面，LLM 可直接在回复中引用展示。
  */
-export function buildContextFromResults(
-  results: Array<{ content: string; metadata?: Record<string, any> | unknown }>,
-): string {
-  // 按文档分组组装（生成侧提纯）：
-  // 同一文档的多个块（同文档多段落命中 / 多个子块映射到同一父块）合并到同一
-  // 【文档 N】标题下，保持首次出现的排序位置 —— 模型能把同文档的分散信息当作
-  // 整体连贯阅读（intra-document 推理），同时消除逐块重复编号的头部噪声。
-  // 图片块不参与合并，仍按出现顺序独立编号。
-  interface ContextGroup {
-    kind: 'doc' | 'image';
-    items: Array<{ content: string; meta: Record<string, any> }>;
-  }
+
+/** 引用来源条目：【文档 N】编号 → 文档元数据映射（供答案引用定位与前端来源卡片使用） */
+export interface DocSource {
+  /** 与上下文中的【文档 N】编号一致（从 1 起） */
+  index: number;
+  /** 文档唯一 id（引用定位主键；与分组键同源：documentId 优先，退化 source） */
+  documentId: string;
+  /** 展示标题：documentTitle 优先，退化 source 文件名，再退化【文档 N】 */
+  title: string;
+  /** 该文档首块内容预览（前 120 字符去换行），用于来源卡片 */
+  snippet: string;
+}
+
+interface ContextGroup {
+  kind: 'doc' | 'image';
+  items: Array<{ content: string; meta: Record<string, any> }>;
+}
+
+/** 上下文构建的输入形状（与历史签名保持兼容） */
+type ContextInput = Array<{
+  content: string;
+  metadata?: Record<string, any> | unknown;
+}>;
+
+/**
+ * 按文档分组组装（生成侧提纯）：
+ * 同一文档的多个块（同文档多段落命中 / 多个子块映射到同一父块）合并到同一
+ * 【文档 N】标题下，保持首次出现的排序位置 —— 模型能把同文档的分散信息当作
+ * 整体连贯阅读（intra-document 推理），同时消除逐块重复编号的头部噪声。
+ * 图片块不参与合并，仍按出现顺序独立编号。
+ */
+function groupResultsByDoc(results: ContextInput): ContextGroup[] {
   const groups: ContextGroup[] = [];
   const docGroupIndex = new Map<string, number>();
 
@@ -96,7 +121,9 @@ export function buildContextFromResults(
       '[图片]',
     );
     // 文档键优先 documentId，缺失时退化为 source / 内容前缀（保证不同块不误并同文档）
-    const docKey = String(meta.documentId || meta.source || r.content.slice(0, 50));
+    const docKey = String(
+      meta.documentId || meta.source || r.content.slice(0, 50),
+    );
     const existing = docGroupIndex.get(docKey);
     if (existing === undefined) {
       docGroupIndex.set(docKey, groups.length);
@@ -105,6 +132,22 @@ export function buildContextFromResults(
       groups[existing].items.push({ content: cleanedContent, meta });
     }
   }
+  return groups;
+}
+
+/**
+ * 从检索结果构建 LLM 上下文，并返回【文档 N】编号 → 文档元数据的来源映射。
+ *
+ * sources 与 context 中的编号严格同源（同一分组循环产出），下游
+ * resolveCitations（citations.ts）据此把模型输出的（【文档 X】）解析为
+ * 可定位的引用条目；无效编号（模型幻觉）自然解析不到，会被剔除。
+ */
+export function buildContextWithSources(results: ContextInput): {
+  context: string;
+  sources: DocSource[];
+} {
+  const groups = groupResultsByDoc(results);
+  const sources: DocSource[] = [];
 
   let docIdx = 0;
   let imgIdx = 0;
@@ -127,6 +170,20 @@ export function buildContextFromResults(
         return `【图片 ${imgIdx}】\n${g.items[0].content}${imageMarkdown}`;
       }
       docIdx++;
+      // 引用来源映射：与【文档 N】编号严格同步（同一循环产出，不会错位）
+      const meta = g.items[0].meta;
+      const documentId = String(meta.documentId || meta.source || '');
+      const rawTitle = String(meta.documentTitle || meta.title || '');
+      // documentTitle 缺失时退化 source 的文件名部分；再退化占位标题
+      const title =
+        rawTitle ||
+        (meta.source ? String(meta.source).split(/[\\/]/).pop() || '' : '') ||
+        `文档 ${docIdx}`;
+      const snippet = g.items[0].content
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+      sources.push({ index: docIdx, documentId, title, snippet });
       const body = g.items.map((it) => it.content).join('\n\n');
       return `【文档 ${docIdx}】\n${body}`;
     })
@@ -141,10 +198,19 @@ export function buildContextFromResults(
   // 检索内容属于不可信上下文：附加隔离指令，防止文档中的恶意指令覆盖系统规则（提示词注入纵深防御）
   instructions += UNTRUSTED_CONTEXT_INSTRUCTION;
 
+  let finalContext = context;
   if (context.trim().length > 0) {
-    return context + instructions;
+    finalContext = context + instructions;
   }
-  return context;
+  return { context: finalContext, sources };
+}
+
+/**
+ * 从检索结果构建 LLM 上下文（仅文本，兼容历史调用方）
+ * 需要引用来源映射时请使用 buildContextWithSources
+ */
+export function buildContextFromResults(results: ContextInput): string {
+  return buildContextWithSources(results).context;
 }
 
 /**
@@ -155,7 +221,9 @@ export function buildContextFromResults(
  * 让出的名额可由唯一块补位（多 gold 题型的可见信息面直接变大）。
  * 归一化规则：连续空白折叠为单个空格 + 去首尾空白，可捕获仅格式差异的重复。
  */
-export function dedupeByNormalizedContent<T extends { content: string }>(results: T[]): T[] {
+export function dedupeByNormalizedContent<T extends { content: string }>(
+  results: T[],
+): T[] {
   const seen = new Set<string>();
   const output: T[] = [];
   for (const r of results) {
@@ -193,7 +261,9 @@ function hasConflictingSourceSignals(
       continue;
     }
     // 文档键优先 documentId，缺失时退化为 source / 内容前缀（保证不同块不误并同文档）
-    const docKey = String(meta.documentId || meta.source || r.content.slice(0, 50));
+    const docKey = String(
+      meta.documentId || meta.source || r.content.slice(0, 50),
+    );
     allDocs.add(docKey);
     if (CONFLICT_MARKER_RE.test(r.content)) {
       markedDocs.add(docKey);
@@ -285,7 +355,10 @@ export async function handleDocumentUpload(file: any): Promise<{
     // 同文件重复上传（legacy 内部重复）由 addDocuments 的 chunk_hash 幂等去重兜底
     const fileChecksum = calculateChecksum(file.buffer);
     const contentHash = computeContentHash(textContent);
-    const dupCheck = await checkLegacyUploadDuplicates(fileChecksum, contentHash);
+    const dupCheck = await checkLegacyUploadDuplicates(
+      fileChecksum,
+      contentHash,
+    );
     if (dupCheck.fileDuplicate) {
       if (tempFilePath !== filePath) {
         fs.unlinkSync(tempFilePath);
@@ -471,9 +544,7 @@ async function checkLegacyUploadDuplicates(
  * 场景：检索命中了含 `[图片]` 占位符的文本块，但没命中图片描述块时，
  * 通过 docId 补查图片信息，把可访问 URL 追加到上下文，让 LLM 能展示图片。
  */
-async function queryImageDescriptionsByDocId(
-  docIds: string[],
-): Promise<
+async function queryImageDescriptionsByDocId(docIds: string[]): Promise<
   Array<{
     docId: string;
     sourceIndex: number;
@@ -616,9 +687,7 @@ export async function enrichWithImageDescriptions(
 /**
  * 收集结果中所有文本块的 docId（用于补查图片）
  */
-function collectDocIds(
-  results: Array<{ metadata?: any }>,
-): string[] {
+function collectDocIds(results: Array<{ metadata?: any }>): string[] {
   const docIds = new Set<string>();
   for (const r of results) {
     const meta = r.metadata || {};
@@ -670,7 +739,10 @@ function extractImageKeywords(query: string): string[] {
     .replace(/-/g, ' ') // 拆分连字符
     .replace(/所有图片|全部图片|所有图|全部图/g, '') // 去除"所有图片"短语
     .replace(/图片|照片|图像|截图|插图|原图/g, '') // 去除图片相关词
-    .replace(/给我|拿出来|展示|显示|找到|查找|搜索|搜|看看|有没有|有吗|在哪|知识库/g, '')
+    .replace(
+      /给我|拿出来|展示|显示|找到|查找|搜索|搜|看看|有没有|有吗|在哪|知识库/g,
+      '',
+    )
     .replace(/所有|全部|有关|关于|的|了|是|在|有|和|或/g, '') // 去除常见停用词
     .replace(/[？?！!。，,.、\s]+/g, ' ')
     .trim();
@@ -954,8 +1026,18 @@ export async function retrieveFromKnowledgeBase(
   const effectiveTopK = isAllImagesQuery ? Math.max(topK, 10) : topK;
 
   // 并行执行：常规检索 + 图片描述块精确检索（图片意图时）
-  const searchPromises: Promise<Array<{ content: string; metadata: any; score: number }>>[] = [
-    hybridSearchKnowledgeBase(query, effectiveTopK, 0.7, 0.3, filter, undefined, config.retrievalMinSimilarity),
+  const searchPromises: Promise<
+    Array<{ content: string; metadata: any; score: number }>
+  >[] = [
+    hybridSearchKnowledgeBase(
+      query,
+      effectiveTopK,
+      0.7,
+      0.3,
+      filter,
+      undefined,
+      config.retrievalMinSimilarity,
+    ),
   ];
 
   if (isImageQuery) {
@@ -971,7 +1053,11 @@ export async function retrieveFromKnowledgeBase(
   if (imageResults && imageResults.length > 0) {
     const existingPaths = new Set(
       results
-        .filter((r) => r.metadata?.chunk_type === 'image' || r.metadata?.chunk_role === 'image')
+        .filter(
+          (r) =>
+            r.metadata?.chunk_type === 'image' ||
+            r.metadata?.chunk_role === 'image',
+        )
         .map((r) => r.metadata?.image_path)
         .filter(Boolean),
     );
@@ -995,17 +1081,47 @@ export async function retrieveFromKnowledgeBase(
   await enrichWithImageDescriptions(results, query);
 
   // 写入语义缓存（仅有结果时缓存，避免空结果污染）
+  // ⚠️ 缓存只存基线：KG 图补充位每次链接结果可能不同，入缓存会把补充块固化给相似查询
   if (cacheable && results.length > 0) {
     void ragSemanticCache.set(query, results);
   }
 
-  const context = buildContextFromResults(results);
+  // ==================== KG 图补充位（基线优先，图只占末尾 supplementSlots 个槽位） ====================
+  // 跳过条件（详见 hybridRetrieveFromKnowledgeBase 同款注释）：带 filter 或图片意图的路径不补充。
+  // kgEnabled=false / 索引未加载 / 链接失败时 supplements 为 []，行为与纯基线完全一致。
+  let finalResults = results;
+  if (!filter && !isImageQuery) {
+    const supplements = await resolveGraphSupplements(
+      query,
+      collectBaselineDocIds(results),
+    );
+    if (supplements.length > 0) {
+      finalResults = fuseGraphSupplements(
+        results,
+        supplements.map((s) => ({
+          content: s.content,
+          metadata: s.metadata,
+          score: s.score,
+        })),
+        effectiveTopK,
+      );
+      logger.info('KG 图补充位已融合进 RAG 检索结果', {
+        module: 'RagService',
+        baselineCount: results.length,
+        supplementCount: supplements.length,
+        mergedCount: finalResults.length,
+        topK: effectiveTopK,
+      });
+    }
+  }
+
+  const context = buildContextFromResults(finalResults);
 
   return {
     query,
-    results,
+    results: finalResults,
     context,
-    hasResults: results.length > 0,
+    hasResults: finalResults.length > 0,
   };
 }
 
@@ -1051,7 +1167,10 @@ export async function hybridRetrieveFromKnowledgeBase(
   // topK 判定须与新默认值保持一致（3→6），否则默认调用静默失去缓存能力
   const cacheable =
     config.semanticCacheEnabled &&
-    topK === 6 && vectorWeight === 0.7 && bm25Weight === 0.3 && !filter;
+    topK === 6 &&
+    vectorWeight === 0.7 &&
+    bm25Weight === 0.3 &&
+    !filter;
   if (cacheable) {
     const cached = await ragSemanticCache.get(query);
     if (cached) {
@@ -1073,20 +1192,41 @@ export async function hybridRetrieveFromKnowledgeBase(
   const effectiveTopK = isAllImagesQuery ? Math.max(topK, 10) : topK;
 
   // 并行执行：常规检索 + 图片描述块精确检索（图片意图时）
-  const searchPromises: Promise<Array<{ content: string; metadata: any; score: number; sources?: string[] }>>[] = [
-    hybridSearchKnowledgeBase(query, effectiveTopK, vectorWeight, bm25Weight, filter, undefined, config.retrievalMinSimilarity),
+  const searchPromises: Promise<
+    Array<{ content: string; metadata: any; score: number; sources?: string[] }>
+  >[] = [
+    hybridSearchKnowledgeBase(
+      query,
+      effectiveTopK,
+      vectorWeight,
+      bm25Weight,
+      filter,
+      undefined,
+      config.retrievalMinSimilarity,
+    ),
   ];
 
   if (isImageQuery) {
     searchPromises.push(
-      searchImageChunksPrecise(query, filter, isAllImagesQuery, vectorWeight, bm25Weight),
+      searchImageChunksPrecise(
+        query,
+        filter,
+        isAllImagesQuery,
+        vectorWeight,
+        bm25Weight,
+      ),
     );
   }
 
   const [textResults, imageResults] = await Promise.all(searchPromises);
 
   // 合并结果：文本结果 + 图片描述块结果（去重）
-  const merged: Array<{ content: string; metadata: any; score: number; sources: string[] }> = textResults.map((r) => ({
+  const merged: Array<{
+    content: string;
+    metadata: any;
+    score: number;
+    sources: string[];
+  }> = textResults.map((r) => ({
     content: r.content,
     metadata: r.metadata,
     score: r.score,
@@ -1095,7 +1235,11 @@ export async function hybridRetrieveFromKnowledgeBase(
   if (imageResults && imageResults.length > 0) {
     const existingPaths = new Set(
       merged
-        .filter((r) => r.metadata?.chunk_type === 'image' || r.metadata?.chunk_role === 'image')
+        .filter(
+          (r) =>
+            r.metadata?.chunk_type === 'image' ||
+            r.metadata?.chunk_role === 'image',
+        )
         .map((r) => r.metadata?.image_path)
         .filter(Boolean),
     );
@@ -1124,17 +1268,51 @@ export async function hybridRetrieveFromKnowledgeBase(
   await enrichWithImageDescriptions(merged, query);
 
   // 写入语义缓存（仅有结果时缓存，避免空结果污染）
+  // ⚠️ 缓存只存基线：KG 图补充位不入缓存
   if (cacheable && merged.length > 0) {
     void ragSemanticCache.set(query, merged);
   }
 
-  const context = buildContextFromResults(merged);
+  // ==================== KG 图补充位（基线优先，图只占末尾 supplementSlots 个槽位） ====================
+  // 跳过条件（任一成立即纯基线）：
+  // - filter 非空：调用方（如 /knowledge/hybrid-search 传 documentId）显式收窄了检索范围，
+  //   图补充块来自其他文档，注入即越界；
+  // - 图片意图：该路径末尾追加图片描述块，结果数可超出 effectiveTopK，
+  //   按门闩融合公式截断会挤掉图片块（30 题门闩口径只覆盖纯文本检索）。
+  let finalMerged = merged;
+  if (!filter && !isImageQuery) {
+    const supplements = await resolveGraphSupplements(
+      query,
+      collectBaselineDocIds(merged),
+    );
+    if (supplements.length > 0) {
+      finalMerged = fuseGraphSupplements(
+        merged,
+        supplements.map((s) => ({
+          content: s.content,
+          metadata: s.metadata,
+          score: s.score,
+          sources: [] as string[],
+        })),
+        effectiveTopK,
+      );
+      logger.info('KG 图补充位已融合进混合检索结果', {
+        module: 'RagService',
+        baselineCount: merged.length,
+        supplementCount: supplements.length,
+        mergedCount: finalMerged.length,
+        topK: effectiveTopK,
+      });
+    }
+  }
+
+  const context = buildContextFromResults(finalMerged);
 
   return {
     query,
-    results: merged,
+    results: finalMerged,
     context,
-    hasResults: merged.length > 0,
+    hasResults: finalMerged.length > 0,
   };
 }
 /**

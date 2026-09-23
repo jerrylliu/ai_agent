@@ -8,7 +8,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // config 整体 mock：避免 zod fail-fast 依赖完整环境变量
@@ -45,6 +50,14 @@ jest.mock('../rag-service', () => ({
   },
 }));
 
+// KG 图补充位不在本测试关注范围：mock 掉避免拉起 kg-core/kg-index（模块加载期读 config.kg）与模型层。
+// 返回空补充 = kgEnabled 关闭时的等价行为，检索链路与纯基线一致。
+jest.mock('../kg/kg-link', () => ({
+  collectBaselineDocIds: jest.fn().mockReturnValue([]),
+  resolveGraphSupplements: jest.fn().mockResolvedValue([]),
+  fuseGraphSupplements: jest.fn((baseline: unknown[]) => baseline),
+}));
+
 import { executeSearchKnowledgeBase } from './search-knowledge-base';
 import { multiHopSearch } from '../vector-store/multi-hop-search';
 import { hybridSearchKnowledgeBase } from '../vector-store';
@@ -67,10 +80,11 @@ function makeWidePool(n: number): Array<Record<string, unknown>> {
 
 /** rerank 透传 mock：打乱顺序返回（模拟精排重排序），并补 rerankScore 字段 */
 function passthroughRerankShuffled(): void {
-  mockedRerank.mockImplementation(async (_query: string, results: Array<Record<string, unknown>>) =>
-    [...results]
-      .reverse()
-      .map((r) => ({ ...r, originalScore: r.score, rerankScore: r.score })),
+  mockedRerank.mockImplementation(
+    async (_query: string, results: Array<Record<string, unknown>>) =>
+      [...results]
+        .reverse()
+        .map((r) => ({ ...r, originalScore: r.score, rerankScore: r.score })),
   );
 }
 
@@ -138,10 +152,15 @@ describe('二段式检索：收口截断', () => {
     });
     passthroughRerankShuffled();
 
-    const result = await executeSearchKnowledgeBase({ query: '测试查询', top_k: 3 });
+    const result = await executeSearchKnowledgeBase({
+      query: '测试查询',
+      top_k: 3,
+    });
 
     expect(result.results).toHaveLength(3);
-    expect(result.results.map((r) => r.score)).toEqual([1, 0.9666666666666667, 0.9333333333333333]);
+    expect(result.results.map((r) => r.score)).toEqual([
+      1, 0.9666666666666667, 0.9333333333333333,
+    ]);
     expect(result.results[0].content).toBe('chunk-0');
   });
 
@@ -178,11 +197,21 @@ describe('二段式检索：父块去重', () => {
     });
     mockedRerank.mockImplementation(
       async (_query: string, results: Array<Record<string, unknown>>) =>
-        results.map((r) => ({ ...r, originalScore: r.score, rerankScore: r.score })),
+        results.map((r) => ({
+          ...r,
+          originalScore: r.score,
+          rerankScore: r.score,
+        })),
     );
 
-    const result = await executeSearchKnowledgeBase({ query: '测试查询', top_k: 3 });
+    const result = await executeSearchKnowledgeBase({
+      query: '测试查询',
+      top_k: 3,
+    });
 
-    expect(result.results.map((r) => r.content)).toEqual(['parent-A', 'parent-B']);
+    expect(result.results.map((r) => r.content)).toEqual([
+      'parent-A',
+      'parent-B',
+    ]);
   });
 });
