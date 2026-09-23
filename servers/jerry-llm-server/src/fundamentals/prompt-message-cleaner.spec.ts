@@ -14,7 +14,12 @@
  *   8. 回归测试：修复前的 bug 行为不会重现（模型能看到最后一轮工具结果）
  */
 
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
+import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+  ToolMessage,
+} from '@langchain/core/messages';
 import { cleanMessagesForFinalSummary } from './prompt-message-cleaner';
 
 // 辅助构造函数：减少测试用例的样板代码
@@ -22,7 +27,10 @@ const sys = (text = '系统规则') => new SystemMessage(text);
 const human = (text = '用户问题') => new HumanMessage(text);
 const ai = (text = 'AI回答') => new AIMessage(text);
 const aiWithToolCalls = (text = '', toolName = 'search_knowledge_base') =>
-  new AIMessage({ content: text, tool_calls: [{ id: 'tc_1', name: toolName, args: {} }] });
+  new AIMessage({
+    content: text,
+    tool_calls: [{ id: 'tc_1', name: toolName, args: {} }],
+  });
 const tool = (text = '工具结果', toolCallId = 'tc_1') =>
   new ToolMessage({ content: text, tool_call_id: toolCallId });
 
@@ -50,16 +58,16 @@ describe('cleanMessagesForFinalSummary', () => {
       expect((result[1] as HumanMessage).content).toBe('查一下武器室规范');
 
       // 所有带 tool_calls 的 AIMessage 都被移除
-      const aiMsgs = result.filter(m => m instanceof AIMessage);
+      const aiMsgs = result.filter((m) => m instanceof AIMessage);
       expect(aiMsgs).toHaveLength(0);
 
       // 只保留最后一轮的 ToolMessage（第3轮结果）
-      const toolMsgs = result.filter(m => m instanceof ToolMessage);
+      const toolMsgs = result.filter((m) => m instanceof ToolMessage);
       expect(toolMsgs).toHaveLength(1);
-      expect((toolMsgs[0] as ToolMessage).content).toBe('第3轮结果');
+      expect(toolMsgs[0].content).toBe('第3轮结果');
 
       // 早期轮次的 ToolMessage 被移除
-      const contents = result.map(m => (m as { content: string }).content);
+      const contents = result.map((m) => (m as { content: string }).content);
       expect(contents).not.toContain('第1轮结果A');
       expect(contents).not.toContain('第1轮结果B');
       expect(contents).not.toContain('第2轮结果');
@@ -75,19 +83,20 @@ describe('cleanMessagesForFinalSummary', () => {
 
       const result = cleanMessagesForFinalSummary(messages);
 
-      const toolMsgs = result.filter(m => m instanceof ToolMessage);
+      const toolMsgs = result.filter((m) => m instanceof ToolMessage);
       expect(toolMsgs).toHaveLength(1);
-      expect((toolMsgs[0] as ToolMessage).content).toBe('唯一一轮结果');
+      expect(toolMsgs[0].content).toBe('唯一一轮结果');
 
       // 带 tool_calls 的 AIMessage 被移除
-      expect(result.filter(m => m instanceof AIMessage)).toHaveLength(0);
+      expect(result.filter((m) => m instanceof AIMessage)).toHaveLength(0);
     });
 
     it('最后一轮是被熔断的 ToolMessage：保留（模型能理解该收尾）', () => {
       // 场景：工具调用次数超限，最后一轮 ToolMessage 是"次数已达上限"提示
       const circuitBrokenContent = JSON.stringify({
         error: true,
-        message: '工具调用总次数已达上限，请基于已有信息直接回答用户问题，不要再调用任何工具。',
+        message:
+          '工具调用总次数已达上限，请基于已有信息直接回答用户问题，不要再调用任何工具。',
       });
       const messages = [
         sys(),
@@ -100,9 +109,9 @@ describe('cleanMessagesForFinalSummary', () => {
 
       const result = cleanMessagesForFinalSummary(messages);
 
-      const toolMsgs = result.filter(m => m instanceof ToolMessage);
+      const toolMsgs = result.filter((m) => m instanceof ToolMessage);
       expect(toolMsgs).toHaveLength(1);
-      expect((toolMsgs[0] as ToolMessage).content).toBe(circuitBrokenContent);
+      expect(toolMsgs[0].content).toBe(circuitBrokenContent);
     });
   });
 
@@ -118,7 +127,7 @@ describe('cleanMessagesForFinalSummary', () => {
       const result = cleanMessagesForFinalSummary(messages);
 
       // 没有 tool_calls 历史，所有 ToolMessage 被移除
-      expect(result.filter(m => m instanceof ToolMessage)).toHaveLength(0);
+      expect(result.filter((m) => m instanceof ToolMessage)).toHaveLength(0);
       // SystemMessage 和 HumanMessage 保留
       expect(result[0]).toBeInstanceOf(SystemMessage);
       expect(result[1]).toBeInstanceOf(HumanMessage);
@@ -137,11 +146,11 @@ describe('cleanMessagesForFinalSummary', () => {
       const result = cleanMessagesForFinalSummary(messages);
 
       // 不带 tool_calls 的 AIMessage 保留
-      const aiMsgs = result.filter(m => m instanceof AIMessage);
+      const aiMsgs = result.filter((m) => m instanceof AIMessage);
       expect(aiMsgs).toHaveLength(1);
-      expect((aiMsgs[0] as AIMessage).content).toBe('我先理解一下你的问题');
+      expect(aiMsgs[0].content).toBe('我先理解一下你的问题');
       // tool_calls 为空或 undefined（没有实际工具调用，所以不被移除）
-      expect(((aiMsgs[0] as AIMessage).tool_calls?.length ?? 0)).toBe(0);
+      expect(aiMsgs[0].tool_calls?.length ?? 0).toBe(0);
     });
 
     it('SystemMessage 始终保留（约定在索引 0）', () => {
@@ -159,20 +168,19 @@ describe('cleanMessagesForFinalSummary', () => {
     });
 
     it('纯函数：不修改原数组', () => {
-      const messages = [
-        sys(),
-        human(),
-        aiWithToolCalls(),
-        tool(),
-      ];
+      const messages = [sys(), human(), aiWithToolCalls(), tool()];
       const originalLength = messages.length;
-      const originalContents = messages.map(m => (m as { content: string }).content);
+      const originalContents = messages.map(
+        (m) => (m as { content: string }).content,
+      );
 
       cleanMessagesForFinalSummary(messages);
 
       // 原数组不变
       expect(messages.length).toBe(originalLength);
-      expect(messages.map(m => (m as { content: string }).content)).toEqual(originalContents);
+      expect(messages.map((m) => (m as { content: string }).content)).toEqual(
+        originalContents,
+      );
     });
 
     it('空数组：返回空数组（不异常）', () => {
@@ -201,7 +209,7 @@ describe('cleanMessagesForFinalSummary', () => {
       const result = cleanMessagesForFinalSummary(messages);
 
       // 关键断言：模型能看到最后一轮工具结果
-      const contents = result.map(m => (m as { content: string }).content);
+      const contents = result.map((m) => (m as { content: string }).content);
       expect(contents).toContain(lastRoundKBResult);
 
       // 早期轮次结果被移除（避免 context 过长 + 协议混乱）
@@ -221,7 +229,7 @@ describe('cleanMessagesForFinalSummary', () => {
       const result = cleanMessagesForFinalSummary(messages);
 
       // 用户原始问题必须保留（否则模型不知道要回答什么）
-      const contents = result.map(m => (m as { content: string }).content);
+      const contents = result.map((m) => (m as { content: string }).content);
       expect(contents).toContain(userQuestion);
     });
   });

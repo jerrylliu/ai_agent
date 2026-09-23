@@ -1,9 +1,24 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  Query,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { KnowledgeSourceService } from '../services/knowledge-source.service.js';
 import { SourceType } from '../entities/knowledge-source.entity.js';
 import { logger } from '../fundamentals/logger';
-import { CreateKnowledgeSourceSchema, UpdateKnowledgeSourceSchema, BatchSyncSchema, type CreateKnowledgeSourceInput, type UpdateKnowledgeSourceInput } from './knowledge-source.schema.js';
+import {
+  CreateKnowledgeSourceSchema,
+  UpdateKnowledgeSourceSchema,
+  BatchSyncSchema,
+  type CreateKnowledgeSourceInput,
+  type UpdateKnowledgeSourceInput,
+} from './knowledge-source.schema.js';
 
 /**
  * 知识源管理接口限流调整
@@ -20,16 +35,33 @@ export class KnowledgeSourceController {
 
   @Post()
   async create(
-    @Body() body: { name: string; type: SourceType; config: Record<string, any>; syncInterval?: number; maxDepth?: number; maxPages?: number; preferMarkdown?: boolean; enableJsRendering?: boolean },
+    @Body()
+    body: {
+      name: string;
+      type: SourceType;
+      config: Record<string, any>;
+      syncInterval?: number;
+      maxDepth?: number;
+      maxPages?: number;
+      preferMarkdown?: boolean;
+      enableJsRendering?: boolean;
+    },
   ) {
     try {
-      const validated = CreateKnowledgeSourceSchema.parse(body) as CreateKnowledgeSourceInput & { type: SourceType };
+      const validated = CreateKnowledgeSourceSchema.parse(
+        body,
+      ) as CreateKnowledgeSourceInput & { type: SourceType };
       const source = await this.sourceService.create(validated);
       return { success: true, data: source };
     } catch (error: any) {
-      logger.error('创建知识源失败', { module: 'KnowledgeSourceController', error: error.message });
+      logger.error('创建知识源失败', {
+        module: 'KnowledgeSourceController',
+        error: error.message,
+      });
       if (error.name === 'ZodError') {
-        const messages = error.issues.map((i: any) => `${i.path.join('.')}: ${i.message}`).join('; ');
+        const messages = error.issues
+          .map((i: any) => `${i.path.join('.')}: ${i.message}`)
+          .join('; ');
         return { success: false, message: messages };
       }
       return { success: false, message: error.message };
@@ -42,7 +74,10 @@ export class KnowledgeSourceController {
       const sources = await this.sourceService.findAll();
       return { success: true, data: sources };
     } catch (error: any) {
-      logger.error('获取知识源列表失败', { module: 'KnowledgeSourceController', error: error.message });
+      logger.error('获取知识源列表失败', {
+        module: 'KnowledgeSourceController',
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -53,7 +88,10 @@ export class KnowledgeSourceController {
       const stats = await this.sourceService.getStats();
       return { success: true, data: stats };
     } catch (error: any) {
-      logger.error('获取知识源统计失败', { module: 'KnowledgeSourceController', error: error.message });
+      logger.error('获取知识源统计失败', {
+        module: 'KnowledgeSourceController',
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -62,7 +100,7 @@ export class KnowledgeSourceController {
   async getTypes() {
     return {
       success: true,
-      data: Object.values(SourceType).map(t => ({
+      data: Object.values(SourceType).map((t) => ({
         value: t,
         label: t === 'web' ? 'Web 网页' : t === 'feishu' ? '飞书' : t,
       })),
@@ -75,7 +113,11 @@ export class KnowledgeSourceController {
       const source = await this.sourceService.findOne(Number(id));
       return { success: true, data: source };
     } catch (error: any) {
-      logger.error('获取知识源详情失败', { module: 'KnowledgeSourceController', id, error: error.message });
+      logger.error('获取知识源详情失败', {
+        module: 'KnowledgeSourceController',
+        id,
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -86,7 +128,11 @@ export class KnowledgeSourceController {
       const count = await this.sourceService.getPageCount(Number(id));
       return { success: true, data: { count } };
     } catch (error: any) {
-      logger.error('获取页面数量失败', { module: 'KnowledgeSourceController', id, error: error.message });
+      logger.error('获取页面数量失败', {
+        module: 'KnowledgeSourceController',
+        id,
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -94,16 +140,32 @@ export class KnowledgeSourceController {
   @Put(':id')
   async update(
     @Param('id') id: string,
-    @Body() body: Partial<{ name: string; config: Record<string, any>; syncInterval: number; maxDepth: number; maxPages: number; preferMarkdown: boolean; enableJsRendering: boolean; enabled: boolean }>,
+    @Body()
+    body: Partial<{
+      name: string;
+      config: Record<string, any>;
+      syncInterval: number;
+      maxDepth: number;
+      maxPages: number;
+      preferMarkdown: boolean;
+      enableJsRendering: boolean;
+      enabled: boolean;
+    }>,
   ) {
     try {
-      const validated = UpdateKnowledgeSourceSchema.parse(body) as UpdateKnowledgeSourceInput;
+      const validated = UpdateKnowledgeSourceSchema.parse(body);
       const source = await this.sourceService.update(Number(id), validated);
       return { success: true, data: source };
     } catch (error: any) {
-      logger.error('更新知识源失败', { module: 'KnowledgeSourceController', id, error: error.message });
+      logger.error('更新知识源失败', {
+        module: 'KnowledgeSourceController',
+        id,
+        error: error.message,
+      });
       if (error.name === 'ZodError') {
-        const messages = error.issues.map((i: any) => `${i.path.join('.')}: ${i.message}`).join('; ');
+        const messages = error.issues
+          .map((i: any) => `${i.path.join('.')}: ${i.message}`)
+          .join('; ');
         return { success: false, message: messages };
       }
       return { success: false, message: error.message };
@@ -116,7 +178,11 @@ export class KnowledgeSourceController {
       await this.sourceService.remove(Number(id));
       return { success: true, message: '知识源已删除' };
     } catch (error: any) {
-      logger.error('删除知识源失败', { module: 'KnowledgeSourceController', id, error: error.message });
+      logger.error('删除知识源失败', {
+        module: 'KnowledgeSourceController',
+        id,
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -127,7 +193,11 @@ export class KnowledgeSourceController {
       const syncLog = await this.sourceService.syncSource(Number(id));
       return { success: true, data: syncLog };
     } catch (error: any) {
-      logger.error('手动同步知识源失败', { module: 'KnowledgeSourceController', id, error: error.message });
+      logger.error('手动同步知识源失败', {
+        module: 'KnowledgeSourceController',
+        id,
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -138,7 +208,11 @@ export class KnowledgeSourceController {
       await this.sourceService.resetSyncStatus(Number(id));
       return { success: true, message: '同步状态已重置' };
     } catch (error: any) {
-      logger.error('重置同步状态失败', { module: 'KnowledgeSourceController', id, error: error.message });
+      logger.error('重置同步状态失败', {
+        module: 'KnowledgeSourceController',
+        id,
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -149,7 +223,11 @@ export class KnowledgeSourceController {
       await this.sourceService.acknowledgeContentUpdate(Number(id));
       return { success: true, message: '更新已确认' };
     } catch (error: any) {
-      logger.error('确认更新失败', { module: 'KnowledgeSourceController', id, error: error.message });
+      logger.error('确认更新失败', {
+        module: 'KnowledgeSourceController',
+        id,
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -157,10 +235,17 @@ export class KnowledgeSourceController {
   @Get(':id/logs')
   async getSyncLogs(@Param('id') id: string, @Query('limit') limit?: string) {
     try {
-      const logs = await this.sourceService.getSyncLogs(Number(id), limit ? Number(limit) : 20);
+      const logs = await this.sourceService.getSyncLogs(
+        Number(id),
+        limit ? Number(limit) : 20,
+      );
       return { success: true, data: logs };
     } catch (error: any) {
-      logger.error('获取同步日志失败', { module: 'KnowledgeSourceController', id, error: error.message });
+      logger.error('获取同步日志失败', {
+        module: 'KnowledgeSourceController',
+        id,
+        error: error.message,
+      });
       return { success: false, message: error.message };
     }
   }
@@ -172,9 +257,14 @@ export class KnowledgeSourceController {
       const results = await this.sourceService.batchSync(validated.sourceIds);
       return { success: true, data: results };
     } catch (error: any) {
-      logger.error('批量同步失败', { module: 'KnowledgeSourceController', error: error.message });
+      logger.error('批量同步失败', {
+        module: 'KnowledgeSourceController',
+        error: error.message,
+      });
       if (error.name === 'ZodError') {
-        const messages = error.issues.map((i: any) => `${i.path.join('.')}: ${i.message}`).join('; ');
+        const messages = error.issues
+          .map((i: any) => `${i.path.join('.')}: ${i.message}`)
+          .join('; ');
         return { success: false, message: messages };
       }
       return { success: false, message: error.message };

@@ -8,9 +8,16 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
-import { validateSearchWebConfig, validateWeatherConfig } from './fundamentals/tools';
+import {
+  validateSearchWebConfig,
+  validateWeatherConfig,
+} from './fundamentals/tools';
 import { config, runtimePaths } from './fundamentals/config';
-import { closeRedis, getRedis, waitForRedisReady } from './fundamentals/redis-client';
+import {
+  closeRedis,
+  getRedis,
+  waitForRedisReady,
+} from './fundamentals/redis-client';
 import { loadApiKeysFromStorage } from './fundamentals/model-provider';
 import { cleanupStaleSessionLocks } from './fundamentals/distributed-lock';
 import { createSpeechWsHandler } from './gateways/speech.gateway';
@@ -131,7 +138,10 @@ async function bootstrap() {
   // 挂载到同一 HTTP 服务器，路径 /api/speech/stream
   // ============================================
   const httpServer = app.getHttpServer();
-  const wss = new WebSocketServer({ server: httpServer, path: '/api/speech/stream' });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: '/api/speech/stream',
+  });
   const speechService = app.get(SpeechService);
   const authService = app.get(AuthService);
   wss.on('connection', createSpeechWsHandler(speechService, authService));
@@ -141,14 +151,12 @@ async function bootstrap() {
   // 防止 Redis Server 端 TCP TIME_WAIT 堆积，并让未完成命令有机会返回结果
   // ============================================
   const gracefulShutdown = async (signal: string) => {
-    // eslint-disable-next-line no-console
     console.log(`[main] 收到 ${signal}，开始优雅关闭...`);
     try {
       closeFeishuWsClient();
       await app.close();
       await closeRedis();
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error('[main] 优雅关闭失败', e);
     } finally {
       process.exit(0);

@@ -40,25 +40,43 @@ jest.mock('./config', () => ({
 }));
 
 jest.mock('./feishu-notify.service', () => ({
-  sendPlainTextMessage: (...args: unknown[]) => mockSendPlainTextMessage(...args),
+  sendPlainTextMessage: (...args: unknown[]) =>
+    mockSendPlainTextMessage(...args),
   sendCardMessage: (...args: unknown[]) => mockSendCardMessage(...args),
   updateCard: (...args: unknown[]) => mockUpdateCard(...args),
   uploadImage: (...args: unknown[]) => mockUploadImage(...args),
   sendImageMessage: (...args: unknown[]) => mockSendImageMessage(...args),
-  buildCardJson: (params: { title: string; content: string; headerColor?: string }) => ({
-    header: { title: { tag: 'plain_text', content: params.title }, template: params.headerColor ?? 'blue' },
-    elements: [{ tag: 'div', text: { tag: 'lark_md', content: params.content } }],
+  buildCardJson: (params: {
+    title: string;
+    content: string;
+    headerColor?: string;
+  }) => ({
+    header: {
+      title: { tag: 'plain_text', content: params.title },
+      template: params.headerColor ?? 'blue',
+    },
+    elements: [
+      { tag: 'div', text: { tag: 'lark_md', content: params.content } },
+    ],
   }),
 }));
 
 jest.mock('./feishu/feishu-chat-session', () => ({
-  buildSessionKey: (params: { chatType: string; chatId: string; senderOpenId: string; ownerUserId?: string }) => {
-    const ownerPrefix = params.ownerUserId ? `owner:${params.ownerUserId}:` : '';
+  buildSessionKey: (params: {
+    chatType: string;
+    chatId: string;
+    senderOpenId: string;
+    ownerUserId?: string;
+  }) => {
+    const ownerPrefix = params.ownerUserId
+      ? `owner:${params.ownerUserId}:`
+      : '';
     return params.chatType === 'p2p'
       ? `${ownerPrefix}p2p:${params.senderOpenId}`
       : `${ownerPrefix}group:${params.chatId}:${params.senderOpenId}`;
   },
-  getOrCreateChatSession: (...args: unknown[]) => mockGetOrCreateChatSession(...args),
+  getOrCreateChatSession: (...args: unknown[]) =>
+    mockGetOrCreateChatSession(...args),
   clearChatSession: (...args: unknown[]) => mockClearChatSession(...args),
 }));
 
@@ -91,7 +109,12 @@ const noopLogger = {
   error: jest.fn(),
 };
 
-function buildEvent(overrides: { message?: Record<string, any>; sender?: Record<string, any> } = {}): any {
+function buildEvent(
+  overrides: {
+    message?: Record<string, any>;
+    sender?: Record<string, any>;
+  } = {},
+): any {
   return {
     sender: {
       sender_id: { open_id: 'ou_alice' },
@@ -120,7 +143,10 @@ describe('processIncomingMessage', () => {
     mockGetOrCreateChatSession.mockResolvedValue('session-uuid-1');
     mockClearChatSession.mockResolvedValue(undefined);
     mockUploadImage.mockResolvedValue({ success: true, key: 'img_key_1' });
-    mockSendImageMessage.mockResolvedValue({ success: true, messageId: 'om_img_1' });
+    mockSendImageMessage.mockResolvedValue({
+      success: true,
+      messageId: 'om_img_1',
+    });
     mockSendCardMessage.mockResolvedValue({
       success: true,
       messageId: 'om_placeholder',
@@ -177,7 +203,13 @@ describe('processIncomingMessage', () => {
       buildEvent({
         message: {
           chat_type: 'group',
-          mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot_official' }, name: '小助手' }],
+          mentions: [
+            {
+              key: '@_user_1',
+              id: { open_id: 'ou_bot_official' },
+              name: '小助手',
+            },
+          ],
           content: JSON.stringify({ text: '@_user_1 帮我查天气' }),
         },
       }),
@@ -197,7 +229,9 @@ describe('processIncomingMessage', () => {
         message: {
           chat_type: 'group',
           // 只 @ 张三，没 @ bot
-          mentions: [{ key: '@_user_1', id: { open_id: 'ou_zhangsan' }, name: '张三' }],
+          mentions: [
+            { key: '@_user_1', id: { open_id: 'ou_zhangsan' }, name: '张三' },
+          ],
           content: JSON.stringify({ text: '@_user_1 帮我看下' }),
         },
       }),
@@ -235,7 +269,7 @@ describe('processIncomingMessage', () => {
     setFeishuPromptInvoker(invoker);
 
     const event = buildEvent();
-    (event as any).event_id = 'evt_dup_1';
+    event.event_id = 'evt_dup_1';
 
     await processIncomingMessage(event, noopLogger);
     await processIncomingMessage(event, noopLogger);
@@ -279,8 +313,13 @@ describe('processIncomingMessage', () => {
       noopLogger,
     );
 
-    expect(cleaner).toHaveBeenCalledWith({ sessionId: 'session-uuid-1', userId: 'default' });
-    expect(mockClearChatSession).toHaveBeenCalledWith('owner:default:p2p:ou_alice');
+    expect(cleaner).toHaveBeenCalledWith({
+      sessionId: 'session-uuid-1',
+      userId: 'default',
+    });
+    expect(mockClearChatSession).toHaveBeenCalledWith(
+      'owner:default:p2p:ou_alice',
+    );
     expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
       'oc_chat_1',
       'chat_id',
@@ -302,15 +341,26 @@ describe('processIncomingMessage', () => {
         message: {
           chat_type: 'group',
           chat_id: 'oc_group_1',
-          mentions: [{ key: '@_user_1', id: { open_id: 'ou_bot_official' }, name: '小助手' }],
+          mentions: [
+            {
+              key: '@_user_1',
+              id: { open_id: 'ou_bot_official' },
+              name: '小助手',
+            },
+          ],
           content: JSON.stringify({ text: '@_user_1 /clear' }),
         },
       }),
       noopLogger,
     );
 
-    expect(cleaner).toHaveBeenCalledWith({ sessionId: 'session-uuid-1', userId: 'default' });
-    expect(mockClearChatSession).toHaveBeenCalledWith('owner:default:group:oc_group_1:ou_group_alice');
+    expect(cleaner).toHaveBeenCalledWith({
+      sessionId: 'session-uuid-1',
+      userId: 'default',
+    });
+    expect(mockClearChatSession).toHaveBeenCalledWith(
+      'owner:default:group:oc_group_1:ou_group_alice',
+    );
     expect(mockSendPlainTextMessage).toHaveBeenCalledWith(
       'oc_group_1',
       'chat_id',
@@ -360,7 +410,8 @@ describe('processIncomingMessage', () => {
       }),
     );
     // finalize 后还会再 PATCH 一次 done=true，避免飞书卡片停留在"AI 回复中..."
-    const lastUpdateCardCall = mockUpdateCard.mock.calls[mockUpdateCard.mock.calls.length - 1];
+    const lastUpdateCardCall =
+      mockUpdateCard.mock.calls[mockUpdateCard.mock.calls.length - 1];
     expect(lastUpdateCardCall[0]).toBe('om_placeholder');
     expect(lastUpdateCardCall[1]).toEqual(
       expect.objectContaining({
@@ -375,33 +426,53 @@ describe('processIncomingMessage', () => {
 
   it('回复含 Markdown 图片 → 卡片剥离图片链接，并发原生 image 消息', async () => {
     const invoker = jest.fn(async ({ res }) => {
-      res.write('event: content\ndata: "骑士图片已生成好了！\\n\\n![骑士](https://example.com/knight.png)"\n\n');
+      res.write(
+        'event: content\ndata: "骑士图片已生成好了！\\n\\n![骑士](https://example.com/knight.png)"\n\n',
+      );
     });
     setFeishuPromptInvoker(invoker);
 
     await processIncomingMessage(buildEvent(), noopLogger);
 
     // 卡片最终内容不应再包含图片 Markdown 链接
-    const lastUpdateCardCall = mockUpdateCard.mock.calls[mockUpdateCard.mock.calls.length - 1];
-    const cardContent = lastUpdateCardCall[1].elements[0].text.content as string;
+    const lastUpdateCardCall =
+      mockUpdateCard.mock.calls[mockUpdateCard.mock.calls.length - 1];
+    const cardContent = lastUpdateCardCall[1].elements[0].text
+      .content as string;
     expect(cardContent).not.toContain('https://example.com/knight.png');
     expect(cardContent).toContain('骑士图片已生成好了');
 
     // 图片应通过原生 image 消息发送
-    expect(mockUploadImage).toHaveBeenCalledWith('https://example.com/knight.png');
-    expect(mockSendImageMessage).toHaveBeenCalledWith('oc_chat_1', 'chat_id', 'img_key_1', expect.any(String));
+    expect(mockUploadImage).toHaveBeenCalledWith(
+      'https://example.com/knight.png',
+    );
+    expect(mockSendImageMessage).toHaveBeenCalledWith(
+      'oc_chat_1',
+      'chat_id',
+      'img_key_1',
+      expect.any(String),
+    );
   });
 
   it('回复含被反引号包裹的图片链接 → 也能正确提取并发原生图片', async () => {
     const invoker = jest.fn(async ({ res }) => {
-      res.write('event: content\ndata: "![生成的图片](`https://example.com/star.png`)"\n\n');
+      res.write(
+        'event: content\ndata: "![生成的图片](`https://example.com/star.png`)"\n\n',
+      );
     });
     setFeishuPromptInvoker(invoker);
 
     await processIncomingMessage(buildEvent(), noopLogger);
 
-    expect(mockUploadImage).toHaveBeenCalledWith('https://example.com/star.png');
-    expect(mockSendImageMessage).toHaveBeenCalledWith('oc_chat_1', 'chat_id', 'img_key_1', expect.any(String));
+    expect(mockUploadImage).toHaveBeenCalledWith(
+      'https://example.com/star.png',
+    );
+    expect(mockSendImageMessage).toHaveBeenCalledWith(
+      'oc_chat_1',
+      'chat_id',
+      'img_key_1',
+      expect.any(String),
+    );
   });
 
   it('Agent 没输出任何内容 → 占位消息改成"没有生成内容"', async () => {
@@ -415,7 +486,9 @@ describe('processIncomingMessage', () => {
       expect.objectContaining({
         elements: expect.arrayContaining([
           expect.objectContaining({
-            text: expect.objectContaining({ content: expect.stringContaining('没有生成内容') }),
+            text: expect.objectContaining({
+              content: expect.stringContaining('没有生成内容'),
+            }),
           }),
         ]),
       }),
@@ -436,7 +509,9 @@ describe('processIncomingMessage', () => {
       expect.objectContaining({
         elements: expect.arrayContaining([
           expect.objectContaining({
-            text: expect.objectContaining({ content: expect.stringContaining('LLM 挂了') }),
+            text: expect.objectContaining({
+              content: expect.stringContaining('LLM 挂了'),
+            }),
           }),
         ]),
       }),
@@ -445,8 +520,10 @@ describe('processIncomingMessage', () => {
   });
 
   it('占位卡片发送失败 → 流式累积，最终一次性以新文本消息发出', async () => {
-    mockSendCardMessage
-      .mockResolvedValueOnce({ success: false, error: 'rate limited' }); // 占位卡片发送失败
+    mockSendCardMessage.mockResolvedValueOnce({
+      success: false,
+      error: 'rate limited',
+    }); // 占位卡片发送失败
     mockSendPlainTextMessage.mockResolvedValueOnce({ success: true }); // 兜底新文本消息成功
 
     const invoker = jest.fn(async ({ res }) => {

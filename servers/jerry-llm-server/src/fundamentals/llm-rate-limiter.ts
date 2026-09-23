@@ -20,7 +20,11 @@ import type { ModelProvider } from './model-provider.js';
 // ==================== 信号量 ====================
 
 class Semaphore {
-  private queue: Array<{ resolve: () => void; callerId: string; enqueuedAt: number }> = [];
+  private queue: Array<{
+    resolve: () => void;
+    callerId: string;
+    enqueuedAt: number;
+  }> = [];
   private running = 0;
   private nextId = 0;
 
@@ -56,7 +60,11 @@ class Semaphore {
     });
 
     return new Promise<string>((resolve) => {
-      this.queue.push({ resolve: () => resolve(callerId), callerId, enqueuedAt });
+      this.queue.push({
+        resolve: () => resolve(callerId),
+        callerId,
+        enqueuedAt,
+      });
     });
   }
 
@@ -88,7 +96,11 @@ class Semaphore {
   }
 
   getStatus(): { running: number; max: number; queueLength: number } {
-    return { running: this.running, max: this.max, queueLength: this.queue.length };
+    return {
+      running: this.running,
+      max: this.max,
+      queueLength: this.queue.length,
+    };
   }
 
   updateMax(newMax: number): void {
@@ -151,7 +163,7 @@ class TokenBucket {
       const waitTime = Math.min(msPerToken, deadline - Date.now());
       if (waitTime <= 0) break;
 
-      await new Promise(resolve => setTimeout(resolve, waitTime));
+      await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
 
     return false;
@@ -195,8 +207,8 @@ const DEFAULT_CONFIG: RateLimiterConfig = {
   fastPoolMax: _rc.fastPoolMax,
   streamingPoolMax: _rc.streamingPoolMax,
   providerRPM: {
-    deepseek: 30,  // DeepSeek 默认 30 RPM
-    zhipu: 60,     // 智谱默认 60 RPM
+    deepseek: 30, // DeepSeek 默认 30 RPM
+    zhipu: 60, // 智谱默认 60 RPM
   },
   tokenWaitTimeout: _rc.tokenWaitTimeout,
 };
@@ -212,7 +224,10 @@ export class LLMRateLimiter {
   constructor(config?: Partial<RateLimiterConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.fastPool = new Semaphore(this.config.fastPoolMax, 'fast');
-    this.streamingPool = new Semaphore(this.config.streamingPoolMax, 'streaming');
+    this.streamingPool = new Semaphore(
+      this.config.streamingPoolMax,
+      'streaming',
+    );
 
     // 初始化各 provider 的令牌桶
     for (const [provider, rpm] of Object.entries(this.config.providerRPM)) {
@@ -249,7 +264,7 @@ export class LLMRateLimiter {
     }
 
     // 1. 令牌桶限流：等待获取令牌
-    const bucket = this.tokenBuckets.get(provider as string);
+    const bucket = this.tokenBuckets.get(provider);
     if (bucket) {
       const tokenStart = Date.now();
       const availableBefore = bucket.getAvailableTokens();
