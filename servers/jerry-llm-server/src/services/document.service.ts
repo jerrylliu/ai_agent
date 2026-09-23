@@ -13,6 +13,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, In, Not } from 'typeorm';
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import * as Diff from 'diff';
 import { Document } from '../entities/document.entity.js';
 import {
@@ -1545,7 +1546,12 @@ export class DocumentService implements OnApplicationBootstrap {
       });
 
       // 返回 images 供事务外落盘（避免图片 IO 影响事务）
-      return { document, version: savedVersion, images: parsedImages, duplicateWarning };
+      return {
+        document,
+        version: savedVersion,
+        images: parsedImages,
+        duplicateWarning,
+      };
     });
 
     // 事务外：落盘图片 + 创建 pending 记录（失败不阻塞上传流程）
@@ -2201,9 +2207,12 @@ export class DocumentService implements OnApplicationBootstrap {
 
     const buffer = readVersionFile(fileUrl);
     if (!buffer) throw new Error('文件不存在');
+    // 文件名必须带唯一后缀：diffVersions 用 Promise.all 并发解析两个版本，
+    // 裸 Date.now() 在同一毫秒内会生成相同路径，后写的 buffer 覆盖先写的，
+    // 导致两个版本解析出相同文本 → diff 静默返回"无差异"（比报错更误导）
     const tempPath = path.join(
       runtimePaths.uploads,
-      `temp_parse_${Date.now()}.${ext}`,
+      `temp_parse_${Date.now()}_${randomUUID().slice(0, 8)}.${ext}`,
     );
     fs.writeFileSync(tempPath, buffer);
     return { filePath: tempPath, isTemp: true };
@@ -2252,6 +2261,38 @@ export class DocumentService implements OnApplicationBootstrap {
       this.parseVersionText(v1),
       this.parseVersionText(v2),
     ]);
+
+    // 占位文本防护：parseVersionText 在文件丢失时返回空串、解析失败时返回
+    // 「[解析失败: ...]」占位文本，这些内容直接参与 diff 会产出
+    // 「全文被删除 + 新增占位行」的误导性结果，必须显式中止并告知准确原因
+    // （与 loadReindexText 对不可用源的处理思路一致，但 diff 是只读场景，走业务异常即可）
+    const describeUnavailable = (
+      v: DocumentVersion,
+      text: string,
+    ): string | null => {
+      if (text.startsWith('[解析失败:')) {
+        return `版本 v${v.versionNumber}（ID:${v.id}）源文件解析失败，无法对比${text}`;
+      }
+      if (text.trim().length === 0) {
+        return `版本 v${v.versionNumber}（ID:${v.id}）源文件丢失或内容为空，无法对比`;
+      }
+      return null;
+    };
+    const unavailableReasons = [
+      describeUnavailable(v1, text1),
+      describeUnavailable(v2, text2),
+    ].filter((reason): reason is string => reason !== null);
+    if (unavailableReasons.length > 0) {
+      const detail = unavailableReasons.join('；');
+      logger.warn('版本对比中止：版本源文件不可用', {
+        module: 'DocumentService',
+        documentId,
+        versionId1,
+        versionId2,
+        detail,
+      });
+      throw new BadRequestException(detail);
+    }
 
     // 超大文档截断（>1MB 纯文本）
     const MAX_DIFF_SIZE = 1024 * 1024;
@@ -2331,6 +2372,18 @@ export class DocumentService implements OnApplicationBootstrap {
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
       .join('\n');
+  }
+
+  /**
+   * 读取版本正文纯文本（parseVersionText 的公开包装）
+   *
+   * 供 KgExtractService 等外部服务复用同一条解析通道
+   * （readVersionFile → 文本类直读 / 二进制走 parseDocument），
+   * 避免在别处重复实现 mime 映射与临时文件管理。
+   * 文件丢失返回空串，解析失败返回 `[解析失败: ...]` 占位——调用方须自行判别。
+   */
+  async getVersionText(version: DocumentVersion): Promise<string> {
+    return this.parseVersionText(version);
   }
 
   /**
@@ -2562,7 +2615,8 @@ export class DocumentService implements OnApplicationBootstrap {
                   textLength: textContent.length,
                 });
               } catch (parseError: any) {
-                if (parseError instanceof SourceUnavailableError) throw parseError;
+                if (parseError instanceof SourceUnavailableError)
+                  throw parseError;
                 logger.error('REINDEX 重试：重新解析文件失败', {
                   module: 'DocumentService',
                   versionId: op.versionId,
@@ -2915,7 +2969,9 @@ export class DocumentService implements OnApplicationBootstrap {
     reason: ReindexFailureReason,
   ): Promise<ReindexFailureItem | null> {
     try {
-      const op = await this.pendingVectorOpRepo.findOne({ where: { id: opId } });
+      const op = await this.pendingVectorOpRepo.findOne({
+        where: { id: opId },
+      });
       if (!op) return null;
 
       let documentTitle = `版本 ${op.versionId}`;
@@ -2971,9 +3027,7 @@ export class DocumentService implements OnApplicationBootstrap {
    *          解析为空，属于永久性失败（重试与检查 ChromaDB 都无效，必须重新
    *          上传文档）；service-error 表示向量库/嵌入服务类临时故障，可重试。
    */
-  async retrySingleVectorOp(
-    opId: number,
-  ): Promise<{
+  async retrySingleVectorOp(opId: number): Promise<{
     success: boolean;
     error?: string;
     reason?: ReindexFailureReason;
