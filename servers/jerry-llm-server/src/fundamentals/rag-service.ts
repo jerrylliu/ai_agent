@@ -90,6 +90,8 @@ export interface DocSource {
 
 interface ContextGroup {
   kind: 'doc' | 'image';
+  /** doc 分组的文档键（documentId → source → 内容前缀），image 分组为空 */
+  docKey?: string;
   items: Array<{ content: string; meta: Record<string, any> }>;
 }
 
@@ -98,6 +100,22 @@ type ContextInput = Array<{
   content: string;
   metadata?: Record<string, any> | unknown;
 }>;
+
+/**
+ * 上下文构建选项（仅 FC 多轮工具调用路径需要，RAG 注入路径不传即为原行为）。
+ *
+ * FC 模式下 search_knowledge_base 会被多轮调用，每轮都要产出一段带【文档 N】
+ * 编号的参考资料。若各轮独立从 1 编号，同一文档在第 1 轮是【文档 2】、第 2 轮
+ * 变成【文档 1】，模型看到的编号体系彼此冲突，最终标注必然张冠李戴。
+ * 通过这两个选项把编号提升到"跨轮全局唯一"：
+ * - startDocIndex：本轮首个新文档使用的编号（= 已累计的 sources 长度 + 1）
+ * - knownDocIndex：docKey → 已分配编号；命中说明该文档在前几轮已出现过，
+ *   直接复用旧编号且不再重复产出 source 条目（调用方据此增量 push）
+ */
+export interface BuildContextOptions {
+  startDocIndex?: number;
+  knownDocIndex?: Map<string, number>;
+}
 
 /**
  * 按文档分组组装（生成侧提纯）：
@@ -127,7 +145,11 @@ function groupResultsByDoc(results: ContextInput): ContextGroup[] {
     const existing = docGroupIndex.get(docKey);
     if (existing === undefined) {
       docGroupIndex.set(docKey, groups.length);
-      groups.push({ kind: 'doc', items: [{ content: cleanedContent, meta }] });
+      groups.push({
+        kind: 'doc',
+        docKey,
+        items: [{ content: cleanedContent, meta }],
+      });
     } else {
       groups[existing].items.push({ content: cleanedContent, meta });
     }
@@ -142,14 +164,21 @@ function groupResultsByDoc(results: ContextInput): ContextGroup[] {
  * resolveCitations（citations.ts）据此把模型输出的（【文档 X】）解析为
  * 可定位的引用条目；无效编号（模型幻觉）自然解析不到，会被剔除。
  */
-export function buildContextWithSources(results: ContextInput): {
+export function buildContextWithSources(
+  results: ContextInput,
+  options?: BuildContextOptions,
+): {
   context: string;
   sources: DocSource[];
 } {
   const groups = groupResultsByDoc(results);
   const sources: DocSource[] = [];
+  // 跨轮编号复用表：调用方（FC 循环）在多轮之间持有同一个 Map，
+  // 本轮新分配的编号会写回，供后续轮次命中复用
+  const knownDocIndex = options?.knownDocIndex;
 
-  let docIdx = 0;
+  // startDocIndex 为本轮首个新文档的编号，未传即从 1 开始（RAG 注入路径原行为）
+  let docIdx = options?.startDocIndex ? options.startDocIndex - 1 : 0;
   let imgIdx = 0;
   const context = groups
     .map((g) => {
@@ -169,10 +198,25 @@ export function buildContextWithSources(results: ContextInput): {
           : '';
         return `【图片 ${imgIdx}】\n${g.items[0].content}${imageMarkdown}`;
       }
+      const body = g.items.map((it) => it.content).join('\n\n');
+      // 跨轮复用：该文档在前几轮已分配过编号，直接用旧编号，
+      // 且不重复产出 source（避免对照表出现同一文档的两条编号）
+      const reusedIdx =
+        g.docKey !== undefined ? knownDocIndex?.get(g.docKey) : undefined;
+      if (reusedIdx !== undefined) {
+        return `【文档 ${reusedIdx}】\n${body}`;
+      }
       docIdx++;
       // 引用来源映射：与【文档 N】编号严格同步（同一循环产出，不会错位）
       const meta = g.items[0].meta;
-      const documentId = String(meta.documentId || meta.source || '');
+      // documentId 兜底不可省：CitationItemSchema 要求 documentId 非空串，
+      // 若向量库元数据缺 documentId 与 source（老数据/异常写入），空串会让
+      // resolveCitations 判定该条引用非法而整条丢弃 —— 前端表现就是"角标在、
+      // 悬停无来源卡片、末尾参考文档列表空白"。此处退化为本轮编号占位 id，
+      // 与 FC 路径的 `fc-${docIdx}` 口径对齐，保证引用一定能推送出去。
+      const documentId = String(
+        meta.documentId || meta.source || `rag-${docIdx}`,
+      );
       const rawTitle = String(meta.documentTitle || meta.title || '');
       // documentTitle 缺失时退化 source 的文件名部分；再退化占位标题
       const title =
@@ -184,7 +228,9 @@ export function buildContextWithSources(results: ContextInput): {
         .trim()
         .slice(0, 120);
       sources.push({ index: docIdx, documentId, title, snippet });
-      const body = g.items.map((it) => it.content).join('\n\n');
+      if (g.docKey !== undefined) {
+        knownDocIndex?.set(g.docKey, docIdx);
+      }
       return `【文档 ${docIdx}】\n${body}`;
     })
     .join('\n\n');

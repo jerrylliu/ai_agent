@@ -20,6 +20,7 @@
 
 import type { Response } from 'express';
 import { CitationsEventSchema } from './citations.js';
+import { logger } from './logger.js';
 
 // 工具名称到中文标签的映射
 const TOOL_LABELS: Record<string, string> = {
@@ -94,8 +95,11 @@ export function sendMetadata(
 /**
  * 发送 citations 事件（RAG 引用列表）
  *
- * 流式回答结束后、res.end() 前一次性发送；出口处 zod parse 校验载荷，
- * 防止结构异常事件流入前端（校验失败抛错，由上层 catch 统一处理）。
+ * 流式回答结束后、res.end() 前一次性发送；出口处 zod safeParse 校验载荷，
+ * 防止结构异常事件流入前端。
+ *
+ * 校验失败时**只记日志并跳过写入，绝不抛错**：调用点的 res.end() 在本函数之后，
+ * 抛错会阻断 SSE 关闭，导致前端流挂死 + 本轮回答不落库（丢整条消息，代价远大于丢引用）。
  */
 export function sendCitations(
   res: Response | undefined,
@@ -107,8 +111,21 @@ export function sendCitations(
   }>,
 ) {
   if (!res || res.writableEnded) return;
-  const data = CitationsEventSchema.parse({ citations });
-  res.write(`event: citations\ndata: ${JSON.stringify(data)}\n\n`);
+  const parsed = CitationsEventSchema.safeParse({ citations });
+  if (!parsed.success) {
+    logger.error(
+      'citations 事件载荷校验失败，已跳过推送（不影响本轮回答与流关闭）',
+      {
+        module: 'SseWriter',
+        count: citations.length,
+        issues: parsed.error.issues.map(
+          (i) => `${i.path.join('.')}: ${i.message}`,
+        ),
+      },
+    );
+    return;
+  }
+  res.write(`event: citations\ndata: ${JSON.stringify(parsed.data)}\n\n`);
 }
 
 /**

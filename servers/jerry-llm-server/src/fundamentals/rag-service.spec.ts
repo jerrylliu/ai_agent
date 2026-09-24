@@ -7,6 +7,7 @@
 
 import {
   buildContextFromResults,
+  buildContextWithSources,
   CONFLICT_RESOLUTION_INSTRUCTION,
   dedupeByNormalizedContent,
 } from './rag-service.js';
@@ -137,6 +138,134 @@ describe('buildContextFromResults 文档分组', () => {
       { content: 'updated appendix data', metadata: meta('doc-2') },
     ]);
     expect(context).toContain(CONFLICT_RESOLUTION_INSTRUCTION.trim());
+  });
+});
+
+describe('buildContextWithSources 引用来源映射', () => {
+  it('sources 编号与上下文【文档 N】严格同源，且字段取自检索元数据', () => {
+    const { context, sources } = buildContextWithSources([
+      {
+        content: 'first doc body',
+        metadata: { ...meta('doc-A'), documentTitle: '文档A标题' },
+      },
+      {
+        content: 'second doc body',
+        metadata: { ...meta('doc-B'), documentTitle: '文档B标题' },
+      },
+    ]);
+    expect(sources.map((s) => s.index)).toEqual([1, 2]);
+    expect(sources.map((s) => s.documentId)).toEqual(['doc-A', 'doc-B']);
+    expect(sources.map((s) => s.title)).toEqual(['文档A标题', '文档B标题']);
+    expect(context).toContain('【文档 1】');
+    expect(context).toContain('【文档 2】');
+  });
+
+  it('元数据缺 documentId 与 source 时退化为 rag-{编号} 占位（不得为空串）', () => {
+    // 空串会被 CitationItemSchema（documentId 要求 min(1)）拒绝，
+    // 导致该条引用被丢弃 —— 前端表现为角标在但悬停无来源卡片、末尾参考文档空白
+    const { sources } = buildContextWithSources([
+      { content: 'body without ids', metadata: { chunk_type: 'text' } },
+    ]);
+    expect(sources).toHaveLength(1);
+    expect(sources[0].documentId).toBe('rag-1');
+    expect(sources[0].title).toBe('文档 1');
+  });
+
+  it('图片块不占用文档编号（sources 只含文本组）', () => {
+    const { sources } = buildContextWithSources([
+      {
+        content: 'a chart description',
+        metadata: {
+          chunk_type: 'image',
+          documentId: 'img-1',
+          image_path: 'a\\b.png',
+        },
+      },
+      { content: 'text body', metadata: meta('doc-1') },
+    ]);
+    expect(sources).toHaveLength(1);
+    expect(sources[0].index).toBe(1);
+    expect(sources[0].documentId).toBe('doc-1');
+  });
+});
+
+describe('buildContextWithSources 跨轮编号统一（FC 多轮工具调用）', () => {
+  it('startDocIndex 让本轮新文档接续全局编号，不从 1 重新开始', () => {
+    // FC 模式下 search_knowledge_base 被多轮调用；若每轮独立编号，
+    // 模型在第 2 轮看到的【文档 1】与第 1 轮的【文档 1】是不同文档 → 标注张冠李戴
+    const { context, sources } = buildContextWithSources(
+      [{ content: 'round2 body', metadata: meta('doc-C') }],
+      { startDocIndex: 3 },
+    );
+    expect(sources.map((s) => s.index)).toEqual([3]);
+    expect(context).toContain('【文档 3】');
+    expect(context).not.toContain('【文档 1】');
+  });
+
+  it('knownDocIndex 命中时复用旧编号，且不重复产出 source', () => {
+    const known = new Map<string, number>([['doc-A', 1]]);
+    const { context, sources } = buildContextWithSources(
+      [{ content: 'same doc again', metadata: meta('doc-A') }],
+      { startDocIndex: 2, knownDocIndex: known },
+    );
+    expect(context).toContain('【文档 1】');
+    expect(sources).toHaveLength(0);
+  });
+
+  it('多轮累积：重复文档复用编号、新文档续编，knownDocIndex 被写回', () => {
+    const known = new Map<string, number>();
+    const round1 = buildContextWithSources(
+      [
+        { content: 'A body', metadata: meta('doc-A') },
+        { content: 'B body', metadata: meta('doc-B') },
+      ],
+      { startDocIndex: 1, knownDocIndex: known },
+    );
+    expect(round1.sources.map((s) => s.index)).toEqual([1, 2]);
+
+    // 第 2 轮：B 已出现过（应复用 2），C 是新文档（应续编 3）
+    const round2 = buildContextWithSources(
+      [
+        { content: 'B body again', metadata: meta('doc-B') },
+        { content: 'C body', metadata: meta('doc-C') },
+      ],
+      { startDocIndex: round1.sources.length + 1, knownDocIndex: known },
+    );
+    expect(round2.context).toContain('【文档 2】');
+    expect(round2.context).toContain('【文档 3】');
+    expect(round2.sources.map((s) => s.index)).toEqual([3]);
+    expect([...known.entries()].sort()).toEqual([
+      ['doc-A', 1],
+      ['doc-B', 2],
+      ['doc-C', 3],
+    ]);
+  });
+
+  it('同一文档的多个块仍合并到同一编号（分组优先于跨轮续编）', () => {
+    const { context, sources } = buildContextWithSources(
+      [
+        { content: 'chunk one', metadata: meta('doc-A') },
+        { content: 'chunk two', metadata: meta('doc-A') },
+      ],
+      { startDocIndex: 5, knownDocIndex: new Map() },
+    );
+    expect(sources).toHaveLength(1);
+    expect(sources[0].index).toBe(5);
+    expect(context.match(/【文档 \d+】/g)).toEqual(['【文档 5】']);
+    expect(context).toContain('chunk one\n\nchunk two');
+  });
+
+  it('不传 options 时行为与单轮构建完全一致（RAG 注入路径不受影响）', () => {
+    const input = [
+      { content: 'A body', metadata: meta('doc-A') },
+      { content: 'B body', metadata: meta('doc-B') },
+    ];
+    expect(buildContextWithSources(input)).toEqual(
+      buildContextWithSources(input, {
+        startDocIndex: 1,
+        knownDocIndex: new Map(),
+      }),
+    );
   });
 });
 

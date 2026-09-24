@@ -11,14 +11,15 @@
  */
 
 import { z } from 'zod';
+import { logger } from './logger.js';
 
 // ==================== Zod Schema ====================
 
 /**
  * 单次回答引用列表上限。
  * schema 的 max 与 resolveCitations 的截断必须同源（同一常量）：
- * resolveCitations 先截断到上限，sendCitations 的 parse 才不会因数量超限抛错
- * （抛错发生在 res.end() 之前会阻断 SSE 关闭，导致前端流挂死 + 消息不落库）。
+ * resolveCitations 先截断到上限，sendCitations 出口的校验才不会因数量超限失败
+ * （失败即整批引用被丢弃，前端只剩静态角标、无来源卡片）。
  * FC 路径的 fcDocSources 跨工具轮次累计无上限，21+ 条完全可达，截断不可省。
  */
 export const MAX_CITATIONS = 20;
@@ -90,8 +91,10 @@ export function extractCitationRefs(text: string): number[] {
  * - 未命中的编号 → invalidRefs（模型幻觉，调用方记日志后丢弃）；
  * - answers 全文无任何标注 → citations 为空数组（调用方不发 citations 事件）；
  * - 命中数超过 MAX_CITATIONS 时按出现顺序截断前 MAX_CITATIONS 条——
- *   下游 sendCitations 出口的 zod max 校验会因超量抛错，而调用点的 res.end()
- *   在 sendCitations 之后，抛错会阻断 SSE 关闭（前端流挂死 + 消息不落库）。
+ *   下游 sendCitations 出口的 zod max 校验会因超量失败，整批引用被丢弃；
+ * - 单条命中但结构非法（如元数据缺 documentId/title）时记 warn 日志并跳过，
+ *   其余引用照常返回。**本函数不抛错**：调用点的 res.end() 在其之后，
+ *   抛错会阻断 SSE 关闭（前端流挂死 + 本轮消息不落库）。
  */
 export function resolveCitations(
   text: string,
@@ -108,14 +111,28 @@ export function resolveCitations(
       invalidRefs.push(ref);
       continue;
     }
-    citations.push(
-      CitationItemSchema.parse({
+    // 用 safeParse 而非 parse：parse 抛错会冒泡到调用点（prompt.ts）跳过 res.end()，
+    // 导致 SSE 流不关闭（前端流挂死 + 消息不落库），且一条脏数据会炸掉整批引用。
+    // 这里降级为"单条失败记日志并跳过"，其余引用照常推送；不吞错，issues 全量留痕。
+    const parsed = CitationItemSchema.safeParse({
+      ref,
+      documentId: src.documentId,
+      title: src.title,
+      snippet: src.snippet,
+    });
+    if (!parsed.success) {
+      logger.warn('引用条目结构非法，已跳过该条（其余引用照常推送）', {
+        module: 'CitationsResolver',
         ref,
         documentId: src.documentId,
         title: src.title,
-        snippet: src.snippet,
-      }),
-    );
+        issues: parsed.error.issues.map(
+          (i) => `${i.path.join('.')}: ${i.message}`,
+        ),
+      });
+      continue;
+    }
+    citations.push(parsed.data);
   }
   return { citations: citations.slice(0, MAX_CITATIONS), invalidRefs };
 }
