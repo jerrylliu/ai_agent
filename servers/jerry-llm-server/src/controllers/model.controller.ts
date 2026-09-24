@@ -5,6 +5,7 @@
 
 // 从 @nestjs/common 导入控制器所需的装饰器
 import { Controller, Get, Post, Body } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { logger } from '../fundamentals/logger';
 
 // 模块级锁：防止并发探测（探测会消耗 token 且写入同一文件）
@@ -20,6 +21,11 @@ export class ModelController {
    * 返回：当前使用的模型ID、可用模型列表、是否已配置 DeepSeek API Key、是否支持视觉
    */
   @Get() // 映射 GET 请求到 /models
+  // 全局默认配额仅 10 次/60 秒，而本接口是模型配置页的轮询型读接口：
+  // 打开页面 + 自动恢复重试会在短时间内连续调用，撞上 429 就会让整个
+  // 模型列表渲染为空（前端 availableModels 保持初始空数组）。
+  // 与 document / knowledge-source 控制器对齐，放宽到 60 次/60 秒。
+  @Throttle({ default: { ttl: 60000, limit: 60 } })
   async getModelInfo() {
     try {
       // 动态导入 model-provider，避免循环依赖

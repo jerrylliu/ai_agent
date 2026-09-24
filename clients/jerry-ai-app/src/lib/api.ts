@@ -2695,7 +2695,7 @@ export async function fetchLatestVersion(): Promise<AppVersionInfo | null> {
   }
 }
 
-// ==================== KG 知识图谱（只读查询） ====================
+// ==================== KG 知识图谱（查询 + 人工提取触发） ====================
 
 /** 聚合图节点（跨文档按 key 合并，与后端 GraphNode 对应） */
 export interface KgGraphNode {
@@ -2800,4 +2800,44 @@ export async function getKgStats(): Promise<KgStatsResponse> {
     headers: getAuthHeaders(),
   });
   return handleResponse<KgStatsResponse>(response);
+}
+
+/**
+ * POST /api/kg/extract/* 受理结果（与后端 KgTriggerResult 对应）
+ *
+ * 抽取已从 @Interval 自动调度改为人工触发，且请求立即返回（HTTP 202）：
+ * 单篇抽取上限 180s，同步等待必然撞上代理超时，进度需轮询 getKgStats() 的 ops 计数。
+ */
+export interface KgTriggerResponse {
+  /** 是否受理本次触发；false 时 reason 可直接展示给用户 */
+  accepted: boolean;
+  /** 未受理原因 / 补充说明（中文） */
+  reason?: string;
+  /** 本次入队（含把历史失败项重置为待抽）的操作数 */
+  enqueued: number;
+  /** 触发后后台是否有抽取任务在跑：true 时前端应开始轮询进度 */
+  running: boolean;
+}
+
+/** 全量提取：把所有「当前生效版本尚未成功抽取」的文档入队并后台执行 */
+export async function triggerKgExtractAll(): Promise<KgTriggerResponse> {
+  const response = await fetch(API_ENDPOINTS.KG_EXTRACT_ALL, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<KgTriggerResponse>(response);
+}
+
+/** 单篇提取：按该文档当前生效版本入队一条抽取操作并后台执行 */
+export async function triggerKgExtractDocument(
+  documentId: number,
+): Promise<KgTriggerResponse> {
+  const response = await fetch(
+    `${API_ENDPOINTS.KG_EXTRACT_DOCUMENT}/${documentId}`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
+  return handleResponse<KgTriggerResponse>(response);
 }

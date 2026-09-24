@@ -24,8 +24,10 @@ export enum KgOpStatus {
 /**
  * KG 抽取操作队列（照抄 pending_vector_ops 状态机范式）
  *
- * 由 KgExtractService 的 @Interval 调度消费：
- * - 扫描 ACTIVE 版本与已完成 op 的差集自动入队（天然覆盖存量回填 + 增量更新）
+ * 由 KgExtractService 消费（人工触发，无自动调度）：
+ * - 图谱面板「全量提取」→ 扫描 ACTIVE 版本与已完成 op 的差集入队（覆盖存量回填 +
+ *   增量更新），并把历史 failed 的 EXTRACT op 重置为 pending 放行重试；
+ * - 图谱面板「提取本文档」→ 按该文档当前 ACTIVE 版本入队一条；
  * - retryCount < maxRetries 时失败回 pending 重试，超限置 failed 留 errorMessage
  */
 @Entity('kg_extract_op')

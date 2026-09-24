@@ -1312,19 +1312,37 @@ export function useChat(
   const refreshAppData = async (reason: string = "manual") => {
     const shouldForceCurrentMessages =
       reason === "manual" && !isTypingRef.current;
-    const results = await Promise.allSettled([
-      loadModelInfo(),
-      checkKnowledgeBaseStatus({ retry: false }),
-      refreshSessionsAndCurrentMessages({
-        forceCurrentMessages: shouldForceCurrentMessages,
-      }),
-    ]);
+    const tasks: { name: string; run: () => Promise<unknown> }[] = [
+      { name: "模型信息", run: () => loadModelInfo() },
+      { name: "知识库状态", run: () => checkKnowledgeBaseStatus({ retry: false }) },
+      {
+        name: "会话与消息",
+        run: () =>
+          refreshSessionsAndCurrentMessages({
+            forceCurrentMessages: shouldForceCurrentMessages,
+          }),
+      },
+    ];
 
-    const rejected = results.find((result) => result.status === "rejected") as
-      | PromiseRejectedResult
-      | undefined;
-    if (rejected) {
-      throw rejected.reason;
+    const results = await Promise.allSettled(tasks.map((task) => task.run()));
+
+    // 各任务失败互相隔离：单个接口挂掉（429 / 500）只应影响它自己那块 UI，
+    // 不能把整批刷新判为失败——否则 useAppRecovery 会把三个接口一起重试三轮，
+    // 反而把限流配额打光，出现「模型配置页与知识库同时空白」的连带故障。
+    const failures = results
+      .map((result, index) => ({ name: tasks[index].name, result }))
+      .filter(
+        (item): item is { name: string; result: PromiseRejectedResult } =>
+          item.result.status === "rejected",
+      );
+
+    failures.forEach(({ name, result }) => {
+      console.warn(`[refreshAppData] ${name} 刷新失败:`, result.reason);
+    });
+
+    // 三个全失败才说明后端整体不可达，此时向上抛，交给恢复机制整批重试
+    if (failures.length === tasks.length) {
+      throw failures[0].result.reason;
     }
   };
 

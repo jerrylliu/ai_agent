@@ -6,6 +6,7 @@
 
 import { Controller, Get, Post, Delete, Body, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import { DocumentService } from '../services/document.service';
 import { KnowledgeSourceService } from '../services/knowledge-source.service.js';
 import { logger } from '../fundamentals/logger';
@@ -56,6 +57,11 @@ export class KnowledgeController {
    * 获取知识库当前状态（从文档版本管理数据库聚合）
    */
   @Get('status')
+  // 与 GET /models 同理：本接口是知识库面板的轮询型读接口，
+  // 全局默认 10 次/60 秒配额会被「打开面板 + 自动恢复重试」快速耗尽，
+  // 429 后前端知识库状态整块空白。只放宽这一个只读接口，
+  // upload / search 等写接口与消耗 token 的接口仍走全局默认配额。
+  @Throttle({ default: { ttl: 60000, limit: 60 } })
   async getKnowledgeBaseStatus() {
     try {
       const stats = await this.documentService.getKnowledgeStats();

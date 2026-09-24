@@ -261,11 +261,10 @@ const KgSchema = z.object({
   // 若沿用 20s 默认值，生产环境 KG 在线链路几乎必然超时降级（等效不生效）。
   // ⚠️ 调小此值前必须确认所用模型的实测时延，否则等于关闭 KG 在线补充位。
   linkTimeoutMs: z.coerce.number().int().positive().default(180000),
-  // 抽取队列调度间隔（扫描 ACTIVE 版本差集入队 + 消费 pending op）
-  extractIntervalMs: z.coerce.number().int().positive().default(300000),
   // 单文档抽取失败最大重试次数（超限置 failed，留 errorMessage 供排查）
   maxRetries: z.coerce.number().int().min(0).default(3),
-  // 单次调度最多消费的 op 数（防止存量回填时长时间阻塞调度线程）
+  // 单批最多消费的 op 数（防止存量回填时一次性占用过多连接与内存）
+  // 抽取已改为人工触发（图谱面板单篇 / 全量按钮），无自动调度间隔配置
   maxOpsPerTick: z.coerce.number().int().positive().default(10),
   // 词汇召回候选 top-K（v1 同口径，不得改动）
   candidateTopK: z.coerce.number().int().positive().default(8),
@@ -532,7 +531,6 @@ function buildRawConfig() {
       extractConcurrency: env.KG_EXTRACT_CONCURRENCY,
       extractTimeoutMs: env.KG_EXTRACT_TIMEOUT_MS,
       linkTimeoutMs: env.KG_LINK_TIMEOUT_MS,
-      extractIntervalMs: env.KG_EXTRACT_INTERVAL_MS,
       maxRetries: env.KG_MAX_RETRIES,
       maxOpsPerTick: env.KG_MAX_OPS_PER_TICK,
       candidateTopK: env.KG_CANDIDATE_TOP_K,
