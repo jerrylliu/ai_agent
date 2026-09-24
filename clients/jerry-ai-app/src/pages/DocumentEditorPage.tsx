@@ -37,6 +37,8 @@ import {
   type DocumentItem,
 } from '@/lib/api';
 import { consumeTransientContent, isTauri, readHashQueryValue } from '@/lib/window';
+import { ANCHOR_NOT_FOUND, findAnchorBlockIndex, normalizeAnchorText } from '@/lib/anchor-match';
+import { highlightAnchor } from '@/components/Editor/extensions/AnchorHighlight';
 
 export interface DocumentEditorPageProps {
   /** 要编辑的文档 ID；不传则进入草稿模式 */
@@ -55,6 +57,18 @@ const EMPTY_DOC: JSONContent = {
   type: 'doc',
   content: [{ type: 'paragraph' }],
 };
+
+/** 锚点未命中提示文案 */
+const ANCHOR_MISS_NOTICE = '未能定位到该引用片段，已打开全文（文档可能已被修改，或引用来自图片说明）';
+
+/** 高亮动画总时长（ms），= new.css 中 1s × 5 次，需与 .citation-anchor-highlight 动画时长一致 */
+const ANCHOR_HIGHLIGHT_MS = 5000;
+
+/** 锚点定位遇到"编辑器内容尚未同步"时的重试上限，防极端情况下无限循环 */
+const ANCHOR_MAX_ATTEMPTS = 5;
+
+/** 锚点定位结果：hit 成功 / miss 未命中（降级普通打开） / stale 内容未同步（需重试） */
+type AnchorScrollResult = 'hit' | 'miss' | 'stale';
 
 export default function DocumentEditorPage({
   documentId,
@@ -95,6 +109,13 @@ export default function DocumentEditorPage({
    */
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
 
+  /**
+   * 锚点未命中提示：非阻塞浮层文案，null 表示不显示。
+   * 用浮层而非 alert——定位失败是"降级为普通打开"，不是错误，
+   * 阻塞式弹窗会打断用户阅读文档本身。
+   */
+  const [anchorNotice, setAnchorNotice] = useState<string | null>(null);
+
   // 锚点来源 1：独立窗口 URL query（新建窗口场景；URLSearchParams.get 已自动解码）
   useEffect(() => {
     const anchor = readHashQueryValue('anchor');
@@ -134,56 +155,87 @@ export default function DocumentEditorPage({
   }, []);
 
   /**
-   * 引用锚点定位：在编辑器文本块中查找 anchor 片段，命中后滚动居中并闪烁高亮；
-   * 未命中静默降级为普通打开（文档被编辑过 / 图片描述类引用不在原文中）。
-   * 归一化策略：去除全部空白后匹配，规避 PDF/Word 解析产生的换行与空格差异；
-   * 只取锚点前 60 字——chunk 片段开头大概率落在单个文本块内，跨块匹配失败率高。
+   * 引用锚点定位：在编辑器文本块中查找 anchor 片段，命中后滚动居中并闪烁高亮。
+   * 匹配与容错策略（长度阶梯、空白归一化）见 @/lib/anchor-match；
+   * 高亮走 AnchorHighlight 扩展（ProseMirror Decoration）：class 由编辑器引擎
+   * 亲手绘制，重绘不会被抹掉——之前用 classList.add 从外部加 class 会被
+   * ProseMirror 的 DOM 观察机制回滚，表现为"定位成功但高亮看不见"。
+   * @returns 'hit' 成功 / 'miss' 未命中（降级普通打开，由调用方提示） / 'stale' 内容尚未同步（需重试）
    */
-  const scrollToAnchorInEditor = useCallback((editor: Editor, anchor: string): void => {
+  const scrollToAnchorInEditor = useCallback((editor: Editor, anchor: string): AnchorScrollResult => {
     try {
-      const normalize = (s: string): string => s.replace(/\s+/g, '');
-      const target = normalize(anchor).slice(0, 60);
-      if (!target) return;
+      // 编辑器还是空文档：value→setContent 同步可能尚未完成，此时匹配会误报未命中
+      if (!editor.state.doc.textContent.trim()) return 'stale';
 
-      let hitPos: number | null = null;
-      // descendants 回调返回 false 仅阻止深入子节点，无法中断整体遍历，靠 hitPos 短路
+      // 单次遍历收集全部文本块（节点位置 + 节点长度 + 归一化文本），阶梯匹配在内存中完成，
+      // 避免每一档都重新遍历全文档
+      const blocks: Array<{ pos: number; size: number; text: string }> = [];
       editor.state.doc.descendants((node, pos) => {
-        if (hitPos !== null) return false;
-        // 只在含文本的块级节点（段落/标题/列表项等）上匹配
-        if (!node.isTextblock) return true;
-        const text = node.textContent;
-        if (text && normalize(text).includes(target)) {
-          hitPos = pos;
-          return false;
+        // 只收含文本的块级节点（段落/标题/列表项等），空块无匹配价值
+        if (node.isTextblock && node.textContent) {
+          blocks.push({ pos, size: node.nodeSize, text: normalizeAnchorText(node.textContent) });
         }
         return true;
       });
 
-      if (hitPos === null) {
+      const hitIndex = findAnchorBlockIndex(
+        blocks.map((block) => block.text),
+        anchor,
+      );
+      if (hitIndex === ANCHOR_NOT_FOUND) {
         console.warn('[DocumentEditorPage] 引用锚点未命中（文档可能已被编辑，或为图片描述类引用）');
-        return;
+        return 'miss';
       }
 
-      const dom = editor.view.nodeDOM(hitPos);
+      const hit = blocks[hitIndex];
+      const dom = editor.view.nodeDOM(hit.pos);
       if (dom instanceof HTMLElement) {
         dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        dom.classList.add('citation-anchor-highlight');
-        window.setTimeout(() => dom.classList.remove('citation-anchor-highlight'), 2500);
+      } else {
+        console.warn('[DocumentEditorPage] 引用锚点命中但无法取得 DOM 节点，跳过滚动');
       }
+
+      // 高亮动画总长 5s，远覆盖平滑滚动的 ~0.45s，随滚动同步启动即可
+      highlightAnchor(editor.view, hit.pos, hit.pos + hit.size, ANCHOR_HIGHLIGHT_MS);
+      return 'hit';
     } catch (err) {
-      // 定位失败静默降级为普通打开
+      // 定位异常同样降级为普通打开，由调用方给出可观察提示
       console.warn('[DocumentEditorPage] 引用锚点定位失败', err);
+      return 'miss';
     }
   }, []);
 
-  // 消费锚点：编辑器实例与内容都就绪后定位一次
-  // 时序保证：DocumentEditor 子组件的 value→Tiptap 同步 effect 先于本 effect 执行，
-  // 因此此处 editor.state.doc 已是最新 content
+  // 消费锚点：编辑器实例就绪后定位一次；内容尚未同步（stale）时限次重试
+  const anchorAttemptsRef = useRef(0);
+  const [anchorRetryTick, setAnchorRetryTick] = useState(0);
   useEffect(() => {
     if (!pendingAnchor || !editorInstance || loading) return;
-    scrollToAnchorInEditor(editorInstance, pendingAnchor);
-    setPendingAnchor(null);
-  }, [pendingAnchor, editorInstance, loading, scrollToAnchorInEditor]);
+    // DocumentEditor 的 value→Tiptap 同步走 queueMicrotask，本 effect 同步执行时
+    // editor.state.doc 可能仍是旧内容（如 EMPTY_DOC），直接匹配会误报"未命中"。
+    // 推迟到宏任务：微任务队列（含 setContent）必然已执行完毕，文档内容已就位。
+    const anchor = pendingAnchor;
+    const timer = window.setTimeout(() => {
+      const result = scrollToAnchorInEditor(editorInstance, anchor);
+      if (result === 'stale' && anchorAttemptsRef.current < ANCHOR_MAX_ATTEMPTS) {
+        // 内容还没到位：保留 pendingAnchor，通过 tick 变化触发本 effect 下一次重试
+        anchorAttemptsRef.current += 1;
+        setAnchorRetryTick((t) => t + 1);
+        return;
+      }
+      anchorAttemptsRef.current = 0;
+      setPendingAnchor(null);
+      // 未命中时给出非阻塞提示：静默降级会让用户误以为"跳转功能没生效"
+      if (result === 'miss') setAnchorNotice(ANCHOR_MISS_NOTICE);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [pendingAnchor, editorInstance, loading, anchorRetryTick, scrollToAnchorInEditor]);
+
+  // 锚点未命中提示 5 秒后自动消失，避免长期占据顶部空间
+  useEffect(() => {
+    if (!anchorNotice) return;
+    const timer = window.setTimeout(() => setAnchorNotice(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [anchorNotice]);
 
   // 标题展示
   const title = useMemo(() => {
@@ -537,6 +589,21 @@ export default function DocumentEditorPage({
       {error && (
         <div className="px-4 py-2 text-xs text-destructive bg-destructive/10 border-b border-destructive/30">
           {error}
+        </div>
+      )}
+
+      {/* 引用锚点未命中提示：非阻塞，5 秒自动消失，可手动关闭 */}
+      {anchorNotice && (
+        <div className="flex items-start gap-2 px-4 py-2 text-xs text-foreground/80 bg-muted border-b border-border">
+          <span className="flex-1">{anchorNotice}</span>
+          <button
+            type="button"
+            onClick={() => setAnchorNotice(null)}
+            className="text-muted-foreground hover:text-foreground font-medium"
+            aria-label="关闭提示"
+          >
+            ×
+          </button>
         </div>
       )}
 

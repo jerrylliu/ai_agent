@@ -586,14 +586,23 @@ button.decorum-tb-btn {
   text-shadow: 0 0 4px #ff524766, 0 0 8px #ff524733;
 }
 
-/* 引用锚点定位命中块：滚动到原文位置后的闪烁高亮（编辑器内，非 cyberpunk 作用域） */
+/* 引用锚点定位命中块：滚动到原文位置后的闪烁高亮（编辑器内，非 cyberpunk 作用域）
+   视觉设计：背景色单独用透明度红在亮色主题下过淡，易被忽略，
+   故叠加 inset 左侧色条作为强锚点，保证即便背景色不明显也能一眼认出目标段落。
+   时长/次数需与 DocumentEditorPage 的 ANCHOR_HIGHLIGHT_MS 保持一致（1s × 5 次 = 5s）。 */
 @keyframes citation-anchor-pulse {
-  0%, 100% { background-color: transparent; }
-  35% { background-color: rgba(255, 82, 71, 0.22); }
+  0%, 100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+  15%, 55% {
+    background-color: rgba(255, 82, 71, 0.3);
+    box-shadow: inset 3px 0 0 0 #ff5247;
+  }
 }
 
 .citation-anchor-highlight {
-  animation: citation-anchor-pulse 1.2s ease-in-out 2;
+  animation: citation-anchor-pulse 1s ease-in-out 5;
   border-radius: 4px;
 }
 

@@ -21,6 +21,7 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import { GhostSuggestion, setEnabled as setGhostEnabled } from './extensions/GhostSuggestion';
 import { CalloutExtension } from './extensions/CalloutExtension';
+import { AnchorHighlight } from './extensions/AnchorHighlight';
 import { useSettingsStore } from '@/stores/settings-store';
 import { cn } from '@/utils/index';
 
@@ -80,6 +81,8 @@ export function DocumentEditor({
       }),
       // Callout 提示块节点
       CalloutExtension,
+      // 引用锚点定位命中后的段落高亮
+      AnchorHighlight,
     ],
     content: value ?? EMPTY_DOC,
     onUpdate: ({ editor: e }) => {
