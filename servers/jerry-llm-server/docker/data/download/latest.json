@@ -1,10 +1,10 @@
 {
   "version": "0.1.9",
-  "pub_date": "2026-09-24T10:09:00Z",
-  "notes": "1. RAG 回答新增引用角标与来源卡片，点击角标直达原文并自动高亮定位（高亮持续 5 秒）\n2. 原文定位容错升级：文档后续被编辑也能阶梯式模糊匹配，定位失败仅轻提示、不打断阅读\n3. 新增知识图谱可视化面板，直观查看文档实体与关系\n4. 服务端稳定性修复：检索引擎容器启动崩溃、文档版本页误触限流 429",
+  "pub_date": "2026-09-24T14:45:19Z",
+  "notes": "1. RAG 回答新增引用角标与来源卡片，点击角标直达原文并自动高亮定位（高亮持续 5 秒）\n2. 原文定位容错升级：文档后续被编辑也能阶梯式模糊匹配，定位失败仅轻提示、不打断阅读\n3. 新增知识图谱可视化面板，直观查看文档实体与关系\n4. 服务端稳定性修复：检索引擎容器启动崩溃、文档版本页误触限流 429\n5. 知识图谱抽取改为手动触发（支持单篇与全量），抽取失败不再影响模型配置页与知识库展示",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUhaOSt5aUw5UTVhOVhGYVlpVTlZVWphV3h6eG9WSTNocStISkovSXMxeXNSb05lMk9nMHJQTHVxVFpldkNCcVp0QUwwaXUzdjYwNG5KV2FvemlTalFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMjQ0NTQwCWZpbGU65Lul5aSq5b+G5qC4XzAuMS45X3g2NC1zZXR1cC5leGUKc2V5MVowUHhoQmNuejdLSk1sWnIvYjZEb3p2ckF5Rmx1MzJ3ZDd4eCs5eG5zZWtQckE3aG9aclBlcU5jVjZMbThVMjVZZG1mOU5PVUk5TERIQkF0Q0E9PQo=",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUtqdVczZ0cybElLU3pZSWoybCs2Q0VHVnBpRU1nOEtZNUF4WkdKQWVmMjVlTkM3MzBXRUlKRmtrbmROUytxc2Jxb1pPNVBKRGdranpaMmFrTzRiMEFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMjYxMTE5CWZpbGU65Lul5aSq5b+G5qC4XzAuMS45X3g2NC1zZXR1cC5leGUKbTRFS3RiaXROSis2V0d2UDQ3V3p3RGJRRzZQVElQcE42aloyNW9tZWFsbElBWitPN1FaVVhmRXF6UzFPTWthNUl4S0ZvZW1yVlRPWUhFWll1eGVwQnc9PQo=",
       "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.9_x64-setup.exe"
     }
   }
