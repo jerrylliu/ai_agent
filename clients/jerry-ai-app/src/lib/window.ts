@@ -55,7 +55,9 @@ function readHashQuery(name: string): string | null {
  * @param title 窗口标题（仅 Tauri 桌面端生效）
  * @param transientToken 跨窗口传递内容的 token（可选）
  * @param anchor 引用定位锚点文本（可选，原始未编码文本，函数内部统一 encodeURIComponent）；
- *               编辑器窗口加载后滚动高亮到该片段位置（RAG 引用定位闭环）
+ *               编辑器窗口加载后滚动高亮到该片段位置（RAG 引用定位闭环）。
+ *               长度建议：传片段前 120 个原始字符。编辑器侧会去除空白后按 [60,40,25]
+ *               阶梯逐档匹配，传得过短会使阶梯退化为单档，降低 PDF/Word 解析差异下的命中率
  * @returns 窗口 label（Tauri）或空字符串（浏览器）
  */
 export async function openEditorWindow(

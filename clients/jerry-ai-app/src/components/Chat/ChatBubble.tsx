@@ -9,6 +9,31 @@ import type { Message, MessageAttachment, MessageDocumentCard, WorkflowProgress,
 import { submitFeedback, getDocumentVersions, exportVersion, getDocumentByTitle } from "../../lib/api";
 import { openEditorWithContent, openEditorWindow } from "../../lib/window";
 
+/* ============== 引用溯源锚点 ============== */
+
+/**
+ * 传给编辑器的锚点原始字符数。
+ * 编辑器侧会先去除全部空白，再按 [60, 40, 25] 长度阶梯逐档匹配以提升容错；
+ * 这里取 120 而非 60，确保归一化后仍有足够字符撑满首档精确匹配——
+ * PDF/Word 解析出的文本含较多换行与空格，60 个原始字符去空白后可能只剩 40 余字，
+ * 会使阶梯退化为单档、失去容错空间。
+ */
+const CITATION_ANCHOR_CHARS = 120;
+
+/**
+ * 打开编辑器并定位到该条引用对应的原文片段（点击与键盘两个入口共用，保证行为一致）
+ * @param citation 引用条目（取 snippet 作为锚点、title 作为窗口标题）
+ * @param docIdNum 已校验为正整数的文档 ID
+ */
+function openCitationSource(citation: CitationItem, docIdNum: number): void {
+  void openEditorWindow(
+    docIdNum,
+    `${citation.title} - 查看`,
+    undefined,
+    citation.snippet.slice(0, CITATION_ANCHOR_CHARS),
+  );
+}
+
 /* ============== 用户文档卡片辅助函数 ============== */
 
 /** 按文件扩展名返回图标颜色和格式标签（与 FileCard 的 getFormatStyle 对齐） */
@@ -426,15 +451,14 @@ function CitationSources({ citations }: { citations: CitationItem[] }) {
                     title="在编辑器中查看原文档"
                     onClick={(e) => {
                       e.stopPropagation();
-                      // 锚点取 snippet 前 60 字（原始文本，openEditorWindow 内部统一编码）：
                       // 编辑器窗口打开后滚动高亮到该片段位置（引用定位闭环）
-                      void openEditorWindow(docIdNum, `${c.title} - 查看`, undefined, c.snippet.slice(0, 60));
+                      openCitationSource(c, docIdNum);
                     }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         e.stopPropagation();
-                        void openEditorWindow(docIdNum, `${c.title} - 查看`, undefined, c.snippet.slice(0, 60));
+                        openCitationSource(c, docIdNum);
                       }
                     }}
                   >
