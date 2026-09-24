@@ -1,13 +1,13 @@
 /**
  * DocumentManager - 文档版本管理主组件
- * 功能：文档列表、版本时间线、上传、删除、回滚、版本对比
+ * 功能：文档列表、版本时间线、上传、删除、回滚、版本对比、单篇知识图谱提取
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import {
   FileText, Upload, Trash2,
   Clock, RefreshCw, X, AlertTriangle, Play, XCircle,
-  Pencil, ShieldCheck,
+  Pencil, ShieldCheck, Network,
 } from 'lucide-react';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Button } from '../ui/button';
@@ -29,6 +29,7 @@ import {
   deletePendingVectorOp,
   retryAllFailedOps,
   getScanPendingReviews,
+  triggerKgExtractDocument,
   type DocumentItem,
   type DocumentVersionItem,
   type DocumentAuditLogItem,
@@ -63,6 +64,8 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
   // 注入扫描人工复核队列：角标计数 + 队列弹窗开关
   const [pendingReviewCount, setPendingReviewCount] = useState(0);
   const [reviewQueueOpen, setReviewQueueOpen] = useState(false);
+  // KG 单篇提取：抽取已从自动调度改为人工触发，记录正在入队的文档 id 做按钮 loading
+  const [kgExtractingId, setKgExtractingId] = useState<number | null>(null);
 
   // 确认弹窗状态
   const [deleteDocConfirmOpen, setDeleteDocConfirmOpen] = useState(false);
@@ -172,6 +175,27 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
       onRefreshKnowledgeBase?.();
     } catch (err: any) {
       showFeedback(false, err.message || '删除失败');
+    }
+  };
+
+  /**
+   * 触发单篇 KG 提取（抽取已改为人工触发，无自动调度）
+   * 后端只做入队并立即返回受理结果，实际抽取在后台执行（单篇上限 180s），
+   * 进度与图谱结果在「知识图谱」面板查看。
+   */
+  const handleKgExtract = async (id: number) => {
+    setKgExtractingId(id);
+    try {
+      const result = await triggerKgExtractDocument(id);
+      if (!result.accepted) {
+        showFeedback(false, result.reason || '本次提取请求未被受理');
+        return;
+      }
+      showFeedback(true, result.reason || '已进入提取队列，后台执行中（进度见知识图谱面板）');
+    } catch (err: any) {
+      showFeedback(false, err.message || '触发知识图谱提取失败');
+    } finally {
+      setKgExtractingId(null);
     }
   };
 
@@ -473,6 +497,19 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
                     }}
                   >
                     <Pencil className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="ml-1 shrink-0"
+                    title="提取知识图谱（人工触发，后台执行）"
+                    disabled={kgExtractingId === doc.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleKgExtract(doc.id);
+                    }}
+                  >
+                    <Network className={`h-3 w-3 ${kgExtractingId === doc.id ? 'animate-pulse' : ''}`} />
                   </Button>
                   <Button
                     variant="ghost"

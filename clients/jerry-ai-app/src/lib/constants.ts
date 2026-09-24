@@ -34,9 +34,12 @@ export const API_ENDPOINTS = {
   EMBEDDING_SWITCH: `${API_BASE_URL}/embedding/switch`,
   EMBEDDING_REBUILD: `${API_BASE_URL}/embedding/rebuild`,
   EMBEDDING_REBUILD_STATUS: `${API_BASE_URL}/embedding/rebuild/status`,
-  // KG 知识图谱只读查询（档位3 可视化面板）
+  // KG 知识图谱查询 + 人工提取触发（档位3 可视化面板）
   KG_GRAPH: `${API_BASE_URL}/api/kg/graph`,
   KG_STATS: `${API_BASE_URL}/api/kg/stats`,
+  // 抽取已从自动调度改为人工触发：全量入队 / 单篇入队（单篇需再拼 `/${documentId}`）
+  KG_EXTRACT_ALL: `${API_BASE_URL}/api/kg/extract/all`,
+  KG_EXTRACT_DOCUMENT: `${API_BASE_URL}/api/kg/extract/document`,
 } as const;
 
 export const MAX_HISTORY_ITEMS = 10;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { X, Network, RefreshCw } from 'lucide-react';
+import { X, Network, RefreshCw, Play } from 'lucide-react';
 import ReactECharts from 'echarts-for-react';
 import { Button } from '../ui/button';
 import {
@@ -7,6 +7,8 @@ import {
   getKgDocumentGraph,
   getKgStats,
   getDocuments,
+  triggerKgExtractAll,
+  triggerKgExtractDocument,
   type KgGraphResponse,
   type KgDocGraphResponse,
   type KgStatsResponse,
@@ -17,6 +19,9 @@ interface KgGraphPanelProps {
   open: boolean;
   onClose: () => void;
 }
+
+/** 后台抽取进度的轮询间隔（毫秒）：抽取是 LLM 长任务，秒级刷新没有意义 */
+const PROGRESS_POLL_MS = 3000;
 
 /** 实体类型 → 中文展示名与图例色（与后端抽取 schema 的类型枚举对应） */
 const TYPE_META: Record<string, { label: string; color: string }> = {
@@ -58,6 +63,11 @@ const KgGraphPanel: React.FC<KgGraphPanelProps> = ({ open, onClose }) => {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [docId, setDocId] = useState<number | null>(null); // null = 全局聚合图
   const [loading, setLoading] = useState(false);
+  // 人工触发提取：triggering 标记按钮 loading，notice 展示受理结果 / 失败原因
+  const [triggering, setTriggering] = useState<'all' | 'doc' | null>(null);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  // 后台抽取进行中：轮询队列计数展示进度，清空后自动刷新图谱
+  const [polling, setPolling] = useState(false);
 
   const fetchAll = useCallback(async (selectedDocId: number | null) => {
     setLoading(true);
@@ -92,6 +102,74 @@ const KgGraphPanel: React.FC<KgGraphPanelProps> = ({ open, onClose }) => {
     setDocId(next);
     fetchAll(next);
   };
+
+  // 后台抽取进度轮询：触发接口立即返回（单篇抽取上限 180s，不能同步等），
+  // 进度只能靠 GET /api/kg/stats 的队列计数观察；队列清空后刷新当前视图。
+  useEffect(() => {
+    if (!polling) return;
+    let cancelled = false;
+    const timer = window.setInterval(async () => {
+      try {
+        const s = await getKgStats();
+        if (cancelled) return;
+        setStats(s);
+        if (s.ops.pending + s.ops.processing === 0) {
+          setPolling(false);
+          setNotice({
+            ok: s.ops.failed === 0,
+            text: `提取结束：成功 ${s.ops.completed} 篇${s.ops.failed > 0 ? ` · 失败 ${s.ops.failed} 篇（可再次点击提取重试）` : ''}`,
+          });
+          await fetchAll(docId);
+        }
+      } catch {
+        // 单次轮询失败不终止观察，下一轮继续（服务重启期间可能短暂 502）
+      }
+    }, PROGRESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [polling, docId, fetchAll]);
+
+  /** 人工触发提取：scope=all 全量入队，scope=doc 只入队当前选中文档 */
+  const handleTrigger = useCallback(
+    async (scope: 'all' | 'doc') => {
+      if (scope === 'doc' && docId === null) return;
+      setTriggering(scope);
+      setNotice(null);
+      try {
+        const result =
+          scope === 'all'
+            ? await triggerKgExtractAll()
+            : await triggerKgExtractDocument(docId as number);
+        if (!result.accepted) {
+          setNotice({ ok: false, text: result.reason || '本次提取请求未被受理' });
+          return;
+        }
+        setNotice({
+          ok: true,
+          text:
+            result.reason ||
+            (scope === 'all'
+              ? `已受理：${result.enqueued} 篇文档进入提取队列，后台执行中`
+              : '已受理：该文档已进入提取队列，后台执行中'),
+        });
+        if (result.running) {
+          setPolling(true);
+        } else {
+          await fetchAll(docId);
+        }
+      } catch (err) {
+        setNotice({
+          ok: false,
+          text: err instanceof Error ? err.message : '触发提取失败',
+        });
+      } finally {
+        setTriggering(null);
+      }
+    },
+    [docId, fetchAll],
+  );
 
   // 当前视图的统一节点/边（两种数据源归一化后共用渲染）
   const { nodes, edges, truncated } = useMemo(() => {
@@ -218,6 +296,10 @@ const KgGraphPanel: React.FC<KgGraphPanelProps> = ({ open, onClose }) => {
     };
   }, [nodes, edges, categories, docId]);
 
+  // KG 关闭 / 队列执行中 / 数据加载中时禁用触发按钮（原因在视图行提示）
+  const extractDisabled =
+    loading || polling || triggering !== null || stats?.enabled === false;
+
   if (!open) return null;
 
   return (
@@ -231,6 +313,16 @@ const KgGraphPanel: React.FC<KgGraphPanelProps> = ({ open, onClose }) => {
             知识图谱
           </h2>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleTrigger('all')}
+              disabled={extractDisabled}
+              title="把所有「当前生效版本尚未成功抽取」的文档入队提取（历史失败项会一并重试），后台执行"
+            >
+              <Play className="h-3.5 w-3.5" />
+              全量提取
+            </Button>
             <Button variant="ghost" size="icon" onClick={() => fetchAll(docId)} disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
@@ -256,12 +348,46 @@ const KgGraphPanel: React.FC<KgGraphPanelProps> = ({ open, onClose }) => {
               </option>
             ))}
           </select>
+          <Button
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => void handleTrigger('doc')}
+            disabled={extractDisabled || docId === null}
+            title="按该文档当前生效版本提取知识图谱（后台执行）"
+          >
+            <Play className="h-3.5 w-3.5" />
+            提取本文档
+          </Button>
           {stats && !stats.enabled && (
             <span className="text-xs text-yellow-600 dark:text-yellow-400 shrink-0">
-              KG 在线链路未启用（数据仍可浏览）
+              KG 在线链路未启用（数据仍可浏览，无法提取）
             </span>
           )}
         </div>
+
+        {/* 触发结果 / 后台抽取进度（抽取已改为人工触发，此处是唯一的进度出口） */}
+        {(notice || polling) && (
+          <div className="px-6 py-2 border-b border-border flex items-center gap-3 text-xs">
+            {polling && stats && (
+              <span className="text-muted-foreground shrink-0 flex items-center gap-1.5">
+                <RefreshCw className="h-3 w-3 animate-spin" />
+                提取进行中：待处理 {stats.ops.pending} · 进行中 {stats.ops.processing}
+              </span>
+            )}
+            {notice && (
+              <span
+                className={
+                  notice.ok
+                    ? 'text-green-600 dark:text-green-400'
+                    : 'text-red-600 dark:text-red-400'
+                }
+              >
+                {notice.text}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* 内容区 */}
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
@@ -340,7 +466,9 @@ const KgGraphPanel: React.FC<KgGraphPanelProps> = ({ open, onClose }) => {
                 </div>
               ) : (
                 <div className="text-center py-10 text-muted-foreground">
-                  {docId === null ? '暂无图谱数据（文档完成 KG 抽取后自动出现）' : '该文档暂无图谱数据'}
+                  {docId === null
+                    ? '暂无图谱数据（点击右上角「全量提取」手动触发文档抽取）'
+                    : '该文档暂无图谱数据（点击上方「提取本文档」手动触发抽取）'}
                 </div>
               )}
             </>
