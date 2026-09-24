@@ -2118,9 +2118,13 @@ async function promptWithFunctionCalling(
   const fcRetrievedContexts: string[] = [];
   const fcSeenContexts = new Set<string>();
   // 引用来源映射（FC 主路径可验证生成）：【文档 N】编号 → 文档元数据。
-  // 与 fcRetrievedContexts 同一循环、同一去重条件产出，编号严格同源；
-  // 流结束后 resolveCitations 据此把模型输出的（【文档 X】）解析为引用列表推给前端
+  // 由 buildContextWithSources 产出（按文档分组），与写进 ToolMessage 的正文
+  // 参考资料共用同一套编号；流结束后 resolveCitations 据此把模型输出的
+  // （【文档 X】）解析为引用列表推给前端
   const fcDocSources: DocSource[] = [];
+  // 文档键 → 已分配的【文档 N】编号，跨轮持有：同一文档在第 2 轮再次命中时
+  // 复用第 1 轮的编号，避免多轮检索各自从 1 编号导致模型看到的编号体系互相冲突
+  const fcDocIndexByKey = new Map<string, number>();
   const collectedImages: Array<{ url: string; alt: string }> = []; // 收集工具生成的图片
   const collectedMindmaps: Array<{
     mermaidCode: string;
@@ -2628,6 +2632,9 @@ async function promptWithFunctionCalling(
       } of toolResults) {
         // Layer 2 检索结果去重：若本次检索与历史高度重叠，生成的警告文本（追加到 ToolMessage）
         let overlapWarning: string | null = null;
+        // 知识库检索结果的正文参考资料（带跨轮统一的【文档 N】编号），
+        // 非空时覆盖 formatToolResult 的默认产出，见下方赋值处说明
+        let kbContextOverride: string | null = null;
         // 只在工具实际执行成功时记录到 metadata
         if (success) {
           toolCallsMade.push({ name: toolCall.name, args: toolCall.args });
@@ -2698,24 +2705,31 @@ async function promptWithFunctionCalling(
               if (ctx && !fcSeenContexts.has(ctx)) {
                 fcSeenContexts.add(ctx);
                 fcRetrievedContexts.push(ctx);
-                // 引用来源与上文 fcRetrievedContexts 严格同源：同一去重分支内产出编号，
-                // 保证【文档 N】↔ 片段映射不错位。title 退化链：documentTitle → source → 文档 N
-                const srcMeta = r.metadata;
-                const docIdx = fcDocSources.length + 1;
-                fcDocSources.push({
-                  index: docIdx,
-                  documentId:
-                    r.documentId ||
-                    (typeof r.source === 'string' && r.source) ||
-                    `fc-${docIdx}`,
-                  title:
-                    (typeof srcMeta?.documentTitle === 'string' &&
-                      srcMeta.documentTitle) ||
-                    (typeof r.source === 'string' && r.source) ||
-                    `文档 ${docIdx}`,
-                  snippet: ctx.length > 120 ? `${ctx.slice(0, 120)}...` : ctx,
-                });
               }
+            }
+            // ==================== 引用编号统一（FC 主路径可验证生成） ====================
+            // 正文参考资料与末尾「引用编号对照表」必须共用同一套【文档 N】编号：
+            // 此前正文块由 formatToolResult → buildContextFromResults 按文档分组、
+            // 每轮从 1 重新编号，而对照表按片段内容去重、跨轮累计编号，两套体系
+            // 在同一条 ToolMessage 里并存，模型标注的编号会指向另一篇文档（张冠李戴），
+            // 或因编号不存在被 resolveCitations 剔除（前端表现为角标缺失）。
+            // 修复口径：正文块也由 buildContextWithSources 产出，并通过
+            // startDocIndex + knownDocIndex 把编号提升为跨轮全局唯一，
+            // sources 直接作为对照表数据源 —— 两侧天然同源，不可能再错位。
+            // 加 res 判定：headless 非流式路径（bench 评测）不覆盖，保证评测基线行为不漂移
+            if (res && kbResults.length > 0) {
+              const built = buildContextWithSources(
+                kbResults.map((r) => ({
+                  content: r.content || '',
+                  metadata: r.metadata || {},
+                })),
+                {
+                  startDocIndex: fcDocSources.length + 1,
+                  knownDocIndex: fcDocIndexByKey,
+                },
+              );
+              kbContextOverride = built.context;
+              fcDocSources.push(...built.sources);
             }
           }
 
@@ -2725,15 +2739,17 @@ async function promptWithFunctionCalling(
 
         // 构造最终 content：如果有检索重叠警告，追加到结果末尾提示模型
         let finalContent = success
-          ? formatToolResult(toolCall.name, content, getCurrentModelId())
+          ? (kbContextOverride ??
+            formatToolResult(toolCall.name, content, getCurrentModelId()))
           : content;
         if (overlapWarning) {
           finalContent = `${finalContent}\n\n${overlapWarning}`;
         }
         // 引用编号对照 + 标注规则（FC 主路径可验证生成）：
         // 工具结果是多轮动态到达的，没有统一参考资料块，因此在每轮检索的 ToolMessage 末尾
-        // 追加全量【文档 N】↔ 片段对照（fcDocSources 已跨轮去重，编号累计稳定），
-        // 模型生成最终回答时按对照表标注（【文档 X】），流结束后 resolveCitations 据此解析。
+        // 追加全量【文档 N】↔ 片段对照（fcDocSources 按文档分组、编号跨轮全局唯一，
+        // 与正文参考资料块严格同源），模型生成最终回答时按对照表标注（【文档 X】），
+        // 流结束后 resolveCitations 据此解析。
         // 对照表片段截断为 120 字（完整内容已在工具结果原文里，此处仅供编号定位）。
         // 加 res 判定：headless 非流式路径（bench 评测）不注入，保证评测基线行为不因本功能漂移
         if (

@@ -3,8 +3,17 @@
  *
  * 引用解析纯函数单元测试：标注提取（extractCitationRefs）与
  * 引用解析（resolveCitations）+ zod schema 校验边界。
- * 无外部依赖（仅 zod），不需要 mock。
+ * 依赖 zod；logger 已 mock（脏数据跳过分支会记 warn，避免加载真实 winston）。
  */
+
+jest.mock('./logger', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
+}));
 
 import {
   extractCitationRefs,
@@ -13,6 +22,7 @@ import {
   CitationsEventSchema,
   type DocSourceEntry,
 } from './citations';
+import { logger } from './logger';
 
 const SOURCES: DocSourceEntry[] = [
   {
@@ -72,6 +82,10 @@ describe('extractCitationRefs', () => {
 });
 
 describe('resolveCitations', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it('有效编号应映射为含 documentId/title/snippet 的引用条目', () => {
     const { citations, invalidRefs } = resolveCitations(
       '答案依据（【文档 1】）。',
@@ -118,7 +132,46 @@ describe('resolveCitations', () => {
     expect(invalidRefs).toEqual([]);
   });
 
-  it('标注数超过 MAX_CITATIONS 时按出现顺序截断（防 sendCitations 出口 parse 抛错阻断 SSE 关闭）', () => {
+  it('来源条目 documentId 为空串时应跳过该条并记日志，其余引用照常返回（不抛错）', () => {
+    // 真实故障场景：向量库元数据缺 documentId 与 source 时，旧实现兜底空串 →
+    // parse 抛 ZodError → 整批引用丢失 + 冒泡跳过 res.end()（前端流挂死）。
+    // 现改为单条降级跳过，保证其余引用仍可推送。
+    const dirtySources: DocSourceEntry[] = [
+      { index: 1, documentId: '', title: '文档A', snippet: '片段A' },
+      { index: 2, documentId: 'doc-b', title: '文档B', snippet: '片段B' },
+    ];
+    let result!: ReturnType<typeof resolveCitations>;
+    expect(() => {
+      result = resolveCitations('（【文档 1】）与（【文档 2】）', dirtySources);
+    }).not.toThrow();
+
+    expect(result.invalidRefs).toEqual([]);
+    expect(result.citations).toEqual([
+      { ref: 2, documentId: 'doc-b', title: '文档B', snippet: '片段B' },
+    ]);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    // 日志必须带上可定位信息（编号 + 非法字段原因），不得静默吞错
+    const meta = (logger.warn as jest.Mock).mock.calls[0][1] as {
+      ref: number;
+      issues: string[];
+    };
+    expect(meta.ref).toBe(1);
+    expect(meta.issues.join('|')).toContain('documentId');
+  });
+
+  it('来源条目 title 为空串时同样跳过该条，不影响其他引用', () => {
+    const dirtySources: DocSourceEntry[] = [
+      { index: 1, documentId: 'doc-a', title: '', snippet: '片段A' },
+      { index: 2, documentId: 'doc-b', title: '文档B', snippet: '片段B' },
+    ];
+    const { citations } = resolveCitations(
+      '（【文档 1】）（【文档 2】）',
+      dirtySources,
+    );
+    expect(citations.map((c) => c.ref)).toEqual([2]);
+  });
+
+  it('标注数超过 MAX_CITATIONS 时按出现顺序截断（防 sendCitations 出口校验失败丢弃整批引用）', () => {
     // 构造 25 个来源 + 回答引用全部 25 个编号（FC 多轮检索累计场景，topK 无上限可达）
     const manySources = Array.from({ length: 25 }, (_, i) => ({
       index: i + 1,

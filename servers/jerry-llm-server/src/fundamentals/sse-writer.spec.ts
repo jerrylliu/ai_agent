@@ -4,6 +4,17 @@
  * 测试 sse-writer.ts 中所有导出函数的输出格式是否符合 SSE 规范
  */
 
+// citations 出口校验失败时 sendCitations 会记日志，这里 mock 掉 logger
+// 避免测试加载真实 winston（会创建日志文件句柄，拖慢套件且产生副作用）
+jest.mock('./logger', () => ({
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
+}));
+
 import {
   sendToolStatus,
   startHeartbeat,
@@ -11,8 +22,10 @@ import {
   sendMetadata,
   sendSessionAction,
   sendContent,
+  sendCitations,
   parseSSEFrame,
 } from './sse-writer';
+import { logger } from './logger';
 
 // Mock Express Response
 function createMockResponse(): { write: jest.Mock; writableEnded: boolean } {
@@ -340,6 +353,66 @@ describe('sse-writer', () => {
       const input = 'data: {"key":"value"}\n\n';
       const frames = parseSSEFrame(input);
       expect(frames).toHaveLength(0);
+    });
+  });
+
+  describe('sendCitations', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('合法引用应写入标准 citations 帧', () => {
+      const res = createMockResponse();
+      sendCitations(res as any, [
+        { ref: 1, documentId: 'doc-a', title: '文档A', snippet: '片段A' },
+      ]);
+
+      expect(res.write).toHaveBeenCalledTimes(1);
+      const frames = parseSSEFrame(res.write.mock.calls[0][0]);
+      expect(frames).toHaveLength(1);
+      expect(frames[0].eventType).toBe('citations');
+      expect(JSON.parse(frames[0].eventData).citations[0].documentId).toBe(
+        'doc-a',
+      );
+    });
+
+    it('载荷非法（documentId 空串）时应跳过写入且不抛错', () => {
+      const res = createMockResponse();
+      // 关键护栏：抛错会冒泡到调用点跳过 res.end()，导致前端流挂死 + 消息不落库
+      expect(() =>
+        sendCitations(res as any, [
+          { ref: 1, documentId: '', title: '文档A', snippet: '片段A' },
+        ]),
+      ).not.toThrow();
+
+      expect(res.write).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledTimes(1);
+    });
+
+    it('引用数超上限时应跳过写入且不抛错', () => {
+      const res = createMockResponse();
+      const items = Array.from({ length: 21 }, (_, i) => ({
+        ref: i + 1,
+        documentId: `doc-${i + 1}`,
+        title: `文档${i + 1}`,
+        snippet: '片段',
+      }));
+      expect(() => sendCitations(res as any, items)).not.toThrow();
+      expect(res.write).not.toHaveBeenCalled();
+      expect(logger.error).toHaveBeenCalledTimes(1);
+    });
+
+    it('res 已结束或未传时应静默返回', () => {
+      const res = createMockResponse();
+      res.writableEnded = true;
+      sendCitations(res as any, [
+        { ref: 1, documentId: 'doc-a', title: '文档A', snippet: '片段A' },
+      ]);
+      sendCitations(undefined, [
+        { ref: 1, documentId: 'doc-a', title: '文档A', snippet: '片段A' },
+      ]);
+      expect(res.write).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
     });
   });
 });
