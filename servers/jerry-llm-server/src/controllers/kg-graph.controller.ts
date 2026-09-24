@@ -1,11 +1,15 @@
 /**
- * KG 图谱只读查询控制器（档位3：图谱可视化面板的数据源）
+ * KG 图谱查询 + 人工提取触发控制器（档位3：图谱可视化面板的数据源）
  * 路由前缀：/api/kg（main.ts 无全局前缀，此处写完整路径）
  *
  * 设计原则：
- *   - 只读安全：全部 GET，直查 MySQL（kg_entity / kg_triple / kg_extract_op），
+ *   - 读接口只读安全：GET 直查 MySQL（kg_entity / kg_triple / kg_extract_op），
  *     不依赖内存快照与 KG_ENABLED 开关——KG 关闭时依然可查历史落库数据，
  *     响应中透传 enabled 字段供前端提示"在线链路未启用"。
+ *   - 写接口只有两个「提取触发」端点（POST）：抽取已从 @Interval 自动调度改为
+ *     人工触发，端点内只做入队与前置校验，实际抽取在后台 fire-and-forget 执行，
+ *     请求立即返回受理结果——单篇抽取上限 180s，同步等待必然撞上 HTTP / nginx
+ *     代理超时。进度由前端轮询 GET /api/kg/stats 的 ops 计数观察。
  *   - 聚合口径与 buildIndex 一致：节点按 normEntity(name)=key 聚合，
  *     边端点同样归一，保证面板看到的图与在线检索用的图同源。
  *   - 不查 embedding 大字段：所有 find 均显式 select，避免拖出 json 向量列。
@@ -15,8 +19,11 @@ import {
   Controller,
   DefaultValuePipe,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseIntPipe,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -28,8 +35,13 @@ import { KgTriple } from '../entities/kg-triple.entity.js';
 import { KgExtractOp } from '../entities/kg-extract-op.entity.js';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard.js';
 import { config } from '../fundamentals/config.js';
+import { logger } from '../fundamentals/logger.js';
 import { normEntity } from '../fundamentals/kg/kg-core.js';
 import { getKgIndexSnapshot } from '../fundamentals/kg/kg-index.js';
+import { KgExtractService } from '../services/kg-extract.service.js';
+import type { KgTriggerResult } from '../services/kg-extract.service.js';
+
+const MODULE = 'KgGraphController';
 
 // ==================== 响应形状（面板契约） ====================
 
@@ -108,6 +120,7 @@ export class KgGraphController {
     private readonly tripleRepo: Repository<KgTriple>,
     @InjectRepository(KgExtractOp)
     private readonly opRepo: Repository<KgExtractOp>,
+    private readonly kgExtractService: KgExtractService,
   ) {}
 
   /**
@@ -384,6 +397,54 @@ export class KgGraphController {
         builtAt: snapshot?.builtAt ?? null,
       },
     };
+  }
+
+  // ==================== 人工提取触发（写接口） ====================
+
+  /**
+   * POST /api/kg/extract/all
+   * 全量提取：把所有「当前生效版本尚未成功抽取」的文档入队（含把历史失败项重置为待抽），
+   * 后台执行。请求立即返回受理结果，不等待抽取完成——进度轮询 GET /api/kg/stats。
+   */
+  @Post('extract/all')
+  @HttpCode(HttpStatus.ACCEPTED)
+  // 一次触发即启动一整轮 LLM 长任务（直接消耗 token），限流远严于读接口
+  @Throttle({ default: { ttl: 60000, limit: 6 } })
+  async triggerExtractAll(): Promise<KgTriggerResult> {
+    const result = await this.kgExtractService.triggerExtractAll();
+    logger.info('收到 KG 全量提取请求', {
+      module: MODULE,
+      accepted: result.accepted,
+      enqueued: result.enqueued,
+      running: result.running,
+      reason: result.reason,
+    });
+    return result;
+  }
+
+  /**
+   * POST /api/kg/extract/document/:documentId
+   * 单篇提取：按该文档当前生效版本入队并后台执行。
+   * 文档无生效版本、已在队列中、KG 未启用或已有任务在跑时返回 accepted=false + reason。
+   */
+  @Post('extract/document/:documentId')
+  @HttpCode(HttpStatus.ACCEPTED)
+  // 单篇同样会触发 LLM 调用，但面板内可能连续点几篇，给到 12 次/分钟
+  @Throttle({ default: { ttl: 60000, limit: 12 } })
+  async triggerExtractDocument(
+    @Param('documentId', ParseIntPipe) documentId: number,
+  ): Promise<KgTriggerResult> {
+    const result =
+      await this.kgExtractService.triggerExtractDocument(documentId);
+    logger.info('收到 KG 单篇提取请求', {
+      module: MODULE,
+      documentId,
+      accepted: result.accepted,
+      enqueued: result.enqueued,
+      running: result.running,
+      reason: result.reason,
+    });
+    return result;
   }
 
   /** 单文档子图：端点缺失时补 implicit 节点（type unknown，无别名） */

@@ -5,19 +5,24 @@
  * kg_extract_op），并全量加载重建内存索引快照（fundamentals/kg/kg-index.ts）。
  * 在线链路（a5）只读内存快照，不触库。
  *
- * 调度模型（照抄 pending_vector_ops 状态机范式，不埋分散钩子）：
- * - @Interval 每 tick：差集扫描入队 + 限量消费 pending op；
+ * 触发模型（照抄 pending_vector_ops 状态机范式，不埋分散钩子）：
+ * - **人工触发，无自动调度**：由 KgGraphController 的 POST 端点驱动
+ *   （单篇 triggerExtractDocument / 全量 triggerExtractAll），进程内不再有定时器；
  * - 差集入队 = ACTIVE 版本 vs 已完成/已失败的 EXTRACT op（按 versionId 比对），
  *   天然覆盖存量回填、版本更新重抽两种场景；
  * - KG 行存在但文档已无 ACTIVE 版本 → 入队 REMOVE_DOC 删行；
- * - KG_ENABLED=false 时调度直接 return，不产生任何 DB 查询（基线行为零变化）。
+ * - KG_ENABLED=false 时触发直接被拒，不产生任何 DB 查询（基线行为零变化）。
+ *
+ * 为什么去掉 @Interval：抽取是 LLM 长任务（单篇上限 extractTimeoutMs=180s），
+ * 且 rebuildSnapshot 要全表加载 + 重建内存索引。无人值守地周期性跑，会在用户
+ * 毫无预期时抢占模型并发池与内存，实测把 HTTP 接口一起拖挂（模型配置页、
+ * 知识库状态页同时空白）。改为人工触发后，重活只在用户知情时发生。
  *
  * 门闩红线：EXTRACT_PROMPT 与抽取口径 = scripts/bench/kg-link-spike.ts v2
  * （30 题门闩验证版本），任何改动都会使门闩结论失效，须重跑 30 题复核。
  */
 
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { Interval } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
@@ -55,6 +60,25 @@ import type { DocEntityRow } from '../fundamentals/kg/kg-index.js';
 import { DocumentService } from './document.service.js';
 
 const MODULE = 'KgExtractService';
+
+/**
+ * 后台消费的最大轮数硬上限（防呆）。
+ * 正常轮数按队列长度推算即可，此值只用于兜住「失败重试把 op 反复置回 pending」
+ * 之类的异常路径，避免后台任务永不退出、isRunning 永久卡死。
+ */
+const MAX_CONSUME_ROUNDS = 200;
+
+/** 人工触发 KG 抽取的受理结果（Service → Controller → 前端契约） */
+export interface KgTriggerResult {
+  /** 是否受理本次触发；false 时前端应把 reason 直接展示给用户 */
+  accepted: boolean;
+  /** 未受理原因 / 补充说明（中文，可直接展示） */
+  reason?: string;
+  /** 本次入队（含把历史 failed 重置为待抽）的 op 数 */
+  enqueued: number;
+  /** 触发后后台是否有抽取任务在跑：前端据此决定是否开始轮询进度 */
+  running: boolean;
+}
 
 /**
  * KG 抽取固定使用的模型 id。
@@ -116,8 +140,13 @@ async function mapWithConcurrency<T, R>(
 
 @Injectable()
 export class KgExtractService implements OnModuleInit {
-  /** 防重入：上一 tick 未跑完时跳过本次触发 */
+  /** 防重入：上一轮后台抽取未跑完时拒绝新触发（人工触发同样受此约束） */
   private isRunning = false;
+
+  /** 是否有抽取任务在跑（Controller 与前端进度提示共用） */
+  get busy(): boolean {
+    return this.isRunning;
+  }
 
   constructor(
     @InjectRepository(KgEntity)
@@ -151,7 +180,7 @@ export class KgExtractService implements OnModuleInit {
       }
       await this.rebuildSnapshot();
     } catch (error) {
-      logger.error('KG 启动加载失败（不阻塞服务，等待下一轮调度重建）', {
+      logger.error('KG 启动加载失败（不阻塞服务，可在图谱面板手动触发重建）', {
         module: MODULE,
         error: errMsg(error),
         stack: error instanceof Error ? error.stack : undefined,
@@ -159,46 +188,237 @@ export class KgExtractService implements OnModuleInit {
     }
   }
 
+  // ==================== 人工触发入口 ====================
+
   /**
-   * 调度入口：差集入队 + 限量消费 pending op，有数据变更时重建内存快照。
-   * KG 关闭时直接 return（不产生任何 DB 查询）。
+   * 全量提取：把知识库所有「当前 ACTIVE 版本尚未成功抽取」的文档入队并后台执行。
+   *
+   * 额外把历史 FAILED 的 EXTRACT op 重置为待抽——enqueueDiff 把 FAILED 视作
+   * 「已处理」会跳过它们，而全量按钮最主要的用户场景恰恰是「上次失败的那批想重试」，
+   * 不重置等于按钮对这批文档无效。
+   *
+   * 立即返回、不等待抽取完成：单篇上限 extractTimeoutMs（默认 180s），
+   * HTTP 请求（含 nginx 代理）必然先超时。进度由前端轮询 GET /api/kg/stats 的
+   * ops.{pending,processing,completed,failed} 观察。
    */
-  @Interval(config.kg.extractIntervalMs)
-  async tick(): Promise<void> {
-    if (!config.kg.enabled) return;
-    if (this.isRunning) {
-      logger.info('KG 抽取调度正在执行中，跳过本次触发', { module: MODULE });
-      return;
-    }
-    // 全量重建进行中时避让：此时版本状态在批量翻转，差集扫描会误入队
-    if (this.documentService.isReindexRunning()) {
-      logger.info('向量全量重建进行中，跳过本次 KG 调度', { module: MODULE });
-      return;
-    }
-    this.isRunning = true;
+  async triggerExtractAll(): Promise<KgTriggerResult> {
+    const rejected = this.rejectIfUnavailable();
+    if (rejected) return rejected;
     try {
-      await this.enqueueDiff();
-      const changed = await this.consumePending();
-      if (changed) await this.rebuildSnapshot();
+      const reset = await this.resetFailedExtractOps();
+      const inserted = await this.enqueueDiff();
+      const enqueued = inserted + reset;
+      const pending = await this.countPending();
+      if (pending > 0) this.startBackgroundConsume();
+      return {
+        accepted: true,
+        enqueued,
+        running: this.isRunning,
+        reason: pending > 0 ? undefined : '没有待提取的文档（全部已完成）',
+      };
     } catch (error) {
-      logger.error('KG 抽取调度异常', {
+      logger.error('KG 全量提取入队失败', {
         module: MODULE,
         error: errMsg(error),
         stack: error instanceof Error ? error.stack : undefined,
+      });
+      return {
+        accepted: false,
+        reason: `入队失败：${errMsg(error)}`,
+        enqueued: 0,
+        running: this.isRunning,
+      };
+    }
+  }
+
+  /**
+   * 单篇提取：按文档当前 ACTIVE 版本入队一条 EXTRACT op 并后台执行。
+   * 文档没有 ACTIVE 版本（上传未成功 / 版本全部回退）或已在队列中时不受理。
+   */
+  async triggerExtractDocument(documentId: number): Promise<KgTriggerResult> {
+    const rejected = this.rejectIfUnavailable();
+    if (rejected) return rejected;
+    try {
+      const enqueued = await this.enqueueDocument(documentId);
+      if (enqueued === 0) {
+        // 两种「没入队」的原因不同，分开提示便于用户判断下一步
+        const reason = (await this.hasOpenOp(documentId))
+          ? '该文档已在提取队列中，请等待完成'
+          : '该文档没有生效版本，无法提取（请确认文档已上传成功）';
+        return {
+          accepted: false,
+          reason,
+          enqueued: 0,
+          running: this.isRunning,
+        };
+      }
+      this.startBackgroundConsume();
+      return { accepted: true, enqueued, running: this.isRunning };
+    } catch (error) {
+      logger.error('KG 单篇提取入队失败', {
+        module: MODULE,
+        documentId,
+        error: errMsg(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      return {
+        accepted: false,
+        reason: `入队失败：${errMsg(error)}`,
+        enqueued: 0,
+        running: this.isRunning,
+      };
+    }
+  }
+
+  /** 触发前置校验：KG 开关 / 防重入 / 向量全量重建避让；可受理时返回 null */
+  private rejectIfUnavailable(): KgTriggerResult | null {
+    if (!config.kg.enabled) {
+      return {
+        accepted: false,
+        reason: 'KG 在线链路未启用（KG_ENABLED=false），无法提取',
+        enqueued: 0,
+        running: false,
+      };
+    }
+    if (this.isRunning) {
+      return {
+        accepted: false,
+        reason: '已有提取任务正在执行，请等待完成后再试',
+        enqueued: 0,
+        running: true,
+      };
+    }
+    // 向量全量重建进行中时避让：此时版本状态在批量翻转，差集扫描会误入队
+    if (this.documentService.isReindexRunning()) {
+      return {
+        accepted: false,
+        reason: '向量全量重建进行中，请稍后再试',
+        enqueued: 0,
+        running: false,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * 启动后台消费（fire-and-forget）：同步置 isRunning 后立即返回，
+   * 保证调用方拿到的 running 字段与实际状态一致。
+   */
+  private startBackgroundConsume(): void {
+    this.isRunning = true;
+    void this.consumeUntilDrained().catch((error) => {
+      logger.error('KG 抽取执行异常', {
+        module: MODULE,
+        error: errMsg(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    });
+  }
+
+  /**
+   * 分批消费直到队列清空，有落库变更时重建内存快照。
+   * consumePending 单批上限 maxOpsPerTick（防一次拉太多 op 长时间占用连接与内存），
+   * 全量提取时队列长度可能远超单批上限，故需循环；轮数按队列长度推算并设硬上限。
+   * isRunning 必须在 finally 中释放，否则后续触发会被永久拒绝。
+   */
+  private async consumeUntilDrained(): Promise<void> {
+    try {
+      const initialPending = await this.countPending();
+      const maxRounds = Math.min(
+        Math.ceil(initialPending / config.kg.maxOpsPerTick) + 2,
+        MAX_CONSUME_ROUNDS,
+      );
+      let changedTotal = false;
+      let rounds = 0;
+      for (let round = 0; round < maxRounds; round += 1) {
+        rounds = round + 1;
+        const changed = await this.consumePending();
+        if (changed) changedTotal = true;
+        const remaining = await this.countPending();
+        if (remaining === 0) break;
+      }
+      if (changedTotal) await this.rebuildSnapshot();
+      logger.info('KG 抽取队列执行完成', {
+        module: MODULE,
+        rounds,
+        initialPending,
       });
     } finally {
       this.isRunning = false;
     }
   }
 
+  /** 待抽 op 计数（后台消费的终止条件与进度判定） */
+  private async countPending(): Promise<number> {
+    return this.opRepo.count({ where: { status: KgOpStatus.PENDING } });
+  }
+
+  /** 该文档是否已有在途 op（pending/processing），用于避免重复入队 */
+  private async hasOpenOp(documentId: number): Promise<boolean> {
+    const count = await this.opRepo.count({
+      where: {
+        documentId,
+        status: In([KgOpStatus.PENDING, KgOpStatus.PROCESSING]),
+      },
+    });
+    return count > 0;
+  }
+
+  /**
+   * 把历史 FAILED 的 EXTRACT op 重置为待抽（retryCount 归零、清错误信息）。
+   * 只动 EXTRACT：REMOVE_DOC 失败通常意味着 KG 行已不存在，重试无意义。
+   */
+  private async resetFailedExtractOps(): Promise<number> {
+    const result = await this.opRepo.update(
+      { operation: KgOpType.EXTRACT, status: KgOpStatus.FAILED },
+      { status: KgOpStatus.PENDING, retryCount: 0, errorMessage: '' },
+    );
+    const affected = result.affected ?? 0;
+    if (affected > 0) {
+      logger.info('已重置失败的 KG 抽取操作为待抽', {
+        module: MODULE,
+        count: affected,
+      });
+    }
+    return affected;
+  }
+
+  /**
+   * 单篇入队：按文档当前 ACTIVE 版本插一条 EXTRACT op。
+   * 与 enqueueDiff 同口径（一版本一行历史 op，不覆盖旧行，便于保留失败记录排查）。
+   * @returns 实际入队数（0 = 无 ACTIVE 版本或已有在途 op）
+   */
+  private async enqueueDocument(documentId: number): Promise<number> {
+    if (await this.hasOpenOp(documentId)) return 0;
+    const activeVersion = await this.versionRepo.findOne({
+      where: { documentId, status: VersionStatus.ACTIVE },
+      select: ['id'],
+      order: { id: 'DESC' },
+    });
+    if (!activeVersion) return 0;
+    await this.opRepo.insert({
+      documentId,
+      versionId: activeVersion.id,
+      operation: KgOpType.EXTRACT,
+      status: KgOpStatus.PENDING,
+    });
+    logger.info('KG 单篇提取已入队', {
+      module: MODULE,
+      documentId,
+      versionId: activeVersion.id,
+    });
+    return 1;
+  }
+
   // ==================== 差集入队 ====================
 
   /**
-   * 扫描 ACTIVE 版本与已处理 op 的差集，自动入队 EXTRACT / REMOVE_DOC。
+   * 扫描 ACTIVE 版本与已处理 op 的差集，入队 EXTRACT / REMOVE_DOC。
    * FAILED 的 op 也算「已处理」：同一版本不会被无限重抽，
-   * 人工修复后删除该 op 行即可让差集扫描重新入队。
+   * 人工重试由 triggerExtractAll 的 resetFailedExtractOps 统一放行。
+   * @returns 本次新入队的 op 数
    */
-  private async enqueueDiff(): Promise<void> {
+  private async enqueueDiff(): Promise<number> {
     const activeVersions = await this.versionRepo.find({
       where: { status: VersionStatus.ACTIVE },
       select: ['id', 'documentId'],
@@ -276,6 +496,7 @@ export class KgExtractService implements OnModuleInit {
         activeDocs: activeDocIds.size,
       });
     }
+    return enqueued;
   }
 
   // ==================== 消费队列 ====================
@@ -367,7 +588,7 @@ export class KgExtractService implements OnModuleInit {
 
     const rawText = await this.documentService.getVersionText(version);
     if (!rawText || !rawText.trim() || rawText.startsWith('[解析失败:')) {
-      // 走重试通道：文件短暂不可用（如正在写入）下一轮可能恢复
+      // 走重试通道：文件短暂不可用（如正在写入）时，retryCount 未耗尽前会置回 pending 重试
       throw new Error(
         `版本文本不可用：${rawText.startsWith('[解析失败:') ? rawText.slice(0, 200) : '内容为空或文件丢失'}`,
       );
@@ -492,7 +713,7 @@ export class KgExtractService implements OnModuleInit {
   /**
    * 全量加载三表 → 按 documentId 分组还原 DocEntityRow[] → buildIndex →
    * 成对原子替换进程级快照（index + keyToEmbedding）。
-   * 公开方法：启动加载 / 调度变更后重建 / 未来管理端手动触发共用。
+   * 公开方法：启动加载 / 人工触发抽取完成后重建，两处共用。
    */
   async rebuildSnapshot(): Promise<void> {
     const [entityRows, tripleRows] = await Promise.all([
