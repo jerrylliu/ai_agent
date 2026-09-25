@@ -336,10 +336,7 @@ async function parsePdfWithMineru(filePath: string): Promise<ParsedDocument> {
   // S3-1 修复：传入 text（已替换图片引用）而非 result.markdown，避免公式解释覆盖图片替换结果
   if (config.formula.enabled) {
     try {
-      const formulaResult = await explainFormulas(
-        text,
-        fileName,
-      );
+      const formulaResult = await explainFormulas(text, fileName);
       text = formulaResult.text;
       logger.info('公式解释完成', {
         module: 'DocumentParser',

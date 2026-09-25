@@ -1,13 +1,13 @@
 /**
  * 火山引擎 ASR 2.0 协议封装
- * 
+ *
  * 提供两种能力：
  * 1. 流式实时转写（WebSocket 大模型 Seed ASR 2.0）
  * 2. 长音频文件转写（HTTP）
- * 
+ *
  * WebSocket 二进制协议帧格式（大端序）：
  *   [4B header][4B sequence?][4B payloadSize][payload]
- * 
+ *
  * header 各字节：
  *   byte0: [version(4b) 0b0001 | headerSize(4b) 0b0001] = 0x11
  *   byte1: [msgType(4b) | flags(4b)]
@@ -85,7 +85,12 @@ const COMP_NONE = 0b0000;
 const COMP_GZIP = 0b0001;
 
 /** 构造 4 字节协议头 */
-function buildHeader(msgType: number, flags: number, ser: number, comp: number): Buffer {
+function buildHeader(
+  msgType: number,
+  flags: number,
+  ser: number,
+  comp: number,
+): Buffer {
   return Buffer.from([
     (PROTOCOL_VERSION << 4) | HEADER_SIZE,
     (msgType << 4) | flags,
@@ -121,14 +126,16 @@ function gunzipSync(data: Buffer): string {
 
 /**
  * 解析服务端二进制响应帧
- * 
+ *
  * 服务端响应格式：
  *   正常响应：[4B header][4B sequence][4B payloadSize][payload]
  *   错误帧：  [4B header][4B backend_code][4B payloadSize][payload]
- * 
+ *
  *   header byte1: msgType=0b1001 (full server) 或 0b1111 (error)
  */
-function parseServerResponse(data: Buffer): { json: string; isError: boolean } | null {
+function parseServerResponse(
+  data: Buffer,
+): { json: string; isError: boolean } | null {
   if (data.length < 12) {
     logger.warn(`ASR 响应数据过短: ${data.length} bytes`);
     return null;
@@ -179,17 +186,22 @@ function parseServerResponse(data: Buffer): { json: string; isError: boolean } |
   offset += 4;
 
   if (payloadSize > data.length - offset) {
-    logger.warn(`ASR 响应 payload 大小不匹配: expected=${payloadSize}, available=${data.length - offset}`);
+    logger.warn(
+      `ASR 响应 payload 大小不匹配: expected=${payloadSize}, available=${data.length - offset}`,
+    );
     return null;
   }
 
   const payload = data.subarray(offset, offset + payloadSize);
 
   try {
-    const jsonStr = compression === COMP_GZIP
-      ? gunzipSync(payload)
-      : payload.toString('utf-8');
-    logger.debug(`ASR 响应解析: msgType=${msgType} flags=${flags} payloadSize=${payloadSize} isError=${isError}`);
+    const jsonStr =
+      compression === COMP_GZIP
+        ? gunzipSync(payload)
+        : payload.toString('utf-8');
+    logger.debug(
+      `ASR 响应解析: msgType=${msgType} flags=${flags} payloadSize=${payloadSize} isError=${isError}`,
+    );
     return { json: jsonStr, isError };
   } catch (e) {
     logger.error('ASR 响应解压失败', e);
@@ -280,16 +292,21 @@ export class StreamingAsrClient {
             show_utterances: true,
             // VAD 参数：优化响应速度，减少等待感
             vad_enable: true,
-            vad_start_timeout: 10000,   // 开始说话超时：10秒（给用户足够准备时间）
-            vad_end_timeout: 400,        // 结束说话超时：400ms（停顿0.4秒即断句，大幅减少等待感）
-            vad_end_wait_time: 100,      // 断句后等待：100ms（减少后端处理延迟）
+            vad_start_timeout: 10000, // 开始说话超时：10秒（给用户足够准备时间）
+            vad_end_timeout: 400, // 结束说话超时：400ms（停顿0.4秒即断句，大幅减少等待感）
+            vad_end_wait_time: 100, // 断句后等待：100ms（减少后端处理延迟）
             enable_timestamp: true,
-            result_level: 3,             // 返回最详细结果（0=最简, 3=最全），确保不丢失文本
+            result_level: 3, // 返回最详细结果（0=最简, 3=最全），确保不丢失文本
           },
         });
 
         const compressed = gzipSync(requestPayload);
-        const header = buildHeader(MSG_FULL_CLIENT, FLAG_POS_SEQ, SER_JSON, COMP_GZIP);
+        const header = buildHeader(
+          MSG_FULL_CLIENT,
+          FLAG_POS_SEQ,
+          SER_JSON,
+          COMP_GZIP,
+        );
         const frame = Buffer.concat([
           header,
           buildSequence(this.seq),
@@ -297,7 +314,9 @@ export class StreamingAsrClient {
           compressed,
         ]);
 
-        logger.debug(`ASR full client request: seq=${this.seq} payloadLen=${requestPayload.length} compressedLen=${compressed.length}`);
+        logger.debug(
+          `ASR full client request: seq=${this.seq} payloadLen=${requestPayload.length} compressedLen=${compressed.length}`,
+        );
         this.ws!.send(frame);
         resolve();
       });
@@ -310,7 +329,9 @@ export class StreamingAsrClient {
         }
 
         try {
-          const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+          const buf = Buffer.isBuffer(data)
+            ? data
+            : Buffer.from(data as ArrayBuffer);
           const parsed = parseServerResponse(buf);
           if (!parsed) return;
 
@@ -318,7 +339,9 @@ export class StreamingAsrClient {
 
           if (parsed.isError) {
             const errMsg = resp.message || 'ASR 服务错误';
-            logger.error(`火山 ASR 错误: code=${resp.code || '?'} message=${errMsg}`);
+            logger.error(
+              `火山 ASR 错误: code=${resp.code || '?'} message=${errMsg}`,
+            );
             this.options.onError?.(errMsg);
             return;
           }
@@ -329,7 +352,7 @@ export class StreamingAsrClient {
           // 修复：安全地处理响应数据结构
           // 检查是否有 result 字段
           let results: any[] = [];
-          
+
           if (Array.isArray(resp.result)) {
             // 直接是数组的情况
             results = resp.result;
@@ -366,7 +389,11 @@ export class StreamingAsrClient {
             }
 
             // 安全检查 utterances
-            if (r.utterances && Array.isArray(r.utterances) && r.utterances.length > 0) {
+            if (
+              r.utterances &&
+              Array.isArray(r.utterances) &&
+              r.utterances.length > 0
+            ) {
               // 修复点：火山引擎 utterance 对象不包含 index 字段，u.index || 0 会让
               // 所有分句都落到 index=0，导致前端按 index 去重时新句覆盖旧句。
               // utterances 数组本身是按时间顺序累计返回（包含历史所有已识别的分句），
@@ -379,7 +406,11 @@ export class StreamingAsrClient {
                     // 最终结果
                     const startTime = u.start_time || 0;
                     const endTime = u.end_time || 0;
-                    this.options.onFinal?.(u.text || '', idx, endTime - startTime);
+                    this.options.onFinal?.(
+                      u.text || '',
+                      idx,
+                      endTime - startTime,
+                    );
                   } else {
                     // 中间结果
                     const timestamp = Date.now();
@@ -392,7 +423,11 @@ export class StreamingAsrClient {
               const timestamp = Date.now();
               // 根据 definite 属性判断是最终还是中间结果
               if (r.definite) {
-                this.options.onFinal?.(r.text, r.index || 0, r.duration_ms || 0);
+                this.options.onFinal?.(
+                  r.text,
+                  r.index || 0,
+                  r.duration_ms || 0,
+                );
               } else {
                 this.options.onInterim?.(r.text, r.index || 0, timestamp);
               }
@@ -407,15 +442,18 @@ export class StreamingAsrClient {
       this.ws.on('error', (err) => {
         clearTimeout(connectTimeout);
         logger.error('火山 ASR WebSocket 错误', err);
-        
-        if (!this.closed && this.reconnectAttempts < this.maxReconnectAttempts) {
+
+        if (
+          !this.closed &&
+          this.reconnectAttempts < this.maxReconnectAttempts
+        ) {
           this.reconnectAttempts++;
           logger.info(`开始第 ${this.reconnectAttempts} 次重连...`);
-          
+
           if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
           }
-          
+
           this.reconnectTimer = setTimeout(() => {
             this.reconnect();
           }, this.reconnectDelay);
@@ -429,12 +467,17 @@ export class StreamingAsrClient {
 
       this.ws.on('close', (code, reason) => {
         clearTimeout(connectTimeout);
-        logger.info(`ASR WebSocket 关闭: code=${code} reason=${reason.toString()}`);
-        
+        logger.info(
+          `ASR WebSocket 关闭: code=${code} reason=${reason.toString()}`,
+        );
+
         // 设置关闭标志，防止后续操作
         this.closed = true;
-        
-        if (!this.closed && this.reconnectAttempts < this.maxReconnectAttempts) {
+
+        if (
+          !this.closed &&
+          this.reconnectAttempts < this.maxReconnectAttempts
+        ) {
           logger.info(`WebSocket 关闭，准备重连...`);
           if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
@@ -451,7 +494,7 @@ export class StreamingAsrClient {
 
   private async reconnect(): Promise<void> {
     if (this.closed) return;
-    
+
     try {
       logger.info('正在重新连接 ASR 服务...');
       await this.connect();
@@ -504,7 +547,12 @@ export class StreamingAsrClient {
 
     this.seq++;
     const seq = -this.seq;
-    const header = buildHeader(MSG_AUDIO_ONLY, FLAG_NEG_SEQ, SER_NONE, COMP_NONE);
+    const header = buildHeader(
+      MSG_AUDIO_ONLY,
+      FLAG_NEG_SEQ,
+      SER_NONE,
+      COMP_NONE,
+    );
 
     const emptyPayload = Buffer.alloc(0);
     const frame = Buffer.concat([
@@ -527,8 +575,8 @@ export class StreamingAsrClient {
       this.reconnectTimer = null;
     }
     if (this.ws) {
-      try { 
-        this.ws.close(); 
+      try {
+        this.ws.close();
       } catch (err) {
         logger.error('关闭 WebSocket 时出错', err);
       }
@@ -547,7 +595,12 @@ export interface FileTranscribeResult {
   taskId: string;
   status: 'pending' | 'success' | 'failed';
   text?: string;
-  segments?: Array<{ start: number; end: number; text: string; confidence?: number }>;
+  segments?: Array<{
+    start: number;
+    end: number;
+    text: string;
+    confidence?: number;
+  }>;
   message?: string;
 }
 
@@ -569,8 +622,8 @@ export async function submitFileTranscribe(
       cluster: 'volcengine_input_common',
     },
     user: { uid: String(uid) },
-    audio: { 
-      format, 
+    audio: {
+      format,
       url: audioUrl,
       language, // 添加语言设置
     },
@@ -582,7 +635,7 @@ export async function submitFileTranscribe(
       response_params: {
         enable_word_info: true, // 返回词级别信息
         enable_sentence_info: true, // 返回句子级别信息
-      }
+      },
     },
   });
 
@@ -614,7 +667,10 @@ export async function submitFileTranscribe(
   return { taskId: data.id || reqid };
 }
 
-export async function queryFileTranscribe(taskId: string, uid: string = 'system'): Promise<FileTranscribeResult> {
+export async function queryFileTranscribe(
+  taskId: string,
+  uid: string = 'system',
+): Promise<FileTranscribeResult> {
   const queryUrl = config.volcAsr.httpUrl + '/query';
   const reqid = randomUUID();
 
@@ -647,7 +703,11 @@ export async function queryFileTranscribe(taskId: string, uid: string = 'system'
     taskId,
   });
   if (!parsed.success) {
-    return { taskId, status: 'failed', message: `查询转写响应结构异常: ${parsed.reason}` };
+    return {
+      taskId,
+      status: 'failed',
+      message: `查询转写响应结构异常: ${parsed.reason}`,
+    };
   }
   const data = parsed.data;
 
@@ -681,23 +741,23 @@ export function convertWavToPcm(wavBuffer: Buffer): Buffer {
   if (wavBuffer.slice(0, 4).toString() !== 'RIFF') {
     throw new Error('无效的WAV文件');
   }
-  
+
   // 查找data块
   let offset = 12; // 跳过RIFF头
   while (offset < wavBuffer.length - 8) {
     const chunkId = wavBuffer.slice(offset, offset + 4).toString();
     const chunkSize = wavBuffer.readUInt32LE(offset + 4);
-    
+
     if (chunkId === 'data') {
       // 返回音频数据部分
       return wavBuffer.slice(offset + 8, offset + 8 + chunkSize);
     }
-    
+
     offset += 8 + chunkSize;
     // 确保chunkSize是偶数
     if (chunkSize % 2 !== 0) offset++;
   }
-  
+
   throw new Error('WAV文件中未找到音频数据');
 }
 
@@ -707,17 +767,21 @@ export function convertWavToPcm(wavBuffer: Buffer): Buffer {
  * @param pcmData PCM音频数据
  * @param chunkSize 分片大小，默认1600字节（100ms@16kHz 16bit mono）
  */
-export function sendAudioInChunks(client: StreamingAsrClient, pcmData: Buffer, chunkSize: number = 1600): void {
+export function sendAudioInChunks(
+  client: StreamingAsrClient,
+  pcmData: Buffer,
+  chunkSize: number = 1600,
+): void {
   for (let i = 0; i < pcmData.length; i += chunkSize) {
     if (client.isClosed) {
       logger.debug('客户端已关闭，停止发送音频');
       break;
     }
-    
+
     const chunk = pcmData.slice(i, Math.min(i + chunkSize, pcmData.length));
     const isLast = i + chunkSize >= pcmData.length;
     client.sendAudio(chunk, isLast);
-    
+
     // 适当延时，模拟实时发送
     if (!isLast) {
       // 这里可以使用异步延时来控制发送节奏

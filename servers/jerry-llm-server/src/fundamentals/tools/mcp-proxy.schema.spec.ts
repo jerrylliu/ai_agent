@@ -6,7 +6,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../config', () => ({
@@ -39,7 +44,13 @@ describe('mcpProxyParamsSchema 入口兜底', () => {
     const r = mcpProxyParamsSchema.safeParse({
       server: 's',
       tool: 't',
-      arguments: { num: 1, str: 'x', bool: true, arr: [1, 2], nested: { a: 1 } },
+      arguments: {
+        num: 1,
+        str: 'x',
+        bool: true,
+        arr: [1, 2],
+        nested: { a: 1 },
+      },
     });
     expect(r.success).toBe(true);
   });

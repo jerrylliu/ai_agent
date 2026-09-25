@@ -11,8 +11,16 @@
  */
 
 import type { Response } from 'express';
-import { HumanMessage, SystemMessage, type BaseMessage } from '@langchain/core/messages';
-import { createRateLimitedLLM, buildModelConfig, getCurrentModelId } from './model-provider.js';
+import {
+  HumanMessage,
+  SystemMessage,
+  type BaseMessage,
+} from '@langchain/core/messages';
+import {
+  createRateLimitedLLM,
+  buildModelConfig,
+  getCurrentModelId,
+} from './model-provider.js';
 import { sendContent, startHeartbeat, stopHeartbeat } from './sse-writer.js';
 import { logger } from './logger.js';
 
@@ -70,13 +78,17 @@ export async function streamCompletion(
 
   if (mode === 'rewrite') {
     messages.push(
-      new HumanMessage(`改写指令：${instruction || '润色'}\n\n原文：\n${context}`),
+      new HumanMessage(
+        `改写指令：${instruction || '润色'}\n\n原文：\n${context}`,
+      ),
     );
   } else {
     // autocomplete / continue：把已有文本放在 HumanMessage 中，让 LLM 接着写
     // 不用 AIMessage 方式，因为部分模型（如 Ollama）对空 HumanMessage 后接 AIMessage 的支持不好
     messages.push(
-      new HumanMessage(`已有的文字：\n${context}\n\n请直接继续写接下来的内容，只输出续写部分：`),
+      new HumanMessage(
+        `已有的文字：\n${context}\n\n请直接继续写接下来的内容，只输出续写部分：`,
+      ),
     );
   }
 
@@ -156,11 +168,15 @@ export async function invokeCompletion(
 
   if (mode === 'rewrite') {
     messages.push(
-      new HumanMessage(`改写指令：${instruction || '润色'}\n\n原文：\n${context}`),
+      new HumanMessage(
+        `改写指令：${instruction || '润色'}\n\n原文：\n${context}`,
+      ),
     );
   } else {
     messages.push(
-      new HumanMessage(`已有的文字：\n${context}\n\n请直接继续写接下来的内容，只输出续写部分：`),
+      new HumanMessage(
+        `已有的文字：\n${context}\n\n请直接继续写接下来的内容，只输出续写部分：`,
+      ),
     );
   }
 

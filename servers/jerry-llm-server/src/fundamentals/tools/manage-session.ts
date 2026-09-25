@@ -32,7 +32,9 @@ export const manageSessionParamsSchema = z.object({
   session_id: z
     .string()
     .optional()
-    .describe('目标会话ID（delete/rename/pin/unpin/switch/add_tag/remove_tag/set_category 时必填）'),
+    .describe(
+      '目标会话ID（delete/rename/pin/unpin/switch/add_tag/remove_tag/set_category 时必填）',
+    ),
   title: z
     .string()
     .optional()
@@ -41,14 +43,8 @@ export const manageSessionParamsSchema = z.object({
     .string()
     .optional()
     .describe('搜索关键词（search 时使用，按标题模糊匹配）'),
-  tag: z
-    .string()
-    .optional()
-    .describe('标签名称（add_tag/remove_tag 时使用）'),
-  category: z
-    .string()
-    .optional()
-    .describe('分类名称（set_category 时使用）'),
+  tag: z.string().optional().describe('标签名称（add_tag/remove_tag 时使用）'),
+  category: z.string().optional().describe('分类名称（set_category 时使用）'),
 });
 
 // ==================== FC Tool Schema ====================
@@ -137,7 +133,11 @@ export async function executeManageSession(
       case 'delete':
         return await handleDelete(userId, validated.session_id);
       case 'rename':
-        return await handleRename(userId, validated.session_id, validated.title);
+        return await handleRename(
+          userId,
+          validated.session_id,
+          validated.title,
+        );
       case 'pin':
         return await handlePin(userId, validated.session_id);
       case 'unpin':
@@ -149,9 +149,17 @@ export async function executeManageSession(
       case 'add_tag':
         return await handleAddTag(userId, validated.session_id, validated.tag);
       case 'remove_tag':
-        return await handleRemoveTag(userId, validated.session_id, validated.tag);
+        return await handleRemoveTag(
+          userId,
+          validated.session_id,
+          validated.tag,
+        );
       case 'set_category':
-        return await handleSetCategory(userId, validated.session_id, validated.category);
+        return await handleSetCategory(
+          userId,
+          validated.session_id,
+          validated.category,
+        );
       case 'list_tags':
         return await handleListTags(userId);
       default:
@@ -237,7 +245,8 @@ async function handleDelete(
   if (!sessionId) {
     return {
       success: false,
-      message: '删除会话需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
+      message:
+        '删除会话需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
     };
   }
 
@@ -277,7 +286,8 @@ async function handleRename(
   if (!sessionId) {
     return {
       success: false,
-      message: '重命名会话需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
+      message:
+        '重命名会话需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
     };
   }
   if (!newTitle || !newTitle.trim()) {
@@ -296,7 +306,11 @@ async function handleRename(
   }
 
   const oldTitle = session.title;
-  await sessionServiceInstance.updateSessionTitle(sessionId, newTitle.trim(), userId);
+  await sessionServiceInstance.updateSessionTitle(
+    sessionId,
+    newTitle.trim(),
+    userId,
+  );
 
   logger.info('FC工具 [manage_session] 重命名会话成功', {
     module: 'Tool:ManageSession',
@@ -322,7 +336,8 @@ async function handlePin(
   if (!sessionId) {
     return {
       success: false,
-      message: '置顶会话需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
+      message:
+        '置顶会话需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
     };
   }
 
@@ -360,7 +375,8 @@ async function handleUnpin(
   if (!sessionId) {
     return {
       success: false,
-      message: '取消置顶需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
+      message:
+        '取消置顶需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
     };
   }
 
@@ -398,7 +414,8 @@ async function handleSwitch(
   if (!sessionId) {
     return {
       success: false,
-      message: '切换会话需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
+      message:
+        '切换会话需要提供 session_id 参数。请先用 list 查看会话列表获取 ID。',
     };
   }
 
@@ -475,7 +492,10 @@ async function handleAddTag(
 
   const tags = [...(session.tags || [])];
   if (tags.includes(tag.trim())) {
-    return { success: true, message: `会话"${session.title}"已有标签"${tag.trim()}"。` };
+    return {
+      success: true,
+      message: `会话"${session.title}"已有标签"${tag.trim()}"。`,
+    };
   }
   tags.push(tag.trim());
 
@@ -508,7 +528,10 @@ async function handleRemoveTag(
   const tags = [...(session.tags || [])];
   const idx = tags.indexOf(tag.trim());
   if (idx === -1) {
-    return { success: true, message: `会话"${session.title}"没有标签"${tag.trim()}"。` };
+    return {
+      success: true,
+      message: `会话"${session.title}"没有标签"${tag.trim()}"。`,
+    };
   }
   tags.splice(idx, 1);
 
@@ -538,7 +561,11 @@ async function handleSetCategory(
     return { success: false, message: `未找到 ID 为 ${sessionId} 的会话。` };
   }
 
-  await sessionServiceInstance.updateSessionCategory(sessionId, category.trim(), userId);
+  await sessionServiceInstance.updateSessionCategory(
+    sessionId,
+    category.trim(),
+    userId,
+  );
 
   return {
     success: true,
@@ -547,9 +574,7 @@ async function handleSetCategory(
   };
 }
 
-async function handleListTags(
-  userId: string,
-): Promise<ManageSessionResult> {
+async function handleListTags(userId: string): Promise<ManageSessionResult> {
   const tags = await sessionServiceInstance.getAllTags(userId);
 
   if (tags.length === 0) {

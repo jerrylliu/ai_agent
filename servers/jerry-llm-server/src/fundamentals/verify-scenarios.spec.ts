@@ -20,7 +20,10 @@ import { buildNormalizedCacheKey } from './cache-key-normalizer';
 import { evaluateRewriteQuality } from './query-rewriter-fallback';
 import type { RewrittenQuery } from './vector-store/query-rewriter';
 import { CacheFuzzyMatcher, type CacheSlots } from './cache-fuzzy-matcher';
-import { CacheAliasLearner, type ComparableResult } from './cache-alias-learner';
+import {
+  CacheAliasLearner,
+  type ComparableResult,
+} from './cache-alias-learner';
 
 // ==================== 场景 1：Layer 1 语义去重拦截 ====================
 
@@ -33,14 +36,24 @@ describe('【场景 1】Layer 1 - 同一 FC 循环内换措辞查知识库', () 
     const call1 = { query: '项目A 进度' };
     const check1 = tracker.check('session-1', 'search_knowledge_base', call1);
     console.log('第 1 次调用:', call1.query);
-    console.log('  → 拦截?', check1.isDuplicate, '| 相似度:', check1.similarity.toFixed(3));
+    console.log(
+      '  → 拦截?',
+      check1.isDuplicate,
+      '| 相似度:',
+      check1.similarity.toFixed(3),
+    );
     tracker.record('session-1', 'search_knowledge_base', call1);
 
     // 第 2 次迭代：模型换措辞再调 search_knowledge_base("项目A 进度报告")
     const call2 = { query: '项目A 进度报告' };
     const check2 = tracker.check('session-1', 'search_knowledge_base', call2);
     console.log('第 2 次调用:', call2.query);
-    console.log('  → 拦截?', check2.isDuplicate, '| 相似度:', check2.similarity.toFixed(3));
+    console.log(
+      '  → 拦截?',
+      check2.isDuplicate,
+      '| 相似度:',
+      check2.similarity.toFixed(3),
+    );
     console.log('  → 匹配的历史查询:', check2.matchedQuery);
 
     expect(check1.isDuplicate).toBe(false);
@@ -64,7 +77,7 @@ describe('【场景 2】Layer 2 - 换关键词查到同一批文档', () => {
     ];
     tracker.record('session-1', '项目A 进度', results1);
     console.log('第 1 次检索:', '项目A 进度');
-    console.log('  → 返回文档:', results1.map(r => r.documentId).join(', '));
+    console.log('  → 返回文档:', results1.map((r) => r.documentId).join(', '));
 
     // 第 2 次检索：换关键词，查到 doc1, doc2（与第 1 次重叠）
     const results2 = [
@@ -74,7 +87,7 @@ describe('【场景 2】Layer 2 - 换关键词查到同一批文档', () => {
     ];
     const overlap = tracker.check('session-1', '项目A 最新进展', results2);
     console.log('第 2 次检索:', '项目A 最新进展');
-    console.log('  → 返回文档:', results2.map(r => r.documentId).join(', '));
+    console.log('  → 返回文档:', results2.map((r) => r.documentId).join(', '));
     console.log('  → 重叠率:', (overlap.overlapRate * 100).toFixed(0) + '%');
     console.log('  → 重叠文档数:', overlap.overlapCount);
     console.log('  → 高度重叠?', overlap.isHighOverlap);
@@ -82,7 +95,11 @@ describe('【场景 2】Layer 2 - 换关键词查到同一批文档', () => {
 
     if (overlap.isHighOverlap) {
       console.log('  → 追加警告到 ToolMessage:');
-      console.log('    【检索去重提示】你上一轮已检索到 ' + overlap.overlapCount + ' 篇相同文档...');
+      console.log(
+        '    【检索去重提示】你上一轮已检索到 ' +
+          overlap.overlapCount +
+          ' 篇相同文档...',
+      );
     }
 
     expect(overlap.isHighOverlap).toBe(true);
@@ -128,17 +145,26 @@ describe('【场景 3b】keywords 作 cache key 源 - 修复改写后 mainQuery 
       mainQuery: '干员 液氮 技能 ability skill',
       subQueries: [],
       keywords: ['干员', '液氮', '技能'],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
     const rewrite2: RewrittenQuery = {
       mainQuery: '干员 液氮 技能 skill power',
       subQueries: [],
       keywords: ['干员', '液氮', '技能'],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
     const rewrite3: RewrittenQuery = {
       mainQuery: '干员 液氮 技能 talent capability',
       subQueries: [],
       keywords: ['干员', '液氮', '技能'],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
 
     // 旧方案：用 mainQuery 作 cache key 源 → 每次不同
     const oldKey1 = buildNormalizedCacheKey(rewrite1.mainQuery);
@@ -148,23 +174,44 @@ describe('【场景 3b】keywords 作 cache key 源 - 修复改写后 mainQuery 
     console.log('  改写1: "' + rewrite1.mainQuery + '" → key:', oldKey1);
     console.log('  改写2: "' + rewrite2.mainQuery + '" → key:', oldKey2);
     console.log('  改写3: "' + rewrite3.mainQuery + '" → key:', oldKey3);
-    console.log('  → key1 == key2?', oldKey1 === oldKey2, '（不同英文词导致 key 不同）');
+    console.log(
+      '  → key1 == key2?',
+      oldKey1 === oldKey2,
+      '（不同英文词导致 key 不同）',
+    );
 
     // 新方案：用 keywords 作 cache key 源 → 稳定相同
     const newKey1 = buildNormalizedCacheKey(rewrite1.keywords.join(' '));
     const newKey2 = buildNormalizedCacheKey(rewrite2.keywords.join(' '));
     const newKey3 = buildNormalizedCacheKey(rewrite3.keywords.join(' '));
     console.log('\n新方案（keywords 作 cache key 源）:');
-    console.log('  keywords1:', JSON.stringify(rewrite1.keywords), '→ key:', newKey1);
-    console.log('  keywords2:', JSON.stringify(rewrite2.keywords), '→ key:', newKey2);
-    console.log('  keywords3:', JSON.stringify(rewrite3.keywords), '→ key:', newKey3);
+    console.log(
+      '  keywords1:',
+      JSON.stringify(rewrite1.keywords),
+      '→ key:',
+      newKey1,
+    );
+    console.log(
+      '  keywords2:',
+      JSON.stringify(rewrite2.keywords),
+      '→ key:',
+      newKey2,
+    );
+    console.log(
+      '  keywords3:',
+      JSON.stringify(rewrite3.keywords),
+      '→ key:',
+      newKey3,
+    );
     console.log('  → key1 == key2?', newKey1 === newKey2);
     console.log('  → key1 == key3?', newKey1 === newKey3);
 
     expect(oldKey1).not.toBe(oldKey2); // 旧方案不命中
-    expect(newKey1).toBe(newKey2);     // 新方案命中
-    expect(newKey1).toBe(newKey3);     // 新方案命中
-    console.log('\n✅ 验证通过：keywords 作 cache key 源，相同语义不同改写结果命中同一缓存\n');
+    expect(newKey1).toBe(newKey2); // 新方案命中
+    expect(newKey1).toBe(newKey3); // 新方案命中
+    console.log(
+      '\n✅ 验证通过：keywords 作 cache key 源，相同语义不同改写结果命中同一缓存\n',
+    );
   });
 });
 
@@ -179,7 +226,10 @@ describe('【场景 4】改写偏差兜底 - 偏差大时降级', () => {
       mainQuery: '项目A 当前进度情况',
       subQueries: [],
       keywords: [],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
     const goodResult = evaluateRewriteQuality('项目A 进度', goodRewrite);
     console.log('改写合理:');
     console.log('  输入: "项目A 进度" → 改写: "' + goodRewrite.mainQuery + '"');
@@ -191,7 +241,10 @@ describe('【场景 4】改写偏差兜底 - 偏差大时降级', () => {
       mainQuery: 'Q2 季度财务报告',
       subQueries: [],
       keywords: [],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
     const badResult = evaluateRewriteQuality('项目A 进度', badRewrite);
     console.log('\n改写偏差大:');
     console.log('  输入: "项目A 进度" → 改写: "' + badRewrite.mainQuery + '"');
@@ -215,13 +268,21 @@ describe('【场景 5】Level 2 - 缓存模糊匹配（Jaccard + 槽位兼容性
     const matcher = new CacheFuzzyMatcher();
 
     // 第 1 次查询：keywords=["干员","液氮","技能"]，cacheKey="key_001"
-    const slots: CacheSlots = { vectorWeight: 0.7, bm25Weight: 0.3, type: 'hybrid' };
+    const slots: CacheSlots = {
+      vectorWeight: 0.7,
+      bm25Weight: 0.3,
+      type: 'hybrid',
+    };
     matcher.record('session-1', 'key_001', ['干员', '液氮', '技能'], slots);
     console.log('第 1 次查询（建立索引）:');
     console.log('  keywords: ["干员","液氮","技能"] → cacheKey: key_001');
 
     // 第 2 次查询：keywords=["干员","液氮","技能介绍"]，Level 1 miss 后走 Level 2
-    const match = matcher.findFuzzyMatch('session-1', ['干员', '液氮', '技能介绍'], slots);
+    const match = matcher.findFuzzyMatch(
+      'session-1',
+      ['干员', '液氮', '技能介绍'],
+      slots,
+    );
     console.log('\n第 2 次查询（模糊匹配）:');
     console.log('  keywords: ["干员","液氮","技能介绍"]');
     console.log('  → 匹配?', match.matched);
@@ -239,12 +300,24 @@ describe('【场景 5】Level 2 - 缓存模糊匹配（Jaccard + 槽位兼容性
     const matcher = new CacheFuzzyMatcher();
 
     // 第 1 次查询：weight=0.7/0.3
-    const slots1: CacheSlots = { vectorWeight: 0.7, bm25Weight: 0.3, type: 'hybrid' };
+    const slots1: CacheSlots = {
+      vectorWeight: 0.7,
+      bm25Weight: 0.3,
+      type: 'hybrid',
+    };
     matcher.record('session-1', 'key_001', ['干员', '液氮', '技能'], slots1);
 
     // 第 2 次查询：weight=0.5/0.5（不同权重，结果排序不同，不能复用）
-    const slots2: CacheSlots = { vectorWeight: 0.5, bm25Weight: 0.5, type: 'hybrid' };
-    const match = matcher.findFuzzyMatch('session-1', ['干员', '液氮', '技能'], slots2);
+    const slots2: CacheSlots = {
+      vectorWeight: 0.5,
+      bm25Weight: 0.5,
+      type: 'hybrid',
+    };
+    const match = matcher.findFuzzyMatch(
+      'session-1',
+      ['干员', '液氮', '技能'],
+      slots2,
+    );
     console.log('不同权重:');
     console.log('  缓存 slots: vectorWeight=0.7, bm25Weight=0.3');
     console.log('  查询 slots: vectorWeight=0.5, bm25Weight=0.5');
@@ -284,7 +357,9 @@ describe('【场景 6】Level 3 - Alias 自学习（行为验证）', () => {
     expect(resolved1).toBe('keyA');
     expect(stable2).toBe(true);
     expect(resolved2).toBe('keyB');
-    console.log('\n✅ 验证通过：alias 稳定后 resolve 直接返回 targetKey，走 Level 1\n');
+    console.log(
+      '\n✅ 验证通过：alias 稳定后 resolve 直接返回 targetKey，走 Level 1\n',
+    );
   });
 });
 
@@ -309,7 +384,12 @@ describe('【场景 7】Level 3 - 结果验证（verifyAndLearn）', () => {
       { documentId: 'doc4', content: '液氮技能介绍内容D' },
     ];
 
-    const result = learner.verifyAndLearn('keyA', 'keyB', actualResults, cachedResults);
+    const result = learner.verifyAndLearn(
+      'keyA',
+      'keyB',
+      actualResults,
+      cachedResults,
+    );
     console.log('结果验证:');
     console.log('  缓存结果: doc1, doc2, doc3');
     console.log('  实际结果: doc1, doc2, doc4');
@@ -325,7 +405,12 @@ describe('【场景 7】Level 3 - 结果验证（verifyAndLearn）', () => {
       { documentId: 'doc2', content: '液氮技能介绍内容B' },
       { documentId: 'doc3', content: '液氮技能介绍内容C' },
     ];
-    const result2 = learner.verifyAndLearn('keyC', 'keyD', actualResults2, cachedResults);
+    const result2 = learner.verifyAndLearn(
+      'keyC',
+      'keyD',
+      actualResults2,
+      cachedResults,
+    );
     console.log('\n完全重叠:');
     console.log('  缓存结果: doc1, doc2, doc3');
     console.log('  实际结果: doc1, doc2, doc3');

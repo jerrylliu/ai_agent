@@ -114,7 +114,9 @@ function matchesOllamaModel(tagName: string, wanted: string): boolean {
   const have = normalize(tagName);
   const want = normalize(wanted);
   if (!have || !want) return false;
-  return have === want || have.endsWith(`/${want}`) || want.endsWith(`/${have}`);
+  return (
+    have === want || have.endsWith(`/${want}`) || want.endsWith(`/${have}`)
+  );
 }
 
 /**
@@ -129,7 +131,11 @@ function matchesOllamaModel(tagName: string, wanted: string): boolean {
 export async function probeOllamaAvailability(
   force = false,
 ): Promise<OllamaProbeResult> {
-  if (!force && ollamaProbeCache && Date.now() - ollamaProbeCache.at < OLLAMA_PROBE_CACHE_TTL_MS) {
+  if (
+    !force &&
+    ollamaProbeCache &&
+    Date.now() - ollamaProbeCache.at < OLLAMA_PROBE_CACHE_TTL_MS
+  ) {
     return ollamaProbeCache.result;
   }
 
@@ -149,9 +155,14 @@ export async function probeOllamaAvailability(
     }
 
     if (!response.ok) {
-      result = { ok: false, reason: `Ollama 返回异常状态码 ${response.status}` };
+      result = {
+        ok: false,
+        reason: `Ollama 返回异常状态码 ${response.status}`,
+      };
     } else {
-      const data = (await response.json()) as { models?: Array<{ name?: string }> };
+      const data = (await response.json()) as {
+        models?: Array<{ name?: string }>;
+      };
       const names = (data.models ?? []).map((m) => m.name ?? '');
       result = names.some((name) => matchesOllamaModel(name, model))
         ? { ok: true, reason: null }
@@ -188,7 +199,9 @@ export async function probeOllamaAvailability(
  *
  * @param force 是否跳过探测缓存强制重探（配置变更后应传 true）
  */
-export async function resolveEffectiveMode(force = false): Promise<EmbeddingMode> {
+export async function resolveEffectiveMode(
+  force = false,
+): Promise<EmbeddingMode> {
   const embeddingConfig = getRuntimeConfig().embedding;
 
   if (!embeddingConfig.localEnabled) {
@@ -292,7 +305,11 @@ export function applyEmbeddingConfigChange(): void {
  * 防止多个知识源同步 + 文档上传同时请求 Ollama 嵌入导致排队或 OOM
  */
 class Semaphore {
-  private queue: Array<{ resolve: () => void; callerId: string; enqueuedAt: number }> = [];
+  private queue: Array<{
+    resolve: () => void;
+    callerId: string;
+    enqueuedAt: number;
+  }> = [];
   private running = 0;
   private nextCallerId = 0;
 
@@ -323,7 +340,11 @@ class Semaphore {
     });
 
     return new Promise<string>((resolve) => {
-      this.queue.push({ resolve: () => resolve(callerId), callerId, enqueuedAt });
+      this.queue.push({
+        resolve: () => resolve(callerId),
+        callerId,
+        enqueuedAt,
+      });
     });
   }
 
@@ -355,7 +376,11 @@ class Semaphore {
 
   /** 获取当前状态（用于监控） */
   getStatus(): { running: number; max: number; queueLength: number } {
-    return { running: this.running, max: this.max, queueLength: this.queue.length };
+    return {
+      running: this.running,
+      max: this.max,
+      queueLength: this.queue.length,
+    };
   }
 }
 
@@ -391,24 +416,50 @@ let isMemoryStore = false;
 let bm25Index: any = null;
 
 /** BM25 文档存储（id → {content, metadata}） */
-let bm25DocumentStore: Map<string, { content: string; metadata: any }> = new Map();
+let bm25DocumentStore: Map<string, { content: string; metadata: any }> =
+  new Map();
 
 // ==================== 状态访问器 ====================
 
-export function getVectorStore(): Chroma | null { return vectorStore; }
-export function setVectorStore(store: Chroma | null): void { vectorStore = store; }
+export function getVectorStore(): Chroma | null {
+  return vectorStore;
+}
+export function setVectorStore(store: Chroma | null): void {
+  vectorStore = store;
+}
 
-export function getInitPromise(): Promise<Chroma> | null { return initPromise; }
-export function setInitPromise(promise: Promise<Chroma> | null): void { initPromise = promise; }
+export function getInitPromise(): Promise<Chroma> | null {
+  return initPromise;
+}
+export function setInitPromise(promise: Promise<Chroma> | null): void {
+  initPromise = promise;
+}
 
-export function getIsMemoryStore(): boolean { return isMemoryStore; }
-export function setIsMemoryStore(value: boolean): void { isMemoryStore = value; }
+export function getIsMemoryStore(): boolean {
+  return isMemoryStore;
+}
+export function setIsMemoryStore(value: boolean): void {
+  isMemoryStore = value;
+}
 
-export function getBM25Index(): any { return bm25Index; }
-export function setBM25Index(index: any): void { bm25Index = index; }
+export function getBM25Index(): any {
+  return bm25Index;
+}
+export function setBM25Index(index: any): void {
+  bm25Index = index;
+}
 
-export function getBM25DocumentStore(): Map<string, { content: string; metadata: any }> { return bm25DocumentStore; }
-export function setBM25DocumentStore(store: Map<string, { content: string; metadata: any }>): void { bm25DocumentStore = store; }
+export function getBM25DocumentStore(): Map<
+  string,
+  { content: string; metadata: any }
+> {
+  return bm25DocumentStore;
+}
+export function setBM25DocumentStore(
+  store: Map<string, { content: string; metadata: any }>,
+): void {
+  bm25DocumentStore = store;
+}
 
 // ==================== 初始化与重置 ====================
 
@@ -423,7 +474,9 @@ export function resetVectorStore(): void {
   isMemoryStore = false;
   // 递增代际标记：让进行中的初始化完成后识别已被重置，丢弃旧结果
   initGeneration++;
-  logger.info('向量存储实例已重置，下次初始化将重新连接 ChromaDB', { module: 'VectorStore' });
+  logger.info('向量存储实例已重置，下次初始化将重新连接 ChromaDB', {
+    module: 'VectorStore',
+  });
 }
 
 /**
@@ -476,7 +529,10 @@ async function doInitialize(generation: number): Promise<Chroma> {
 
   if (!fs.existsSync(PERSIST_DIR)) {
     fs.mkdirSync(PERSIST_DIR, { recursive: true });
-    logger.info('创建 ChromaDB 数据目录', { module: 'VectorStore', path: PERSIST_DIR });
+    logger.info('创建 ChromaDB 数据目录', {
+      module: 'VectorStore',
+      path: PERSIST_DIR,
+    });
   }
 
   let store: Chroma;
@@ -487,16 +543,25 @@ async function doInitialize(generation: number): Promise<Chroma> {
   const embeddings = getEmbeddings();
 
   try {
-    const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
+    const client = new ChromaClient({
+      host: config.chromaHost,
+      port: config.chromaPort,
+    });
 
     let collectionExists = false;
     try {
       await client.getCollection({ name: collectionName });
       collectionExists = true;
-      logger.info('发现已有知识库集合', { module: 'VectorStore', collection: collectionName });
+      logger.info('发现已有知识库集合', {
+        module: 'VectorStore',
+        collection: collectionName,
+      });
     } catch {
       collectionExists = false;
-      logger.info('知识库集合不存在，将创建新集合', { module: 'VectorStore', collection: collectionName });
+      logger.info('知识库集合不存在，将创建新集合', {
+        module: 'VectorStore',
+        collection: collectionName,
+      });
     }
 
     if (collectionExists) {
@@ -505,21 +570,30 @@ async function doInitialize(generation: number): Promise<Chroma> {
         url: config.chromaUrl,
       });
       const coll = await client.getCollection({ name: collectionName });
-      logger.info('当前集合空间', { module: 'VectorStore', space: coll.metadata?.['hnsw:space'] || 'l2(默认)' });
+      logger.info('当前集合空间', {
+        module: 'VectorStore',
+        space: coll.metadata?.['hnsw:space'] || 'l2(默认)',
+      });
     } else {
       await client.createCollection({
         name: collectionName,
-        metadata: { "hnsw:space": "cosine" },
+        metadata: { 'hnsw:space': 'cosine' },
         embeddingFunction: embeddings as any,
       });
-      logger.info('新知识库集合已创建', { module: 'VectorStore', collection: collectionName });
+      logger.info('新知识库集合已创建', {
+        module: 'VectorStore',
+        collection: collectionName,
+      });
       store = await Chroma.fromExistingCollection(embeddings, {
         collectionName,
         url: config.chromaUrl,
       });
     }
   } catch (error: any) {
-    logger.error('ChromaDB 连接失败，降级为内存存储', { module: 'VectorStore', error: error.message });
+    logger.error('ChromaDB 连接失败，降级为内存存储', {
+      module: 'VectorStore',
+      error: error.message,
+    });
     store = await createMemoryVectorStore();
     memoryMode = true;
   }
@@ -528,16 +602,23 @@ async function doInitialize(generation: number): Promise<Chroma> {
   // 本次结果是按旧配置/旧集合构建的，写入单例会导致后续读写命中错误集合。
   // 丢弃本次结果，用最新配置重新初始化。
   if (generation !== initGeneration) {
-    logger.warn('向量存储初始化已被配置变更取代，丢弃本次结果并按最新配置重新初始化', {
-      module: 'VectorStore',
-      staleCollection: collectionName,
-    });
+    logger.warn(
+      '向量存储初始化已被配置变更取代，丢弃本次结果并按最新配置重新初始化',
+      {
+        module: 'VectorStore',
+        staleCollection: collectionName,
+      },
+    );
     return initializeVectorStore();
   }
 
   vectorStore = store;
   isMemoryStore = memoryMode;
-  logger.info('向量数据库初始化完成', { module: 'VectorStore', collection: collectionName, memoryMode });
+  logger.info('向量数据库初始化完成', {
+    module: 'VectorStore',
+    collection: collectionName,
+    memoryMode,
+  });
   return vectorStore;
 }
 
@@ -549,14 +630,18 @@ async function doInitialize(generation: number): Promise<Chroma> {
 async function createMemoryVectorStore(): Promise<Chroma> {
   logger.warn('使用内存向量存储（数据不会持久化）', { module: 'VectorStore' });
 
-  const { MemoryVectorStore } = await import('@langchain/classic/vectorstores/memory');
+  const { MemoryVectorStore } =
+    await import('@langchain/classic/vectorstores/memory');
   const memoryStore = new MemoryVectorStore(getEmbeddings());
 
   // 将 MemoryVectorStore 包装为兼容 Chroma 接口的对象
   return {
     addDocuments: memoryStore.addDocuments.bind(memoryStore),
-    similaritySearchWithScore: memoryStore.similaritySearchWithScore.bind(memoryStore),
-    delete: async () => { logger.warn('内存存储不支持删除操作', { module: 'VectorStore' }); },
+    similaritySearchWithScore:
+      memoryStore.similaritySearchWithScore.bind(memoryStore),
+    delete: async () => {
+      logger.warn('内存存储不支持删除操作', { module: 'VectorStore' });
+    },
     collection: null,
   } as unknown as Chroma;
 }

@@ -8,7 +8,12 @@
  */
 
 jest.mock('../fundamentals/logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('@nestjs/typeorm', () => ({
@@ -105,9 +110,24 @@ describe('ToolUsageService', () => {
       const now = new Date();
       const yesterday = new Date(now.getTime() - 86400000);
       repo.find.mockResolvedValue([
-        { toolName: 'calculate', success: true, durationMs: 50, createdAt: yesterday },
-        { toolName: 'calculate', success: false, durationMs: 100, createdAt: yesterday },
-        { toolName: 'search_web', success: true, durationMs: 30, createdAt: now },
+        {
+          toolName: 'calculate',
+          success: true,
+          durationMs: 50,
+          createdAt: yesterday,
+        },
+        {
+          toolName: 'calculate',
+          success: false,
+          durationMs: 100,
+          createdAt: yesterday,
+        },
+        {
+          toolName: 'search_web',
+          success: true,
+          durationMs: 30,
+          createdAt: now,
+        },
       ]);
 
       const stats = await service.getToolUsageStats('u1', 7);
@@ -128,8 +148,18 @@ describe('ToolUsageService', () => {
 
     it('应按天聚合', async () => {
       repo.find.mockResolvedValue([
-        { toolName: 't', success: true, durationMs: 1, createdAt: new Date('2025-01-01') },
-        { toolName: 't', success: true, durationMs: 1, createdAt: new Date('2025-01-02') },
+        {
+          toolName: 't',
+          success: true,
+          durationMs: 1,
+          createdAt: new Date('2025-01-01'),
+        },
+        {
+          toolName: 't',
+          success: true,
+          durationMs: 1,
+          createdAt: new Date('2025-01-02'),
+        },
       ]);
 
       const stats = await service.getToolUsageStats('u1', 30);

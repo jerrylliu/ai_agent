@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  ManyToOne,
+  Index,
+} from 'typeorm';
 import { Document } from './document.entity.js';
 
 export enum VersionStatus {
@@ -127,6 +134,8 @@ export class DocumentVersion {
   @Index()
   createdAt: Date;
 
-  @ManyToOne(() => Document, document => document.versions, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Document, (document) => document.versions, {
+    onDelete: 'CASCADE',
+  })
   document: Document;
 }

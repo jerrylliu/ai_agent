@@ -1,4 +1,10 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  Index,
+} from 'typeorm';
 
 export enum VectorOpType {
   REMOVE = 'remove',
@@ -24,7 +30,11 @@ export class PendingVectorOp {
   @Column({ type: 'enum', enum: VectorOpType })
   operation: VectorOpType;
 
-  @Column({ type: 'enum', enum: VectorOpStatus, default: VectorOpStatus.PENDING })
+  @Column({
+    type: 'enum',
+    enum: VectorOpStatus,
+    default: VectorOpStatus.PENDING,
+  })
   status: VectorOpStatus;
 
   @Column({ default: 0 })

@@ -8,7 +8,12 @@
  */
 
 import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { StreamingAsrClient, submitFileTranscribe, queryFileTranscribe, type FileTranscribeResult } from '../fundamentals/volc-asr-provider.js';
+import {
+  StreamingAsrClient,
+  submitFileTranscribe,
+  queryFileTranscribe,
+  type FileTranscribeResult,
+} from '../fundamentals/volc-asr-provider.js';
 import { getRedis } from '../fundamentals/redis-client.js';
 import { logger } from '../fundamentals/logger.js';
 
@@ -17,7 +22,6 @@ const activeClients = new Map<string, StreamingAsrClient>();
 
 @Injectable()
 export class SpeechService implements OnModuleDestroy {
-
   /** 创建流式 ASR 客户端并连接火山引擎 */
   async createStreamingClient(
     userId: string,
@@ -77,7 +81,10 @@ export class SpeechService implements OnModuleDestroy {
     const relayMs = performance.now() - t0;
     // 火山引擎 WS.send 是异步写缓冲，通常 <1ms；如果 >5ms 说明网络背压
     if (relayMs > 5) {
-      logger.warn(`ASR→火山引擎 发送耗时过高 userId=${userId}: ${relayMs.toFixed(2)}ms`, { module: 'SpeechService' });
+      logger.warn(
+        `ASR→火山引擎 发送耗时过高 userId=${userId}: ${relayMs.toFixed(2)}ms`,
+        { module: 'SpeechService' },
+      );
     }
     return true;
   }
@@ -91,13 +98,20 @@ export class SpeechService implements OnModuleDestroy {
   }
 
   /** 提交长音频转写任务 */
-  async submitTranscribe(audioUrl: string, format: string, userId: string): Promise<{ taskId: string }> {
+  async submitTranscribe(
+    audioUrl: string,
+    format: string,
+    userId: string,
+  ): Promise<{ taskId: string }> {
     this.incrementUsage(userId, 0); // 记录一次调用
     return submitFileTranscribe(audioUrl, format, userId);
   }
 
   /** 查询长音频转写结果 */
-  async queryTranscribe(taskId: string, userId: string): Promise<FileTranscribeResult> {
+  async queryTranscribe(
+    taskId: string,
+    userId: string,
+  ): Promise<FileTranscribeResult> {
     return queryFileTranscribe(taskId, userId);
   }
 
@@ -111,7 +125,10 @@ export class SpeechService implements OnModuleDestroy {
   }
 
   /** 累加 ASR 用量（毫秒转秒） */
-  private async incrementUsage(userId: string, durationMs: number): Promise<void> {
+  private async incrementUsage(
+    userId: string,
+    durationMs: number,
+  ): Promise<void> {
     const redis = getRedis();
     if (!redis) return;
     try {

@@ -57,7 +57,11 @@ export async function deleteFeishuChatSessionBySessionId(
   const mapping = await chatSessionRepository.findOne({ where: { sessionId } });
   if (!mapping) return;
   // ownerUserId 存的是字符串，调用方传入可能是数字，统一转字符串比较，避免越权判断误判
-  if (ownerUserId !== undefined && String(mapping.ownerUserId) !== String(ownerUserId)) return;
+  if (
+    ownerUserId !== undefined &&
+    String(mapping.ownerUserId) !== String(ownerUserId)
+  )
+    return;
 
   localFallback.delete(buildSessionKey(mapping));
   await chatSessionRepository.delete({ id: mapping.id });
@@ -214,7 +218,10 @@ export async function getOrCreateChatSession(
   return sessionId;
 }
 
-async function cacheSessionMapping(sessionKey: string, sessionId: string): Promise<void> {
+async function cacheSessionMapping(
+  sessionKey: string,
+  sessionId: string,
+): Promise<void> {
   const redis = getRedis();
   if (!redis || !isRedisReady()) return;
   try {

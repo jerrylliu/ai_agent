@@ -7,7 +7,12 @@
 
 // Mock logger 防止 logger → config 链触发 JWT_SECRET 检查
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 import { executeCalculate, calculateSchema } from './calculate';
@@ -19,7 +24,9 @@ describe('calculate 工具', () => {
     });
 
     it('parameters 应要求 expression 必填', () => {
-      expect(calculateSchema.function.parameters.required).toContain('expression');
+      expect(calculateSchema.function.parameters.required).toContain(
+        'expression',
+      );
     });
   });
 

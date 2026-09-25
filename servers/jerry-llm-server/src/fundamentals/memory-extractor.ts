@@ -54,7 +54,9 @@ function createExtractorLLM(): ChatOpenAI | ChatOllama | null {
     if (nonAsciiMatch) {
       logger.error('DeepSeek API Key 包含非 ASCII 字符，回退到本地模型', {
         module: 'MemoryExtractor',
-        nonAsciiChars: nonAsciiMatch.map(c => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`),
+        nonAsciiChars: nonAsciiMatch.map(
+          (c) => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`,
+        ),
         apiKeyLength: apiKey.length,
       });
       // 回退到本地模型
@@ -79,10 +81,16 @@ function createExtractorLLM(): ChatOpenAI | ChatOllama | null {
       baseUrl: OLLAMA_BASE_URL,
       think: false,
     });
-    logger.info('DeepSeek API Key 未配置，使用本地模型提取记忆', { module: 'MemoryExtractor', model: LOCAL_EXTRACTOR_MODEL });
+    logger.info('DeepSeek API Key 未配置，使用本地模型提取记忆', {
+      module: 'MemoryExtractor',
+      model: LOCAL_EXTRACTOR_MODEL,
+    });
     return llm;
   } catch (error: any) {
-    logger.warn('本地模型创建失败，跳过记忆提取', { module: 'MemoryExtractor', error: error.message });
+    logger.warn('本地模型创建失败，跳过记忆提取', {
+      module: 'MemoryExtractor',
+      error: error.message,
+    });
     return null;
   }
 }
@@ -185,7 +193,9 @@ export function shouldExtractMemory(
   if (currentMessageCount < MEMORY_EXTRACTION_INTERVAL) {
     return false;
   }
-  return currentMessageCount - lastExtractionCount >= MEMORY_EXTRACTION_INTERVAL;
+  return (
+    currentMessageCount - lastExtractionCount >= MEMORY_EXTRACTION_INTERVAL
+  );
 }
 
 /**
@@ -207,16 +217,22 @@ export async function extractMemories(
       .map((msg) => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}`)
       .join('\n');
 
-    logger.info('开始提取用户记忆', { module: 'MemoryExtractor', messageCount: messages.length });
+    logger.info('开始提取用户记忆', {
+      module: 'MemoryExtractor',
+      messageCount: messages.length,
+    });
 
     const result = await llm.invoke([
       new SystemMessage(MEMORY_EXTRACTION_PROMPT),
-      new HumanMessage(`请从以下对话中提取关于用户的关键信息：\n${conversationText}`),
+      new HumanMessage(
+        `请从以下对话中提取关于用户的关键信息：\n${conversationText}`,
+      ),
     ]);
 
-    const content = typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content);
+    const content =
+      typeof result.content === 'string'
+        ? result.content
+        : JSON.stringify(result.content);
 
     // 解析 JSON 结果（zod 校验，失败降级为空数组）
     const parsed = parseLlmJson(content, ExtractedMemoryArraySchema, {
@@ -224,10 +240,16 @@ export async function extractMemories(
     });
     const memories = parsed.success ? parsed.data : [];
 
-    logger.info('提取到用户记忆', { module: 'MemoryExtractor', memoryCount: memories.length });
+    logger.info('提取到用户记忆', {
+      module: 'MemoryExtractor',
+      memoryCount: memories.length,
+    });
     return memories;
   } catch (error: any) {
-    logger.error('记忆提取失败', { module: 'MemoryExtractor', error: error.message });
+    logger.error('记忆提取失败', {
+      module: 'MemoryExtractor',
+      error: error.message,
+    });
     return [];
   }
 }
@@ -276,25 +298,29 @@ export async function mergeMemories(
       .map((m, i) => `[${i}] ${m}`)
       .join('\n');
 
-    const newList = newMemories
-      .map((m) => m.content)
-      .join('\n');
+    const newList = newMemories.map((m) => m.content).join('\n');
 
     const result = await llm.invoke([
       new SystemMessage(MEMORY_MERGE_PROMPT),
-      new HumanMessage(`已有记忆：\n${existingList}\n\n新提取的记忆：\n${newList}`),
+      new HumanMessage(
+        `已有记忆：\n${existingList}\n\n新提取的记忆：\n${newList}`,
+      ),
     ]);
 
-    const content = typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content);
+    const content =
+      typeof result.content === 'string'
+        ? result.content
+        : JSON.stringify(result.content);
 
     const mergeParsed = parseLlmJson(content, MergeActionArraySchema, {
       module: 'MemoryExtractor:Merge',
     });
     return mergeParsed.success ? mergeParsed.data : [];
   } catch (error: any) {
-    logger.error('记忆合并失败，降级为简单去重', { module: 'MemoryExtractor', error: error.message });
+    logger.error('记忆合并失败，降级为简单去重', {
+      module: 'MemoryExtractor',
+      error: error.message,
+    });
     return newMemories
       .filter((m) => !existingMemories.some((e) => e === m.content))
       .map((m) => ({

@@ -53,24 +53,32 @@ let dbAvailable = false;
 export function validateQueryDatabaseConfig(): boolean {
   const c = config.queryDb;
   if (!c.host || !c.user || !c.password || !c.database) {
-    logger.warn('query_database 工具未配置：缺少 NOTIFY_DB_HOST/USER/PASSWORD/DATABASE，数据库查询功能不可用', {
-      module: 'Tool:QueryDatabase',
-    });
+    logger.warn(
+      'query_database 工具未配置：缺少 NOTIFY_DB_HOST/USER/PASSWORD/DATABASE，数据库查询功能不可用',
+      {
+        module: 'Tool:QueryDatabase',
+      },
+    );
     dbAvailable = false;
     return false;
   }
   if (c.allowedTables.length === 0) {
     // 不强制要求白名单，但要给出警告，避免误用
-    logger.warn('query_database：未配置 NOTIFY_DB_ALLOWED_TABLES，所有表均可被查询，建议配置白名单', {
-      module: 'Tool:QueryDatabase',
-    });
+    logger.warn(
+      'query_database：未配置 NOTIFY_DB_ALLOWED_TABLES，所有表均可被查询，建议配置白名单',
+      {
+        module: 'Tool:QueryDatabase',
+      },
+    );
   }
   dbAvailable = true;
   logger.info('query_database 工具配置校验通过', {
     module: 'Tool:QueryDatabase',
     host: c.host,
     database: c.database,
-    allowedTables: c.allowedTables.length ? c.allowedTables.join(',') : '(全部)',
+    allowedTables: c.allowedTables.length
+      ? c.allowedTables.join(',')
+      : '(全部)',
   });
   return true;
 }
@@ -91,7 +99,9 @@ export const queryDatabaseParamsSchema = z.object({
   purpose: z
     .string()
     .optional()
-    .describe('本次查询的业务目的，用于日志和确认弹窗展示，例如"统计上个月销售额"'),
+    .describe(
+      '本次查询的业务目的，用于日志和确认弹窗展示，例如"统计上个月销售额"',
+    ),
 });
 
 export type QueryDatabaseParams = z.infer<typeof queryDatabaseParamsSchema>;
@@ -189,7 +199,10 @@ function validateAndRewriteSql(sql: string): SqlValidationResult {
 
   // 强制：必须是 SELECT
   if (ast.type !== 'select') {
-    return { ok: false, reason: `不允许的语句类型：${ast.type}（仅支持 SELECT）` };
+    return {
+      ok: false,
+      reason: `不允许的语句类型：${ast.type}（仅支持 SELECT）`,
+    };
   }
 
   // 表名白名单校验
@@ -199,7 +212,10 @@ function validateAndRewriteSql(sql: string): SqlValidationResult {
     extractTablesFromAst(ast, referenced);
     for (const t of referenced) {
       if (!allowed.includes(t)) {
-        return { ok: false, reason: `表 "${t}" 不在白名单内，允许的表：${allowed.join(', ')}` };
+        return {
+          ok: false,
+          reason: `表 "${t}" 不在白名单内，允许的表：${allowed.join(', ')}`,
+        };
       }
     }
   }
@@ -246,7 +262,9 @@ function getPool(): mysql.Pool {
  *   3. 用预编译方式执行（防注入）+ 超时控制
  *   4. 截断超大结果集
  */
-export async function executeQueryDatabase(rawParams: unknown): Promise<QueryDatabaseResult> {
+export async function executeQueryDatabase(
+  rawParams: unknown,
+): Promise<QueryDatabaseResult> {
   const startedAt = Date.now();
 
   const parsed = safeParseToolParams(queryDatabaseParamsSchema, rawParams);

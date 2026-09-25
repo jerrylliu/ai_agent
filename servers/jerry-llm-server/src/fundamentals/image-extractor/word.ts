@@ -27,7 +27,9 @@ interface MammothHtmlResult {
 }
 
 /** 从 data URL 中提取 MIME 和 base64 数据 */
-function parseDataUrl(dataUrl: string): { mimeType: string; buffer: Buffer } | null {
+function parseDataUrl(
+  dataUrl: string,
+): { mimeType: string; buffer: Buffer } | null {
   const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return null;
   const [, mimeType, base64] = match;
@@ -85,7 +87,9 @@ export async function extractFromWord(
   // 动态 import mammoth 避免在非 Word 路径下加载
   const mammoth = await import('mammoth');
 
-  const result = (await mammoth.convertToHtml({ path: filePath })) as MammothHtmlResult;
+  const result = (await mammoth.convertToHtml({
+    path: filePath,
+  })) as MammothHtmlResult;
 
   if (result.messages && result.messages.length > 0) {
     const warnings = result.messages.filter((m) => m.type === 'warning').length;
@@ -188,12 +192,17 @@ function assignImageContextFromText(text: string, images: ImageAsset[]): void {
     // 取最前 500 字符，保留最近的上下文
     const afterText = (parts[i + 1] || '').trim().slice(0, 500);
 
-    const surroundingText = `${beforeText}\n[图片位置]\n${afterText}`.slice(0, 1000);
+    const surroundingText = `${beforeText}\n[图片位置]\n${afterText}`.slice(
+      0,
+      1000,
+    );
     images[i].surroundingText = surroundingText;
 
     // caption：取前文的最后一个非空行作为标题
     // 这是最自然的"图片标题"——文档中紧挨图片前面的那行文字
-    const beforeLines = beforeText.split('\n').filter((l) => l.trim().length > 0);
+    const beforeLines = beforeText
+      .split('\n')
+      .filter((l) => l.trim().length > 0);
     const lastLine = beforeLines[beforeLines.length - 1] || '';
     if (lastLine.length >= 2 && lastLine.length <= 100) {
       images[i].caption = lastLine.trim();
@@ -204,7 +213,11 @@ function assignImageContextFromText(text: string, images: ImageAsset[]): void {
       const trimmed = line.trim();
       if (trimmed.length >= 2 && trimmed.length <= 50) {
         // 匹配 "# 标题" 或 "第N章" 或 "N. 标题" 格式
-        if (/^#{1,6}\s+/.test(trimmed) || /^第.+章/.test(trimmed) || /^\d+\.\s+/.test(trimmed)) {
+        if (
+          /^#{1,6}\s+/.test(trimmed) ||
+          /^第.+章/.test(trimmed) ||
+          /^\d+\.\s+/.test(trimmed)
+        ) {
           images[i].section = trimmed.replace(/^#{1,6}\s+/, '');
           break;
         }
@@ -225,8 +238,19 @@ function assignImageContextFromText(text: string, images: ImageAsset[]): void {
 function htmlToText($: cheerio.CheerioAPI): string {
   // 块级元素后加换行
   const blockTags = [
-    'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    'li', 'tr', 'table', 'br', 'hr',
+    'p',
+    'div',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'li',
+    'tr',
+    'table',
+    'br',
+    'hr',
   ];
   for (const tag of blockTags) {
     $(tag).each((_, elem) => {

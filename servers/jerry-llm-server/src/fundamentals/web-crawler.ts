@@ -9,7 +9,15 @@ const turndown = new TurndownService({
   codeBlockStyle: 'fenced',
 });
 
-turndown.remove(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'noscript']);
+turndown.remove([
+  'script',
+  'style',
+  'nav',
+  'footer',
+  'header',
+  'iframe',
+  'noscript',
+]);
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const PUPPETEER_TIMEOUT_MS = 30000;
@@ -43,7 +51,12 @@ export interface WebCrawlConfig {
 
 function normalizeUrl(base: string, href: string): string | null {
   try {
-    if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('javascript:')) {
+    if (
+      !href ||
+      href.startsWith('#') ||
+      href.startsWith('mailto:') ||
+      href.startsWith('javascript:')
+    ) {
       return null;
     }
     const url = new URL(href, base);
@@ -67,7 +80,11 @@ function isSameDomain(baseUrl: string, targetUrl: string): boolean {
   }
 }
 
-function matchesPatterns(url: string, includePatterns?: string[], excludePatterns?: string[]): boolean {
+function matchesPatterns(
+  url: string,
+  includePatterns?: string[],
+  excludePatterns?: string[],
+): boolean {
   if (excludePatterns && excludePatterns.length > 0) {
     for (const pattern of excludePatterns) {
       if (url.includes(pattern)) return false;
@@ -106,7 +123,10 @@ type FetchedContent = {
   url: string;
 };
 
-async function fetchPage(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<FetchedContent | null> {
+async function fetchPage(
+  url: string,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<FetchedContent | null> {
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
 
@@ -122,7 +142,11 @@ async function fetchPage(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): P
     });
 
     if (!response.ok) {
-      logger.warn('网页爬取返回非200状态', { module: 'WebCrawler', url, status: response.status });
+      logger.warn('网页爬取返回非200状态', {
+        module: 'WebCrawler',
+        url,
+        status: response.status,
+      });
       return null;
     }
 
@@ -131,7 +155,10 @@ async function fetchPage(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): P
 
     if (contentTypeHeader.includes('text/markdown')) {
       contentType = 'markdown';
-    } else if (contentTypeHeader.includes('text/html') || contentTypeHeader.includes('application/xhtml')) {
+    } else if (
+      contentTypeHeader.includes('text/html') ||
+      contentTypeHeader.includes('application/xhtml')
+    ) {
       contentType = 'html';
     } else if (contentTypeHeader.includes('text/plain')) {
       if (url.endsWith('.md')) {
@@ -143,7 +170,11 @@ async function fetchPage(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): P
       if (url.endsWith('.md')) {
         contentType = 'markdown';
       } else {
-        logger.warn('网页爬取跳过不支持的内容类型', { module: 'WebCrawler', url, contentType: contentTypeHeader });
+        logger.warn('网页爬取跳过不支持的内容类型', {
+          module: 'WebCrawler',
+          url,
+          contentType: contentTypeHeader,
+        });
         return null;
       }
     }
@@ -152,14 +183,21 @@ async function fetchPage(url: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): P
     return { raw, contentType, url };
   } catch (error: any) {
     const isTimeout = error.name === 'AbortError';
-    logger.warn('网页爬取失败', { module: 'WebCrawler', url, error: isTimeout ? '请求超时' : error.message });
+    logger.warn('网页爬取失败', {
+      module: 'WebCrawler',
+      url,
+      error: isTimeout ? '请求超时' : error.message,
+    });
     return null;
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-async function tryFetchMarkdownVersion(htmlUrl: string, timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<FetchedContent | null> {
+async function tryFetchMarkdownVersion(
+  htmlUrl: string,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<FetchedContent | null> {
   try {
     const u = new URL(htmlUrl);
     // 对已有明确文件后缀的 URL（如 .txt, .json, .xml），不尝试追加 .md
@@ -175,8 +213,15 @@ async function tryFetchMarkdownVersion(htmlUrl: string, timeoutMs: number = DEFA
     }
     const mdUrl = u.toString();
     const result = await fetchPage(mdUrl, timeoutMs);
-    if (result && (result.contentType === 'markdown' || result.contentType === 'plain')) {
-      logger.info('发现 Markdown 优化版本', { module: 'WebCrawler', htmlUrl, mdUrl });
+    if (
+      result &&
+      (result.contentType === 'markdown' || result.contentType === 'plain')
+    ) {
+      logger.info('发现 Markdown 优化版本', {
+        module: 'WebCrawler',
+        htmlUrl,
+        mdUrl,
+      });
       return { ...result, url: htmlUrl };
     }
   } catch {
@@ -197,18 +242,25 @@ function findSystemChrome(): string | undefined {
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     // Windows Chrome
-    process.env.PROGRAMFILES && `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`,
-    process.env['PROGRAMFILES(X86)'] && `${process.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`,
-    process.env.LOCALAPPDATA && `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+    process.env.PROGRAMFILES &&
+      `${process.env.PROGRAMFILES}\\Google\\Chrome\\Application\\chrome.exe`,
+    process.env['PROGRAMFILES(X86)'] &&
+      `${process.env['PROGRAMFILES(X86)']}\\Google\\Chrome\\Application\\chrome.exe`,
+    process.env.LOCALAPPDATA &&
+      `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
     // Windows Edge
-    process.env.PROGRAMFILES && `${process.env.PROGRAMFILES}\\Microsoft\\Edge\\Application\\msedge.exe`,
-    process.env['PROGRAMFILES(X86)'] && `${process.env['PROGRAMFILES(X86)']}\\Microsoft\\Edge\\Application\\msedge.exe`,
+    process.env.PROGRAMFILES &&
+      `${process.env.PROGRAMFILES}\\Microsoft\\Edge\\Application\\msedge.exe`,
+    process.env['PROGRAMFILES(X86)'] &&
+      `${process.env['PROGRAMFILES(X86)']}\\Microsoft\\Edge\\Application\\msedge.exe`,
   ].filter(Boolean) as string[];
 
   for (const p of paths) {
     try {
       if (fs.existsSync(p)) return p;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   return undefined;
 }
@@ -216,7 +268,10 @@ function findSystemChrome(): string | undefined {
 export async function launchBrowser(): Promise<Browser> {
   const executablePath = await findSystemChrome();
   if (executablePath) {
-    logger.info('使用系统浏览器', { module: 'WebCrawler', path: executablePath });
+    logger.info('使用系统浏览器', {
+      module: 'WebCrawler',
+      path: executablePath,
+    });
   } else {
     logger.info('使用 Puppeteer 自带浏览器', { module: 'WebCrawler' });
   }
@@ -234,7 +289,10 @@ export async function launchBrowser(): Promise<Browser> {
   });
 }
 
-async function renderWithPuppeteer(url: string, browser: Browser): Promise<string | null> {
+async function renderWithPuppeteer(
+  url: string,
+  browser: Browser,
+): Promise<string | null> {
   let page: Page | null = null;
   try {
     page = await browser.newPage();
@@ -257,10 +315,18 @@ async function renderWithPuppeteer(url: string, browser: Browser): Promise<strin
     });
 
     const html = await page.content();
-    logger.info('Puppeteer 渲染完成', { module: 'WebCrawler', url, htmlLength: html.length });
+    logger.info('Puppeteer 渲染完成', {
+      module: 'WebCrawler',
+      url,
+      htmlLength: html.length,
+    });
     return html;
   } catch (error: any) {
-    logger.warn('Puppeteer 渲染失败', { module: 'WebCrawler', url, error: error.message });
+    logger.warn('Puppeteer 渲染失败', {
+      module: 'WebCrawler',
+      url,
+      error: error.message,
+    });
     return null;
   } finally {
     if (page) {
@@ -291,7 +357,8 @@ function extractMarkdownLinks(md: string, baseUrl: string): string[] {
 function extractFromHtml(html: string, url: string): CrawlPage {
   const $ = cheerio.load(html);
 
-  const title = $('title').first().text().trim() || $('h1').first().text().trim() || url;
+  const title =
+    $('title').first().text().trim() || $('h1').first().text().trim() || url;
 
   const mainContent =
     $('main').html() ||
@@ -314,7 +381,13 @@ function extractFromHtml(html: string, url: string): CrawlPage {
     }
   });
 
-  return { url, title, markdown, links: [...new Set(links)], sourceType: 'html' };
+  return {
+    url,
+    title,
+    markdown,
+    links: [...new Set(links)],
+    sourceType: 'html',
+  };
 }
 
 function extractFromMarkdown(md: string, url: string): CrawlPage {
@@ -330,7 +403,9 @@ function extractContent(fetched: FetchedContent): CrawlPage {
   return extractFromMarkdown(fetched.raw, fetched.url);
 }
 
-export async function crawlWebsite(config: WebCrawlConfig): Promise<CrawlResult> {
+export async function crawlWebsite(
+  config: WebCrawlConfig,
+): Promise<CrawlResult> {
   const {
     startUrl,
     maxDepth = 2,
@@ -345,7 +420,9 @@ export async function crawlWebsite(config: WebCrawlConfig): Promise<CrawlResult>
   const pages: CrawlPage[] = [];
   const errors: Array<{ url: string; error: string }> = [];
 
-  const queue: Array<{ url: string; depth: number }> = [{ url: startUrl, depth: 0 }];
+  const queue: Array<{ url: string; depth: number }> = [
+    { url: startUrl, depth: 0 },
+  ];
 
   let browser: Browser | null = null;
 
@@ -353,7 +430,10 @@ export async function crawlWebsite(config: WebCrawlConfig): Promise<CrawlResult>
     try {
       browser = await launchBrowser();
     } catch (error: any) {
-      logger.error('Puppeteer 浏览器启动失败，将回退到普通模式', { module: 'WebCrawler', error: error.message });
+      logger.error('Puppeteer 浏览器启动失败，将回退到普通模式', {
+        module: 'WebCrawler',
+        error: error.message,
+      });
     }
   }
 
@@ -373,7 +453,8 @@ export async function crawlWebsite(config: WebCrawlConfig): Promise<CrawlResult>
       const canonical = canonicalizeUrl(item.url);
       if (visited.has(canonical)) continue;
       if (item.depth > maxDepth) continue;
-      if (!matchesPatterns(item.url, includePatterns, excludePatterns)) continue;
+      if (!matchesPatterns(item.url, includePatterns, excludePatterns))
+        continue;
 
       visited.add(canonical);
 
@@ -388,7 +469,10 @@ export async function crawlWebsite(config: WebCrawlConfig): Promise<CrawlResult>
 
       // 当 enableJsRendering 开启时，直接用 Puppeteer 渲染 HTML 页面
       if (!fetched && enableJsRendering && browser) {
-        logger.info('JS 渲染模式：使用 Puppeteer 抓取', { module: 'WebCrawler', url: item.url });
+        logger.info('JS 渲染模式：使用 Puppeteer 抓取', {
+          module: 'WebCrawler',
+          url: item.url,
+        });
         const renderedHtml = await renderWithPuppeteer(item.url, browser);
         if (renderedHtml) {
           fetched = { raw: renderedHtml, contentType: 'html', url: item.url };
@@ -424,17 +508,24 @@ export async function crawlWebsite(config: WebCrawlConfig): Promise<CrawlResult>
         if (item.depth < maxDepth) {
           for (const link of page.links) {
             const linkCanonical = canonicalizeUrl(link);
-            if (!visited.has(linkCanonical) && pages.length + queue.length < maxPages) {
+            if (
+              !visited.has(linkCanonical) &&
+              pages.length + queue.length < maxPages
+            ) {
               queue.push({ url: link, depth: item.depth + 1 });
             }
           }
         }
       } catch (error: any) {
         errors.push({ url: item.url, error: error.message });
-        logger.warn('网页内容提取失败', { module: 'WebCrawler', url: item.url, error: error.message });
+        logger.warn('网页内容提取失败', {
+          module: 'WebCrawler',
+          url: item.url,
+          error: error.message,
+        });
       }
 
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
   } finally {
     if (browser) {
@@ -449,8 +540,8 @@ export async function crawlWebsite(config: WebCrawlConfig): Promise<CrawlResult>
     totalPages: pages.length,
     errorCount: errors.length,
     visitedCount: visited.size,
-    markdownPages: pages.filter(p => p.sourceType === 'markdown').length,
-    htmlPages: pages.filter(p => p.sourceType === 'html').length,
+    markdownPages: pages.filter((p) => p.sourceType === 'markdown').length,
+    htmlPages: pages.filter((p) => p.sourceType === 'html').length,
   });
 
   return { pages, totalPages: pages.length, errors };

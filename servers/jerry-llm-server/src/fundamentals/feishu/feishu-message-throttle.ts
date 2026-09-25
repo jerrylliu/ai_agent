@@ -36,7 +36,9 @@ export interface FeishuStreamEditor {
 }
 
 /** PATCH 飞书消息文本内容的回调，由调用方注入（避免循环依赖） */
-export type FeishuTextPatcher = (text: string) => Promise<{ success: boolean; error?: string }>;
+export type FeishuTextPatcher = (
+  text: string,
+) => Promise<{ success: boolean; error?: string }>;
 
 /**
  * 创建一个流式编辑器

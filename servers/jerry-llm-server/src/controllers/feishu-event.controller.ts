@@ -53,7 +53,8 @@ export class FeishuEventController {
     // v1: body.token (顶层)
     // v2: body.header.token
     const bodyToken: string | undefined = body?.header?.token ?? body?.token;
-    const verificationToken = process.env.NOTIFY_FEISHU_VERIFICATION_TOKEN || '';
+    const verificationToken =
+      process.env.NOTIFY_FEISHU_VERIFICATION_TOKEN || '';
 
     if (verificationToken) {
       const isValid = verifyEventToken(bodyToken, verificationToken);

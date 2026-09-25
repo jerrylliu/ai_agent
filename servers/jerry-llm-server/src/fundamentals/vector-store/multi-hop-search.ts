@@ -124,7 +124,16 @@ export async function multiHopSearch(
   // 未启用多跳，直接执行单次检索（HyDE 文本透传，与多跳路径第 1 跳行为一致，
   // 避免「多跳开 = 有 HyDE、多跳关 = 无 HyDE」的静默不一致）
   if (!enabled) {
-    return singleHopSearch(originalQuery, rewrittenQuery, topK, vectorWeight, bm25Weight, filter, cacheKeyOverride, options?.vectorQueryText);
+    return singleHopSearch(
+      originalQuery,
+      rewrittenQuery,
+      topK,
+      vectorWeight,
+      bm25Weight,
+      filter,
+      cacheKeyOverride,
+      options?.vectorQueryText,
+    );
   }
 
   logger.info('多跳检索开始', {
@@ -157,14 +166,26 @@ export async function multiHopSearch(
     options?.vectorQueryText,
   );
 
-  hopDetails.push({ hop: 1, query: firstQuery, resultCount: firstResults.length });
+  hopDetails.push({
+    hop: 1,
+    query: firstQuery,
+    resultCount: firstResults.length,
+  });
   hopLists.push(firstResults);
 
   // 如果改写产生了子查询，也一并检索（统一 RRF 合并，禁止跨路 score 直接比较）
   if (rewrittenQuery?.subQueries && rewrittenQuery.subQueries.length > 0) {
     const subLists: SearchResult[][] = [];
     for (const subQ of rewrittenQuery.subQueries) {
-      const subResults = await hybridSearchKnowledgeBase(subQ, hopTopK, vectorWeight, bm25Weight, filter, undefined, config.retrievalMinSimilarity);
+      const subResults = await hybridSearchKnowledgeBase(
+        subQ,
+        hopTopK,
+        vectorWeight,
+        bm25Weight,
+        filter,
+        undefined,
+        config.retrievalMinSimilarity,
+      );
       subLists.push(subResults);
       hopDetails.push({ hop: 1, query: subQ, resultCount: subResults.length });
     }
@@ -215,9 +236,21 @@ export async function multiHopSearch(
     // 执行追问检索（追问各路结果合并为一跳列表）
     const followUpLists: SearchResult[][] = [];
     for (const q of followUp.queries) {
-      const hopResults = await hybridSearchKnowledgeBase(q, hopTopK, vectorWeight, bm25Weight, filter, undefined, config.retrievalMinSimilarity);
+      const hopResults = await hybridSearchKnowledgeBase(
+        q,
+        hopTopK,
+        vectorWeight,
+        bm25Weight,
+        filter,
+        undefined,
+        config.retrievalMinSimilarity,
+      );
       followUpLists.push(hopResults);
-      hopDetails.push({ hop: currentHop, query: q, resultCount: hopResults.length });
+      hopDetails.push({
+        hop: currentHop,
+        query: q,
+        resultCount: hopResults.length,
+      });
     }
     if (followUpLists.length > 0) {
       // 追问查询互相平等（无主次），统一 RRF 合并成一跳的联合列表
@@ -253,7 +286,10 @@ export async function multiHopSearch(
 /**
  * 定位统一 RRF 合并结果在各跳列表中的原始归属（用于 hop 标记，找不到返回 undefined）
  */
-function hopIndexOf(content: string, hopLists: SearchResult[][]): number | undefined {
+function hopIndexOf(
+  content: string,
+  hopLists: SearchResult[][],
+): number | undefined {
   for (let i = 0; i < hopLists.length; i++) {
     if (hopLists[i].some((r) => r.content === content)) return i + 1;
   }
@@ -289,13 +325,25 @@ async function singleHopSearch(
     undefined,
     vectorQueryText,
   );
-  hopDetails.push({ hop: 1, query: mainQuery, resultCount: mainResults.length });
+  hopDetails.push({
+    hop: 1,
+    query: mainQuery,
+    resultCount: mainResults.length,
+  });
 
   // 子查询也检索（各子查询为独立一路，与主路统一 RRF 合并）
   const rankedLists: SearchResult[][] = [mainResults];
   if (rewrittenQuery?.subQueries) {
     for (const subQ of rewrittenQuery.subQueries) {
-      const subResults = await hybridSearchKnowledgeBase(subQ, topK, vectorWeight, bm25Weight, filter, undefined, config.retrievalMinSimilarity);
+      const subResults = await hybridSearchKnowledgeBase(
+        subQ,
+        topK,
+        vectorWeight,
+        bm25Weight,
+        filter,
+        undefined,
+        config.retrievalMinSimilarity,
+      );
       rankedLists.push(subResults);
       hopDetails.push({ hop: 1, query: subQ, resultCount: subResults.length });
     }
@@ -328,9 +376,10 @@ async function generateFollowUpQueries(
     modelConfig.temperature = 0.1;
     const llm = createRateLimitedLLM(modelConfig, 'fast');
 
-    const prompt = FOLLOW_UP_PROMPT
-      .replace('__QUERY__', originalQuery)
-      .replace('__RESULTS__', resultsSummary || '（无检索结果）');
+    const prompt = FOLLOW_UP_PROMPT.replace('__QUERY__', originalQuery).replace(
+      '__RESULTS__',
+      resultsSummary || '（无检索结果）',
+    );
 
     const result = await Promise.race([
       llm.invoke([new HumanMessage(prompt)], {
@@ -338,7 +387,10 @@ async function generateFollowUpQueries(
         signal: AbortSignal.timeout(timeout),
       }),
       new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => reject(new Error('追问查询生成超时')), timeout + 1000);
+        const timer = setTimeout(
+          () => reject(new Error('追问查询生成超时')),
+          timeout + 1000,
+        );
         // 防止 timer 泄漏：如果 AbortSignal 先触发，清理 setTimeout
         timer.unref?.();
       }),
@@ -365,7 +417,10 @@ const FollowUpResponseSchema = z.object({
   follow_up_queries: z.array(z.string()).optional(),
 });
 
-function parseFollowUpResponse(content: string): { needFollowUp: boolean; queries: string[] } {
+function parseFollowUpResponse(content: string): {
+  needFollowUp: boolean;
+  queries: string[];
+} {
   const result = parseLlmJson(content, FollowUpResponseSchema, {
     module: 'MultiHopSearch',
   });

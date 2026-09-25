@@ -45,7 +45,9 @@ const DEAD_LETTER_MAX = 1000;
  *   - 99991661 / 99991663 / 99991664：tenant_access_token 无效/过期（重试前会重新取 token）
  * HTTP 维度：429（限流）、5xx（服务端错误）、网络异常/超时 → 可重试
  */
-const RETRYABLE_FEISHU_CODES = new Set([99991400, 99991661, 99991663, 99991664]);
+const RETRYABLE_FEISHU_CODES = new Set([
+  99991400, 99991661, 99991663, 99991664,
+]);
 
 export interface FeishuApiResult {
   /** 飞书业务错误码，0 表示成功 */

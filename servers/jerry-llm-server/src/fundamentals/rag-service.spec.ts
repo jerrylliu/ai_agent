@@ -21,7 +21,10 @@ const meta = (documentId: string) => ({
 describe('buildContextFromResults 冲突注入', () => {
   it('两个不同文档均含修正信号词 → 注入冲突规则', () => {
     const context = buildContextFromResults([
-      { content: 'previously reported accuracy was 89% correct', metadata: meta('doc-1') },
+      {
+        content: 'previously reported accuracy was 89% correct',
+        metadata: meta('doc-1'),
+      },
       { content: 'updated result: accuracy 96%', metadata: meta('doc-2') },
     ]);
     expect(context).toContain(CONFLICT_RESOLUTION_INSTRUCTION.trim());
@@ -46,7 +49,10 @@ describe('buildContextFromResults 冲突注入', () => {
   it('同一文档的两个块各含信号词 → 不注入（文档内自洽）', () => {
     const context = buildContextFromResults([
       { content: 'first chunk mentions updated flow', metadata: meta('doc-1') },
-      { content: 'second chunk mentions revised flow', metadata: meta('doc-1') },
+      {
+        content: 'second chunk mentions revised flow',
+        metadata: meta('doc-1'),
+      },
     ]);
     expect(context).not.toContain(CONFLICT_RESOLUTION_INSTRUCTION.trim());
   });
@@ -63,7 +69,11 @@ describe('buildContextFromResults 冲突注入', () => {
     const context = buildContextFromResults([
       {
         content: 'updated description',
-        metadata: { chunk_type: 'image', documentId: 'img-1', image_path: 'a\\b.png' },
+        metadata: {
+          chunk_type: 'image',
+          documentId: 'img-1',
+          image_path: 'a\\b.png',
+        },
       },
       { content: 'corrected body', metadata: meta('doc-1') },
     ]);
@@ -91,7 +101,9 @@ describe('buildContextFromResults 文档分组', () => {
       { content: 'beta section body', metadata: meta('doc-1') },
       { content: 'gamma section body', metadata: meta('doc-2') },
     ]);
-    expect(context).toContain('【文档 1】\nalpha section body\n\nbeta section body');
+    expect(context).toContain(
+      '【文档 1】\nalpha section body\n\nbeta section body',
+    );
     expect(context).toContain('【文档 2】\ngamma section body');
     // 分组后只有 2 个文档头，不存在第二个 doc-1 的独立头
     expect(context.match(/【文档 \d+】/g)).toHaveLength(2);
@@ -118,11 +130,19 @@ describe('buildContextFromResults 文档分组', () => {
       { content: 'text before image', metadata: meta('doc-1') },
       {
         content: 'a chart description',
-        metadata: { chunk_type: 'image', documentId: 'img-1', image_path: 'a\\b.png' },
+        metadata: {
+          chunk_type: 'image',
+          documentId: 'img-1',
+          image_path: 'a\\b.png',
+        },
       },
       {
         content: 'another chart',
-        metadata: { chunk_type: 'image', documentId: 'img-2', image_path: 'a\\c.png' },
+        metadata: {
+          chunk_type: 'image',
+          documentId: 'img-2',
+          image_path: 'a\\c.png',
+        },
       },
     ]);
     expect(context).toContain('【图片 1】');
@@ -133,7 +153,10 @@ describe('buildContextFromResults 文档分组', () => {
 
   it('分组不影响冲突注入判定（metadata 级检测与展示分组解耦）', () => {
     const context = buildContextFromResults([
-      { content: 'previously reported accuracy was 89%', metadata: meta('doc-1') },
+      {
+        content: 'previously reported accuracy was 89%',
+        metadata: meta('doc-1'),
+      },
       { content: 'updated result: accuracy 96%', metadata: meta('doc-2') },
       { content: 'updated appendix data', metadata: meta('doc-2') },
     ]);

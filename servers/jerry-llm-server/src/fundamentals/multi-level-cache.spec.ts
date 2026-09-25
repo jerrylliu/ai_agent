@@ -42,10 +42,12 @@ function createMockRedis(): MockRedis {
   const store = new Map<string, string>();
   return {
     get: jest.fn(async (key: string) => store.get(key) ?? null),
-    set: jest.fn(async (key: string, val: string, _ex?: string, _ttl?: number) => {
-      store.set(key, val);
-      return 'OK';
-    }),
+    set: jest.fn(
+      async (key: string, val: string, _ex?: string, _ttl?: number) => {
+        store.set(key, val);
+        return 'OK';
+      },
+    ),
     expire: jest.fn(async (key: string, ttl: number) => {
       return store.has(key) ? 1 : 0;
     }),
@@ -334,7 +336,10 @@ describe('MultiLevelCache', () => {
 
       await cache.touch('k1');
 
-      expect(mockRedis!.expire).toHaveBeenCalledWith('test:k1', expect.any(Number));
+      expect(mockRedis!.expire).toHaveBeenCalledWith(
+        'test:k1',
+        expect.any(Number),
+      );
     });
 
     it('不存在的 key touch 不应 crash', async () => {
@@ -424,7 +429,8 @@ describe('MultiLevelCache', () => {
       const ttls: number[] = [];
       for (let i = 0; i < 20; i++) {
         await jitterCache.set(`k${i}`, { name: 'a' });
-        const call = mockRedis!.set.mock.calls[mockRedis!.set.mock.calls.length - 1];
+        const call =
+          mockRedis!.set.mock.calls[mockRedis!.set.mock.calls.length - 1];
         ttls.push(call[3] as number);
       }
 

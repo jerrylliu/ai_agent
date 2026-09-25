@@ -53,17 +53,28 @@ export class UsageService {
     });
 
     const totalInputTokens = records.reduce((sum, r) => sum + r.inputTokens, 0);
-    const totalOutputTokens = records.reduce((sum, r) => sum + r.outputTokens, 0);
+    const totalOutputTokens = records.reduce(
+      (sum, r) => sum + r.outputTokens,
+      0,
+    );
     const totalCalls = records.length;
-    const avgResponseTime = totalCalls > 0
-      ? Math.round(records.reduce((sum, r) => sum + (r.responseTimeMs || 0), 0) / totalCalls)
-      : 0;
-    const knowledgeBaseHitRate = totalCalls > 0
-      ? records.filter(r => r.usedKnowledgeBase).length / totalCalls
-      : 0;
+    const avgResponseTime =
+      totalCalls > 0
+        ? Math.round(
+            records.reduce((sum, r) => sum + (r.responseTimeMs || 0), 0) /
+              totalCalls,
+          )
+        : 0;
+    const knowledgeBaseHitRate =
+      totalCalls > 0
+        ? records.filter((r) => r.usedKnowledgeBase).length / totalCalls
+        : 0;
 
     // 按天聚合
-    const dailyStats: Record<string, { calls: number; inputTokens: number; outputTokens: number }> = {};
+    const dailyStats: Record<
+      string,
+      { calls: number; inputTokens: number; outputTokens: number }
+    > = {};
     for (const r of records) {
       const day = new Date(r.createdAt).toISOString().slice(0, 10);
       if (!dailyStats[day]) {

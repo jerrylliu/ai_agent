@@ -13,7 +13,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../config', () => ({
@@ -72,10 +77,7 @@ jest.mock('./text-splitter', () => ({
   DEFAULT_CHILD_CHUNK_OVERLAP: 100,
 }));
 
-import {
-  computeChunkHash,
-  deduplicateTextChunks,
-} from './vector-crud';
+import { computeChunkHash, deduplicateTextChunks } from './vector-crud';
 import { initializeVectorStore } from './store-state';
 import { getBM25Index, getBM25DocumentStore } from './store-state';
 import { saveBM25Index } from './bm25-index';
@@ -87,7 +89,11 @@ const mockSaveBM25Index = saveBM25Index as jest.Mock;
 
 /** 构造带 get/delete 的假 collection，get 按 where 条件返回预置数据 */
 function createFakeCollection(
-  existing: Array<{ id: string; document: string; metadata: Record<string, any> }>,
+  existing: Array<{
+    id: string;
+    document: string;
+    metadata: Record<string, any>;
+  }>,
 ) {
   const deletedIds: string[] = [];
   return {
@@ -127,7 +133,11 @@ function createFakeCollection(
 
 /** 构造假 BM25 documentStore（Map<id, {content, metadata}>） */
 function createFakeBM25Store(
-  entries: Array<{ id: string; content: string; metadata: Record<string, any> }>,
+  entries: Array<{
+    id: string;
+    content: string;
+    metadata: Record<string, any>;
+  }>,
 ) {
   const store = new Map();
   for (const e of entries) {
@@ -160,7 +170,11 @@ describe('deduplicateTextChunks', () => {
       {
         id: 'doc_1000_aaa_0',
         document: chunkText,
-        metadata: { source: 'report.pdf', versionId: 'legacy', chunk_hash: chunkHash },
+        metadata: {
+          source: 'report.pdf',
+          versionId: 'legacy',
+          chunk_hash: chunkHash,
+        },
       },
     ]);
     mockInitializeVectorStore.mockResolvedValue({ collection });
@@ -169,13 +183,21 @@ describe('deduplicateTextChunks', () => {
       {
         id: 'doc_1000_aaa_0',
         content: chunkText,
-        metadata: { source: 'report.pdf', versionId: 'legacy', chunk_hash: chunkHash },
+        metadata: {
+          source: 'report.pdf',
+          versionId: 'legacy',
+          chunk_hash: chunkHash,
+        },
       },
       // 不同内容的条目不应被删
       {
         id: 'doc_1000_bbb_1',
         content: '完全不同的内容',
-        metadata: { source: 'report.pdf', versionId: 'legacy', chunk_hash: computeChunkHash('完全不同的内容') },
+        metadata: {
+          source: 'report.pdf',
+          versionId: 'legacy',
+          chunk_hash: computeChunkHash('完全不同的内容'),
+        },
       },
     ]);
     mockGetBM25Index.mockReturnValue({ remove: jest.fn() });
@@ -202,7 +224,12 @@ describe('deduplicateTextChunks', () => {
       {
         id: 'doc_1000_v1_0',
         document: chunkText,
-        metadata: { source: 'a.pdf', versionId: '1', chunk_hash: chunkHash, versionStatus: 'archived' },
+        metadata: {
+          source: 'a.pdf',
+          versionId: '1',
+          chunk_hash: chunkHash,
+          versionStatus: 'archived',
+        },
       },
     ]);
     mockInitializeVectorStore.mockResolvedValue({ collection });

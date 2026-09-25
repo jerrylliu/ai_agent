@@ -15,7 +15,11 @@
 
 import { logger } from '../logger';
 import { executeWorkflow, type ToolExecutor } from './workflow-engine';
-import { getPipelineTemplate, listPipelineTemplates, hasPipelineTemplate } from './pipeline-templates';
+import {
+  getPipelineTemplate,
+  listPipelineTemplates,
+  hasPipelineTemplate,
+} from './pipeline-templates';
 
 // 工具执行器引用，由 tools/index.ts 在初始化时注入（避免循环依赖）
 let toolExecutorRef: ToolExecutor | null = null;
@@ -32,9 +36,9 @@ export function setWorkflowToolExecutor(executor: ToolExecutor): void {
  */
 export function buildExecuteWorkflowSchema() {
   const templates = listPipelineTemplates();
-  const templateIds = templates.map(t => t.id);
+  const templateIds = templates.map((t) => t.id);
   const templateDescriptions = templates
-    .map(t => `${t.id}: ${t.name} - ${t.description}`)
+    .map((t) => `${t.id}: ${t.name} - ${t.description}`)
     .join('\n  ');
 
   return {
@@ -57,7 +61,8 @@ export function buildExecuteWorkflowSchema() {
           },
           userInput: {
             type: 'string',
-            description: '用户原始问题或主题（流水线内的步骤会通过 ${context.userInput} 引用此值）',
+            description:
+              '用户原始问题或主题（流水线内的步骤会通过 ${context.userInput} 引用此值）',
           },
         },
         required: ['templateId', 'userInput'],
@@ -77,7 +82,12 @@ export interface ExecuteWorkflowResult {
   workflowId: string;
   status: 'completed' | 'failed' | 'partial' | 'not_found';
   message: string;
-  steps?: Array<{ stepId: string; status: string; durationMs: number; error?: string }>;
+  steps?: Array<{
+    stepId: string;
+    status: string;
+    durationMs: number;
+    error?: string;
+  }>;
   finalOutput?: any;
 }
 
@@ -98,7 +108,9 @@ export async function executeExecuteWorkflow(
   });
 
   if (!hasPipelineTemplate(templateId)) {
-    const available = listPipelineTemplates().map(t => t.id).join(', ');
+    const available = listPipelineTemplates()
+      .map((t) => t.id)
+      .join(', ');
     logger.warn('execute_workflow：未知模板，拒绝执行', {
       module: 'Tool:ExecuteWorkflow',
       templateId,
@@ -130,7 +142,7 @@ export async function executeExecuteWorkflow(
     templateId,
     templateName: template.name,
     stepCount: template.steps.length,
-    stepTools: template.steps.map(s => s.tool).join(' -> '),
+    stepTools: template.steps.map((s) => s.tool).join(' -> '),
     userId: context?.userId,
     sessionId: context?.sessionId,
   });
@@ -151,9 +163,9 @@ export async function executeExecuteWorkflow(
     module: 'Tool:ExecuteWorkflow',
     templateId,
     status: result.status,
-    successCount: result.steps.filter(s => s.status === 'success').length,
-    failedCount: result.steps.filter(s => s.status === 'failed').length,
-    skippedCount: result.steps.filter(s => s.status === 'skipped').length,
+    successCount: result.steps.filter((s) => s.status === 'success').length,
+    failedCount: result.steps.filter((s) => s.status === 'failed').length,
+    skippedCount: result.steps.filter((s) => s.status === 'skipped').length,
     totalDurationMs: result.totalDurationMs,
     wallClockMs: Date.now() - startTime,
   });
@@ -162,10 +174,13 @@ export async function executeExecuteWorkflow(
     workflowId: result.workflowId,
     status: result.status,
     message: `流水线 "${template.name}" 执行${
-      result.status === 'completed' ? '成功' :
-      result.status === 'partial' ? '部分成功' : '失败'
+      result.status === 'completed'
+        ? '成功'
+        : result.status === 'partial'
+          ? '部分成功'
+          : '失败'
     }，共 ${result.steps.length} 个步骤，耗时 ${result.totalDurationMs}ms`,
-    steps: result.steps.map(s => ({
+    steps: result.steps.map((s) => ({
       stepId: s.stepId,
       status: s.status,
       durationMs: s.durationMs,

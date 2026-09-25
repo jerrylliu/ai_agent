@@ -140,7 +140,11 @@ function getByPath(obj: any, path: string): any {
  * - 字符串中夹杂模板（如 "查询：${context.userInput}"）→ 字符串拼接
  * - 其他类型 → 原样返回
  */
-function resolveValue(value: any, context: WorkflowContext, stepOutputs: Record<string, any>): any {
+function resolveValue(
+  value: any,
+  context: WorkflowContext,
+  stepOutputs: Record<string, any>,
+): any {
   if (typeof value !== 'string') {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       // 递归解析对象
@@ -151,7 +155,7 @@ function resolveValue(value: any, context: WorkflowContext, stepOutputs: Record<
       return resolved;
     }
     if (Array.isArray(value)) {
-      return value.map(item => resolveValue(item, context, stepOutputs));
+      return value.map((item) => resolveValue(item, context, stepOutputs));
     }
     return value;
   }
@@ -239,7 +243,11 @@ function resolveParams(
 // ==================== 执行引擎 ====================
 
 /** 工具执行器函数类型（避免循环依赖，由调用方注入） */
-export type ToolExecutor = (toolName: string, params: any, ctx: { userId?: string; sessionId?: string; res?: Response }) => Promise<any>;
+export type ToolExecutor = (
+  toolName: string,
+  params: any,
+  ctx: { userId?: string; sessionId?: string; res?: Response },
+) => Promise<any>;
 
 /**
  * 工作流声明式通知发送器（E1）
@@ -290,9 +298,12 @@ export async function executeWorkflow(
     stepCount: workflow.steps.length,
     userId: context.userId,
     sessionId: context.sessionId,
-    userInputPreview: typeof context.userInput === 'string' ? context.userInput.substring(0, 100) : undefined,
-    stepIds: workflow.steps.map(s => s.id).join(' -> '),
-    stepTools: workflow.steps.map(s => s.tool).join(' -> '),
+    userInputPreview:
+      typeof context.userInput === 'string'
+        ? context.userInput.substring(0, 100)
+        : undefined,
+    stepIds: workflow.steps.map((s) => s.id).join(' -> '),
+    stepTools: workflow.steps.map((s) => s.tool).join(' -> '),
     sseEnabled: !!res,
   });
 
@@ -385,7 +396,10 @@ export async function executeWorkflow(
         sendToolStatus(res, step.tool, 'done', { error: true });
       }
       if ((step.onError ?? 'abort') === 'abort') {
-        logger.warn('Workflow：onError=abort，标记后续步骤跳过', stepLogContext);
+        logger.warn(
+          'Workflow：onError=abort，标记后续步骤跳过',
+          stepLogContext,
+        );
         aborted = true;
       }
       continue;
@@ -416,9 +430,10 @@ export async function executeWorkflow(
         ...stepLogContext,
         durationMs: stepDurationMs,
         outputType: typeof output,
-        outputPreview: typeof output === 'string'
-          ? output.substring(0, 200)
-          : JSON.stringify(output).substring(0, 200),
+        outputPreview:
+          typeof output === 'string'
+            ? output.substring(0, 200)
+            : JSON.stringify(output).substring(0, 200),
       });
 
       if (res) {
@@ -458,17 +473,23 @@ export async function executeWorkflow(
       }
 
       if ((step.onError ?? 'abort') === 'abort') {
-        logger.warn('Workflow：onError=abort，标记后续步骤跳过', stepLogContext);
+        logger.warn(
+          'Workflow：onError=abort，标记后续步骤跳过',
+          stepLogContext,
+        );
         aborted = true;
       } else {
-        logger.info('Workflow：onError=continue，继续执行后续步骤', stepLogContext);
+        logger.info(
+          'Workflow：onError=continue，继续执行后续步骤',
+          stepLogContext,
+        );
       }
     }
   }
 
   // 计算流水线整体状态
-  const failedCount = stepResults.filter(r => r.status === 'failed').length;
-  const successCount = stepResults.filter(r => r.status === 'success').length;
+  const failedCount = stepResults.filter((r) => r.status === 'failed').length;
+  const successCount = stepResults.filter((r) => r.status === 'success').length;
   let status: 'completed' | 'failed' | 'partial';
   if (failedCount === 0) {
     status = 'completed';
@@ -479,7 +500,9 @@ export async function executeWorkflow(
   }
 
   // 最后一个成功步骤的输出作为流水线最终输出
-  const lastSuccess = [...stepResults].reverse().find(r => r.status === 'success');
+  const lastSuccess = [...stepResults]
+    .reverse()
+    .find((r) => r.status === 'success');
   const finalOutput = lastSuccess?.output;
 
   const totalDurationMs = Date.now() - startTime;
@@ -543,7 +566,14 @@ async function dispatchWorkflowNotify(args: {
   failedCount: number;
   totalDurationMs: number;
 }): Promise<void> {
-  const { workflow, context, status, successCount, failedCount, totalDurationMs } = args;
+  const {
+    workflow,
+    context,
+    status,
+    successCount,
+    failedCount,
+    totalDurationMs,
+  } = args;
   const notify = workflow.notify;
   if (!notify) return;
 
@@ -571,10 +601,12 @@ async function dispatchWorkflowNotify(args: {
   };
 
   const channel = notify.channel ?? 'feishu';
-  const title = renderNotifyTemplate(notify.title, context, workflowMeta)
-    || defaultNotifyTitle(workflowMeta);
-  const content = renderNotifyTemplate(notify.content, context, workflowMeta)
-    || defaultNotifyContent(workflowMeta);
+  const title =
+    renderNotifyTemplate(notify.title, context, workflowMeta) ||
+    defaultNotifyTitle(workflowMeta);
+  const content =
+    renderNotifyTemplate(notify.content, context, workflowMeta) ||
+    defaultNotifyContent(workflowMeta);
 
   try {
     await workflowNotifierRef({
@@ -621,8 +653,18 @@ function renderNotifyTemplate(
 }
 
 function defaultNotifyTitle(meta: { name: string; status: string }): string {
-  const emoji = meta.status === 'completed' ? '✅' : meta.status === 'partial' ? '⚠️' : '❌';
-  const cn = meta.status === 'completed' ? '执行完成' : meta.status === 'partial' ? '部分成功' : '执行失败';
+  const emoji =
+    meta.status === 'completed'
+      ? '✅'
+      : meta.status === 'partial'
+        ? '⚠️'
+        : '❌';
+  const cn =
+    meta.status === 'completed'
+      ? '执行完成'
+      : meta.status === 'partial'
+        ? '部分成功'
+        : '执行失败';
   return `${emoji} 工作流 ${meta.name} ${cn}`;
 }
 
@@ -646,12 +688,16 @@ function defaultNotifyContent(meta: {
  * 校验流水线定义的合法性
  * 用于在执行前快速发现错误（如引用了不存在的步骤）
  */
-export function validateWorkflow(workflow: WorkflowDefinition): { valid: boolean; errors: string[] } {
+export function validateWorkflow(workflow: WorkflowDefinition): {
+  valid: boolean;
+  errors: string[];
+} {
   const errors: string[] = [];
   const stepIds = new Set<string>();
 
   if (!workflow.id) errors.push('流水线必须有 id');
-  if (!workflow.steps || workflow.steps.length === 0) errors.push('流水线必须至少包含一个步骤');
+  if (!workflow.steps || workflow.steps.length === 0)
+    errors.push('流水线必须至少包含一个步骤');
 
   for (let i = 0; i < workflow.steps.length; i++) {
     const step = workflow.steps[i];
@@ -674,7 +720,9 @@ export function validateWorkflow(workflow: WorkflowDefinition): { valid: boolean
         const refAsIndex = parseInt(ref, 10);
         if (!isNaN(refAsIndex) && String(refAsIndex) === ref) {
           if (refAsIndex > i + 1) {
-            errors.push(`步骤 ${step.id} 引用了后定义的步骤序号 $step${ref}（当前是第 ${i + 1} 步）`);
+            errors.push(
+              `步骤 ${step.id} 引用了后定义的步骤序号 $step${ref}（当前是第 ${i + 1} 步）`,
+            );
           }
           // 序号引用始终有效（只要不超过当前步骤），不需要在 stepIds 中查找
         } else {
@@ -701,7 +749,8 @@ function collectStepReferences(params: any): string[] {
   } else if (Array.isArray(params)) {
     for (const item of params) refs.push(...collectStepReferences(item));
   } else if (params && typeof params === 'object') {
-    for (const v of Object.values(params)) refs.push(...collectStepReferences(v));
+    for (const v of Object.values(params))
+      refs.push(...collectStepReferences(v));
   }
   return refs;
 }

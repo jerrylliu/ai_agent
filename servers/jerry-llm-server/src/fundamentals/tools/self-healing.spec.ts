@@ -12,7 +12,12 @@
  *   7. LRU 上限 + TTL 过期
  */
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 import {
@@ -40,16 +45,25 @@ describe('Self-Healing Agent', () => {
     });
 
     it('result.success=false 但无 suggestion 时不算自愈', () => {
-      const r = { success: false, channel: 'feishu', delivered: 0, errors: ['unknown'] };
+      const r = {
+        success: false,
+        channel: 'feishu',
+        delivered: 0,
+        errors: ['unknown'],
+      };
       const d = applySelfHealing({ toolName: 'send_notification', result: r });
       expect(d.result).toBe(r);
       expect(d.consumedAttempt).toBe(false);
     });
 
     it('非对象结果（字符串/数字）应原样返回', () => {
-      expect(applySelfHealing({ toolName: 'x', result: 'hello' }).result).toBe('hello');
+      expect(applySelfHealing({ toolName: 'x', result: 'hello' }).result).toBe(
+        'hello',
+      );
       expect(applySelfHealing({ toolName: 'x', result: 42 }).result).toBe(42);
-      expect(applySelfHealing({ toolName: 'x', result: null }).result).toBeNull();
+      expect(
+        applySelfHealing({ toolName: 'x', result: null }).result,
+      ).toBeNull();
     });
 
     it('没有 success 字段的对象应原样返回', () => {
@@ -92,15 +106,27 @@ describe('Self-Healing Agent', () => {
     });
 
     it('第 N 次失败（N <= max）应累加但仍 shouldRetry=true', () => {
-      applySelfHealing({ toolName: 't', sessionId: 's1', result: { ...failureResult } });
-      const d = applySelfHealing({ toolName: 't', sessionId: 's1', result: { ...failureResult } });
+      applySelfHealing({
+        toolName: 't',
+        sessionId: 's1',
+        result: { ...failureResult },
+      });
+      const d = applySelfHealing({
+        toolName: 't',
+        sessionId: 's1',
+        result: { ...failureResult },
+      });
       expect(d.currentAttempt).toBe(2);
       expect(d.result.suggestion._selfHealing.shouldRetry).toBe(true);
     });
 
     it('达到 maxAttempts+1 时应 shouldRetry=false 且 hint 替换为放弃自愈', () => {
       for (let i = 0; i < MAX_HEALING_ATTEMPTS; i++) {
-        applySelfHealing({ toolName: 't', sessionId: 's1', result: { ...failureResult } });
+        applySelfHealing({
+          toolName: 't',
+          sessionId: 's1',
+          result: { ...failureResult },
+        });
       }
       // 这次触发"达到上限"
       const d = applySelfHealing({
@@ -115,8 +141,16 @@ describe('Self-Healing Agent', () => {
     });
 
     it('成功一次应清空计数，下次失败重新从 1 开始', () => {
-      applySelfHealing({ toolName: 't', sessionId: 's1', result: { ...failureResult } });
-      applySelfHealing({ toolName: 't', sessionId: 's1', result: { success: true } });
+      applySelfHealing({
+        toolName: 't',
+        sessionId: 's1',
+        result: { ...failureResult },
+      });
+      applySelfHealing({
+        toolName: 't',
+        sessionId: 's1',
+        result: { success: true },
+      });
       const d = applySelfHealing({
         toolName: 't',
         sessionId: 's1',
@@ -126,7 +160,11 @@ describe('Self-Healing Agent', () => {
     });
 
     it('不同 sessionId 应独立计数', () => {
-      applySelfHealing({ toolName: 't', sessionId: 's1', result: { ...failureResult } });
+      applySelfHealing({
+        toolName: 't',
+        sessionId: 's1',
+        result: { ...failureResult },
+      });
       const d = applySelfHealing({
         toolName: 't',
         sessionId: 's2',
@@ -136,7 +174,11 @@ describe('Self-Healing Agent', () => {
     });
 
     it('不同 toolName 应独立计数', () => {
-      applySelfHealing({ toolName: 'tool_a', sessionId: 's1', result: { ...failureResult } });
+      applySelfHealing({
+        toolName: 'tool_a',
+        sessionId: 's1',
+        result: { ...failureResult },
+      });
       const d = applySelfHealing({
         toolName: 'tool_b',
         sessionId: 's1',
@@ -147,7 +189,10 @@ describe('Self-Healing Agent', () => {
 
     it('sessionId 缺失时使用 global 共享计数', () => {
       applySelfHealing({ toolName: 't', result: { ...failureResult } });
-      const d = applySelfHealing({ toolName: 't', result: { ...failureResult } });
+      const d = applySelfHealing({
+        toolName: 't',
+        result: { ...failureResult },
+      });
       expect(d.currentAttempt).toBe(2);
     });
 

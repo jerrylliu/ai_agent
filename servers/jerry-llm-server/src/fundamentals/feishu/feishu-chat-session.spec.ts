@@ -108,13 +108,18 @@ describe('feishu-chat-session', () => {
     function createRepoMock(initial: any[] = []) {
       const rows = [...initial];
       return {
-        findOne: jest.fn(async ({ where }) => rows.find((row) => {
-          if (where.sessionId) return row.sessionId === where.sessionId;
-          return row.ownerUserId === where.ownerUserId &&
-            row.chatType === where.chatType &&
-            row.chatId === where.chatId &&
-            row.senderOpenId === where.senderOpenId;
-        }) ?? null),
+        findOne: jest.fn(
+          async ({ where }) =>
+            rows.find((row) => {
+              if (where.sessionId) return row.sessionId === where.sessionId;
+              return (
+                row.ownerUserId === where.ownerUserId &&
+                row.chatType === where.chatType &&
+                row.chatId === where.chatId &&
+                row.senderOpenId === where.senderOpenId
+              );
+            }) ?? null,
+        ),
         create: jest.fn((data) => ({ id: rows.length + 1, ...data })),
         save: jest.fn(async (entity) => {
           const idx = rows.findIndex((row) => row.id === entity.id);
@@ -125,10 +130,12 @@ describe('feishu-chat-session', () => {
         delete: jest.fn(async (where) => {
           const idx = rows.findIndex((row) => {
             if (typeof where.id === 'number') return row.id === where.id;
-            return row.ownerUserId === where.ownerUserId &&
+            return (
+              row.ownerUserId === where.ownerUserId &&
               row.chatType === where.chatType &&
               row.chatId === where.chatId &&
-              row.senderOpenId === where.senderOpenId;
+              row.senderOpenId === where.senderOpenId
+            );
           });
           if (idx >= 0) rows.splice(idx, 1);
           return { affected: idx >= 0 ? 1 : 0 };
@@ -171,7 +178,9 @@ describe('feishu-chat-session', () => {
       const repo = createRepoMock();
       initFeishuChatSessionRepository(repo);
 
-      const id1 = await getOrCreateChatSession('owner:15:group:oc_team:ou_alice');
+      const id1 = await getOrCreateChatSession(
+        'owner:15:group:oc_team:ou_alice',
+      );
       const id2 = await getOrCreateChatSession('owner:15:group:oc_team:ou_bob');
 
       expect(id1).not.toBe(id2);
@@ -194,7 +203,9 @@ describe('feishu-chat-session', () => {
     it('deleteFeishuChatSessionBySessionId 会按 owner 删除指定映射', async () => {
       const repo = createRepoMock();
       initFeishuChatSessionRepository(repo);
-      const sessionId = await getOrCreateChatSession('owner:15:p2p:ou_delete_by_session');
+      const sessionId = await getOrCreateChatSession(
+        'owner:15:p2p:ou_delete_by_session',
+      );
 
       await deleteFeishuChatSessionBySessionId(sessionId, '15');
 
@@ -204,7 +215,9 @@ describe('feishu-chat-session', () => {
     it('deleteFeishuChatSessionBySessionId 会删除群聊中当前发送人的映射，不影响同群其他人', async () => {
       const repo = createRepoMock();
       initFeishuChatSessionRepository(repo);
-      const aliceSessionId = await getOrCreateChatSession('owner:15:group:oc_team:ou_alice');
+      const aliceSessionId = await getOrCreateChatSession(
+        'owner:15:group:oc_team:ou_alice',
+      );
       await getOrCreateChatSession('owner:15:group:oc_team:ou_bob');
 
       await deleteFeishuChatSessionBySessionId(aliceSessionId, '15');
@@ -216,7 +229,9 @@ describe('feishu-chat-session', () => {
     it('deleteFeishuChatSessionBySessionId owner 不匹配时不删除映射', async () => {
       const repo = createRepoMock();
       initFeishuChatSessionRepository(repo);
-      const sessionId = await getOrCreateChatSession('owner:15:p2p:ou_keep_by_owner');
+      const sessionId = await getOrCreateChatSession(
+        'owner:15:p2p:ou_keep_by_owner',
+      );
 
       await deleteFeishuChatSessionBySessionId(sessionId, '16');
 
@@ -227,7 +242,9 @@ describe('feishu-chat-session', () => {
   describe('getOrCreateChatSession（DB 未注入，降级到本地 Map）', () => {
     it('首次调用创建 uuid 形式的 sessionId', async () => {
       const id = await getOrCreateChatSession('p2p:ou_test1');
-      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
     });
 
     it('同 sessionKey 二次调用返回同一个 sessionId', async () => {

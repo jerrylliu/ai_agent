@@ -10,7 +10,12 @@
  */
 
 jest.mock('./logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('./config', () => ({
@@ -33,7 +38,13 @@ jest.mock('docx', () => ({
   Packer: { toBuffer: async () => Buffer.from('') },
   Paragraph: class {},
   TextRun: class {},
-  HeadingLevel: { TITLE: 0, HEADING_1: 1, HEADING_2: 2, HEADING_3: 3, HEADING_4: 4 },
+  HeadingLevel: {
+    TITLE: 0,
+    HEADING_1: 1,
+    HEADING_2: 2,
+    HEADING_3: 3,
+    HEADING_4: 4,
+  },
   AlignmentType: { CENTER: 'center', START: 'start' },
   LevelFormat: { DECIMAL: 'decimal' },
 }));
@@ -80,7 +91,10 @@ describe('markdownToMd', () => {
 describe('getDocumentMimeType', () => {
   it.each([
     ['pdf', 'application/pdf'],
-    ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    [
+      'docx',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ],
     ['html', 'text/html'],
     ['md', 'text/markdown'],
   ] as const)('%s → %s', (format, expected) => {

@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  ManyToOne,
+  Index,
+} from 'typeorm';
 import { Document } from './document.entity.js';
 
 export enum AuditAction {
@@ -41,6 +48,8 @@ export class DocumentAuditLog {
   @Index()
   createdAt: Date;
 
-  @ManyToOne(() => Document, document => document.auditLogs, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Document, (document) => document.auditLogs, {
+    onDelete: 'CASCADE',
+  })
   document: Document;
 }

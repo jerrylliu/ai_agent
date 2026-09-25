@@ -9,7 +9,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // 阻断真实 document-generator（含 puppeteer / marked / docx）
@@ -23,16 +28,23 @@ jest.mock('../document-generator', () => ({
   }),
   getDocumentMimeType: (format: string) => {
     switch (format) {
-      case 'pdf': return 'application/pdf';
-      case 'docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      case 'html': return 'text/html';
-      case 'md': return 'text/markdown';
-      default: return 'application/octet-stream';
+      case 'pdf':
+        return 'application/pdf';
+      case 'docx':
+        return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      case 'html':
+        return 'text/html';
+      case 'md':
+        return 'text/markdown';
+      default:
+        return 'application/octet-stream';
     }
   },
   ensureExtension: (filename: string, format: string) => {
     const target = `.${format}`;
-    return filename.toLowerCase().endsWith(target) ? filename : `${filename}${target}`;
+    return filename.toLowerCase().endsWith(target)
+      ? filename
+      : `${filename}${target}`;
   },
 }));
 
@@ -176,7 +188,10 @@ describe('P1 文档导出意图登记（content 可选）', () => {
   });
 
   it('缺 content 且上下文没有响应通道/docIntents：返回失败并给出可执行提示', async () => {
-    const result = await executeGenerateDocument({ title: 'x', format: 'pdf' }, { userId: 'u1' });
+    const result = await executeGenerateDocument(
+      { title: 'x', format: 'pdf' },
+      { userId: 'u1' },
+    );
     expect(result.success).toBe(false);
     expect(result.message).toContain('缺少文档正文');
     expect(saveSpy).not.toHaveBeenCalled();
@@ -244,7 +259,11 @@ describe('persistDocument —— 可复用落盘函数', () => {
 
   it('service 未注入时返回失败', async () => {
     initGenerateDocumentTool(null as any);
-    const result = await persistDocument({ title: 'x', content: 'y', format: 'md' });
+    const result = await persistDocument({
+      title: 'x',
+      content: 'y',
+      format: 'md',
+    });
     expect(result.success).toBe(false);
     expect(result.message).toContain('文档服务未初始化');
   });

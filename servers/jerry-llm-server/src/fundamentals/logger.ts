@@ -40,7 +40,8 @@ const consoleFormat = winston.format.combine(
   winston.format.colorize(), // 级别着色
   winston.format.printf(({ timestamp, level, message, module, ...meta }) => {
     const moduleStr = module ? `[${module}]` : '';
-    const metaStr = Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
+    const metaStr =
+      Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
     return `${timestamp} ${level} ${moduleStr} ${message}${metaStr}`;
   }),
 );
@@ -83,7 +84,8 @@ export const winstonConfig = {
             json: true,
             format: winston.format.json(),
             replaceTimestamp: true,
-            onConnectionError: (err) => console.error('Loki connection error:', err),
+            onConnectionError: (err) =>
+              console.error('Loki connection error:', err),
           }),
         ]
       : []),
@@ -115,10 +117,14 @@ const standaloneLogger = winston.createLogger({
  *   logger.debug('调试', { module: 'ModelProvider', modelId: 'xxx' });
  */
 export const logger = {
-  info: (message: string, meta?: Record<string, any>) => standaloneLogger.info(message, meta),
-  warn: (message: string, meta?: Record<string, any>) => standaloneLogger.warn(message, meta),
-  error: (message: string, meta?: Record<string, any>) => standaloneLogger.error(message, meta),
-  debug: (message: string, meta?: Record<string, any>) => standaloneLogger.debug(message, meta),
+  info: (message: string, meta?: Record<string, any>) =>
+    standaloneLogger.info(message, meta),
+  warn: (message: string, meta?: Record<string, any>) =>
+    standaloneLogger.warn(message, meta),
+  error: (message: string, meta?: Record<string, any>) =>
+    standaloneLogger.error(message, meta),
+  debug: (message: string, meta?: Record<string, any>) =>
+    standaloneLogger.debug(message, meta),
 };
 
 /**

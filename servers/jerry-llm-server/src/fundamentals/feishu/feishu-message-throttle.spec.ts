@@ -18,7 +18,10 @@ jest.mock('../logger', () => ({
   },
 }));
 
-import { createFeishuStreamEditor, FEISHU_STREAM_TUNING } from './feishu-message-throttle';
+import {
+  createFeishuStreamEditor,
+  FEISHU_STREAM_TUNING,
+} from './feishu-message-throttle';
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -57,7 +60,9 @@ describe('feishu-message-throttle', () => {
     editor.appendDelta('a'.repeat(FEISHU_STREAM_TUNING.MIN_DELTA_CHARS + 1));
     await wait(20);
     expect(patcher).toHaveBeenCalledTimes(1);
-    expect(patcher.mock.calls[0][0].length).toBe(FEISHU_STREAM_TUNING.MIN_DELTA_CHARS + 1);
+    expect(patcher.mock.calls[0][0].length).toBe(
+      FEISHU_STREAM_TUNING.MIN_DELTA_CHARS + 1,
+    );
   });
 
   it('flush(true) 强制写出最终内容', async () => {
@@ -103,7 +108,9 @@ describe('feishu-message-throttle', () => {
     await editor.flush(true);
     // 第二次重试成功
     expect(patcher.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(patcher.mock.calls[patcher.mock.calls.length - 1][0]).toBe('hello world');
+    expect(patcher.mock.calls[patcher.mock.calls.length - 1][0]).toBe(
+      'hello world',
+    );
   });
 
   it('内容为空时 flush(false) 不触发 PATCH（避免发空消息）', async () => {

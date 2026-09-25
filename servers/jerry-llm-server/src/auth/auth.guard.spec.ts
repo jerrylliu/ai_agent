@@ -41,10 +41,12 @@ function mockContext(authHeader?: string) {
   } as any;
 }
 
-function mockAuthService(overrides: Partial<{
-  verifyToken: jest.Mock;
-  getUserById: jest.Mock;
-}> = {}): Partial<AuthService> {
+function mockAuthService(
+  overrides: Partial<{
+    verifyToken: jest.Mock;
+    getUserById: jest.Mock;
+  }> = {},
+): Partial<AuthService> {
   return {
     verifyToken: overrides.verifyToken || jest.fn(),
     getUserById: overrides.getUserById || jest.fn(),
@@ -61,7 +63,9 @@ describe('AuthGuard', () => {
       const guard = new AuthGuard(authService);
       const ctx = mockContext(undefined);
 
-      await expect(guard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
+      await expect(guard.canActivate(ctx)).rejects.toThrow(
+        UnauthorizedException,
+      );
       await expect(guard.canActivate(ctx)).rejects.toThrow('未提供认证令牌');
     });
   });
@@ -98,7 +102,9 @@ describe('AuthGuard', () => {
       const guard = new AuthGuard(authService);
       const ctx = mockContext('Bearer invalid.token.here');
 
-      await expect(guard.canActivate(ctx)).rejects.toThrow('认证令牌无效或已过期');
+      await expect(guard.canActivate(ctx)).rejects.toThrow(
+        '认证令牌无效或已过期',
+      );
     });
 
     it('Token 过期（verify 返回 null）时应拒绝', async () => {
@@ -121,14 +127,14 @@ describe('AuthGuard', () => {
       const decoded = { sub: 1, tokenVersion: 2 };
       const authService = mockAuthService({
         verifyToken: jest.fn().mockReturnValue(decoded),
-        getUserById: jest
-          .fn()
-          .mockResolvedValue({ id: 1, tokenVersion: 5 }), // 当前版本更高
+        getUserById: jest.fn().mockResolvedValue({ id: 1, tokenVersion: 5 }), // 当前版本更高
       }) as AuthService;
       const guard = new AuthGuard(authService);
       const ctx = mockContext('Bearer old.version.token');
 
-      await expect(guard.canActivate(ctx)).rejects.toThrow('认证令牌已失效，请重新登录');
+      await expect(guard.canActivate(ctx)).rejects.toThrow(
+        '认证令牌已失效，请重新登录',
+      );
     });
 
     it('tokenVersion 匹配时应通过', async () => {

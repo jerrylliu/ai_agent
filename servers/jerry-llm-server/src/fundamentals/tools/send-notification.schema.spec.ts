@@ -5,7 +5,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../config', () => ({
@@ -56,7 +61,11 @@ describe('sendNotificationSchema 结构', () => {
 
   it('channel 应为 enum [feishu, email, webhook]', () => {
     const params = sendNotificationSchema.function.parameters as any;
-    expect(params.properties.channel.enum).toEqual(['feishu', 'email', 'webhook']);
+    expect(params.properties.channel.enum).toEqual([
+      'feishu',
+      'email',
+      'webhook',
+    ]);
   });
 
   it('attachments 应为 array<object>，items.filename 必填', () => {
@@ -164,7 +173,9 @@ describe('sendNotificationParamsSchema 字符串形态容错', () => {
     });
     expect(r.success).toBe(true);
     if (r.success) {
-      expect(r.data.attachments).toEqual([{ filename: 'attachment', url: 'fc://chart/abc123' }]);
+      expect(r.data.attachments).toEqual([
+        { filename: 'attachment', url: 'fc://chart/abc123' },
+      ]);
     }
   });
 
@@ -179,7 +190,9 @@ describe('sendNotificationParamsSchema 字符串形态容错', () => {
     expect(r.success).toBe(true);
     if (r.success) {
       expect(r.data.recipients).toEqual(['a@b.com', 'c@d.com']);
-      expect(r.data.attachments).toEqual([{ filename: 'a.pdf', url: 'https://x.com/a.pdf' }]);
+      expect(r.data.attachments).toEqual([
+        { filename: 'a.pdf', url: 'https://x.com/a.pdf' },
+      ]);
     }
   });
 });

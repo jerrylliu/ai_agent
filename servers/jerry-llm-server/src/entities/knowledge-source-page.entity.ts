@@ -1,4 +1,13 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, Index, Unique } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  ManyToOne,
+  Index,
+  Unique,
+} from 'typeorm';
 import { KnowledgeSource } from './knowledge-source.entity.js';
 
 @Entity('knowledge_source_pages')

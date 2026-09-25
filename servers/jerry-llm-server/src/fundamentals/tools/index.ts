@@ -1,21 +1,148 @@
-import { searchKnowledgeBaseSchema, executeSearchKnowledgeBase, type SearchKnowledgeBaseParams, type SearchKnowledgeBaseResult } from './search-knowledge-base';
-import { searchWebSchema, executeSearchWeb, type SearchWebParams, type SearchWebResult, validateSearchWebConfig, isSearchWebAvailable } from './search-web';
-import { getWeatherSchema, executeGetWeather, type GetWeatherParams, type GetWeatherResult, validateWeatherConfig, isWeatherAvailable } from './get-weather';
-import { calculateSchema, executeCalculate, type CalculateParams, type CalculateResult } from './calculate';
-import { manageSessionSchema, executeManageSession, initManageSession, type ManageSessionParams, type ManageSessionResult } from './manage-session';
-import { listKnowledgeBaseSchema, executeListKnowledgeBase, type ListKnowledgeBaseParams, type ListKnowledgeBaseResult } from './list-knowledge-base';
-import { createPlanSchema, executeCreatePlan, type CreatePlanParams, type CreatePlanResult, updatePlanStepSchema, executeUpdatePlanStep, type UpdatePlanStepParams, type UpdatePlanStepResult, getPlanSchema, executeGetPlan, type GetPlanResult, resolveDataBindings, getSessionPlan, storeStepOutput, findMatchingStep, preloadSessionPlan } from './plan-execute';
-import { crawlWebpageSchema, executeCrawlWebpage, type CrawlWebpageParams, type CrawlWebpageResult } from './crawl-webpage';
-import { createDocumentSchema, executeCreateDocument, type CreateDocumentParams, type CreateDocumentResult, updateDocumentSchema, executeUpdateDocument, type UpdateDocumentParams, type UpdateDocumentResult, summarizeDocumentSchema, executeSummarizeDocument, type SummarizeDocumentParams, type SummarizeDocumentResult, compareDocumentsSchema, executeCompareDocuments, type CompareDocumentsParams, type CompareDocumentsResult, initDocumentTools } from './document-ops';
-import { generateChartSchema, executeGenerateChart, type GenerateChartParams, type GenerateChartResult, generateImageSchema, executeGenerateImage, type GenerateImageParams, type GenerateImageResult, createMindmapSchema, executeCreateMindmap, type CreateMindmapParams, type CreateMindmapResult } from './multimodal-output';
-import { generateDocumentSchema, executeGenerateDocument, type GenerateDocumentParams, type GenerateDocumentResult, type GenerateDocumentIntent } from './generate-document';
-import { sendNotificationSchema, executeSendNotification, validateSendNotificationConfig, isSendNotificationAvailable, type SendNotificationParams, type SendNotificationResult } from './send-notification';
-import { queryDatabaseSchema, executeQueryDatabase, validateQueryDatabaseConfig, isQueryDatabaseAvailable, type QueryDatabaseParams, type QueryDatabaseResult } from './query-database';
-import { buildMcpProxySchema, executeMcpProxy, validateMcpProxyConfig, isMcpProxyAvailable, initMcpProxy, type McpProxyParams, type McpProxyResult } from './mcp-proxy';
-import { buildExecuteWorkflowSchema, executeExecuteWorkflow, setWorkflowToolExecutor, type ExecuteWorkflowParams, type ExecuteWorkflowResult } from '../workflow/execute-workflow-tool';
+import {
+  searchKnowledgeBaseSchema,
+  executeSearchKnowledgeBase,
+  type SearchKnowledgeBaseParams,
+  type SearchKnowledgeBaseResult,
+} from './search-knowledge-base';
+import {
+  searchWebSchema,
+  executeSearchWeb,
+  type SearchWebParams,
+  type SearchWebResult,
+  validateSearchWebConfig,
+  isSearchWebAvailable,
+} from './search-web';
+import {
+  getWeatherSchema,
+  executeGetWeather,
+  type GetWeatherParams,
+  type GetWeatherResult,
+  validateWeatherConfig,
+  isWeatherAvailable,
+} from './get-weather';
+import {
+  calculateSchema,
+  executeCalculate,
+  type CalculateParams,
+  type CalculateResult,
+} from './calculate';
+import {
+  manageSessionSchema,
+  executeManageSession,
+  initManageSession,
+  type ManageSessionParams,
+  type ManageSessionResult,
+} from './manage-session';
+import {
+  listKnowledgeBaseSchema,
+  executeListKnowledgeBase,
+  type ListKnowledgeBaseParams,
+  type ListKnowledgeBaseResult,
+} from './list-knowledge-base';
+import {
+  createPlanSchema,
+  executeCreatePlan,
+  type CreatePlanParams,
+  type CreatePlanResult,
+  updatePlanStepSchema,
+  executeUpdatePlanStep,
+  type UpdatePlanStepParams,
+  type UpdatePlanStepResult,
+  getPlanSchema,
+  executeGetPlan,
+  type GetPlanResult,
+  resolveDataBindings,
+  getSessionPlan,
+  storeStepOutput,
+  findMatchingStep,
+  preloadSessionPlan,
+} from './plan-execute';
+import {
+  crawlWebpageSchema,
+  executeCrawlWebpage,
+  type CrawlWebpageParams,
+  type CrawlWebpageResult,
+} from './crawl-webpage';
+import {
+  createDocumentSchema,
+  executeCreateDocument,
+  type CreateDocumentParams,
+  type CreateDocumentResult,
+  updateDocumentSchema,
+  executeUpdateDocument,
+  type UpdateDocumentParams,
+  type UpdateDocumentResult,
+  summarizeDocumentSchema,
+  executeSummarizeDocument,
+  type SummarizeDocumentParams,
+  type SummarizeDocumentResult,
+  compareDocumentsSchema,
+  executeCompareDocuments,
+  type CompareDocumentsParams,
+  type CompareDocumentsResult,
+  initDocumentTools,
+} from './document-ops';
+import {
+  generateChartSchema,
+  executeGenerateChart,
+  type GenerateChartParams,
+  type GenerateChartResult,
+  generateImageSchema,
+  executeGenerateImage,
+  type GenerateImageParams,
+  type GenerateImageResult,
+  createMindmapSchema,
+  executeCreateMindmap,
+  type CreateMindmapParams,
+  type CreateMindmapResult,
+} from './multimodal-output';
+import {
+  generateDocumentSchema,
+  executeGenerateDocument,
+  type GenerateDocumentParams,
+  type GenerateDocumentResult,
+  type GenerateDocumentIntent,
+} from './generate-document';
+import {
+  sendNotificationSchema,
+  executeSendNotification,
+  validateSendNotificationConfig,
+  isSendNotificationAvailable,
+  type SendNotificationParams,
+  type SendNotificationResult,
+} from './send-notification';
+import {
+  queryDatabaseSchema,
+  executeQueryDatabase,
+  validateQueryDatabaseConfig,
+  isQueryDatabaseAvailable,
+  type QueryDatabaseParams,
+  type QueryDatabaseResult,
+} from './query-database';
+import {
+  buildMcpProxySchema,
+  executeMcpProxy,
+  validateMcpProxyConfig,
+  isMcpProxyAvailable,
+  initMcpProxy,
+  type McpProxyParams,
+  type McpProxyResult,
+} from './mcp-proxy';
+import {
+  buildExecuteWorkflowSchema,
+  executeExecuteWorkflow,
+  setWorkflowToolExecutor,
+  type ExecuteWorkflowParams,
+  type ExecuteWorkflowResult,
+} from '../workflow/execute-workflow-tool';
 import { setWorkflowNotifier } from '../workflow/workflow-engine';
 import { logger } from '../logger';
-import { requiresConfirmation, requestConfirmation, getPendingConfirmationInfo, attachSseResponseToConfirmation } from '../human-in-the-loop';
+import {
+  requiresConfirmation,
+  requestConfirmation,
+  getPendingConfirmationInfo,
+  attachSseResponseToConfirmation,
+} from '../human-in-the-loop';
 import { sendConfirmationRequest } from '../sse-writer';
 import { applySelfHealing } from './self-healing';
 
@@ -36,16 +163,18 @@ export interface ToolContext {
 }
 
 // 工具调用记录回调，由外部注入（避免循环依赖）
-let toolUsageCallback: ((data: {
-  userId?: string;
-  sessionId?: string;
-  toolName: string;
-  success: boolean;
-  durationMs: number;
-  paramsSummary?: string;
-  errorMessage?: string;
-  modelId?: string;
-}) => Promise<any>) | null = null;
+let toolUsageCallback:
+  | ((data: {
+      userId?: string;
+      sessionId?: string;
+      toolName: string;
+      success: boolean;
+      durationMs: number;
+      paramsSummary?: string;
+      errorMessage?: string;
+      modelId?: string;
+    }) => Promise<any>)
+  | null = null;
 
 /**
  * 注入工具调用记录回调
@@ -99,19 +228,31 @@ function buildToolsMap(): Record<string, ToolDefinition> {
     },
     manage_session: {
       schema: manageSessionSchema,
-      executor: executeManageSession as (params: any, context?: ToolContext) => Promise<any>,
+      executor: executeManageSession as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
     },
     create_plan: {
       schema: createPlanSchema,
-      executor: executeCreatePlan as (params: any, context?: ToolContext) => Promise<any>,
+      executor: executeCreatePlan as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
     },
     update_plan_step: {
       schema: updatePlanStepSchema,
-      executor: executeUpdatePlanStep as (params: any, context?: ToolContext) => Promise<any>,
+      executor: executeUpdatePlanStep as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
     },
     get_plan: {
       schema: getPlanSchema,
-      executor: executeGetPlan as (params: any, context?: ToolContext) => Promise<any>,
+      executor: executeGetPlan as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
     },
     crawl_webpage: {
       schema: crawlWebpageSchema,
@@ -147,11 +288,17 @@ function buildToolsMap(): Record<string, ToolDefinition> {
     },
     generate_document: {
       schema: generateDocumentSchema,
-      executor: executeGenerateDocument as (params: any, context?: ToolContext) => Promise<any>,
+      executor: executeGenerateDocument as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
     },
     execute_workflow: {
       schema: buildExecuteWorkflowSchema(),
-      executor: executeExecuteWorkflow as (params: any, context?: ToolContext) => Promise<any>,
+      executor: executeExecuteWorkflow as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
     },
   };
 
@@ -162,7 +309,9 @@ function buildToolsMap(): Record<string, ToolDefinition> {
     };
     logger.info('工具注册：search_web 已启用', { module: 'ToolRegistry' });
   } else {
-    logger.info('工具注册：search_web 未配置，跳过注册', { module: 'ToolRegistry' });
+    logger.info('工具注册：search_web 未配置，跳过注册', {
+      module: 'ToolRegistry',
+    });
   }
 
   if (isWeatherAvailable()) {
@@ -172,7 +321,9 @@ function buildToolsMap(): Record<string, ToolDefinition> {
     };
     logger.info('工具注册：get_weather 已启用', { module: 'ToolRegistry' });
   } else {
-    logger.info('工具注册：get_weather 未配置，跳过注册', { module: 'ToolRegistry' });
+    logger.info('工具注册：get_weather 未配置，跳过注册', {
+      module: 'ToolRegistry',
+    });
   }
 
   // ---------------- send_notification（飞书/邮件/Webhook 任一通道可用即注册） ----------------
@@ -181,9 +332,13 @@ function buildToolsMap(): Record<string, ToolDefinition> {
       schema: sendNotificationSchema,
       executor: executeSendNotification as (params: any) => Promise<any>,
     };
-    logger.info('工具注册：send_notification 已启用', { module: 'ToolRegistry' });
+    logger.info('工具注册：send_notification 已启用', {
+      module: 'ToolRegistry',
+    });
   } else {
-    logger.info('工具注册：send_notification 未配置，跳过注册', { module: 'ToolRegistry' });
+    logger.info('工具注册：send_notification 未配置，跳过注册', {
+      module: 'ToolRegistry',
+    });
   }
 
   // ---------------- query_database（外部业务库 NL2SQL） ----------------
@@ -194,7 +349,9 @@ function buildToolsMap(): Record<string, ToolDefinition> {
     };
     logger.info('工具注册：query_database 已启用', { module: 'ToolRegistry' });
   } else {
-    logger.info('工具注册：query_database 未配置，跳过注册', { module: 'ToolRegistry' });
+    logger.info('工具注册：query_database 未配置，跳过注册', {
+      module: 'ToolRegistry',
+    });
   }
 
   // ---------------- mcp_proxy（接入 MCP 生态） ----------------
@@ -205,9 +362,14 @@ function buildToolsMap(): Record<string, ToolDefinition> {
       schema: buildMcpProxySchema(),
       executor: executeMcpProxy as (params: any) => Promise<any>,
     };
-    logger.info('工具注册：mcp_proxy 已启用（实际工具列表将在 onModuleInit 后异步加载）', { module: 'ToolRegistry' });
+    logger.info(
+      '工具注册：mcp_proxy 已启用（实际工具列表将在 onModuleInit 后异步加载）',
+      { module: 'ToolRegistry' },
+    );
   } else {
-    logger.info('工具注册：mcp_proxy 未配置 NOTIFY_MCP_SERVERS，跳过注册', { module: 'ToolRegistry' });
+    logger.info('工具注册：mcp_proxy 未配置 NOTIFY_MCP_SERVERS，跳过注册', {
+      module: 'ToolRegistry',
+    });
   }
 
   return tools;
@@ -228,21 +390,23 @@ setWorkflowToolExecutor(async (toolName, params, ctx) => {
 // E1：工作流引擎执行结束后的声明式通知发送器
 // 直接复用 send_notification 工具的执行链路，免去工作流定义里再写一遍发送步骤
 // 设计：notify 配置失败不抛错（仅 warn），但 send_notification 自身的失败仍由其内部 errors 字段携带
-setWorkflowNotifier(async ({ channel, title, content, recipients, webhookUrl }) => {
-  const result = await executeSendNotification({
-    channel,
-    title,
-    content,
-    recipients,
-    webhookUrl,
-  } as any);
-  if (!result?.success) {
-    // 把工具内部的失败原因往上抛，让 dispatchWorkflowNotify 的 try/catch 捕获后只记 warn
-    throw new Error(
-      `send_notification 失败：${(result?.errors ?? ['unknown']).join('; ').slice(0, 200)}`,
-    );
-  }
-});
+setWorkflowNotifier(
+  async ({ channel, title, content, recipients, webhookUrl }) => {
+    const result = await executeSendNotification({
+      channel,
+      title,
+      content,
+      recipients,
+      webhookUrl,
+    } as any);
+    if (!result?.success) {
+      // 把工具内部的失败原因往上抛，让 dispatchWorkflowNotify 的 try/catch 捕获后只记 warn
+      throw new Error(
+        `send_notification 失败：${(result?.errors ?? ['unknown']).join('; ').slice(0, 200)}`,
+      );
+    }
+  },
+);
 
 export function getAllToolSchemas(): any[] {
   return Object.values(TOOLS).map((t) => t.schema);
@@ -258,7 +422,8 @@ export function getAllToolSchemas(): any[] {
  */
 const TOOL_COMPACT_DESCRIPTIONS: Record<string, string> = {
   search_knowledge_base: '搜索知识库文档，涉及已上传文档时使用，不用于通用问题',
-  list_knowledge_base: '列出知识库所有文档清单，用户问知识库有什么内容时使用，不用于搜索具体内容',
+  list_knowledge_base:
+    '列出知识库所有文档清单，用户问知识库有什么内容时使用，不用于搜索具体内容',
   search_web: '联网搜索实时信息，涉及最新新闻或实时数据时使用，不用于查天气',
   get_weather: '查询城市天气，包括实时天气和预报，不用于其他搜索',
   calculate: '执行数学计算，复杂运算时使用，简单加减可直接回答',
@@ -274,7 +439,8 @@ const TOOL_COMPACT_DESCRIPTIONS: Record<string, string> = {
   generate_chart: '生成图表，折线柱状饼图等，数据可视化时使用',
   generate_image: '文生图，根据文字描述生成图片，需要图片时使用',
   create_mindmap: '生成思维导图，整理知识结构梳理逻辑时使用',
-  generate_document: '导出文档文件(PDF/Word/HTML/MD)，只传标题与格式，正文写在回复正文里',
+  generate_document:
+    '导出文档文件(PDF/Word/HTML/MD)，只传标题与格式，正文写在回复正文里',
   execute_workflow: '一键执行预置流水线，多步任务匹配模板时优先用此工具',
   send_notification: '发送通知到飞书邮件Webhook，任务完成或主动提醒时使用',
   query_database: '查询外部业务库执行SELECT语句，需要业务数据时使用',
@@ -285,7 +451,10 @@ const TOOL_COMPACT_DESCRIPTIONS: Record<string, string> = {
  * 预计算的工具参数压缩描述
  * 只为 required 参数提供精简描述，可选参数在压缩模式下会被移除
  */
-const TOOL_COMPACT_PARAM_DESCRIPTIONS: Record<string, Record<string, string>> = {
+const TOOL_COMPACT_PARAM_DESCRIPTIONS: Record<
+  string,
+  Record<string, string>
+> = {
   search_knowledge_base: {
     query: '搜索查询语句',
   },
@@ -417,7 +586,10 @@ function compressSchema(schema: any): any {
  * 当工具数量超过 TOOL_RETRIEVAL_THRESHOLD 且缺少预计算描述时调用
  * 生成后自动写入 TOOL_COMPACT_DESCRIPTIONS，后续请求直接复用
  */
-async function generateCompactDescriptionWithLLM(toolName: string, fullDescription: string): Promise<string> {
+async function generateCompactDescriptionWithLLM(
+  toolName: string,
+  fullDescription: string,
+): Promise<string> {
   // 动态导入避免循环依赖
   const { createLLM, buildModelConfig } = await import('../model-provider.js');
   const { HumanMessage } = await import('@langchain/core/messages');
@@ -436,7 +608,9 @@ async function generateCompactDescriptionWithLLM(toolName: string, fullDescripti
 
   try {
     const result = await llm.invoke([new HumanMessage(prompt)]);
-    const compact = (typeof result.content === 'string' ? result.content : '').trim();
+    const compact = (
+      typeof result.content === 'string' ? result.content : ''
+    ).trim();
     if (compact && compact.length > 0 && compact.length < 60) {
       logger.info('LLM 生成压缩描述成功', {
         module: 'ToolRegistry',
@@ -448,15 +622,23 @@ async function generateCompactDescriptionWithLLM(toolName: string, fullDescripti
       return compact;
     }
     // LLM 输出异常，降级使用原始描述的第一句
-    logger.warn('LLM 生成压缩描述异常，降级处理', { module: 'ToolRegistry', toolName, compact });
-    return fullDescription.split(/[。.]/)[0] || fullDescription.substring(0, 30);
+    logger.warn('LLM 生成压缩描述异常，降级处理', {
+      module: 'ToolRegistry',
+      toolName,
+      compact,
+    });
+    return (
+      fullDescription.split(/[。.]/)[0] || fullDescription.substring(0, 30)
+    );
   } catch (error: any) {
     logger.warn('LLM 生成压缩描述失败，降级处理', {
       module: 'ToolRegistry',
       toolName,
       error: error.message,
     });
-    return fullDescription.split(/[。.]/)[0] || fullDescription.substring(0, 30);
+    return (
+      fullDescription.split(/[。.]/)[0] || fullDescription.substring(0, 30)
+    );
   }
 }
 
@@ -474,7 +656,7 @@ async function ensureCompactDescriptions(): Promise<void> {
   }
 
   // 检查哪些工具缺少压缩描述
-  const missing = allNames.filter(name => !TOOL_COMPACT_DESCRIPTIONS[name]);
+  const missing = allNames.filter((name) => !TOOL_COMPACT_DESCRIPTIONS[name]);
   if (missing.length === 0) return;
 
   logger.info('工具数超过阈值，启动 LLM 辅助生成压缩描述', {
@@ -488,7 +670,10 @@ async function ensureCompactDescriptions(): Promise<void> {
     const tool = TOOLS[name];
     if (!tool?.schema?.function?.description) continue;
 
-    const compact = await generateCompactDescriptionWithLLM(name, tool.schema.function.description);
+    const compact = await generateCompactDescriptionWithLLM(
+      name,
+      tool.schema.function.description,
+    );
     TOOL_COMPACT_DESCRIPTIONS[name] = compact;
   }
 }
@@ -501,7 +686,10 @@ async function ensureCompactDescriptions(): Promise<void> {
  *
  * 异步原因：工具数 > 15 时可能需要调用 LLM 生成压缩描述
  */
-export async function getToolSchemasForModel(modelId: string, options?: { contextLength?: number; supportsFC?: boolean; query?: string }): Promise<any[]> {
+export async function getToolSchemasForModel(
+  modelId: string,
+  options?: { contextLength?: number; supportsFC?: boolean; query?: string },
+): Promise<any[]> {
   // 工具数 > 15 时，确保所有工具都有压缩描述（可能触发 LLM 生成）
   await ensureCompactDescriptions();
 
@@ -534,17 +722,30 @@ export async function getToolSchemasForModel(modelId: string, options?: { contex
   // 长上下文 + FC 能力强：全量注册（如果经过动态选择，则只注册选中的工具）
   if (!needCompress) {
     return allNames
-      .filter(name => TOOLS[name])
-      .map(name => TOOLS[name].schema);
+      .filter((name) => TOOLS[name])
+      .map((name) => TOOLS[name].schema);
   }
 
   // 小上下文或 FC 弱：核心工具 + 压缩 Schema
-  const coreTools = ['search_knowledge_base', 'list_knowledge_base', 'calculate'];
+  const coreTools = [
+    'search_knowledge_base',
+    'list_knowledge_base',
+    'calculate',
+  ];
   // FC 能力弱但上下文够大：多给几个工具（但压缩 Schema）
   // 包含新增的外部 API 集成工具：send_notification / query_database / mcp_proxy
-  const extendedTools = ['search_knowledge_base', 'list_knowledge_base', 'calculate', 'search_web', 'get_weather', 'send_notification', 'query_database', 'mcp_proxy'];
-  const filteredNames = allNames.filter(name =>
-    (effectiveCtx >= 8192 ? extendedTools : coreTools).includes(name)
+  const extendedTools = [
+    'search_knowledge_base',
+    'list_knowledge_base',
+    'calculate',
+    'search_web',
+    'get_weather',
+    'send_notification',
+    'query_database',
+    'mcp_proxy',
+  ];
+  const filteredNames = allNames.filter((name) =>
+    (effectiveCtx >= 8192 ? extendedTools : coreTools).includes(name),
   );
 
   logger.info('模型工具裁剪', {
@@ -558,8 +759,8 @@ export async function getToolSchemasForModel(modelId: string, options?: { contex
   });
 
   return filteredNames
-    .filter(name => TOOLS[name])
-    .map(name => compressSchema(TOOLS[name].schema));
+    .filter((name) => TOOLS[name])
+    .map((name) => compressSchema(TOOLS[name].schema));
 }
 
 // ==================== 动态工具选择（工具 > 15 时激活） ====================
@@ -576,10 +777,13 @@ export async function getToolSchemasForModel(modelId: string, options?: { contex
 const TOOL_SEMANTIC_DESCRIPTIONS: Record<string, string> = {
   search_knowledge_base: '搜索 知识库 文档 上传 文件 查找 资料',
   list_knowledge_base: '列出 概览 清单 有什么 包含 哪些 文档列表 知识库内容',
-  search_web: '!!联网搜索 !!最新新闻 !!实时信息 联网 搜索 网页 互联网 最新 新闻 实时 在线 查询',
-  get_weather: '!!查天气 !!天气预报 天气 气温 温度 下雨 晴天 阴天 湿度 风力 空气质量 预报',
+  search_web:
+    '!!联网搜索 !!最新新闻 !!实时信息 联网 搜索 网页 互联网 最新 新闻 实时 在线 查询',
+  get_weather:
+    '!!查天气 !!天气预报 天气 气温 温度 下雨 晴天 阴天 湿度 风力 空气质量 预报',
   calculate: '!!计算 !!算一下 数学 运算 算术 公式 三角函数 对数 开方 乘除',
-  manage_session: '!!新建会话 !!删除会话 !!切换会话 会话 对话 新建 删除 重命名 置顶 切换 管理',
+  manage_session:
+    '!!新建会话 !!删除会话 !!切换会话 会话 对话 新建 删除 重命名 置顶 切换 管理',
   create_plan: '规划 计划 步骤 任务 分步 执行 复杂 多步骤',
   update_plan_step: '更新 步骤 状态 完成 失败 跳过',
   get_plan: '查看 计划 进度 回顾 状态',
@@ -588,14 +792,19 @@ const TOOL_SEMANTIC_DESCRIPTIONS: Record<string, string> = {
   update_document: '!!更新文档 !!修改文档 更新 修改 编辑 文档 版本 变更',
   summarize_document: '!!生成摘要 !!总结文档 摘要 总结 概括 文档 核心 要点',
   compare_documents: '!!对比文档 !!比较文档 对比 比较 差异 不同 文档 区别',
-  generate_chart: '!!画图 !!生成图表 !!可视化 图表 折线图 柱状图 饼图 数据可视化 绘图',
+  generate_chart:
+    '!!画图 !!生成图表 !!可视化 图表 折线图 柱状图 饼图 数据可视化 绘图',
   generate_image: '!!画图 !!生成图片 !!文生图 图片 画图 生成图 图像 绘画',
   create_mindmap: '!!思维导图 !!脑图 思维导图 脑图 知识结构 逻辑关系 梳理',
-  execute_workflow: '!!执行工作流 !!运行流水线 工作流 流水线 流程 一键 自动化 组合 多步 模板',
+  execute_workflow:
+    '!!执行工作流 !!运行流水线 工作流 流水线 流程 一键 自动化 组合 多步 模板',
   // ---------------- 外部 API 集成工具：意图词重点加权 ----------------
-  send_notification: '!!发邮件 !!发消息 !!发送邮件 !!发送消息 !!发飞书 !!发钉钉 !!发通知 !!推送 !!提醒我 !!告诉 !!通知 通知 提醒 飞书 邮件 邮箱 钉钉 webhook 推送 告诉 发消息 发邮件 发送',
-  query_database: '!!查数据库 !!查表 !!查询数据 !!统计销售 !!统计订单 !!查订单 !!查用户 数据库 查询 SQL 业务数据 统计 订单 销售 用户 表',
-  mcp_proxy: '!!调用MCP !!使用MCP !!MCP工具 MCP GitHub 文件系统 Slack Notion 外部工具 生态 扩展',
+  send_notification:
+    '!!发邮件 !!发消息 !!发送邮件 !!发送消息 !!发飞书 !!发钉钉 !!发通知 !!推送 !!提醒我 !!告诉 !!通知 通知 提醒 飞书 邮件 邮箱 钉钉 webhook 推送 告诉 发消息 发邮件 发送',
+  query_database:
+    '!!查数据库 !!查表 !!查询数据 !!统计销售 !!统计订单 !!查订单 !!查用户 数据库 查询 SQL 业务数据 统计 订单 销售 用户 表',
+  mcp_proxy:
+    '!!调用MCP !!使用MCP !!MCP工具 MCP GitHub 文件系统 Slack Notion 外部工具 生态 扩展',
 };
 
 /** 动态工具选择阈值，工具数超过此值才启用 */
@@ -621,17 +830,19 @@ export function selectToolsByQuery(query: string): string[] {
 
   if (!query || query.trim().length === 0) {
     // 无 query 时返回核心工具
-    const coreTools = allNames.filter(name =>
-      ['search_knowledge_base', 'calculate'].includes(name)
+    const coreTools = allNames.filter((name) =>
+      ['search_knowledge_base', 'calculate'].includes(name),
     );
-    return coreTools.length > 0 ? coreTools : allNames.slice(0, TOOL_RETRIEVAL_TOP_K);
+    return coreTools.length > 0
+      ? coreTools
+      : allNames.slice(0, TOOL_RETRIEVAL_TOP_K);
   }
 
   const queryLower = query.toLowerCase();
   const queryChars = new Set(queryLower.split(''));
 
   // 计算每个工具与 query 的相关性分数
-  const scored = allNames.map(name => {
+  const scored = allNames.map((name) => {
     const desc = TOOL_SEMANTIC_DESCRIPTIONS[name] || name;
     const descLower = desc.toLowerCase();
     let score = 0;
@@ -670,20 +881,27 @@ export function selectToolsByQuery(query: string): string[] {
 
   // 按分数降序排列，取 Top-K
   scored.sort((a, b) => b.score - a.score);
-  const selected = scored.slice(0, TOOL_RETRIEVAL_TOP_K).map(s => s.name);
+  const selected = scored.slice(0, TOOL_RETRIEVAL_TOP_K).map((s) => s.name);
 
   logger.info('动态工具选择', {
     module: 'ToolRegistry',
     query: query.substring(0, 100),
     totalTools: allNames.length,
     selectedTools: selected.join(', '),
-    topScores: scored.slice(0, TOOL_RETRIEVAL_TOP_K).map(s => `${s.name}(${s.score.toFixed(1)})`).join(', '),
+    topScores: scored
+      .slice(0, TOOL_RETRIEVAL_TOP_K)
+      .map((s) => `${s.name}(${s.score.toFixed(1)})`)
+      .join(', '),
   });
 
   return selected;
 }
 
-export async function executeTool(name: string, params: any, context?: ToolContext): Promise<any> {
+export async function executeTool(
+  name: string,
+  params: any,
+  context?: ToolContext,
+): Promise<any> {
   const tool = TOOLS[name];
   if (!tool) {
     logger.error('FC工具注册中心：尝试执行未注册的工具', {
@@ -691,7 +909,9 @@ export async function executeTool(name: string, params: any, context?: ToolConte
       toolName: name,
       availableTools: Object.keys(TOOLS),
     });
-    throw new Error(`未知工具: ${name}，可用工具: ${Object.keys(TOOLS).join(', ')}`);
+    throw new Error(
+      `未知工具: ${name}，可用工具: ${Object.keys(TOOLS).join(', ')}`,
+    );
   }
 
   logger.info('FC工具注册中心：开始执行工具', {
@@ -710,11 +930,16 @@ export async function executeTool(name: string, params: any, context?: ToolConte
     const confirmedPromise = requestConfirmation(name, params);
 
     // 推送确认请求到前端
-    const pendingInfo = getPendingConfirmationInfo(confirmedPromise.confirmationId);
+    const pendingInfo = getPendingConfirmationInfo(
+      confirmedPromise.confirmationId,
+    );
     if (pendingInfo && context?.res) {
       sendConfirmationRequest(context.res, pendingInfo);
       // 关联 SSE Response，让飞书侧审批后能通过 SSE 通知 Web 关闭弹窗
-      attachSseResponseToConfirmation(confirmedPromise.confirmationId, context.res);
+      attachSseResponseToConfirmation(
+        confirmedPromise.confirmationId,
+        context.res,
+      );
     }
 
     const confirmed = await confirmedPromise;
@@ -750,9 +975,10 @@ export async function executeTool(name: string, params: any, context?: ToolConte
     const result = healed.result;
     const duration = Date.now() - startTime;
 
-    const resultSummary = typeof result === 'object' && result !== null
-      ? JSON.stringify(result).substring(0, 500)
-      : String(result).substring(0, 500);
+    const resultSummary =
+      typeof result === 'object' && result !== null
+        ? JSON.stringify(result).substring(0, 500)
+        : String(result).substring(0, 500);
 
     logger.info('FC工具注册中心：工具执行完成', {
       module: 'ToolRegistry',
@@ -772,7 +998,10 @@ export async function executeTool(name: string, params: any, context?: ToolConte
         paramsSummary: JSON.stringify(params).substring(0, 500),
         modelId: context?.modelId,
       }).catch((err: any) => {
-        logger.error('工具调用指标持久化失败', { module: 'ToolRegistry', error: String(err) });
+        logger.error('工具调用指标持久化失败', {
+          module: 'ToolRegistry',
+          error: String(err),
+        });
       });
     }
 
@@ -799,7 +1028,10 @@ export async function executeTool(name: string, params: any, context?: ToolConte
         errorMessage: error.message?.substring(0, 500),
         modelId: context?.modelId,
       }).catch((err: any) => {
-        logger.error('工具调用指标持久化失败', { module: 'ToolRegistry', error: String(err) });
+        logger.error('工具调用指标持久化失败', {
+          module: 'ToolRegistry',
+          error: String(err),
+        });
       });
     }
 
@@ -818,13 +1050,85 @@ export function getAvailableToolNames(): string[] {
 export { initManageSession };
 export { initMcpProxy };
 
-export { searchKnowledgeBaseSchema, executeSearchKnowledgeBase, type SearchKnowledgeBaseParams, type SearchKnowledgeBaseResult };
-export { listKnowledgeBaseSchema, executeListKnowledgeBase, type ListKnowledgeBaseParams, type ListKnowledgeBaseResult };
-export { searchWebSchema, executeSearchWeb, type SearchWebParams, type SearchWebResult, validateSearchWebConfig, isSearchWebAvailable };
-export { getWeatherSchema, executeGetWeather, type GetWeatherParams, type GetWeatherResult, validateWeatherConfig, isWeatherAvailable };
-export { calculateSchema, executeCalculate, type CalculateParams, type CalculateResult };
-export { manageSessionSchema, executeManageSession, type ManageSessionParams, type ManageSessionResult };
-export { createPlanSchema, executeCreatePlan, type CreatePlanParams, type CreatePlanResult, updatePlanStepSchema, executeUpdatePlanStep, type UpdatePlanStepParams, type UpdatePlanStepResult, getPlanSchema, executeGetPlan, type GetPlanResult, resolveDataBindings, getSessionPlan, storeStepOutput, findMatchingStep, preloadSessionPlan };
-export { sendNotificationSchema, executeSendNotification, type SendNotificationParams, type SendNotificationResult, validateSendNotificationConfig, isSendNotificationAvailable };
-export { queryDatabaseSchema, executeQueryDatabase, type QueryDatabaseParams, type QueryDatabaseResult, validateQueryDatabaseConfig, isQueryDatabaseAvailable };
-export { buildMcpProxySchema, executeMcpProxy, type McpProxyParams, type McpProxyResult, validateMcpProxyConfig, isMcpProxyAvailable };
+export {
+  searchKnowledgeBaseSchema,
+  executeSearchKnowledgeBase,
+  type SearchKnowledgeBaseParams,
+  type SearchKnowledgeBaseResult,
+};
+export {
+  listKnowledgeBaseSchema,
+  executeListKnowledgeBase,
+  type ListKnowledgeBaseParams,
+  type ListKnowledgeBaseResult,
+};
+export {
+  searchWebSchema,
+  executeSearchWeb,
+  type SearchWebParams,
+  type SearchWebResult,
+  validateSearchWebConfig,
+  isSearchWebAvailable,
+};
+export {
+  getWeatherSchema,
+  executeGetWeather,
+  type GetWeatherParams,
+  type GetWeatherResult,
+  validateWeatherConfig,
+  isWeatherAvailable,
+};
+export {
+  calculateSchema,
+  executeCalculate,
+  type CalculateParams,
+  type CalculateResult,
+};
+export {
+  manageSessionSchema,
+  executeManageSession,
+  type ManageSessionParams,
+  type ManageSessionResult,
+};
+export {
+  createPlanSchema,
+  executeCreatePlan,
+  type CreatePlanParams,
+  type CreatePlanResult,
+  updatePlanStepSchema,
+  executeUpdatePlanStep,
+  type UpdatePlanStepParams,
+  type UpdatePlanStepResult,
+  getPlanSchema,
+  executeGetPlan,
+  type GetPlanResult,
+  resolveDataBindings,
+  getSessionPlan,
+  storeStepOutput,
+  findMatchingStep,
+  preloadSessionPlan,
+};
+export {
+  sendNotificationSchema,
+  executeSendNotification,
+  type SendNotificationParams,
+  type SendNotificationResult,
+  validateSendNotificationConfig,
+  isSendNotificationAvailable,
+};
+export {
+  queryDatabaseSchema,
+  executeQueryDatabase,
+  type QueryDatabaseParams,
+  type QueryDatabaseResult,
+  validateQueryDatabaseConfig,
+  isQueryDatabaseAvailable,
+};
+export {
+  buildMcpProxySchema,
+  executeMcpProxy,
+  type McpProxyParams,
+  type McpProxyResult,
+  validateMcpProxyConfig,
+  isMcpProxyAvailable,
+};

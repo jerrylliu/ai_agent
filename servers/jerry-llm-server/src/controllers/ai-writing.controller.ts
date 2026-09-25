@@ -5,7 +5,11 @@
 import { Controller, Post, Body, Res, Req, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard.js';
-import { streamCompletion, invokeCompletion, type CompletionMode } from '../fundamentals/ai-writing.service.js';
+import {
+  streamCompletion,
+  invokeCompletion,
+  type CompletionMode,
+} from '../fundamentals/ai-writing.service.js';
 import { logger } from '../fundamentals/logger.js';
 
 @Controller('ai')
@@ -27,7 +31,8 @@ export class AiWritingController {
    */
   @Post('completion')
   async completion(
-    @Body() body: {
+    @Body()
+    body: {
       mode?: CompletionMode;
       context?: string;
       instruction?: string;
@@ -85,7 +90,8 @@ export class AiWritingController {
    */
   @Post('complete')
   async complete(
-    @Body() body: {
+    @Body()
+    body: {
       mode?: CompletionMode;
       context?: string;
       instruction?: string;
@@ -123,12 +129,15 @@ export class AiWritingController {
       );
       res.json({ success: true, suggestion });
     } catch (err) {
-      const isAbort = abortController.signal.aborted || (err as Error).name === 'AbortError';
+      const isAbort =
+        abortController.signal.aborted || (err as Error).name === 'AbortError';
       if (!res.writableEnded) {
         if (isAbort) {
           res.json({ success: false, message: '客户端取消' });
         } else {
-          res.status(500).json({ success: false, message: (err as Error).message });
+          res
+            .status(500)
+            .json({ success: false, message: (err as Error).message });
         }
       }
     }

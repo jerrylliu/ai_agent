@@ -6,7 +6,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // 阻断 model-provider / langchain 真实加载（schema 测试不需要它们）
@@ -71,7 +76,10 @@ describe('updateDocumentSchema', () => {
   });
 
   it('documentId=0 应被拦截（必须 positive）', () => {
-    const r = updateDocumentParamsSchema.safeParse({ documentId: 0, content: 'x' });
+    const r = updateDocumentParamsSchema.safeParse({
+      documentId: 0,
+      content: 'x',
+    });
     expect(r.success).toBe(false);
   });
 

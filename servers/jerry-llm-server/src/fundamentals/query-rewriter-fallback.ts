@@ -42,7 +42,10 @@ const REWRITE_DEVIATION_THRESHOLD = 0.3;
 // ==================== 类型 ====================
 
 /** 不使用改写后查询的原因 */
-export type FallbackReason = 'rewrite_failed' | 'no_rewrite' | 'semantic_deviation';
+export type FallbackReason =
+  | 'rewrite_failed'
+  | 'no_rewrite'
+  | 'semantic_deviation';
 
 /** 改写质量评估结果 */
 export interface RewriteEvaluation {

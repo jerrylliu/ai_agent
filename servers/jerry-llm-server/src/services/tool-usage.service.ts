@@ -50,14 +50,21 @@ export class ToolUsageService {
     });
 
     const totalCalls = records.length;
-    const successCalls = records.filter(r => r.success).length;
-    const successRate = totalCalls > 0 ? Math.round((successCalls / totalCalls) * 100) / 100 : 0;
-    const avgDuration = totalCalls > 0
-      ? Math.round(records.reduce((sum, r) => sum + r.durationMs, 0) / totalCalls)
-      : 0;
+    const successCalls = records.filter((r) => r.success).length;
+    const successRate =
+      totalCalls > 0 ? Math.round((successCalls / totalCalls) * 100) / 100 : 0;
+    const avgDuration =
+      totalCalls > 0
+        ? Math.round(
+            records.reduce((sum, r) => sum + r.durationMs, 0) / totalCalls,
+          )
+        : 0;
 
     // 按工具名聚合
-    const byTool: Record<string, { calls: number; successRate: number; avgDurationMs: number }> = {};
+    const byTool: Record<
+      string,
+      { calls: number; successRate: number; avgDurationMs: number }
+    > = {};
     for (const r of records) {
       if (!byTool[r.toolName]) {
         byTool[r.toolName] = { calls: 0, successRate: 0, avgDurationMs: 0 };
@@ -65,16 +72,22 @@ export class ToolUsageService {
       byTool[r.toolName].calls++;
     }
     for (const [name, stat] of Object.entries(byTool)) {
-      const toolRecords = records.filter(r => r.toolName === name);
-      const toolSuccess = toolRecords.filter(r => r.success).length;
-      stat.successRate = stat.calls > 0 ? Math.round((toolSuccess / stat.calls) * 100) / 100 : 0;
-      stat.avgDurationMs = stat.calls > 0
-        ? Math.round(toolRecords.reduce((sum, r) => sum + r.durationMs, 0) / stat.calls)
-        : 0;
+      const toolRecords = records.filter((r) => r.toolName === name);
+      const toolSuccess = toolRecords.filter((r) => r.success).length;
+      stat.successRate =
+        stat.calls > 0 ? Math.round((toolSuccess / stat.calls) * 100) / 100 : 0;
+      stat.avgDurationMs =
+        stat.calls > 0
+          ? Math.round(
+              toolRecords.reduce((sum, r) => sum + r.durationMs, 0) /
+                stat.calls,
+            )
+          : 0;
     }
 
     // 按天聚合
-    const dailyStats: Record<string, { calls: number; successCalls: number }> = {};
+    const dailyStats: Record<string, { calls: number; successCalls: number }> =
+      {};
     for (const r of records) {
       const day = new Date(r.createdAt).toISOString().slice(0, 10);
       if (!dailyStats[day]) {

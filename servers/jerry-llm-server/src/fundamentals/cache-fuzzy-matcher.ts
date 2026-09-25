@@ -190,22 +190,36 @@ export class CacheFuzzyMatcher {
   ): FuzzyMatchResult {
     const entries = this.index.get(sessionId);
     if (!entries || entries.length === 0 || keywords.length === 0) {
-      return { matched: false, cacheKey: null, similarity: 0, matchedKeywords: null };
+      return {
+        matched: false,
+        cacheKey: null,
+        similarity: 0,
+        matchedKeywords: null,
+      };
     }
 
     const currentKeywordsSet = tokenizeKeywords(keywords);
     if (currentKeywordsSet.size === 0) {
-      return { matched: false, cacheKey: null, similarity: 0, matchedKeywords: null };
+      return {
+        matched: false,
+        cacheKey: null,
+        similarity: 0,
+        matchedKeywords: null,
+      };
     }
 
     // 遍历索引，找相似度最高且槽位兼容的
-    let bestMatch: { entry: CacheKeyIndexEntry; similarity: number } | null = null;
+    let bestMatch: { entry: CacheKeyIndexEntry; similarity: number } | null =
+      null;
 
     for (const entry of entries) {
       // 槽位不兼容直接跳过（防止误伤不同意图）
       if (!isSlotsCompatible(slots, entry.slots)) continue;
 
-      const similarity = jaccardSimilarity(currentKeywordsSet, entry.keywordsSet);
+      const similarity = jaccardSimilarity(
+        currentKeywordsSet,
+        entry.keywordsSet,
+      );
       if (similarity >= FUZZY_MATCH_THRESHOLD) {
         if (!bestMatch || similarity > bestMatch.similarity) {
           bestMatch = { entry, similarity };
@@ -238,7 +252,12 @@ export class CacheFuzzyMatcher {
       indexedCount: entries.length,
       threshold: FUZZY_MATCH_THRESHOLD,
     });
-    return { matched: false, cacheKey: null, similarity: 0, matchedKeywords: null };
+    return {
+      matched: false,
+      cacheKey: null,
+      similarity: 0,
+      matchedKeywords: null,
+    };
   }
 
   /**

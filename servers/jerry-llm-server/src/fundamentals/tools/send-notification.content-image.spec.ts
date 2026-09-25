@@ -13,7 +13,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../config', () => ({
@@ -109,8 +114,14 @@ beforeEach(() => {
   mockDetectReceiveIdType.mockReturnValue('chat_id');
   mockSendCardMessage.mockResolvedValue({ success: true, messageId: 'card-1' });
   mockUploadImage.mockResolvedValue({ success: true, key: 'img_key_1' });
-  mockSendImageMessage.mockResolvedValue({ success: true, messageId: 'img-msg-1' });
-  mockBuildCardJson.mockImplementation((params: unknown) => ({ __card: true, params }));
+  mockSendImageMessage.mockResolvedValue({
+    success: true,
+    messageId: 'img-msg-1',
+  });
+  mockBuildCardJson.mockImplementation((params: unknown) => ({
+    __card: true,
+    params,
+  }));
 });
 
 afterAll(() => {
@@ -155,7 +166,9 @@ describe('email 通道：正文图片自动转附件', () => {
     const mail = mockSendMail.mock.calls[0][0];
     // b.png（手动传入，正文重复出现但未重复提取） + a.png（自动提取一次）
     expect(mail.attachments).toHaveLength(2);
-    const filenames = mail.attachments.map((a: { filename: string }) => a.filename).sort();
+    const filenames = mail.attachments
+      .map((a: { filename: string }) => a.filename)
+      .sort();
     expect(filenames).toEqual(['a.png', 'b-manual.png']);
   });
 });
@@ -165,7 +178,8 @@ describe('feishu 通道：正文图片自动转附件', () => {
     const result = await executeSendNotification({
       channel: 'feishu',
       title: '液氮资料',
-      content: '检索结果如下：\n![图片 1](http://localhost:3000/images/68/img_0.png)',
+      content:
+        '检索结果如下：\n![图片 1](http://localhost:3000/images/68/img_0.png)',
       recipients: ['oc_chat123'],
     });
     expect(result.success).toBe(true);

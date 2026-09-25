@@ -59,7 +59,9 @@ describe('feishu-fake-response', () => {
     const editor = makeEditor();
     const { res } = createFeishuFakeResponse(editor);
 
-    res.write(sseFrame('tool_status', { tool: 'search_web', status: 'running' }));
+    res.write(
+      sseFrame('tool_status', { tool: 'search_web', status: 'running' }),
+    );
     res.write(sseFrame('metadata', { foo: 1 }));
     res.write(sseFrame('heartbeat', {}));
     res.write(sseFrame('workflow_step_started', { stepId: 's1' }));
@@ -74,7 +76,12 @@ describe('feishu-fake-response', () => {
       onConfirmationRequest: onConfirm,
     });
 
-    res.write(sseFrame('confirmation_request', { id: 'cf_1', toolName: 'send_notification' }));
+    res.write(
+      sseFrame('confirmation_request', {
+        id: 'cf_1',
+        toolName: 'send_notification',
+      }),
+    );
 
     expect(onConfirm).toHaveBeenCalledWith({
       id: 'cf_1',

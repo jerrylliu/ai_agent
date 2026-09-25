@@ -57,7 +57,12 @@ export function createFeishuFakeResponse(
     write(chunk: any): boolean {
       if (writableEnded) return false;
       try {
-        const raw = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+        const raw =
+          typeof chunk === 'string'
+            ? chunk
+            : Buffer.isBuffer(chunk)
+              ? chunk.toString('utf8')
+              : String(chunk);
         const frames = parseSSEFrame(raw);
         for (const f of frames) {
           if (f.eventType === 'content') {
@@ -73,10 +78,13 @@ export function createFeishuFakeResponse(
             try {
               const info = JSON.parse(f.eventData);
               options?.onConfirmationRequest?.(info);
-              logger.info('飞书 fakeRes：忽略 confirmation_request（飞书侧暂不支持工具审批）', {
-                module: 'FeishuFakeResponse',
-                toolName: info?.toolName,
-              });
+              logger.info(
+                '飞书 fakeRes：忽略 confirmation_request（飞书侧暂不支持工具审批）',
+                {
+                  module: 'FeishuFakeResponse',
+                  toolName: info?.toolName,
+                },
+              );
             } catch {
               /* ignore */
             }

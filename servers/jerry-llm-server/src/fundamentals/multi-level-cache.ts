@@ -246,7 +246,12 @@ export class MultiLevelCache<V> {
 
     try {
       const ttl = this.computeTtlWithJitter();
-      await redis.set(this.buildRedisKey(rawKey), JSON.stringify(value), 'EX', ttl);
+      await redis.set(
+        this.buildRedisKey(rawKey),
+        JSON.stringify(value),
+        'EX',
+        ttl,
+      );
       if (this.debug) {
         logger.debug('MultiLevelCache: 已写入 L2', {
           module: 'MultiLevelCache',
@@ -334,7 +339,8 @@ export class MultiLevelCache<V> {
       l2Errors: this.l2Errors,
       total,
       l1HitRate: total === 0 ? 0 : +(this.l1Hits / total).toFixed(4),
-      overallHitRate: total === 0 ? 0 : +((this.l1Hits + this.l2Hits) / total).toFixed(4),
+      overallHitRate:
+        total === 0 ? 0 : +((this.l1Hits + this.l2Hits) / total).toFixed(4),
       l1Size: this.l1.size,
       l1MaxSize: this.l1MaxSize,
     };

@@ -90,7 +90,12 @@ describe('feishu-asset-sync', () => {
 
       expect(mockChartPng).toHaveBeenCalledTimes(1);
       expect(mockUploadImage).toHaveBeenCalledWith('', expect.any(Buffer));
-      expect(mockSendImageMessage).toHaveBeenCalledWith('ou_1', 'open_id', 'img_key', expect.any(String));
+      expect(mockSendImageMessage).toHaveBeenCalledWith(
+        'ou_1',
+        'open_id',
+        'img_key',
+        expect.any(String),
+      );
     });
 
     it('思维导图应渲染 PNG 并以原生 image 消息发送（群聊 chat_id）', async () => {
@@ -105,7 +110,12 @@ describe('feishu-asset-sync', () => {
       });
 
       expect(mockMindmapPng).toHaveBeenCalledTimes(1);
-      expect(mockSendImageMessage).toHaveBeenCalledWith('oc_1', 'chat_id', 'img_key', expect.any(String));
+      expect(mockSendImageMessage).toHaveBeenCalledWith(
+        'oc_1',
+        'chat_id',
+        'img_key',
+        expect.any(String),
+      );
     });
 
     it('文档应上传并以原生 file 消息发送', async () => {
@@ -114,21 +124,40 @@ describe('feishu-asset-sync', () => {
         receiveIdType: 'chat_id',
         charts: [],
         mindmaps: [],
-        documents: [{ key: 'doc_k', filename: '科技.pdf', buffer: Buffer.from('pdf') }],
+        documents: [
+          { key: 'doc_k', filename: '科技.pdf', buffer: Buffer.from('pdf') },
+        ],
         idempotencyBase: 'base3',
         sessionId: 's1',
       });
 
-      expect(mockUploadFile).toHaveBeenCalledWith('fc://document/doc_k', '科技.pdf', expect.any(Buffer));
-      expect(mockSendFileMessage).toHaveBeenCalledWith('oc_1', 'chat_id', 'file_key', expect.any(String));
+      expect(mockUploadFile).toHaveBeenCalledWith(
+        'fc://document/doc_k',
+        '科技.pdf',
+        expect.any(Buffer),
+      );
+      expect(mockSendFileMessage).toHaveBeenCalledWith(
+        'oc_1',
+        'chat_id',
+        'file_key',
+        expect.any(String),
+      );
     });
 
     it('同一会话同一文档只同步一次（去重，防时间窗口重复发）', async () => {
-      const doc = { key: 'doc_dup', filename: '报告.pdf', buffer: Buffer.from('pdf') };
+      const doc = {
+        key: 'doc_dup',
+        filename: '报告.pdf',
+        buffer: Buffer.from('pdf'),
+      };
       const params = {
-        receiveId: 'oc_1', receiveIdType: 'chat_id' as const,
-        charts: [], mindmaps: [], documents: [doc],
-        idempotencyBase: 'b', sessionId: 's_dup',
+        receiveId: 'oc_1',
+        receiveIdType: 'chat_id' as const,
+        charts: [],
+        mindmaps: [],
+        documents: [doc],
+        idempotencyBase: 'b',
+        sessionId: 's_dup',
       };
       await syncRichAssetsToFeishu(params);
       await syncRichAssetsToFeishu(params); // 第二次（模拟 10 分钟窗口内再次触发）
@@ -155,19 +184,30 @@ describe('feishu-asset-sync', () => {
 
     it('同一 idempotencyBase 派生稳定 uuid（重复调用 uuid 一致）', async () => {
       await syncRichAssetsToFeishu({
-        receiveId: 'ou_1', receiveIdType: 'open_id',
-        charts: ['{"a":1}'], mindmaps: [], documents: [],
-        idempotencyBase: 'fixed', sessionId: 's1',
+        receiveId: 'ou_1',
+        receiveIdType: 'open_id',
+        charts: ['{"a":1}'],
+        mindmaps: [],
+        documents: [],
+        idempotencyBase: 'fixed',
+        sessionId: 's1',
       });
       const firstUuid = mockSendImageMessage.mock.calls[0][3];
       jest.clearAllMocks();
       mockUploadImage.mockResolvedValue({ success: true, key: 'img_key' });
-      mockSendImageMessage.mockResolvedValue({ success: true, messageId: 'm1' });
+      mockSendImageMessage.mockResolvedValue({
+        success: true,
+        messageId: 'm1',
+      });
       mockChartPng.mockResolvedValue(PNG_DATA_URI);
       await syncRichAssetsToFeishu({
-        receiveId: 'ou_1', receiveIdType: 'open_id',
-        charts: ['{"a":1}'], mindmaps: [], documents: [],
-        idempotencyBase: 'fixed', sessionId: 's1',
+        receiveId: 'ou_1',
+        receiveIdType: 'open_id',
+        charts: ['{"a":1}'],
+        mindmaps: [],
+        documents: [],
+        idempotencyBase: 'fixed',
+        sessionId: 's1',
       });
       expect(mockSendImageMessage.mock.calls[0][3]).toBe(firstUuid);
     });

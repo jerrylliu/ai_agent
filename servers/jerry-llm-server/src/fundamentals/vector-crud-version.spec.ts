@@ -18,26 +18,54 @@ jest.mock('./logger', () => ({
 
 jest.mock('./runtime-config', () => ({
   getRuntimeConfig: () => ({
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+    },
     // store-state.ts 在模块加载时会读取 embedding.localEnabled 推导初始生效模式，
     // mock 必须提供该字段；测试环境无 Ollama，置为 false 直接走云端分支，避免网络探测
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   }),
   updateRuntimeConfig: jest.fn(),
   loadRuntimeConfig: jest.fn(),
   saveRuntimeConfig: jest.fn(),
   DEFAULT_RUNTIME_CONFIG: {
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+    },
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   },
 }));
@@ -65,13 +93,19 @@ describe('vector-crud / vector-version 事件触发', () => {
     it('addDocuments 应触发 knowledge-base-updated 事件（reason: 文档添加）', () => {
       eventBus.emit('knowledge-base-updated', '文档添加');
 
-      expect(emitSpy).toHaveBeenCalledWith('knowledge-base-updated', '文档添加');
+      expect(emitSpy).toHaveBeenCalledWith(
+        'knowledge-base-updated',
+        '文档添加',
+      );
     });
 
     it('deleteDocuments 应触发 knowledge-base-updated 事件（reason: 文档删除）', () => {
       eventBus.emit('knowledge-base-updated', '文档删除');
 
-      expect(emitSpy).toHaveBeenCalledWith('knowledge-base-updated', '文档删除');
+      expect(emitSpy).toHaveBeenCalledWith(
+        'knowledge-base-updated',
+        '文档删除',
+      );
     });
   });
 
@@ -81,19 +115,28 @@ describe('vector-crud / vector-version 事件触发', () => {
     it('clearKnowledgeBase 应触发 knowledge-base-updated 事件（reason: 知识库清空）', () => {
       eventBus.emit('knowledge-base-updated', '知识库清空');
 
-      expect(emitSpy).toHaveBeenCalledWith('knowledge-base-updated', '知识库清空');
+      expect(emitSpy).toHaveBeenCalledWith(
+        'knowledge-base-updated',
+        '知识库清空',
+      );
     });
 
     it('removeDocumentVersion 应触发 knowledge-base-updated 事件（reason: 版本删除）', () => {
       eventBus.emit('knowledge-base-updated', '版本删除');
 
-      expect(emitSpy).toHaveBeenCalledWith('knowledge-base-updated', '版本删除');
+      expect(emitSpy).toHaveBeenCalledWith(
+        'knowledge-base-updated',
+        '版本删除',
+      );
     });
 
     it('updateVersionVectorStatus 应触发 knowledge-base-updated 事件（reason: 版本状态变更）', () => {
       eventBus.emit('knowledge-base-updated', '版本状态变更');
 
-      expect(emitSpy).toHaveBeenCalledWith('knowledge-base-updated', '版本状态变更');
+      expect(emitSpy).toHaveBeenCalledWith(
+        'knowledge-base-updated',
+        '版本状态变更',
+      );
     });
   });
 
@@ -123,7 +166,13 @@ describe('vector-crud / vector-version 事件触发', () => {
     });
 
     it('所有 5 种事件原因都应触发缓存清空', () => {
-      const reasons = ['文档添加', '文档删除', '知识库清空', '版本删除', '版本状态变更'];
+      const reasons = [
+        '文档添加',
+        '文档删除',
+        '知识库清空',
+        '版本删除',
+        '版本状态变更',
+      ];
 
       for (const reason of reasons) {
         searchCache.set(`key-${reason}`, { data: reason });

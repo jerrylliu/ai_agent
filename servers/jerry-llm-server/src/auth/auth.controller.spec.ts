@@ -33,7 +33,13 @@ jest.mock('../fundamentals/config', () => ({
   config: {
     jwtSecret: 'test-secret',
     serverBaseUrl: 'http://localhost:3000',
-    db: { host: 'localhost', port: 3306, username: 'r', password: '', database: 't' },
+    db: {
+      host: 'localhost',
+      port: 3306,
+      username: 'r',
+      password: '',
+      database: 't',
+    },
     ollamaBaseUrl: 'http://localhost:11434',
     chromaUrl: 'http://localhost:8000',
     chromaHost: 'localhost',
@@ -147,7 +153,10 @@ describe('AuthController', () => {
    * ==================================================================*/
   describe('updateProfile', () => {
     it('应委托 AuthService.updateProfile', async () => {
-      authService.updateProfile.mockResolvedValue({ id: 'u1', avatar: 'x.jpg' });
+      authService.updateProfile.mockResolvedValue({
+        id: 'u1',
+        avatar: 'x.jpg',
+      });
       const req = { user: { sub: 'u1' } };
       const body = { avatar: 'x.jpg' };
       const r = await controller.updateProfile(req, body);
@@ -165,7 +174,11 @@ describe('AuthController', () => {
       const req = { user: { sub: 'u1' } };
       const body = { oldPassword: 'old', newPassword: 'new' };
       const r = await controller.changePassword(req, body as any);
-      expect(authService.changePassword).toHaveBeenCalledWith('u1', 'old', 'new');
+      expect(authService.changePassword).toHaveBeenCalledWith(
+        'u1',
+        'old',
+        'new',
+      );
       expect(r).toEqual({ success: true });
     });
   });
@@ -201,24 +214,44 @@ describe('AuthController', () => {
   describe('uploadAvatar', () => {
     it('缺少文件时应抛出 BadRequest', async () => {
       const req = { user: { sub: 'u1' } };
-      await expect(controller.uploadAvatar(req, undefined)).rejects.toThrow(BadRequestException);
-      await expect(controller.uploadAvatar(req, null)).rejects.toThrow(BadRequestException);
+      await expect(controller.uploadAvatar(req, undefined)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(controller.uploadAvatar(req, null)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('不支持的文件类型应抛出 BadRequest', async () => {
       const req = { user: { sub: 'u1' } };
-      const file = { mimetype: 'text/plain', size: 1000, originalname: 'doc.txt', buffer: Buffer.from('') };
-      await expect(controller.uploadAvatar(req, file)).rejects.toThrow(BadRequestException);
+      const file = {
+        mimetype: 'text/plain',
+        size: 1000,
+        originalname: 'doc.txt',
+        buffer: Buffer.from(''),
+      };
+      await expect(controller.uploadAvatar(req, file)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('文件过大应抛出 BadRequest', async () => {
       const req = { user: { sub: 'u1' } };
-      const file = { mimetype: 'image/png', size: 30 * 1024 * 1024, originalname: 'big.png', buffer: Buffer.from('') };
-      await expect(controller.uploadAvatar(req, file)).rejects.toThrow(BadRequestException);
+      const file = {
+        mimetype: 'image/png',
+        size: 30 * 1024 * 1024,
+        originalname: 'big.png',
+        buffer: Buffer.from(''),
+      };
+      await expect(controller.uploadAvatar(req, file)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('有效头像应更新用户资料', async () => {
-      authService.updateProfile.mockResolvedValue({ avatar: 'http://localhost:3000/files/avatars/1_a.png' });
+      authService.updateProfile.mockResolvedValue({
+        avatar: 'http://localhost:3000/files/avatars/1_a.png',
+      });
       const req = { user: { sub: 'u1' } };
       const buffer = Buffer.from('fake');
       const file = {

@@ -17,7 +17,9 @@ jest.mock('@nestjs/typeorm', () => ({
 import { OptionalAuthGuard } from './optional-auth.guard';
 
 describe('OptionalAuthGuard', () => {
-  function makeMockAuthService(overrides: { verifyToken?: any; getUserById?: any } = {}) {
+  function makeMockAuthService(
+    overrides: { verifyToken?: any; getUserById?: any } = {},
+  ) {
     return {
       verifyToken: overrides.verifyToken ?? jest.fn(),
       getUserById: overrides.getUserById ?? jest.fn(),
@@ -80,7 +82,9 @@ describe('OptionalAuthGuard', () => {
    * Token 验证失败 → 放行，userId = default
    * ==================================================================*/
   it('verifyToken 返回 null 时应放行', async () => {
-    const authService = makeMockAuthService({ verifyToken: jest.fn().mockReturnValue(null) });
+    const authService = makeMockAuthService({
+      verifyToken: jest.fn().mockReturnValue(null),
+    });
     const guard = new OptionalAuthGuard(authService);
     const ctx = makeContext('Bearer invalid');
     const req = ctx.switchToHttp().getRequest();

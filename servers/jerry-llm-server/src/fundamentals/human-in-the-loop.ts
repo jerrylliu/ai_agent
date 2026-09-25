@@ -18,7 +18,12 @@
  */
 
 import { logger } from './logger';
-import { sendCardMessage, buildCardJson, detectReceiveIdType, updateCard } from './feishu-notify.service';
+import {
+  sendCardMessage,
+  buildCardJson,
+  detectReceiveIdType,
+  updateCard,
+} from './feishu-notify.service';
 import { sendConfirmationResolved } from './sse-writer';
 import { metrics } from './metrics';
 import type { Response } from 'express';
@@ -49,18 +54,32 @@ const CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
  * 需要人工确认的工具列表及其风险等级和提示信息
  * 对于有多种操作的工具，可通过 actionFilter 指定哪些操作需要确认
  */
-const CONFIRMATION_CONFIG: Record<string, {
-  riskLevel: 'low' | 'medium' | 'high';
-  message: string;
-  paramSummary: (params: any) => string;
-  actionFilter?: string[];
-}> = {
+const CONFIRMATION_CONFIG: Record<
+  string,
+  {
+    riskLevel: 'low' | 'medium' | 'high';
+    message: string;
+    paramSummary: (params: any) => string;
+    actionFilter?: string[];
+  }
+> = {
   manage_session: {
     riskLevel: 'medium',
     message: '即将执行会话管理操作',
-    paramSummary: (params) => `操作：${params.action}${params.title ? `，标题：${params.title}` : ''}${params.session_id ? `，会话ID：${params.session_id}` : ''}`,
+    paramSummary: (params) =>
+      `操作：${params.action}${params.title ? `，标题：${params.title}` : ''}${params.session_id ? `，会话ID：${params.session_id}` : ''}`,
     // 只有破坏性操作需要确认，只读操作（list/search/list_tags）不需要
-    actionFilter: ['delete', 'create', 'rename', 'pin', 'unpin', 'switch', 'add_tag', 'remove_tag', 'set_category'],
+    actionFilter: [
+      'delete',
+      'create',
+      'rename',
+      'pin',
+      'unpin',
+      'switch',
+      'add_tag',
+      'remove_tag',
+      'set_category',
+    ],
   },
 
   // ---------------- 三大外部 API 工具：均需要用户确认 ----------------
@@ -70,8 +89,11 @@ const CONFIRMATION_CONFIG: Record<string, {
     message: '即将发送通知，请确认后再继续',
     paramSummary: (params) => {
       const channel = params.channel || '?';
-      const recipients = Array.isArray(params.recipients) ? params.recipients.join(', ') : '';
-      const target = params.channel === 'webhook' ? params.webhookUrl : recipients;
+      const recipients = Array.isArray(params.recipients)
+        ? params.recipients.join(', ')
+        : '';
+      const target =
+        params.channel === 'webhook' ? params.webhookUrl : recipients;
       return `通道：${channel}${target ? `，目标：${String(target).slice(0, 80)}` : ''}，标题：${(params.title || '').slice(0, 40)}`;
     },
   },
@@ -88,7 +110,8 @@ const CONFIRMATION_CONFIG: Record<string, {
   mcp_proxy: {
     riskLevel: 'high',
     message: '即将调用 MCP 外部工具，可能产生副作用',
-    paramSummary: (params) => `${params.server}.${params.tool}（${JSON.stringify(params.arguments || {}).slice(0, 100)}）`,
+    paramSummary: (params) =>
+      `${params.server}.${params.tool}（${JSON.stringify(params.arguments || {}).slice(0, 100)}）`,
   },
 };
 
@@ -164,7 +187,13 @@ export function requestConfirmation(
 
     // 飞书双通道：如果配置了 HITL 接收人，并行推送飞书卡片
     // 失败不影响 Web 端正常审批流程
-    void sendFeishuConfirmationCard(id, toolName, config.riskLevel, config.message, paramsSummary).then((result) => {
+    void sendFeishuConfirmationCard(
+      id,
+      toolName,
+      config.riskLevel,
+      config.message,
+      paramsSummary,
+    ).then((result) => {
       if (result && pendingConfirmations.has(id)) {
         const entry = pendingConfirmations.get(id)!;
         entry.feishuMessageId = result.messageId;
@@ -270,7 +299,12 @@ export function handleConfirmationResponse(
   // 双通道协同：如果 Web 端先确认，且飞书卡片已发出，则反向更新飞书卡片
   // 避免飞书侧用户看到一张永远停在"待审批"的死卡片
   if (source === 'web' && pending.feishuMessageId) {
-    void updateFeishuHITLCard(pending.feishuMessageId, pending.toolName, confirmed, 'Web 端用户').catch((e) => {
+    void updateFeishuHITLCard(
+      pending.feishuMessageId,
+      pending.toolName,
+      confirmed,
+      'Web 端用户',
+    ).catch((e) => {
       logger.warn('双通道：反向更新飞书卡片失败', {
         module: 'HumanInTheLoop',
         confirmationId,
@@ -286,7 +320,9 @@ export function handleConfirmationResponse(
  * 获取确认请求关联的飞书消息 ID（供 feishu-event.controller 在飞书侧确认后更新卡片）
  * 由于 handleConfirmationResponse 调用后会删除 entry，所以需要在调用前先取一次
  */
-export function getFeishuMessageIdForConfirmation(confirmationId: string): string | undefined {
+export function getFeishuMessageIdForConfirmation(
+  confirmationId: string,
+): string | undefined {
   return pendingConfirmations.get(confirmationId)?.feishuMessageId;
 }
 
@@ -330,8 +366,16 @@ export function registerConfirmationConfig(
 /** 飞书 HITL 确认卡片：审批结果值 */
 function buildHITLButtons(confirmationId: string) {
   return [
-    { text: '✅ 确认执行', value: { action: 'confirm', confirmation_id: confirmationId }, type: 'primary' as const },
-    { text: '❌ 拒绝', value: { action: 'reject', confirmation_id: confirmationId }, type: 'danger' as const },
+    {
+      text: '✅ 确认执行',
+      value: { action: 'confirm', confirmation_id: confirmationId },
+      type: 'primary' as const,
+    },
+    {
+      text: '❌ 拒绝',
+      value: { action: 'reject', confirmation_id: confirmationId },
+      type: 'danger' as const,
+    },
   ];
 }
 
@@ -356,7 +400,12 @@ async function sendFeishuConfirmationCard(
     const card = buildCardJson({
       title: `🔐 操作确认：${toolName}`,
       content: `${message}\n\n**${riskLevel === 'high' ? '⚠️ 高' : riskLevel === 'medium' ? '⚡ 中' : 'ℹ️ 低'}风险操作**\n\`${paramsSummary}\``,
-      headerColor: riskLevel === 'high' ? 'red' : riskLevel === 'medium' ? 'yellow' : 'blue',
+      headerColor:
+        riskLevel === 'high'
+          ? 'red'
+          : riskLevel === 'medium'
+            ? 'yellow'
+            : 'blue',
       buttons: buildHITLButtons(confirmationId),
     });
 
@@ -404,7 +453,9 @@ export function buildHITLResolvedCard(
   operator: string,
 ): Record<string, unknown> {
   const resultIcon = confirmed ? '✅ 已确认' : '❌ 已拒绝';
-  const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+  const timestamp = new Date().toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+  });
   return buildCardJson({
     title: `🔐 操作确认：${toolName}（已处理）`,
     content: `${resultIcon}\n\n操作者：${operator}\n时间：${timestamp}`,
@@ -429,7 +480,9 @@ export async function updateFeishuHITLCard(
   operator: string,
 ): Promise<void> {
   const resultIcon = confirmed ? '✅ 已确认' : '❌ 已拒绝';
-  const timestamp = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+  const timestamp = new Date().toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+  });
   const card = buildCardJson({
     title: `🔐 操作确认：${toolName}（已处理）`,
     content: `${resultIcon}\n\n操作者：${operator}\n时间：${timestamp}`,

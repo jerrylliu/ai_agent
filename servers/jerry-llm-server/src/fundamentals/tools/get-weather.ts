@@ -82,21 +82,28 @@ const QWeatherHourlySchema = z.looseObject({
 
 const QWEATHER_API_KEY = config.qweatherApiKey;
 const _rawApiBase = config.qweatherApiBase;
-const QWEATHER_API_BASE = _rawApiBase.startsWith('http') ? _rawApiBase : `https://${_rawApiBase}`;
+const QWEATHER_API_BASE = _rawApiBase.startsWith('http')
+  ? _rawApiBase
+  : `https://${_rawApiBase}`;
 const WEATHER_API_TIMEOUT_MS = 10000;
 
 let resolvedApiBase: string | null = null;
 
 // 判断是否为自定义Host（非标准 devapi/api 域名）
-const isCustomHost = !QWEATHER_API_BASE.includes('devapi.qweather.com') && !QWEATHER_API_BASE.includes('api.qweather.com');
+const isCustomHost =
+  !QWEATHER_API_BASE.includes('devapi.qweather.com') &&
+  !QWEATHER_API_BASE.includes('api.qweather.com');
 
 let weatherAvailable = false;
 
 export function validateWeatherConfig(): boolean {
   if (!QWEATHER_API_KEY || QWEATHER_API_KEY.startsWith('TODO')) {
-    logger.warn('get_weather 工具未配置：QWEATHER_API_KEY 未设置或仍为占位符，天气查询功能不可用', {
-      module: 'Tool:GetWeather',
-    });
+    logger.warn(
+      'get_weather 工具未配置：QWEATHER_API_KEY 未设置或仍为占位符，天气查询功能不可用',
+      {
+        module: 'Tool:GetWeather',
+      },
+    );
     weatherAvailable = false;
     return false;
   }
@@ -224,20 +231,24 @@ export interface WeatherHourly {
   updateTime: string;
 }
 
-export type GetWeatherResult = {
-  type: 'now';
-  data: WeatherNow;
-} | {
-  type: 'daily';
-  data: WeatherDaily;
-} | {
-  type: 'hourly';
-  data: WeatherHourly;
-} | {
-  type: 'error';
-  error: string;
-  city: string;
-};
+export type GetWeatherResult =
+  | {
+      type: 'now';
+      data: WeatherNow;
+    }
+  | {
+      type: 'daily';
+      data: WeatherDaily;
+    }
+  | {
+      type: 'hourly';
+      data: WeatherHourly;
+    }
+  | {
+      type: 'error';
+      error: string;
+      city: string;
+    };
 
 async function lookupCityId(cityName: string): Promise<string> {
   if (/^\d+$/.test(cityName)) {
@@ -256,7 +267,10 @@ async function lookupCityId(cityName: string): Promise<string> {
   });
 
   const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), WEATHER_API_TIMEOUT_MS);
+  const timeoutId = setTimeout(
+    () => abortController.abort(),
+    WEATHER_API_TIMEOUT_MS,
+  );
 
   try {
     const headers: Record<string, string> = {};
@@ -264,7 +278,10 @@ async function lookupCityId(cityName: string): Promise<string> {
       headers['X-QW-Api-Key'] = QWEATHER_API_KEY;
     }
 
-    const response = await fetch(url, { signal: abortController.signal, headers });
+    const response = await fetch(url, {
+      signal: abortController.signal,
+      headers,
+    });
     const responseText = await response.text();
 
     logger.info('FC工具 [get_weather] 城市查询API原始响应', {
@@ -320,21 +337,30 @@ async function lookupCityId(cityName: string): Promise<string> {
   }
 }
 
-async function fetchWeatherNow(cityId: string, cityName: string): Promise<WeatherNow> {
+async function fetchWeatherNow(
+  cityId: string,
+  cityName: string,
+): Promise<WeatherNow> {
   const apiBase = await resolveApiBase();
   const url = isCustomHost
     ? `${apiBase}/v7/weather/now?location=${cityId}`
     : `${apiBase}/v7/weather/now?location=${cityId}&key=${QWEATHER_API_KEY}`;
 
   const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), WEATHER_API_TIMEOUT_MS);
+  const timeoutId = setTimeout(
+    () => abortController.abort(),
+    WEATHER_API_TIMEOUT_MS,
+  );
 
   try {
     const headers: Record<string, string> = {};
     if (isCustomHost) {
       headers['X-QW-Api-Key'] = QWEATHER_API_KEY;
     }
-    const response = await fetch(url, { signal: abortController.signal, headers });
+    const response = await fetch(url, {
+      signal: abortController.signal,
+      headers,
+    });
     const responseText = await response.text();
 
     logger.info('FC工具 [get_weather] API原始响应', {
@@ -355,12 +381,16 @@ async function fetchWeatherNow(cityId: string, cityName: string): Promise<Weathe
       cityId,
     });
     if (!parsed.success) {
-      throw new Error(`和风天气 /v7/weather/now 响应不符合预期结构: ${parsed.reason}`);
+      throw new Error(
+        `和风天气 /v7/weather/now 响应不符合预期结构: ${parsed.reason}`,
+      );
     }
     const data = parsed.data;
 
     if (data.code !== '200') {
-      throw new Error(`和风天气API返回错误码: ${data.code}，响应: ${JSON.stringify(data).substring(0, 300)}`);
+      throw new Error(
+        `和风天气API返回错误码: ${data.code}，响应: ${JSON.stringify(data).substring(0, 300)}`,
+      );
     }
 
     const now = data.now;
@@ -387,21 +417,30 @@ async function fetchWeatherNow(cityId: string, cityName: string): Promise<Weathe
   }
 }
 
-async function fetchWeatherDaily(cityId: string, cityName: string): Promise<WeatherDaily> {
+async function fetchWeatherDaily(
+  cityId: string,
+  cityName: string,
+): Promise<WeatherDaily> {
   const apiBase = await resolveApiBase();
   const url = isCustomHost
     ? `${apiBase}/v7/weather/7d?location=${cityId}`
     : `${apiBase}/v7/weather/7d?location=${cityId}&key=${QWEATHER_API_KEY}`;
 
   const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), WEATHER_API_TIMEOUT_MS);
+  const timeoutId = setTimeout(
+    () => abortController.abort(),
+    WEATHER_API_TIMEOUT_MS,
+  );
 
   try {
     const headers: Record<string, string> = {};
     if (isCustomHost) {
       headers['X-QW-Api-Key'] = QWEATHER_API_KEY;
     }
-    const response = await fetch(url, { signal: abortController.signal, headers });
+    const response = await fetch(url, {
+      signal: abortController.signal,
+      headers,
+    });
     const responseText = await response.text();
 
     const parsed = parseToolResultJson(responseText, QWeather7dSchema, {
@@ -410,7 +449,9 @@ async function fetchWeatherDaily(cityId: string, cityName: string): Promise<Weat
       cityId,
     });
     if (!parsed.success) {
-      throw new Error(`和风天气 /v7/weather/7d 响应不符合预期结构: ${parsed.reason}`);
+      throw new Error(
+        `和风天气 /v7/weather/7d 响应不符合预期结构: ${parsed.reason}`,
+      );
     }
     const data = parsed.data;
 
@@ -443,21 +484,30 @@ async function fetchWeatherDaily(cityId: string, cityName: string): Promise<Weat
   }
 }
 
-async function fetchWeatherHourly(cityId: string, cityName: string): Promise<WeatherHourly> {
+async function fetchWeatherHourly(
+  cityId: string,
+  cityName: string,
+): Promise<WeatherHourly> {
   const apiBase = await resolveApiBase();
   const url = isCustomHost
     ? `${apiBase}/v7/weather/24h?location=${cityId}`
     : `${apiBase}/v7/weather/24h?location=${cityId}&key=${QWEATHER_API_KEY}`;
 
   const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), WEATHER_API_TIMEOUT_MS);
+  const timeoutId = setTimeout(
+    () => abortController.abort(),
+    WEATHER_API_TIMEOUT_MS,
+  );
 
   try {
     const headers: Record<string, string> = {};
     if (isCustomHost) {
       headers['X-QW-Api-Key'] = QWEATHER_API_KEY;
     }
-    const response = await fetch(url, { signal: abortController.signal, headers });
+    const response = await fetch(url, {
+      signal: abortController.signal,
+      headers,
+    });
     const responseText = await response.text();
 
     const parsed = parseToolResultJson(responseText, QWeatherHourlySchema, {
@@ -466,7 +516,9 @@ async function fetchWeatherHourly(cityId: string, cityName: string): Promise<Wea
       cityId,
     });
     if (!parsed.success) {
-      throw new Error(`和风天气 /v7/weather/24h 响应不符合预期结构: ${parsed.reason}`);
+      throw new Error(
+        `和风天气 /v7/weather/24h 响应不符合预期结构: ${parsed.reason}`,
+      );
     }
     const data = parsed.data;
 
@@ -604,9 +656,12 @@ function formatWeatherResult(result: GetWeatherResult): GetWeatherResult {
 
   if (result.type === 'daily') {
     const d = result.data;
-    const forecastText = d.forecasts.map(f =>
-      `${f.fxDate}：${f.textDay}转${f.textNight}，${f.tempMin}°C~${f.tempMax}°C，${f.windDirDay}${f.windScaleDay}级，湿度${f.humidity}%`
-    ).join('\n');
+    const forecastText = d.forecasts
+      .map(
+        (f) =>
+          `${f.fxDate}：${f.textDay}转${f.textNight}，${f.tempMin}°C~${f.tempMax}°C，${f.windDirDay}${f.windScaleDay}级，湿度${f.humidity}%`,
+      )
+      .join('\n');
     return {
       ...result,
       data: {
@@ -618,10 +673,12 @@ function formatWeatherResult(result: GetWeatherResult): GetWeatherResult {
 
   if (result.type === 'hourly') {
     const d = result.data;
-    const forecastText = d.forecasts.map(f => {
-      const time = f.fxTime.replace(/T/, ' ').replace(/\+.*$/, '');
-      return `${time}：${f.text}，${f.temp}°C，${f.windDir}${f.windScale}级，湿度${f.humidity}%`;
-    }).join('\n');
+    const forecastText = d.forecasts
+      .map((f) => {
+        const time = f.fxTime.replace(/T/, ' ').replace(/\+.*$/, '');
+        return `${time}：${f.text}，${f.temp}°C，${f.windDir}${f.windScale}级，湿度${f.humidity}%`;
+      })
+      .join('\n');
     return {
       ...result,
       data: {

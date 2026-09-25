@@ -63,13 +63,15 @@ jest.mock('./redis-client', () => ({
       },
       set: async (key: string, value: string, mode?: string, ttl?: number) => {
         state.setCalls += 1;
-        const expiresAt = mode === 'PX' && typeof ttl === 'number' ? Date.now() + ttl : 0;
+        const expiresAt =
+          mode === 'PX' && typeof ttl === 'number' ? Date.now() + ttl : 0;
         state.store.set(key, { value, expiresAt });
         return 'OK';
       },
     };
   },
-  isRedisReady: () => ((globalThis as any).__feishuRedisMock as RedisMockState).ready,
+  isRedisReady: () =>
+    ((globalThis as any).__feishuRedisMock as RedisMockState).ready,
 }));
 
 // mock logger：避免测试输出污染
@@ -242,7 +244,11 @@ describe('FeishuNotifyService', () => {
         title: 't',
         content: 'c',
         buttons: [
-          { text: '确认', value: { action: 'confirm', cid: '123' }, type: 'primary' },
+          {
+            text: '确认',
+            value: { action: 'confirm', cid: '123' },
+            type: 'primary',
+          },
         ],
       }) as any;
       const actionEl = card.elements.find((e: any) => e.tag === 'action');
@@ -288,7 +294,11 @@ describe('FeishuNotifyService', () => {
       // 第一次：返回 token + 发送结果
       fetchSpy
         .mockResolvedValueOnce(
-          mockFetchResponse({ code: 0, tenant_access_token: 't_xxx', expire: 7200 }),
+          mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't_xxx',
+            expire: 7200,
+          }),
         )
         .mockResolvedValueOnce(
           mockFetchResponse({ code: 0, data: { message_id: 'om_001' } }),
@@ -315,12 +325,19 @@ describe('FeishuNotifyService', () => {
     it('L2 命中时不应调用远端飞书 Token 接口', async () => {
       // 预置 L2 中已有未过期 token
       redisMock.ready = true;
-      const key = 'jerry:feishu:tenant_token:https://open.feishu.cn/open-apis:test-app-id';
+      const key =
+        'jerry:feishu:tenant_token:https://open.feishu.cn/open-apis:test-app-id';
       // 注意：模块内 key 不包含 ioredis 的 keyPrefix（那是 client 透明添加的）
-      redisMock.store.set('feishu:tenant_token:https://open.feishu.cn/open-apis:test-app-id', {
-        value: JSON.stringify({ token: 'token-from-redis', expiresAt: Date.now() + 60_000 }),
-        expiresAt: Date.now() + 60_000,
-      });
+      redisMock.store.set(
+        'feishu:tenant_token:https://open.feishu.cn/open-apis:test-app-id',
+        {
+          value: JSON.stringify({
+            token: 'token-from-redis',
+            expiresAt: Date.now() + 60_000,
+          }),
+          expiresAt: Date.now() + 60_000,
+        },
+      );
 
       // 只 mock 发送消息，不 mock token 接口；若代码错误走远端，fetch 会因为缺 mock 返回 undefined
       fetchSpy.mockResolvedValueOnce(
@@ -342,7 +359,11 @@ describe('FeishuNotifyService', () => {
       redisMock.ready = true;
       fetchSpy
         .mockResolvedValueOnce(
-          mockFetchResponse({ code: 0, tenant_access_token: 't_remote', expire: 7200 }),
+          mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't_remote',
+            expire: 7200,
+          }),
         )
         .mockResolvedValueOnce(
           mockFetchResponse({ code: 0, data: { message_id: 'om_l2_miss' } }),
@@ -371,7 +392,11 @@ describe('FeishuNotifyService', () => {
       expect(redisMock.ready).toBe(false);
       fetchSpy
         .mockResolvedValueOnce(
-          mockFetchResponse({ code: 0, tenant_access_token: 't_local', expire: 7200 }),
+          mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't_local',
+            expire: 7200,
+          }),
         )
         .mockResolvedValueOnce(
           mockFetchResponse({ code: 0, data: { message_id: 'om_no_redis' } }),
@@ -398,7 +423,10 @@ describe('FeishuNotifyService', () => {
             expire: 7200,
           });
         }
-        return mockFetchResponse({ code: 0, data: { message_id: 'om_concurrent' } });
+        return mockFetchResponse({
+          code: 0,
+          data: { message_id: 'om_concurrent' },
+        });
       });
 
       // 同进程 5 个并发发送（同一 cacheKey）
@@ -511,7 +539,10 @@ describe('FeishuNotifyService', () => {
       fetchSpy.mockResolvedValueOnce(
         mockFetchResponse({ code: 0, data: { message_id: 'om_card_001' } }),
       );
-      const r = await sendCardMessage('ou_x', 'open_id', { header: {}, elements: [] });
+      const r = await sendCardMessage('ou_x', 'open_id', {
+        header: {},
+        elements: [],
+      });
       expect(r.success).toBe(true);
       expect(r.messageId).toBe('om_card_001');
     });
@@ -620,7 +651,11 @@ describe('FeishuNotifyService', () => {
     it('首次反查成功应缓存', async () => {
       fetchSpy
         .mockResolvedValueOnce(
-          mockFetchResponse({ code: 0, tenant_access_token: 't', expire: 7200 }),
+          mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't',
+            expire: 7200,
+          }),
         )
         .mockResolvedValueOnce(
           mockFetchResponse({
@@ -642,7 +677,11 @@ describe('FeishuNotifyService', () => {
     it('飞书返回非 0 应返回 null', async () => {
       fetchSpy
         .mockResolvedValueOnce(
-          mockFetchResponse({ code: 0, tenant_access_token: 't', expire: 7200 }),
+          mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't',
+            expire: 7200,
+          }),
         )
         .mockResolvedValueOnce(
           mockFetchResponse({ code: 99991664, msg: 'no permission' }),
@@ -654,7 +693,11 @@ describe('FeishuNotifyService', () => {
     it('用户列表里没有该邮箱应返回 null', async () => {
       fetchSpy
         .mockResolvedValueOnce(
-          mockFetchResponse({ code: 0, tenant_access_token: 't', expire: 7200 }),
+          mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't',
+            expire: 7200,
+          }),
         )
         .mockResolvedValueOnce(
           mockFetchResponse({ code: 0, data: { user_list: [] } }),
@@ -666,7 +709,11 @@ describe('FeishuNotifyService', () => {
     it('网络异常应返回 null', async () => {
       fetchSpy
         .mockResolvedValueOnce(
-          mockFetchResponse({ code: 0, tenant_access_token: 't', expire: 7200 }),
+          mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't',
+            expire: 7200,
+          }),
         )
         .mockRejectedValueOnce(new Error('network unreachable'));
       const r = await resolveOpenIdByEmail('x@y.com');
@@ -676,7 +723,11 @@ describe('FeishuNotifyService', () => {
     it('clearEmailCache 后应再次发起请求', async () => {
       fetchSpy
         .mockResolvedValueOnce(
-          mockFetchResponse({ code: 0, tenant_access_token: 't', expire: 7200 }),
+          mockFetchResponse({
+            code: 0,
+            tenant_access_token: 't',
+            expire: 7200,
+          }),
         )
         .mockResolvedValueOnce(
           mockFetchResponse({

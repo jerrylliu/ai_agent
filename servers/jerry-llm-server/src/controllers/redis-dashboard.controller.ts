@@ -30,7 +30,10 @@ export class RedisDashboardController {
   @Get('redis-dashboard')
   async dashboard(@Res() res: Response) {
     // 将 keyPrefix 注入 HTML，避免 JS 模板字符串歧义
-    const html = DASHBOARD_HTML.replace('__KEY_PREFIX__', config.redis.keyPrefix);
+    const html = DASHBOARD_HTML.replace(
+      '__KEY_PREFIX__',
+      config.redis.keyPrefix,
+    );
     res.type('text/html').send(html);
   }
 
@@ -52,7 +55,13 @@ export class RedisDashboardController {
     };
 
     if (!redis || !connected) {
-      return { ...base, error: 'Redis 未连接', keys: {}, server: null, memory: null };
+      return {
+        ...base,
+        error: 'Redis 未连接',
+        keys: {},
+        server: null,
+        memory: null,
+      };
     }
 
     try {
@@ -68,7 +77,9 @@ export class RedisDashboardController {
 
       // 解析 server info
       const server = this.parseInfoSection(info, [
-        'redis_version', 'uptime_in_seconds', 'uptime_in_days',
+        'redis_version',
+        'uptime_in_seconds',
+        'uptime_in_days',
         'total_commands_processed',
       ]);
       // connected_clients 在 clients section
@@ -79,8 +90,10 @@ export class RedisDashboardController {
 
       // 解析 memory info
       const memory = this.parseInfoSection(memInfo, [
-        'used_memory_human', 'used_memory_peak_human',
-        'maxmemory_human', 'mem_fragmentation_ratio',
+        'used_memory_human',
+        'used_memory_peak_human',
+        'maxmemory_human',
+        'mem_fragmentation_ratio',
       ]);
 
       // 按业务分类统计 key
@@ -92,10 +105,24 @@ export class RedisDashboardController {
         this.getLockDetails(redis, allKeys),
       ]);
 
-      return { ...base, keys, server, memory, rateLimitDetails, lockDetails, totalKeys: allKeys.length };
+      return {
+        ...base,
+        keys,
+        server,
+        memory,
+        rateLimitDetails,
+        lockDetails,
+        totalKeys: allKeys.length,
+      };
     } catch (e: any) {
       logger.warn('RedisDashboard: 获取状态失败', { err: e.message });
-      return { ...base, error: e.message, keys: {}, server: null, memory: null };
+      return {
+        ...base,
+        error: e.message,
+        keys: {},
+        server: null,
+        memory: null,
+      };
     }
   }
 
@@ -104,7 +131,9 @@ export class RedisDashboardController {
    * KEYS * 会阻塞 Redis 主线程，key 多时导致服务不可用；
    * SCAN 是增量式遍历，不阻塞。
    */
-  private async scanAllKeys(redis: NonNullable<ReturnType<typeof getRedis>>): Promise<string[]> {
+  private async scanAllKeys(
+    redis: NonNullable<ReturnType<typeof getRedis>>,
+  ): Promise<string[]> {
     const keys: string[] = [];
     let cursor = '0';
     do {
@@ -116,7 +145,10 @@ export class RedisDashboardController {
   }
 
   /** 解析 Redis INFO 输出为 key-value 对象 */
-  private parseInfoSection(info: string | null, fields: string[]): Record<string, string> {
+  private parseInfoSection(
+    info: string | null,
+    fields: string[],
+  ): Record<string, string> {
     if (!info) return {};
     const result: Record<string, string> = {};
     for (const line of info.split('\n')) {
@@ -149,8 +181,11 @@ export class RedisDashboardController {
    * 获取限流 ZSET 详情（使用 pipeline 批量执行，减少 RTT）
    * pipeline 将多条命令打包成一次网络往返，比逐条执行快 5-10 倍
    */
-  private async getRateLimitDetails(redis: NonNullable<ReturnType<typeof getRedis>>, allKeys: string[]) {
-    const rlKeys = allKeys.filter(k => k.includes('rate-limit')).slice(0, 20);
+  private async getRateLimitDetails(
+    redis: NonNullable<ReturnType<typeof getRedis>>,
+    allKeys: string[],
+  ) {
+    const rlKeys = allKeys.filter((k) => k.includes('rate-limit')).slice(0, 20);
     if (rlKeys.length === 0) return [];
 
     // pipeline 批量执行 ZCARD + TTL
@@ -182,8 +217,11 @@ export class RedisDashboardController {
   /**
    * 获取锁详情（使用 pipeline 批量执行）
    */
-  private async getLockDetails(redis: NonNullable<ReturnType<typeof getRedis>>, allKeys: string[]) {
-    const lockKeys = allKeys.filter(k => k.includes(':lock:')).slice(0, 20);
+  private async getLockDetails(
+    redis: NonNullable<ReturnType<typeof getRedis>>,
+    allKeys: string[],
+  ) {
+    const lockKeys = allKeys.filter((k) => k.includes(':lock:')).slice(0, 20);
     if (lockKeys.length === 0) return [];
 
     // pipeline 批量执行 GET + TTL

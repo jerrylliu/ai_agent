@@ -47,9 +47,12 @@ export function getRedis(): Redis | null {
   if (!config.redis.enabled) {
     if (!initAttempted) {
       initAttempted = true;
-      logger.info('Redis 未启用（REDIS_ENABLED=false），所有 Redis 能力将走内存降级', {
-        module: 'RedisClient',
-      });
+      logger.info(
+        'Redis 未启用（REDIS_ENABLED=false），所有 Redis 能力将走内存降级',
+        {
+          module: 'RedisClient',
+        },
+      );
     }
     return null;
   }
@@ -92,7 +95,10 @@ export function getRedis(): Redis | null {
   try {
     client = new Redis(options);
   } catch (e: any) {
-    logger.error('Redis 客户端初始化失败', { module: 'RedisClient', err: e.message });
+    logger.error('Redis 客户端初始化失败', {
+      module: 'RedisClient',
+      err: e.message,
+    });
     return null;
   }
 
@@ -155,7 +161,10 @@ export function waitForRedisReady(timeoutMs = 5000): Promise<boolean> {
 
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      logger.warn('等待 Redis 就绪超时，降级跳过', { module: 'RedisClient', timeoutMs });
+      logger.warn('等待 Redis 就绪超时，降级跳过', {
+        module: 'RedisClient',
+        timeoutMs,
+      });
       resolve(false);
     }, timeoutMs);
 
@@ -177,7 +186,10 @@ export async function closeRedis(): Promise<void> {
     await client.quit();
     logger.info('Redis 已优雅关闭', { module: 'RedisClient' });
   } catch (e: any) {
-    logger.warn('Redis 关闭失败，强制断开', { module: 'RedisClient', err: e.message });
+    logger.warn('Redis 关闭失败，强制断开', {
+      module: 'RedisClient',
+      err: e.message,
+    });
     client.disconnect();
   } finally {
     client = null;

@@ -13,7 +13,12 @@
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 
 // logger mock（防止 winston 加载链）
-const mockLogger = { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
+const mockLogger = {
+  log: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+  debug: jest.fn(),
+};
 jest.mock('nest-winston', () => ({
   WINSTON_MODULE_NEST_PROVIDER: 'WINSTON_MODULE_NEST_PROVIDER',
 }));
@@ -21,11 +26,21 @@ jest.mock('nest-winston', () => ({
 // fundamentals/logger.ts 顶层会调 WinstonModule.forRoot()，nest-winston 被 mock 成只暴露
 // 常量后会报 undefined.forRoot —— 这里直接 mock 掉 logger.ts，避免触发 winston 链路
 jest.mock('../fundamentals/logger.js', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
   WinstonLoggerModule: {},
 }));
 jest.mock('../fundamentals/logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
   WinstonLoggerModule: {},
 }));
 
@@ -45,7 +60,10 @@ jest.mock('../fundamentals/human-in-the-loop.js', () => ({
   updateFeishuHITLCard: jest.fn().mockResolvedValue({ success: true }),
   buildHITLResolvedCard: jest.fn().mockReturnValue({
     config: { wide_screen_mode: true },
-    header: { template: 'green', title: { tag: 'plain_text', content: 'resolved' } },
+    header: {
+      template: 'green',
+      title: { tag: 'plain_text', content: 'resolved' },
+    },
     elements: [],
   }),
 }));
@@ -260,7 +278,9 @@ describe('FeishuEventController', () => {
 
     it('open_message_id 缺失时应尝试 fallback 查询 HITL 内置 Map', async () => {
       (handleConfirmationResponse as jest.Mock).mockReturnValue(true);
-      (getFeishuMessageIdForConfirmation as jest.Mock).mockReturnValue('om_fallback');
+      (getFeishuMessageIdForConfirmation as jest.Mock).mockReturnValue(
+        'om_fallback',
+      );
 
       await controller.handleFeishuEvent({
         schema: '2.0',
@@ -285,7 +305,9 @@ describe('FeishuEventController', () => {
 
     it('open_message_id + fallback 都没有时应跳过异步 PATCH，但同步卡片仍返回', async () => {
       (handleConfirmationResponse as jest.Mock).mockReturnValue(true);
-      (getFeishuMessageIdForConfirmation as jest.Mock).mockReturnValue(undefined);
+      (getFeishuMessageIdForConfirmation as jest.Mock).mockReturnValue(
+        undefined,
+      );
 
       const result: any = await controller.handleFeishuEvent({
         schema: '2.0',
@@ -318,7 +340,11 @@ describe('FeishuEventController', () => {
           context: { open_message_id: 'om_x' },
         },
       });
-      expect(buildHITLResolvedCard).toHaveBeenCalledWith('操作', true, '飞书用户 unknown');
+      expect(buildHITLResolvedCard).toHaveBeenCalledWith(
+        '操作',
+        true,
+        '飞书用户 unknown',
+      );
     });
   });
 

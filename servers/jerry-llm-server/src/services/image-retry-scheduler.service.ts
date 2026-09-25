@@ -22,7 +22,10 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { ImageDescription } from '../entities/image-description.entity.js';
 import { Document } from '../entities/document.entity.js';
-import { DocumentVersion, VersionStatus } from '../entities/document-version.entity.js';
+import {
+  DocumentVersion,
+  VersionStatus,
+} from '../entities/document-version.entity.js';
 import { logger } from '../fundamentals/logger.js';
 import { config } from '../fundamentals/config.js';
 import {
@@ -253,11 +256,15 @@ export class ImageRetrySchedulerService {
     versionStatus: VersionStatus | undefined,
   ): Promise<'success' | 'failed' | 'skipped'> {
     // S2-3 修复：版本已归档或不存在时跳过重试，避免写入错误状态的向量块
-    if (versionStatus === undefined || versionStatus === VersionStatus.ARCHIVED) {
+    if (
+      versionStatus === undefined ||
+      versionStatus === VersionStatus.ARCHIVED
+    ) {
       record.status = 'skipped' as const;
-      record.errorMessage = versionStatus === undefined
-        ? '版本不存在，跳过重试'
-        : '版本已归档，跳过重试';
+      record.errorMessage =
+        versionStatus === undefined
+          ? '版本不存在，跳过重试'
+          : '版本已归档，跳过重试';
       record.updatedAt = new Date();
       await this.imageDescriptionRepo.save(record);
       logger.warn('图片重试：版本不可用，标记 skipped', {
@@ -322,7 +329,10 @@ export class ImageRetrySchedulerService {
         existingImagePath: record.imagePath,
       });
     } catch (translateErr: unknown) {
-      const errMsg = translateErr instanceof Error ? translateErr.message : String(translateErr);
+      const errMsg =
+        translateErr instanceof Error
+          ? translateErr.message
+          : String(translateErr);
       logger.error('图片重试：translateImage 抛出异常', {
         module: 'ImageRetryScheduler',
         recordId: record.id,
@@ -378,9 +388,7 @@ export class ImageRetrySchedulerService {
 
     // 合并 description + caption：标题作为标签追加到描述后面
     // caption 来自文档中图片前面的标题文本，让 BM25 检索能通过标题关键词找到图片
-    const captionLine = record.caption
-      ? `\n【标题】${record.caption}`
-      : '';
+    const captionLine = record.caption ? `\n【标题】${record.caption}` : '';
 
     const chunkInput: ImageChunkInput = {
       description: translationResult.description + captionLine,

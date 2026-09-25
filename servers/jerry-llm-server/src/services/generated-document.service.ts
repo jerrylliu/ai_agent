@@ -40,7 +40,10 @@ export class GeneratedDocumentService {
   private ensureDir(): void {
     if (!fs.existsSync(this.storageDir)) {
       fs.mkdirSync(this.storageDir, { recursive: true });
-      logger.info('文档存储目录已创建', { module: 'GeneratedDocumentService', dir: this.storageDir });
+      logger.info('文档存储目录已创建', {
+        module: 'GeneratedDocumentService',
+        dir: this.storageDir,
+      });
     }
   }
 
@@ -51,7 +54,10 @@ export class GeneratedDocumentService {
       const key = crypto.randomBytes(12).toString('base64url').slice(0, 16);
       const exists = await this.repo.findOne({ where: { key } });
       if (!exists) return key;
-      logger.warn('genKey 碰撞，重试', { module: 'GeneratedDocumentService', attempt: i + 1 });
+      logger.warn('genKey 碰撞，重试', {
+        module: 'GeneratedDocumentService',
+        attempt: i + 1,
+      });
     }
     // 极端情况：5 次都碰撞，加长 key 到 24 字符
     return crypto.randomBytes(18).toString('base64url').slice(0, 24);
@@ -84,9 +90,14 @@ export class GeneratedDocumentService {
     // 先写磁盘，如果后续入库失败则回滚删除文件
     fs.writeFileSync(absPath, params.buffer);
 
-    const checksum = crypto.createHash('sha256').update(params.buffer).digest('hex');
+    const checksum = crypto
+      .createHash('sha256')
+      .update(params.buffer)
+      .digest('hex');
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + config.document.ttlDays * 24 * 60 * 60 * 1000);
+    const expiresAt = new Date(
+      now.getTime() + config.document.ttlDays * 24 * 60 * 60 * 1000,
+    );
 
     const entity = this.repo.create({
       key,
@@ -165,7 +176,10 @@ export class GeneratedDocumentService {
    * @param key 文档 key
    * @param userId 当前请求的 userId（用于权限校验，传 null 跳过校验，仅供内部如邮件发送使用）
    */
-  async read(key: string, userId: string | null): Promise<{ entity: GeneratedDocument; buffer: Buffer } | null> {
+  async read(
+    key: string,
+    userId: string | null,
+  ): Promise<{ entity: GeneratedDocument; buffer: Buffer } | null> {
     const entity = await this.findByKey(key);
     if (!entity) return null;
 
@@ -196,7 +210,11 @@ export class GeneratedDocumentService {
 
     // 续期 lastAccessedAt（不阻塞主流程，错误忽略）
     this.repo.update(entity.id, { lastAccessedAt: new Date() }).catch((err) => {
-      logger.warn('更新 lastAccessedAt 失败', { module: 'GeneratedDocumentService', key, error: err?.message });
+      logger.warn('更新 lastAccessedAt 失败', {
+        module: 'GeneratedDocumentService',
+        key,
+        error: err?.message,
+      });
     });
 
     return { entity, buffer };
@@ -208,7 +226,10 @@ export class GeneratedDocumentService {
    * @param sessionId 会话标识
    * @param afterMs 只返回 createdAt 晚于此毫秒时间戳的文档（防止把历史文档重复同步）
    */
-  async listRecentBySession(sessionId: string, afterMs: number): Promise<GeneratedDocument[]> {
+  async listRecentBySession(
+    sessionId: string,
+    afterMs: number,
+  ): Promise<GeneratedDocument[]> {
     const all = await this.repo.find({
       where: { sessionId },
       order: { createdAt: 'ASC' },
@@ -230,9 +251,16 @@ export class GeneratedDocumentService {
    *   - 闲置条件：lastAccessedAt 超过 idleDays 且不为 NULL（NULL 行视为从未访问，也应清理）
    *   - 去重：expired 和 idle 结果可能有交集，使用 Set 按 id 去重
    */
-  async cleanup(): Promise<{ deletedExpired: number; deletedIdle: number; deletedKeys: string[]; deletedBySession: Map<string, string[]> }> {
+  async cleanup(): Promise<{
+    deletedExpired: number;
+    deletedIdle: number;
+    deletedKeys: string[];
+    deletedBySession: Map<string, string[]>;
+  }> {
     const now = new Date();
-    const idleThreshold = new Date(now.getTime() - config.document.idleDays * 24 * 60 * 60 * 1000);
+    const idleThreshold = new Date(
+      now.getTime() - config.document.idleDays * 24 * 60 * 60 * 1000,
+    );
 
     // 1. 硬过期（排除收藏）
     const expired = await this.repo.find({
@@ -300,7 +328,11 @@ export class GeneratedDocumentService {
       return false;
     }
     await this.deleteEntity(entity);
-    logger.info('用户主动删除文档', { module: 'GeneratedDocumentService', key, userId });
+    logger.info('用户主动删除文档', {
+      module: 'GeneratedDocumentService',
+      key,
+      userId,
+    });
     return true;
   }
 
@@ -308,7 +340,11 @@ export class GeneratedDocumentService {
    * 切换收藏状态（收藏后不再参与自动清理）
    * @returns 更新后的实体；null 表示文档不存在或权限不足
    */
-  async setFavorite(key: string, userId: string | null, favorited: boolean): Promise<GeneratedDocument | null> {
+  async setFavorite(
+    key: string,
+    userId: string | null,
+    favorited: boolean,
+  ): Promise<GeneratedDocument | null> {
     const entity = await this.repo.findOne({ where: { key } });
     if (!entity) return null;
     if (userId !== null && entity.userId !== userId) {

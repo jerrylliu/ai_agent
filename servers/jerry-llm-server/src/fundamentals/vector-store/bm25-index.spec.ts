@@ -11,7 +11,12 @@
  * Mock 基础模块
  * ==================================================================*/
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 let mockBM25Index: any = null;
@@ -20,9 +25,13 @@ let mockDocumentStore: Map<string, any> = new Map();
 jest.mock('./store-state', () => ({
   PERSIST_DIR: '/tmp/bm25-test',
   getBM25Index: () => mockBM25Index,
-  setBM25Index: (val: any) => { mockBM25Index = val; },
+  setBM25Index: (val: any) => {
+    mockBM25Index = val;
+  },
   getBM25DocumentStore: () => mockDocumentStore,
-  setBM25DocumentStore: (val: any) => { mockDocumentStore = val; },
+  setBM25DocumentStore: (val: any) => {
+    mockDocumentStore = val;
+  },
 }));
 
 jest.mock('fs', () => ({
@@ -67,7 +76,12 @@ describe('BM25 索引管理', () => {
 
   describe('addToBM25Index', () => {
     it('应添加文档到索引', async () => {
-      await addToBM25Index('doc1', '人工智能发展趋势', { type: 'article' }, true);
+      await addToBM25Index(
+        'doc1',
+        '人工智能发展趋势',
+        { type: 'article' },
+        true,
+      );
       expect(mockBM25Index).toBeDefined();
       expect(mockBM25Index.documentCount).toBe(1);
       expect(mockDocumentStore.has('doc1')).toBe(true);

@@ -25,22 +25,18 @@ let documentService: any = null;
  */
 export function initDocumentTools(service: any): void {
   documentService = service;
-  logger.info('文档操作工具：DocumentService 已注入', { module: 'Tool:DocumentOps' });
+  logger.info('文档操作工具：DocumentService 已注入', {
+    module: 'Tool:DocumentOps',
+  });
 }
 
 // ==================== create_document ====================
 
 export const createDocumentParamsSchema = z.object({
   title: z.string().min(1).describe('文档标题'),
-  content: z
-    .string()
-    .min(1)
-    .describe('文档内容（纯文本或 Markdown 格式）'),
+  content: z.string().min(1).describe('文档内容（纯文本或 Markdown 格式）'),
   description: z.string().optional().describe('文档描述（可选）'),
-  tags: z
-    .array(z.string())
-    .optional()
-    .describe('文档标签列表（可选）'),
+  tags: z.array(z.string()).optional().describe('文档标签列表（可选）'),
 });
 
 export type CreateDocumentParams = z.infer<typeof createDocumentParamsSchema>;
@@ -133,10 +129,7 @@ export async function executeCreateDocument(
 
 export const updateDocumentParamsSchema = z.object({
   documentId: z.number().int().positive().describe('要更新的文档ID'),
-  content: z
-    .string()
-    .min(1)
-    .describe('新的文档内容（纯文本或 Markdown 格式）'),
+  content: z.string().min(1).describe('新的文档内容（纯文本或 Markdown 格式）'),
   title: z.string().optional().describe('新标题（可选，不传则保持原标题）'),
 });
 
@@ -200,7 +193,9 @@ export async function executeUpdateDocument(
 
     // 如果提供了新标题，额外更新文档元信息
     if (params.title) {
-      await documentService.updateDocument(params.documentId, { title: params.title });
+      await documentService.updateDocument(params.documentId, {
+        title: params.title,
+      });
     }
 
     logger.info('FC工具 [update_document] 更新文档成功', {
@@ -336,7 +331,8 @@ ${content.substring(0, 6000)}
 摘要：`;
 
     const result = await llm.invoke([new HumanMessage(prompt)]);
-    const summary = typeof result.content === 'string' ? result.content.trim() : '';
+    const summary =
+      typeof result.content === 'string' ? result.content.trim() : '';
 
     logger.info('FC工具 [summarize_document] 生成摘要成功', {
       module: 'Tool:DocumentOps',
@@ -471,13 +467,13 @@ export async function executeCompareDocuments(
     }
 
     const totalLines = addedLines + removedLines + unchangedLines;
-    const similarity = totalLines > 0
-      ? Math.round((unchangedLines / totalLines) * 100)
-      : 100;
+    const similarity =
+      totalLines > 0 ? Math.round((unchangedLines / totalLines) * 100) : 100;
 
-    const diffSummary = diffParts.length > 0
-      ? diffParts.slice(0, 50).join('\n')
-      : '两份文档内容完全相同';
+    const diffSummary =
+      diffParts.length > 0
+        ? diffParts.slice(0, 50).join('\n')
+        : '两份文档内容完全相同';
 
     logger.info('FC工具 [compare_documents] 对比完成', {
       module: 'Tool:DocumentOps',

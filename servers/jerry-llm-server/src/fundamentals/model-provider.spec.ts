@@ -19,36 +19,72 @@ jest.mock('./logger', () => ({
 
 jest.mock('./runtime-config', () => ({
   getRuntimeConfig: () => ({
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+    },
     // store-state.ts 在模块加载时会读取 embedding.localEnabled 推导初始生效模式，
     // mock 必须提供该字段；测试环境无 Ollama，置为 false 直接走云端分支，避免网络探测
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   }),
   updateRuntimeConfig: jest.fn(),
   loadRuntimeConfig: jest.fn(),
   saveRuntimeConfig: jest.fn(),
   DEFAULT_RUNTIME_CONFIG: {
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+    },
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   },
 }));
 
 // Mock LangChain
 const mockInvoke = jest.fn().mockResolvedValue({ content: 'test response' });
-const mockStream = jest.fn().mockResolvedValue((async function* () { yield { content: 'chunk' }; })());
+const mockStream = jest.fn().mockResolvedValue(
+  (async function* () {
+    yield { content: 'chunk' };
+  })(),
+);
 const mockBindTools = jest.fn().mockReturnValue({
   invoke: jest.fn().mockResolvedValue({ content: 'fc response' }),
-  stream: jest.fn().mockResolvedValue((async function* () { yield { content: 'fc chunk' }; })()),
+  stream: jest.fn().mockResolvedValue(
+    (async function* () {
+      yield { content: 'fc chunk' };
+    })(),
+  ),
 });
 
 jest.mock('@langchain/ollama', () => ({
@@ -75,7 +111,11 @@ jest.mock('./config', () => ({
   },
 }));
 
-import { createRateLimitedLLM, setDeepseekApiKey, setZhipuApiKey } from './model-provider';
+import {
+  createRateLimitedLLM,
+  setDeepseekApiKey,
+  setZhipuApiKey,
+} from './model-provider';
 import { llmRateLimiter } from './llm-rate-limiter';
 
 describe('createRateLimitedLLM', () => {
@@ -90,7 +130,11 @@ describe('createRateLimitedLLM', () => {
   describe('Ollama 不限流', () => {
     it('Ollama 应直接返回原始实例，不包装方法', () => {
       const llm = createRateLimitedLLM(
-        { provider: 'ollama', model: 'minicpm', baseUrl: 'http://localhost:11434' },
+        {
+          provider: 'ollama',
+          model: 'minicpm',
+          baseUrl: 'http://localhost:11434',
+        },
         'fast',
       );
 
@@ -105,7 +149,12 @@ describe('createRateLimitedLLM', () => {
   describe('DeepSeek 限流包装', () => {
     it('invoke 方法应被限流包装', async () => {
       const llm = createRateLimitedLLM(
-        { provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: 'test-key', baseUrl: 'https://api.deepseek.com' },
+        {
+          provider: 'deepseek',
+          model: 'deepseek-v4-flash',
+          apiKey: 'test-key',
+          baseUrl: 'https://api.deepseek.com',
+        },
         'fast',
       );
 
@@ -117,7 +166,12 @@ describe('createRateLimitedLLM', () => {
 
     it('stream 方法应被限流包装', async () => {
       const llm = createRateLimitedLLM(
-        { provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: 'test-key', baseUrl: 'https://api.deepseek.com' },
+        {
+          provider: 'deepseek',
+          model: 'deepseek-v4-flash',
+          apiKey: 'test-key',
+          baseUrl: 'https://api.deepseek.com',
+        },
         'streaming',
       );
 
@@ -128,14 +182,23 @@ describe('createRateLimitedLLM', () => {
 
     it('bindTools 返回实例的 invoke 应被限流包装', async () => {
       const llm = createRateLimitedLLM(
-        { provider: 'deepseek', model: 'deepseek-v4-flash', apiKey: 'test-key', baseUrl: 'https://api.deepseek.com' },
+        {
+          provider: 'deepseek',
+          model: 'deepseek-v4-flash',
+          apiKey: 'test-key',
+          baseUrl: 'https://api.deepseek.com',
+        },
         'fast',
       );
 
-      const boundLLM = (llm as any).bindTools([{ name: 'test_tool', description: 'test', parameters: {} }]);
+      const boundLLM = (llm as any).bindTools([
+        { name: 'test_tool', description: 'test', parameters: {} },
+      ]);
       expect(mockBindTools).toHaveBeenCalled();
 
-      const result = await boundLLM.invoke([{ role: 'user', content: 'use tool' }]);
+      const result = await boundLLM.invoke([
+        { role: 'user', content: 'use tool' },
+      ]);
       expect(result).toEqual({ content: 'fc response' });
     });
   });
@@ -145,7 +208,12 @@ describe('createRateLimitedLLM', () => {
   describe('智谱限流包装', () => {
     it('invoke 方法应被限流包装', async () => {
       const llm = createRateLimitedLLM(
-        { provider: 'zhipu', model: 'glm-4.7', apiKey: 'test-key', baseUrl: 'https://open.bigmodel.cn/api/paas' },
+        {
+          provider: 'zhipu',
+          model: 'glm-4.7',
+          apiKey: 'test-key',
+          baseUrl: 'https://open.bigmodel.cn/api/paas',
+        },
         'fast',
       );
 

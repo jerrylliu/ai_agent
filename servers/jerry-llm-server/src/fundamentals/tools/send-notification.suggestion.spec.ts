@@ -10,7 +10,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // 让 feishu 通道"已配置"，进入 recipients 校验逻辑
@@ -53,7 +58,10 @@ jest.mock('../feishu-notify.service', () => ({
   resolveOpenIdByEmail: jest.fn(),
 }));
 
-import { executeSendNotification, validateSendNotificationConfig } from './send-notification';
+import {
+  executeSendNotification,
+  validateSendNotificationConfig,
+} from './send-notification';
 
 describe('send_notification 结构化错误反馈（suggestion）', () => {
   beforeAll(() => {

@@ -20,26 +20,54 @@ jest.mock('./logger', () => ({
 
 jest.mock('./runtime-config', () => ({
   getRuntimeConfig: () => ({
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+    },
     // store-state.ts 在模块加载时会读取 embedding.localEnabled 推导初始生效模式，
     // mock 必须提供该字段；测试环境无 Ollama，置为 false 直接走云端分支，避免网络探测
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   }),
   updateRuntimeConfig: jest.fn(),
   loadRuntimeConfig: jest.fn(),
   saveRuntimeConfig: jest.fn(),
   DEFAULT_RUNTIME_CONFIG: {
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+    },
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   },
 }));
@@ -55,7 +83,10 @@ jest.mock('./vector-store/store-state', () => ({
   initializeVectorStore: () => mockInitializeVectorStore(),
   getBM25Index: jest.fn(() => null),
   getBM25DocumentStore: jest.fn(() => new Map()),
-  getEmbeddingSemaphore: jest.fn(() => ({ acquire: jest.fn().mockResolvedValue('id'), release: jest.fn() })),
+  getEmbeddingSemaphore: jest.fn(() => ({
+    acquire: jest.fn().mockResolvedValue('id'),
+    release: jest.fn(),
+  })),
   BATCH_SIZE: 100,
   getActiveCollectionName: jest.fn(() => 'test'),
   getEmbeddings: jest.fn(() => ({})),
@@ -73,13 +104,20 @@ jest.mock('./vector-store/bm25-engine', () => ({
 }));
 
 import { LRUCache, searchCache } from './cache';
-import { searchKnowledgeBase, hybridSearchKnowledgeBase } from './vector-store/vector-search';
+import {
+  searchKnowledgeBase,
+  hybridSearchKnowledgeBase,
+} from './vector-store/vector-search';
 
 // 搜索结果模板
 const makeResults = (count: number) =>
   Array.from({ length: count }, (_, i) => ({
     content: `文档内容 ${i}`,
-    metadata: { source: `doc${i}.txt`, doc_type: '技术文档', versionStatus: 'active' },
+    metadata: {
+      source: `doc${i}.txt`,
+      doc_type: '技术文档',
+      versionStatus: 'active',
+    },
     score: 0.1 + i * 0.05,
   }));
 
@@ -90,7 +128,10 @@ describe('vector-search 缓存逻辑', () => {
     mockSimilaritySearchWithScore.mockReset();
     // 默认返回带 versionStatus=active 的结果
     mockSimilaritySearchWithScore.mockResolvedValue(
-      makeResults(3).map(r => [{ pageContent: r.content, metadata: r.metadata }, r.score]),
+      makeResults(3).map((r) => [
+        { pageContent: r.content, metadata: r.metadata },
+        r.score,
+      ]),
     );
   });
 
@@ -144,8 +185,20 @@ describe('vector-search 缓存逻辑', () => {
 
   describe('cacheKeyOverride（FC 模式）', () => {
     it('传入 cacheKeyOverride 应使用覆盖值生成缓存 key', async () => {
-      await searchKnowledgeBase('改写后的查询A', 5, 0.55, undefined, '原始查询');
-      await searchKnowledgeBase('改写后的查询B', 5, 0.55, undefined, '原始查询');
+      await searchKnowledgeBase(
+        '改写后的查询A',
+        5,
+        0.55,
+        undefined,
+        '原始查询',
+      );
+      await searchKnowledgeBase(
+        '改写后的查询B',
+        5,
+        0.55,
+        undefined,
+        '原始查询',
+      );
 
       // cacheKeyOverride 相同，应命中缓存，只调用一次向量检索
       expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(1);
@@ -177,7 +230,13 @@ describe('vector-search 缓存逻辑', () => {
 
       await searchKnowledgeBase('改写A', 5, 0.55, undefined, 'AI Agent 开发');
       // 第二次应命中缓存，不调用向量检索
-      await searchKnowledgeBase('改写B', 5, 0.55, undefined, 'AI  Agent   开发');
+      await searchKnowledgeBase(
+        '改写B',
+        5,
+        0.55,
+        undefined,
+        'AI  Agent   开发',
+      );
 
       expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(1);
     });
@@ -213,7 +272,11 @@ describe('vector-search 缓存逻辑', () => {
       // 但混合搜索的外层缓存是新的未命中
       // 关键验证：两次搜索的缓存 key 不同（通过 makeKey 直接验证）
       const pureKey = LRUCache.makeKey('混合vs纯量查询');
-      const hybridKey = LRUCache.makeKey('混合vs纯量查询', { _type: 'hybrid', _vw: 0.7, _bw: 0.3 });
+      const hybridKey = LRUCache.makeKey('混合vs纯量查询', {
+        _type: 'hybrid',
+        _vw: 0.7,
+        _bw: 0.3,
+      });
       expect(pureKey).not.toBe(hybridKey);
     });
 
@@ -228,18 +291,40 @@ describe('vector-search 缓存逻辑', () => {
 
       // 权重不同，缓存 key 不同，第二次混合搜索不应命中
       // 验证方式：缓存 key 确实不同
-      const key1 = LRUCache.makeKey('权重测试查询', { _type: 'hybrid', _vw: 0.7, _bw: 0.3 });
-      const key2 = LRUCache.makeKey('权重测试查询', { _type: 'hybrid', _vw: 0.5, _bw: 0.5 });
+      const key1 = LRUCache.makeKey('权重测试查询', {
+        _type: 'hybrid',
+        _vw: 0.7,
+        _bw: 0.3,
+      });
+      const key2 = LRUCache.makeKey('权重测试查询', {
+        _type: 'hybrid',
+        _vw: 0.5,
+        _bw: 0.5,
+      });
       expect(key1).not.toBe(key2);
     });
 
     it('混合搜索传入 cacheKeyOverride 应使用覆盖值', async () => {
       searchCache.clear('cacheKeyOverride测试');
 
-      await hybridSearchKnowledgeBase('改写A', 5, 0.7, 0.3, undefined, '原始查询');
+      await hybridSearchKnowledgeBase(
+        '改写A',
+        5,
+        0.7,
+        0.3,
+        undefined,
+        '原始查询',
+      );
       const callsAfterFirst = mockSimilaritySearchWithScore.mock.calls.length;
 
-      await hybridSearchKnowledgeBase('改写B', 5, 0.7, 0.3, undefined, '原始查询');
+      await hybridSearchKnowledgeBase(
+        '改写B',
+        5,
+        0.7,
+        0.3,
+        undefined,
+        '原始查询',
+      );
       const callsAfterSecond = mockSimilaritySearchWithScore.mock.calls.length;
 
       // cacheKeyOverride 相同，应命中缓存
@@ -298,13 +383,18 @@ describe('vector-search 缓存逻辑', () => {
 
   describe('HyDE 集成模式', () => {
     /** 按查询文本分流的向量检索 mock：query → [content, cosine距离] 列表 */
-    const mockVectorByQuery = (mapping: Record<string, Array<[string, number]>>) => {
+    const mockVectorByQuery = (
+      mapping: Record<string, Array<[string, number]>>,
+    ) => {
       mockSimilaritySearchWithScore.mockImplementation((query: string) => {
         const entries = mapping[query];
         if (!entries) return Promise.resolve([]);
         return Promise.resolve(
           entries.map(([content, score]) => [
-            { pageContent: content, metadata: { source: `${content}.txt`, versionStatus: 'active' } },
+            {
+              pageContent: content,
+              metadata: { source: `${content}.txt`, versionStatus: 'active' },
+            },
             score,
           ]),
         );
@@ -317,9 +407,20 @@ describe('vector-search 缓存逻辑', () => {
     });
 
     it('传 vectorQueryText 时应做主查询 + HyDE 两次向量检索，BM25 仍用原始查询', async () => {
-      mockVectorByQuery({ '主查询': [['A', 0.1]], '假想答案': [['B', 0.2]] });
+      mockVectorByQuery({ 主查询: [['A', 0.1]], 假想答案: [['B', 0.2]] });
 
-      await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, undefined, 0.55, undefined, undefined, '假想答案');
+      await hybridSearchKnowledgeBase(
+        '主查询',
+        5,
+        0.7,
+        0.3,
+        undefined,
+        undefined,
+        0.55,
+        undefined,
+        undefined,
+        '假想答案',
+      );
 
       const calls = mockSimilaritySearchWithScore.mock.calls;
       expect(calls.length).toBe(2);
@@ -331,11 +432,28 @@ describe('vector-search 缓存逻辑', () => {
 
     it('双路命中同一文档时 RRF 分数叠加，排序高于单路命中，vectorScore 保留主查询口径', async () => {
       mockVectorByQuery({
-        '主查询': [['A', 0.1], ['B', 0.2]],
-        '假想答案': [['B', 0.15], ['C', 0.3]],
+        主查询: [
+          ['A', 0.1],
+          ['B', 0.2],
+        ],
+        假想答案: [
+          ['B', 0.15],
+          ['C', 0.3],
+        ],
       });
 
-      const results = await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, undefined, 0.55, undefined, undefined, '假想答案');
+      const results = await hybridSearchKnowledgeBase(
+        '主查询',
+        5,
+        0.7,
+        0.3,
+        undefined,
+        undefined,
+        0.55,
+        undefined,
+        undefined,
+        '假想答案',
+      );
 
       expect(results.length).toBe(3);
       // B 被主向量（rank2）与 HyDE 向量（rank1）同时命中，RRF 分数叠加应排第一
@@ -349,7 +467,7 @@ describe('vector-search 缓存逻辑', () => {
     });
 
     it('不传 vectorQueryText 时只做一次向量检索（行为与改造前一致）', async () => {
-      mockVectorByQuery({ '主查询': [['A', 0.1]] });
+      mockVectorByQuery({ 主查询: [['A', 0.1]] });
 
       await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3);
 
@@ -357,30 +475,72 @@ describe('vector-search 缓存逻辑', () => {
     });
 
     it('vectorQueryText 为空白时视为未传，单路回退', async () => {
-      mockVectorByQuery({ '主查询': [['A', 0.1]] });
+      mockVectorByQuery({ 主查询: [['A', 0.1]] });
 
-      await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, undefined, 0.55, undefined, undefined, '   ');
+      await hybridSearchKnowledgeBase(
+        '主查询',
+        5,
+        0.7,
+        0.3,
+        undefined,
+        undefined,
+        0.55,
+        undefined,
+        undefined,
+        '   ',
+      );
 
       expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(1);
     });
 
     it('缓存 key 应区分 HyDE 状态：同 override 下无 HyDE 与有 HyDE 结果互不污染', async () => {
       // 第一次：无 HyDE → 仅主查询结果
-      mockVectorByQuery({ '主查询': [['A', 0.1]] });
-      const r1 = await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, 'override');
+      mockVectorByQuery({ 主查询: [['A', 0.1]] });
+      const r1 = await hybridSearchKnowledgeBase(
+        '主查询',
+        5,
+        0.7,
+        0.3,
+        undefined,
+        'override',
+      );
       expect(r1.map((r) => r.content)).toEqual(['A']);
 
       // 第二次：同 override + HyDE → 外层缓存 key 含 _hyde 标志，不得命中第一次结果；
       // 主向量路命中内部纯向量缓存（0 调用），仅 HyDE 路发起真实检索
-      mockVectorByQuery({ '主查询': [['A', 0.1]], '假想答案': [['B', 0.2]] });
+      mockVectorByQuery({ 主查询: [['A', 0.1]], 假想答案: [['B', 0.2]] });
       mockSimilaritySearchWithScore.mockClear();
-      const r2 = await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, 'override', 0.55, undefined, undefined, '假想答案');
+      const r2 = await hybridSearchKnowledgeBase(
+        '主查询',
+        5,
+        0.7,
+        0.3,
+        undefined,
+        'override',
+        0.55,
+        undefined,
+        undefined,
+        '假想答案',
+      );
       expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(1);
-      expect(r2.map((r) => r.content)).toEqual(expect.arrayContaining(['A', 'B']));
+      expect(r2.map((r) => r.content)).toEqual(
+        expect.arrayContaining(['A', 'B']),
+      );
 
       // 第三次：完全相同参数 → 命中写入的 HyDE 态外层缓存，0 次向量检索
       mockSimilaritySearchWithScore.mockClear();
-      await hybridSearchKnowledgeBase('主查询', 5, 0.7, 0.3, undefined, 'override', 0.55, undefined, undefined, '假想答案');
+      await hybridSearchKnowledgeBase(
+        '主查询',
+        5,
+        0.7,
+        0.3,
+        undefined,
+        'override',
+        0.55,
+        undefined,
+        undefined,
+        '假想答案',
+      );
       expect(mockSimilaritySearchWithScore).toHaveBeenCalledTimes(0);
     });
   });

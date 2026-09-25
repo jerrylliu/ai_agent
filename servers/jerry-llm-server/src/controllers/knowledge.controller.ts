@@ -4,7 +4,16 @@
 // 上传已统一走文档版本管理 (/documents/upload)
 // 路由前缀：/knowledge
 
-import { Controller, Get, Post, Delete, Body, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Delete,
+  Body,
+  Query,
+  UseInterceptors,
+  UploadedFile,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import { DocumentService } from '../services/document.service';
@@ -14,7 +23,6 @@ import { UNTRUSTED_CONTEXT_INSTRUCTION } from '../fundamentals/prompt-injection-
 
 @Controller('knowledge')
 export class KnowledgeController {
-
   constructor(
     private readonly documentService: DocumentService,
     private readonly knowledgeSourceService: KnowledgeSourceService,
@@ -27,9 +35,7 @@ export class KnowledgeController {
    */
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
-  async uploadToKnowledgeBase(
-    @UploadedFile() file: any,
-  ) {
+  async uploadToKnowledgeBase(@UploadedFile() file: any) {
     try {
       if (!file) {
         return { success: false, message: '请选择要上传的文件' };
@@ -37,8 +43,16 @@ export class KnowledgeController {
 
       // 统一走文档版本管理
       const result = await this.documentService.uploadDocument(
-        { buffer: file.buffer, originalname: file.originalname, size: file.size, mimetype: file.mimetype },
-        { title: file.originalname.replace(/\.[^/.]+$/, ''), operator: 'anonymous' },
+        {
+          buffer: file.buffer,
+          originalname: file.originalname,
+          size: file.size,
+          mimetype: file.mimetype,
+        },
+        {
+          title: file.originalname.replace(/\.[^/.]+$/, ''),
+          operator: 'anonymous',
+        },
       );
 
       return {
@@ -47,7 +61,10 @@ export class KnowledgeController {
         documentCount: 1,
       };
     } catch (error: any) {
-      logger.error('上传到知识库失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('上传到知识库失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
       return { success: false, message: `上传失败: ${error.message}` };
     }
   }
@@ -66,17 +83,18 @@ export class KnowledgeController {
     try {
       const stats = await this.documentService.getKnowledgeStats();
 
-      const knowledgeSourcePageCount = await this.knowledgeSourceService.getTotalPageCount();
+      const knowledgeSourcePageCount =
+        await this.knowledgeSourceService.getTotalPageCount();
 
       const knowledgeSources = await this.knowledgeSourceService.findAll();
-      const hasContentUpdate = knowledgeSources.some(s => s.hasContentUpdate);
+      const hasContentUpdate = knowledgeSources.some((s) => s.hasContentUpdate);
 
       let vectorStoreInfo: any = {};
       try {
-        const { getKnowledgeBaseStatus } = await import('../fundamentals/rag-service.js');
+        const { getKnowledgeBaseStatus } =
+          await import('../fundamentals/rag-service.js');
         vectorStoreInfo = await getKnowledgeBaseStatus();
-      } catch {
-      }
+      } catch {}
 
       const totalDocumentCount = stats.documentCount + knowledgeSourcePageCount;
 
@@ -93,7 +111,10 @@ export class KnowledgeController {
         ...vectorStoreInfo,
       };
     } catch (error: any) {
-      logger.error('获取知识库状态失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('获取知识库状态失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
       return { status: 'error', message: `获取状态失败: ${error.message}` };
     }
   }
@@ -112,7 +133,12 @@ export class KnowledgeController {
    */
   @Post('search')
   async searchKnowledgeBase(
-    @Body() body: { query: string; topK?: number; filter?: Record<string, any> },
+    @Body()
+    body: {
+      query: string;
+      topK?: number;
+      filter?: Record<string, any>;
+    },
   ) {
     const startTime = Date.now();
     try {
@@ -129,7 +155,8 @@ export class KnowledgeController {
       });
 
       // ==================== 阶段1：查询改写 ====================
-      const { rewriteQuery } = await import('../fundamentals/vector-store/query-rewriter.js');
+      const { rewriteQuery } =
+        await import('../fundamentals/vector-store/query-rewriter.js');
       let rewritten: {
         mainQuery: string;
         subQueries: string[];
@@ -165,9 +192,8 @@ export class KnowledgeController {
       // 复用 multiHopSearch：第1跳用改写查询搜，LLM 看结果判断是否需要追问，
       // 若需要则生成新查询再搜第2跳，合并去重所有跳的结果。
       // 这是聊天管线准确度高的核心原因：有"纠错机制"，第1跳搜偏了能补救。
-      const { multiHopSearch } = await import(
-        '../fundamentals/vector-store/multi-hop-search.js'
-      );
+      const { multiHopSearch } =
+        await import('../fundamentals/vector-store/multi-hop-search.js');
       // 每跳多取候选给 rerank 精排，topK*4 至少 20
       const hopTopK = Math.max(topK * 4, 20);
       let multiHopResult: {
@@ -203,9 +229,8 @@ export class KnowledgeController {
           error: error.message,
         });
         // 降级：直接用改写后的主查询做单次混合搜索
-        const { hybridRetrieveFromKnowledgeBase } = await import(
-          '../fundamentals/rag-service.js'
-        );
+        const { hybridRetrieveFromKnowledgeBase } =
+          await import('../fundamentals/rag-service.js');
         const fallback = await hybridRetrieveFromKnowledgeBase(
           rewritten.mainQuery,
           hopTopK,
@@ -216,9 +241,7 @@ export class KnowledgeController {
         multiHopResult = {
           results: fallback.results.map((r) => ({ ...r, hop: 1 })),
           hopsExecuted: 1,
-          hopDetails: [
-            { hop: 1, query, resultCount: fallback.results.length },
-          ],
+          hopDetails: [{ hop: 1, query, resultCount: fallback.results.length }],
         };
         logger.info('降级单次混合搜索完成', {
           module: 'KnowledgeController',
@@ -234,16 +257,21 @@ export class KnowledgeController {
           module: 'KnowledgeController',
           durationMs: Date.now() - startTime,
         });
-        return { success: true, query, results: [], context: '', hasResults: false };
+        return {
+          success: true,
+          query,
+          results: [],
+          context: '',
+          hasResults: false,
+        };
       }
 
       // 候选数保护：DashScope rerank 最多 100 条，超出截断
       const rerankCandidates = candidates.slice(0, 100);
 
       // ==================== 阶段3：Rerank 精排 ====================
-      const { rerankResults } = await import(
-        '../fundamentals/vector-store/result-reranker.js'
-      );
+      const { rerankResults } =
+        await import('../fundamentals/vector-store/result-reranker.js');
       let finalResults: Array<{
         content: string;
         metadata: any;
@@ -279,7 +307,9 @@ export class KnowledgeController {
         .join('\n\n');
       // 检索内容属于不可信上下文：附加隔离指令，防止文档中的恶意指令覆盖系统规则
       const context =
-        rawContext.trim().length > 0 ? rawContext + UNTRUSTED_CONTEXT_INSTRUCTION : rawContext;
+        rawContext.trim().length > 0
+          ? rawContext + UNTRUSTED_CONTEXT_INSTRUCTION
+          : rawContext;
 
       logger.info('知识库搜索完成（增强管线）', {
         module: 'KnowledgeController',
@@ -312,7 +342,8 @@ export class KnowledgeController {
    */
   @Post('hybrid-search')
   async hybridSearchKnowledgeBase(
-    @Body() body: {
+    @Body()
+    body: {
       query: string;
       topK?: number;
       vectorWeight?: number;
@@ -321,12 +352,25 @@ export class KnowledgeController {
     },
   ) {
     try {
-      const { hybridRetrieveFromKnowledgeBase } = await import('../fundamentals/rag-service.js');
-      const { query, topK = 3, vectorWeight = 0.7, bm25Weight = 0.3, filter } = body;
+      const { hybridRetrieveFromKnowledgeBase } =
+        await import('../fundamentals/rag-service.js');
+      const {
+        query,
+        topK = 3,
+        vectorWeight = 0.7,
+        bm25Weight = 0.3,
+        filter,
+      } = body;
       if (!query) {
         return { success: false, message: '请提供搜索查询内容' };
       }
-      const result = await hybridRetrieveFromKnowledgeBase(query, topK, vectorWeight, bm25Weight, filter);
+      const result = await hybridRetrieveFromKnowledgeBase(
+        query,
+        topK,
+        vectorWeight,
+        bm25Weight,
+        filter,
+      );
       return {
         success: true,
         query: result.query,
@@ -335,7 +379,10 @@ export class KnowledgeController {
         hasResults: result.hasResults,
       };
     } catch (error: any) {
-      logger.error('混合搜索知识库失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('混合搜索知识库失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
       return { success: false, message: `搜索失败: ${error.message}` };
     }
   }
@@ -347,11 +394,15 @@ export class KnowledgeController {
   @Get('types')
   async getDocumentTypes() {
     try {
-      const { getDocumentTypes } = await import('../fundamentals/vector-store/index.js');
+      const { getDocumentTypes } =
+        await import('../fundamentals/vector-store/index.js');
       const types = await getDocumentTypes();
       return { success: true, types };
     } catch (error: any) {
-      logger.error('获取文档类型失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('获取文档类型失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
       return { success: false, message: `获取失败: ${error.message}` };
     }
   }
@@ -363,11 +414,15 @@ export class KnowledgeController {
   @Get('documents')
   async getAllDocuments() {
     try {
-      const { getAllDocuments } = await import('../fundamentals/vector-store/index.js');
+      const { getAllDocuments } =
+        await import('../fundamentals/vector-store/index.js');
       const documents = await getAllDocuments();
       return { success: true, documentCount: documents.length, documents };
     } catch (error: any) {
-      logger.error('获取文档列表失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('获取文档列表失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
       return { success: false, message: `获取文档列表失败: ${error.message}` };
     }
   }
@@ -377,16 +432,18 @@ export class KnowledgeController {
    * 调试接口
    */
   @Get('debug')
-  async debugKnowledge(
-    @Query('query') query: string,
-  ) {
+  async debugKnowledge(@Query('query') query: string) {
     try {
-      const { debugSearch, getAllDocumentsWithDebug } = await import('../fundamentals/vector-store/index.js');
+      const { debugSearch, getAllDocumentsWithDebug } =
+        await import('../fundamentals/vector-store/index.js');
       const debugInfo = await debugSearch(query || '测试查询', 5);
       const documentsInfo = await getAllDocumentsWithDebug();
       return { success: true, searchDebug: debugInfo, documentsInfo };
     } catch (error: any) {
-      logger.error('调试失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('调试失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
       return { success: false, message: `调试失败: ${error.message}` };
     }
   }
@@ -396,11 +453,10 @@ export class KnowledgeController {
    * 预览文本切片效果
    */
   @Post('preview-chunk')
-  async previewChunk(
-    @Body() body: { text: string },
-  ) {
+  async previewChunk(@Body() body: { text: string }) {
     try {
-      const { previewChunking } = await import('../fundamentals/vector-store/index.js');
+      const { previewChunking } =
+        await import('../fundamentals/vector-store/index.js');
       if (!body.text) {
         return { success: false, message: '请提供 text 参数' };
       }
@@ -409,10 +465,17 @@ export class KnowledgeController {
         success: true,
         originalLength: body.text.length,
         chunkCount: chunks.length,
-        chunks: chunks.map((chunk, i) => ({ index: i, length: chunk.length, content: chunk })),
+        chunks: chunks.map((chunk, i) => ({
+          index: i,
+          length: chunk.length,
+          content: chunk,
+        })),
       };
     } catch (error: any) {
-      logger.error('预览切片失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('预览切片失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
       return { success: false, message: `预览切片失败: ${error.message}` };
     }
   }
@@ -422,19 +485,24 @@ export class KnowledgeController {
    * 预览文本的 Embedding 向量
    */
   @Post('preview-embedding')
-  async previewEmbedding(
-    @Body() body: { text: string },
-  ) {
+  async previewEmbedding(@Body() body: { text: string }) {
     try {
-      const { previewEmbedding } = await import('../fundamentals/vector-store/index.js');
+      const { previewEmbedding } =
+        await import('../fundamentals/vector-store/index.js');
       if (!body.text) {
         return { success: false, message: '请提供 text 参数' };
       }
       const embedding = await previewEmbedding(body.text);
       return { success: true, embedding };
     } catch (error: any) {
-      logger.error('预览 Embedding 失败', { module: 'KnowledgeController', error: error.message });
-      return { success: false, message: `预览 Embedding 失败: ${error.message}` };
+      logger.error('预览 Embedding 失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
+      return {
+        success: false,
+        message: `预览 Embedding 失败: ${error.message}`,
+      };
     }
   }
 
@@ -453,13 +521,18 @@ export class KnowledgeController {
           await this.documentService.deleteDocument(doc.id, 'system-clear');
           deletedCount++;
         } catch (err: any) {
-          logger.error('清空时删除文档失败', { module: 'KnowledgeController', documentId: doc.id, error: err.message });
+          logger.error('清空时删除文档失败', {
+            module: 'KnowledgeController',
+            documentId: doc.id,
+            error: err.message,
+          });
         }
       }
 
       // 额外清理可能存在的无版本管理的孤岛向量
       try {
-        const { clearKnowledgeBase } = await import('../fundamentals/vector-store/index.js');
+        const { clearKnowledgeBase } =
+          await import('../fundamentals/vector-store/index.js');
         await clearKnowledgeBase();
       } catch {
         // 向量库清理失败不影响结果
@@ -469,13 +542,25 @@ export class KnowledgeController {
       try {
         await this.knowledgeSourceService.markAllForResync();
       } catch (err: any) {
-        logger.error('标记知识源重新同步失败', { module: 'KnowledgeController', error: err.message });
+        logger.error('标记知识源重新同步失败', {
+          module: 'KnowledgeController',
+          error: err.message,
+        });
       }
 
-      logger.info('知识库已重置', { module: 'KnowledgeController', deletedCount });
-      return { success: true, message: `知识库已重置，共删除 ${deletedCount} 个文档` };
+      logger.info('知识库已重置', {
+        module: 'KnowledgeController',
+        deletedCount,
+      });
+      return {
+        success: true,
+        message: `知识库已重置，共删除 ${deletedCount} 个文档`,
+      };
     } catch (error: any) {
-      logger.error('重置知识库失败', { module: 'KnowledgeController', error: error.message });
+      logger.error('重置知识库失败', {
+        module: 'KnowledgeController',
+        error: error.message,
+      });
       return { success: false, message: `重置知识库失败: ${error.message}` };
     }
   }

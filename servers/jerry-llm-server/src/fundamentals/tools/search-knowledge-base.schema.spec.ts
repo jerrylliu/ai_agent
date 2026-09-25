@@ -6,7 +6,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // 屏蔽向量库 / 检索增强等链式 import，schema 测试不需要它们的运行时
@@ -31,7 +36,9 @@ import {
 describe('searchKnowledgeBaseSchema 结构', () => {
   it('应是 OpenAI Function Calling 格式', () => {
     expect(searchKnowledgeBaseSchema.type).toBe('function');
-    expect(searchKnowledgeBaseSchema.function.name).toBe('search_knowledge_base');
+    expect(searchKnowledgeBaseSchema.function.name).toBe(
+      'search_knowledge_base',
+    );
     expect(searchKnowledgeBaseSchema.function.description).toContain('知识库');
   });
 
@@ -66,7 +73,10 @@ describe('searchKnowledgeBaseParamsSchema 校验', () => {
   });
 
   it('top_k 为负数应被拦截', () => {
-    const r = searchKnowledgeBaseParamsSchema.safeParse({ query: 'x', top_k: -1 });
+    const r = searchKnowledgeBaseParamsSchema.safeParse({
+      query: 'x',
+      top_k: -1,
+    });
     expect(r.success).toBe(false);
   });
 

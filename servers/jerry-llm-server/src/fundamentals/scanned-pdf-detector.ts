@@ -79,7 +79,8 @@ export async function detectScannedPages(
     }
   }
 
-  const scannedRatio = totalPages > 0 ? scannedPageNumbers.length / totalPages : 0;
+  const scannedRatio =
+    totalPages > 0 ? scannedPageNumbers.length / totalPages : 0;
   const isScannedPdf = scannedRatio > 0.5;
 
   logger.info('扫描件检测完成', {

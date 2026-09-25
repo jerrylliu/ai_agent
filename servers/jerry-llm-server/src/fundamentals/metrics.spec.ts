@@ -47,8 +47,12 @@ describe('metrics', () => {
       metrics.feishuMessageSent.inc({ channel: 'image', status: 'failure' });
 
       const text = await metricsRegistry.metrics();
-      expect(text).toMatch(/jerry_feishu_message_sent_total\{channel="card",status="success"\} 2/);
-      expect(text).toMatch(/jerry_feishu_message_sent_total\{channel="image",status="failure"\} 1/);
+      expect(text).toMatch(
+        /jerry_feishu_message_sent_total\{channel="card",status="success"\} 2/,
+      );
+      expect(text).toMatch(
+        /jerry_feishu_message_sent_total\{channel="image",status="failure"\} 1/,
+      );
     });
   });
 
@@ -59,9 +63,15 @@ describe('metrics', () => {
       metrics.hitlResolved.inc({ action: 'timeout', source: 'web' });
 
       const text = await metricsRegistry.metrics();
-      expect(text).toMatch(/jerry_hitl_resolved_total\{action="confirm",source="web"\} 1/);
-      expect(text).toMatch(/jerry_hitl_resolved_total\{action="confirm",source="feishu"\} 1/);
-      expect(text).toMatch(/jerry_hitl_resolved_total\{action="timeout",source="web"\} 1/);
+      expect(text).toMatch(
+        /jerry_hitl_resolved_total\{action="confirm",source="web"\} 1/,
+      );
+      expect(text).toMatch(
+        /jerry_hitl_resolved_total\{action="confirm",source="feishu"\} 1/,
+      );
+      expect(text).toMatch(
+        /jerry_hitl_resolved_total\{action="timeout",source="web"\} 1/,
+      );
     });
   });
 
@@ -85,13 +95,27 @@ describe('metrics', () => {
       metrics.refreshCacheGauges();
 
       const text = await metricsRegistry.metrics();
-      expect(text).toMatch(/jerry_multilevel_cache_l1_hits\{namespace="test-cache"\} 10/);
-      expect(text).toMatch(/jerry_multilevel_cache_l2_hits\{namespace="test-cache"\} 3/);
-      expect(text).toMatch(/jerry_multilevel_cache_misses\{namespace="test-cache"\} 2/);
-      expect(text).toMatch(/jerry_multilevel_cache_l2_errors\{namespace="test-cache"\} 1/);
-      expect(text).toMatch(/jerry_multilevel_cache_overall_hit_rate\{namespace="test-cache"\} 0.8667/);
-      expect(text).toMatch(/jerry_multilevel_cache_l1_size\{namespace="test-cache"\} 100/);
-      expect(text).toMatch(/jerry_multilevel_cache_l1_max_size\{namespace="test-cache"\} 500/);
+      expect(text).toMatch(
+        /jerry_multilevel_cache_l1_hits\{namespace="test-cache"\} 10/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_l2_hits\{namespace="test-cache"\} 3/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_misses\{namespace="test-cache"\} 2/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_l2_errors\{namespace="test-cache"\} 1/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_overall_hit_rate\{namespace="test-cache"\} 0.8667/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_l1_size\{namespace="test-cache"\} 100/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_l1_max_size\{namespace="test-cache"\} 500/,
+      );
     });
 
     it('多个 namespace 应独立统计', async () => {
@@ -161,7 +185,9 @@ describe('metrics', () => {
       });
       metrics.refreshCacheGauges();
       const text = await metricsRegistry.metrics();
-      expect(text).toMatch(/jerry_multilevel_cache_l1_hits\{namespace="same"\} 999/);
+      expect(text).toMatch(
+        /jerry_multilevel_cache_l1_hits\{namespace="same"\} 999/,
+      );
     });
   });
 });

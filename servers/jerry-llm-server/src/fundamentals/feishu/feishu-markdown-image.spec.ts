@@ -1,4 +1,7 @@
-import { splitMarkdownImages, stripMarkdownImages } from './feishu-markdown-image';
+import {
+  splitMarkdownImages,
+  stripMarkdownImages,
+} from './feishu-markdown-image';
 
 describe('feishu-markdown-image', () => {
   describe('splitMarkdownImages', () => {
@@ -13,8 +16,12 @@ describe('feishu-markdown-image', () => {
     });
 
     it('兼容反引号包裹的图片链接', () => {
-      const { text, imageUrls } = splitMarkdownImages('![星空](`https://example.com/b.png?Expires=1&Signature=x%3D`)');
-      expect(imageUrls).toEqual(['https://example.com/b.png?Expires=1&Signature=x%3D']);
+      const { text, imageUrls } = splitMarkdownImages(
+        '![星空](`https://example.com/b.png?Expires=1&Signature=x%3D`)',
+      );
+      expect(imageUrls).toEqual([
+        'https://example.com/b.png?Expires=1&Signature=x%3D',
+      ]);
       expect(text).toBe('');
     });
 
@@ -34,11 +41,14 @@ describe('feishu-markdown-image', () => {
 
   describe('stripMarkdownImages', () => {
     it('剥离图片但保留其余文本与空白', () => {
-      expect(stripMarkdownImages('前缀 ![x](https://e.com/a.png) 后缀')).toBe('前缀  后缀');
+      expect(stripMarkdownImages('前缀 ![x](https://e.com/a.png) 后缀')).toBe(
+        '前缀  后缀',
+      );
     });
 
     it('剥离带签名 query 与反引号的图片', () => {
-      const input = '![生成的图片](`https://oss.com/x.png?Expires=1782&Signature=McV%3D`)说明文字';
+      const input =
+        '![生成的图片](`https://oss.com/x.png?Expires=1782&Signature=McV%3D`)说明文字';
       expect(stripMarkdownImages(input)).toBe('说明文字');
     });
 

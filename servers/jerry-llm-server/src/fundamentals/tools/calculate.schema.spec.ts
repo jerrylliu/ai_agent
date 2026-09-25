@@ -11,7 +11,12 @@
 
 // 隔离 logger 以避免链式触发 config 校验
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 import { calculateSchema, calculateParamsSchema } from './calculate';

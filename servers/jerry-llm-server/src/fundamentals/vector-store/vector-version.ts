@@ -32,13 +32,8 @@ import {
   saveBM25Index,
   clearBM25Index,
 } from './bm25-index.js';
-import {
-  addDocuments,
-  getAllDocuments,
-} from './vector-crud.js';
-import {
-  searchKnowledgeBase,
-} from './vector-search.js';
+import { addDocuments, getAllDocuments } from './vector-crud.js';
+import { searchKnowledgeBase } from './vector-search.js';
 import { DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP } from './text-splitter.js';
 
 // ==================== 统计与查询 ====================
@@ -50,14 +45,17 @@ export async function getDocumentTypes(): Promise<string[]> {
   try {
     const docs = await getAllDocuments();
     const types = new Set<string>();
-    docs.forEach(doc => {
+    docs.forEach((doc) => {
       if (doc.metadata?.doc_type) {
         types.add(doc.metadata.doc_type);
       }
     });
     return Array.from(types);
   } catch (error) {
-    logger.error('获取文档类型失败', { module: 'VectorStore', error: String(error) });
+    logger.error('获取文档类型失败', {
+      module: 'VectorStore',
+      error: String(error),
+    });
     return [];
   }
 }
@@ -71,7 +69,10 @@ export async function getKnowledgeBaseStats(): Promise<{
 }> {
   const collectionName = getActiveCollectionName();
   try {
-    const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
+    const client = new ChromaClient({
+      host: config.chromaHost,
+      port: config.chromaPort,
+    });
     const collection = await client.getCollection({ name: collectionName });
     const results = await collection.get();
     const documentCount = results.documents?.length || 0;
@@ -100,16 +101,25 @@ export async function clearKnowledgeBase(): Promise<void> {
   logger.warn('即将清空整个知识库', { module: 'VectorStore' });
 
   try {
-    const client = new ChromaClient({ host: config.chromaHost, port: config.chromaPort });
+    const client = new ChromaClient({
+      host: config.chromaHost,
+      port: config.chromaPort,
+    });
     const collectionName = getActiveCollectionName();
 
     // 检查集合是否存在并删除
     try {
       await client.deleteCollection({ name: collectionName });
-      logger.info('知识库集合已删除', { module: 'VectorStore', collection: collectionName });
+      logger.info('知识库集合已删除', {
+        module: 'VectorStore',
+        collection: collectionName,
+      });
     } catch (error: any) {
       if (error.message && error.message.includes('not found')) {
-        logger.info('知识库集合不存在，无需删除', { module: 'VectorStore', collection: collectionName });
+        logger.info('知识库集合不存在，无需删除', {
+          module: 'VectorStore',
+          collection: collectionName,
+        });
       } else {
         throw error;
       }
@@ -118,7 +128,7 @@ export async function clearKnowledgeBase(): Promise<void> {
     // 重新创建空集合（指定嵌入函数）
     await client.createCollection({
       name: collectionName,
-      metadata: { "hnsw:space": "cosine" },
+      metadata: { 'hnsw:space': 'cosine' },
       embeddingFunction: getEmbeddings() as any,
     });
     logger.info('已创建新的空知识库集合', { module: 'VectorStore' });
@@ -134,7 +144,10 @@ export async function clearKnowledgeBase(): Promise<void> {
     // 通知缓存：知识库已清空
     eventBus.emit('knowledge-base-updated', '知识库清空');
   } catch (error) {
-    logger.error('清空知识库失败', { module: 'VectorStore', error: String(error) });
+    logger.error('清空知识库失败', {
+      module: 'VectorStore',
+      error: String(error),
+    });
   }
 }
 
@@ -182,7 +195,7 @@ export async function debugSearch(
   query: string,
   topK: number = 3,
   // 与 searchKnowledgeBase / hybridSearchKnowledgeBase 保持一致
-  minSimilarity: number = 0.55
+  minSimilarity: number = 0.55,
 ): Promise<{
   originalQuery: string;
   rawResults: Array<{
@@ -203,15 +216,28 @@ export async function debugSearch(
 
   const results = await store.similaritySearchWithScore(query, topK * 3);
 
-  logger.debug('原始搜索结果', { module: 'VectorStore', resultCount: results.length });
+  logger.debug('原始搜索结果', {
+    module: 'VectorStore',
+    resultCount: results.length,
+  });
   results.forEach(([doc, score], i) => {
-    logger.debug('调试搜索结果', { module: 'VectorStore', index: i + 1, score: score.toFixed(4), content: doc.pageContent.substring(0, 100), metadata: doc.metadata });
+    logger.debug('调试搜索结果', {
+      module: 'VectorStore',
+      index: i + 1,
+      score: score.toFixed(4),
+      content: doc.pageContent.substring(0, 100),
+      metadata: doc.metadata,
+    });
   });
   const filtered = results
     .filter(([_, score]) => score <= minSimilarity)
     .slice(0, topK);
 
-  logger.debug('过滤后搜索结果', { module: 'VectorStore', minSimilarity, filteredCount: filtered.length });
+  logger.debug('过滤后搜索结果', {
+    module: 'VectorStore',
+    minSimilarity,
+    filteredCount: filtered.length,
+  });
 
   const rawResults = results.map(([doc, score]) => ({
     content: doc.pageContent,
@@ -247,10 +273,11 @@ export async function getAllDocumentsWithDebug(): Promise<{
   const documents = await getAllDocuments();
   return {
     totalCount: documents.length,
-    documents: documents.map(d => ({
+    documents: documents.map((d) => ({
       content: d.content,
       metadata: d.metadata,
-      contentPreview: d.content.substring(0, 100) + (d.content.length > 100 ? '...' : ''),
+      contentPreview:
+        d.content.substring(0, 100) + (d.content.length > 100 ? '...' : ''),
       contentLength: d.content.length,
     })),
   };
@@ -277,29 +304,52 @@ export async function removeDocumentVersion(versionId: number): Promise<void> {
     try {
       existing = await collection.get({ where: versionFilter });
     } catch (getError: any) {
-      if (getError.name === 'ChromaNotFoundError' || getError.message?.includes('could not be found')) {
-        logger.info('ChromaDB 集合或资源不存在，视为已清理', { module: 'VectorStore', versionId });
+      if (
+        getError.name === 'ChromaNotFoundError' ||
+        getError.message?.includes('could not be found')
+      ) {
+        logger.info('ChromaDB 集合或资源不存在，视为已清理', {
+          module: 'VectorStore',
+          versionId,
+        });
         existing = { ids: [] };
       } else {
         throw getError;
       }
     }
 
-    logger.info('查询到版本向量数据', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
+    logger.info('查询到版本向量数据', {
+      module: 'VectorStore',
+      versionId,
+      vectorCount: existing.ids.length,
+    });
 
     if (existing.ids.length > 0) {
       try {
         await collection.delete({ where: versionFilter });
-        logger.info('已从 ChromaDB 删除版本向量', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
+        logger.info('已从 ChromaDB 删除版本向量', {
+          module: 'VectorStore',
+          versionId,
+          vectorCount: existing.ids.length,
+        });
       } catch (delError: any) {
-        if (delError.name === 'ChromaNotFoundError' || delError.message?.includes('could not be found')) {
-          logger.info('ChromaDB 删除时资源不存在，视为已清理', { module: 'VectorStore', versionId });
+        if (
+          delError.name === 'ChromaNotFoundError' ||
+          delError.message?.includes('could not be found')
+        ) {
+          logger.info('ChromaDB 删除时资源不存在，视为已清理', {
+            module: 'VectorStore',
+            versionId,
+          });
         } else {
           throw delError;
         }
       }
     } else {
-      logger.info('ChromaDB 中无该版本向量数据', { module: 'VectorStore', versionId });
+      logger.info('ChromaDB 中无该版本向量数据', {
+        module: 'VectorStore',
+        versionId,
+      });
     }
 
     // 同步清理 BM25 索引中该版本的数据
@@ -314,22 +364,41 @@ export async function removeDocumentVersion(versionId: number): Promise<void> {
           idsToRemove.push(id);
         }
       }
-      logger.info('BM25 索引中该版本文档数量', { module: 'VectorStore', versionId, docCount: idsToRemove.length });
+      logger.info('BM25 索引中该版本文档数量', {
+        module: 'VectorStore',
+        versionId,
+        docCount: idsToRemove.length,
+      });
 
       if (idsToRemove.length > 0) {
         for (const id of idsToRemove) {
           try {
             bm25Index.remove(id);
           } catch {
-            logger.warn('BM25 删除文档失败（可能已不存在）', { module: 'VectorStore', id });
+            logger.warn('BM25 删除文档失败（可能已不存在）', {
+              module: 'VectorStore',
+              id,
+            });
           }
           bm25DocumentStore.delete(id);
         }
-        saveBM25Index().catch(err => logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(err) }));
-        logger.info('已从 BM25 索引删除版本文档', { module: 'VectorStore', versionId, docCount: idsToRemove.length });
+        saveBM25Index().catch((err) =>
+          logger.error('保存 BM25 索引失败', {
+            module: 'VectorStore',
+            error: String(err),
+          }),
+        );
+        logger.info('已从 BM25 索引删除版本文档', {
+          module: 'VectorStore',
+          versionId,
+          docCount: idsToRemove.length,
+        });
       }
     } else {
-      logger.info('BM25 索引未初始化，跳过', { module: 'VectorStore', versionId });
+      logger.info('BM25 索引未初始化，跳过', {
+        module: 'VectorStore',
+        versionId,
+      });
     }
 
     logger.info('版本向量数据删除完成', { module: 'VectorStore', versionId });
@@ -337,7 +406,12 @@ export async function removeDocumentVersion(versionId: number): Promise<void> {
     // 通知缓存：知识库已更新
     eventBus.emit('knowledge-base-updated', '版本删除');
   } catch (error: any) {
-    logger.error('删除版本向量数据失败', { module: 'VectorStore', versionId, error: error.message, stack: error.stack });
+    logger.error('删除版本向量数据失败', {
+      module: 'VectorStore',
+      versionId,
+      error: error.message,
+      stack: error.stack,
+    });
     throw error;
   }
 }
@@ -345,8 +419,15 @@ export async function removeDocumentVersion(versionId: number): Promise<void> {
 /**
  * 按 versionId 批量更新向量的 versionStatus（回滚时用，不删除向量）
  */
-export async function updateVersionVectorStatus(versionId: number, newStatus: string): Promise<void> {
-  logger.info('开始更新版本向量状态', { module: 'VectorStore', versionId, newStatus });
+export async function updateVersionVectorStatus(
+  versionId: number,
+  newStatus: string,
+): Promise<void> {
+  logger.info('开始更新版本向量状态', {
+    module: 'VectorStore',
+    versionId,
+    newStatus,
+  });
 
   const store = await initializeVectorStore();
   const collection = store.collection;
@@ -361,15 +442,25 @@ export async function updateVersionVectorStatus(versionId: number, newStatus: st
     try {
       existing = await collection.get({ where: versionFilter });
     } catch (getError: any) {
-      if (getError.name === 'ChromaNotFoundError' || getError.message?.includes('could not be found')) {
-        logger.info('ChromaDB 集合或资源不存在，无需更新状态', { module: 'VectorStore', versionId });
+      if (
+        getError.name === 'ChromaNotFoundError' ||
+        getError.message?.includes('could not be found')
+      ) {
+        logger.info('ChromaDB 集合或资源不存在，无需更新状态', {
+          module: 'VectorStore',
+          versionId,
+        });
         existing = { ids: [], metadatas: [] };
       } else {
         throw getError;
       }
     }
 
-    logger.info('查询到版本向量数据', { module: 'VectorStore', versionId, vectorCount: existing.ids.length });
+    logger.info('查询到版本向量数据', {
+      module: 'VectorStore',
+      versionId,
+      vectorCount: existing.ids.length,
+    });
 
     if (existing.ids.length > 0) {
       const updatedMetadata = existing.metadatas.map((meta: any) => ({
@@ -382,9 +473,17 @@ export async function updateVersionVectorStatus(versionId: number, newStatus: st
         metadatas: updatedMetadata,
       });
 
-      logger.info('已更新 ChromaDB 版本向量状态', { module: 'VectorStore', versionId, newStatus, vectorCount: existing.ids.length });
+      logger.info('已更新 ChromaDB 版本向量状态', {
+        module: 'VectorStore',
+        versionId,
+        newStatus,
+        vectorCount: existing.ids.length,
+      });
     } else {
-      logger.info('ChromaDB 中无该版本向量数据，跳过状态更新', { module: 'VectorStore', versionId });
+      logger.info('ChromaDB 中无该版本向量数据，跳过状态更新', {
+        module: 'VectorStore',
+        versionId,
+      });
     }
 
     // 同步更新 BM25 索引
@@ -401,17 +500,37 @@ export async function updateVersionVectorStatus(versionId: number, newStatus: st
         }
       }
       if (updatedCount > 0) {
-        logger.info('已更新 BM25 索引中版本文档状态', { module: 'VectorStore', versionId, newStatus, updatedCount });
-        saveBM25Index().catch(err => logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(err) }));
+        logger.info('已更新 BM25 索引中版本文档状态', {
+          module: 'VectorStore',
+          versionId,
+          newStatus,
+          updatedCount,
+        });
+        saveBM25Index().catch((err) =>
+          logger.error('保存 BM25 索引失败', {
+            module: 'VectorStore',
+            error: String(err),
+          }),
+        );
       }
     }
 
-    logger.info('版本向量状态更新完成', { module: 'VectorStore', versionId, newStatus });
+    logger.info('版本向量状态更新完成', {
+      module: 'VectorStore',
+      versionId,
+      newStatus,
+    });
 
     // 通知缓存：知识库已更新（版本状态变更影响检索结果的 versionStatus 过滤）
     eventBus.emit('knowledge-base-updated', '版本状态变更');
   } catch (error: any) {
-    logger.error('更新版本向量状态失败', { module: 'VectorStore', versionId, newStatus, error: error.message, stack: error.stack });
+    logger.error('更新版本向量状态失败', {
+      module: 'VectorStore',
+      versionId,
+      newStatus,
+      error: error.message,
+      stack: error.stack,
+    });
     throw error;
   }
 }
@@ -424,7 +543,12 @@ export async function reindexVersion(
   documentId: number,
   textContent: string,
   versionStatus: string,
-  fileInfo: { source: string; fileType: string; mimeType?: string; documentTitle?: string },
+  fileInfo: {
+    source: string;
+    fileType: string;
+    mimeType?: string;
+    documentTitle?: string;
+  },
 ): Promise<number> {
   // 空文本守卫：必须置于 removeDocumentVersion 之前。
   // 否则会先把该版本的旧向量删干净、再因切不出块而写入失败，
@@ -441,7 +565,13 @@ export async function reindexVersion(
     );
   }
 
-  logger.info('开始重新向量化版本', { module: 'VectorStore', versionId, documentId, versionStatus, textLength: textContent.length });
+  logger.info('开始重新向量化版本', {
+    module: 'VectorStore',
+    versionId,
+    documentId,
+    versionStatus,
+    textLength: textContent.length,
+  });
 
   // 1. 先清理旧向量
   await removeDocumentVersion(versionId);
@@ -450,7 +580,7 @@ export async function reindexVersion(
   // 从 fileUrl 提取纯文件名作为 source，并写入 documentTitle 供前端展示
   const rawFileName = fileInfo.source
     ? fileInfo.source.split(/[\\/]/).pop() || fileInfo.source
-    : (fileInfo.documentTitle || 'unknown');
+    : fileInfo.documentTitle || 'unknown';
   const metadata = {
     documentId: String(documentId),
     documentTitle: fileInfo.documentTitle || rawFileName,
@@ -472,7 +602,12 @@ export async function reindexVersion(
   const chunkCount = await addDocuments([textContent], [metadata], {
     chunkingStrategy: 'parent-child',
   });
-  logger.info('版本重新向量化完成', { module: 'VectorStore', versionId, documentId, chunkCount });
+  logger.info('版本重新向量化完成', {
+    module: 'VectorStore',
+    versionId,
+    documentId,
+    chunkCount,
+  });
   return chunkCount;
 }
 
@@ -481,8 +616,13 @@ export async function reindexVersion(
  * @param validVersionIds 数据库中存在的 versionId 列表
  * @returns 清理的向量数量
  */
-export async function cleanOrphanVectors(validVersionIds: string[]): Promise<number> {
-  logger.info('开始清理孤岛向量', { module: 'VectorStore', validVersionCount: validVersionIds.length });
+export async function cleanOrphanVectors(
+  validVersionIds: string[],
+): Promise<number> {
+  logger.info('开始清理孤岛向量', {
+    module: 'VectorStore',
+    validVersionCount: validVersionIds.length,
+  });
 
   const store = await initializeVectorStore();
   const collection = store.collection;
@@ -496,7 +636,10 @@ export async function cleanOrphanVectors(validVersionIds: string[]): Promise<num
     const orphanIds: string[] = [];
     const orphanVersionIds = new Set<string>();
 
-    logger.info('ChromaDB 中总向量数', { module: 'VectorStore', totalVectors: allDocs.ids.length });
+    logger.info('ChromaDB 中总向量数', {
+      module: 'VectorStore',
+      totalVectors: allDocs.ids.length,
+    });
 
     for (let i = 0; i < allDocs.ids.length; i++) {
       const meta = allDocs.metadatas[i] as any;
@@ -509,9 +652,16 @@ export async function cleanOrphanVectors(validVersionIds: string[]): Promise<num
     }
 
     if (orphanIds.length > 0) {
-      logger.info('发现孤岛向量', { module: 'VectorStore', orphanCount: orphanIds.length, orphanVersionIds: [...orphanVersionIds] });
+      logger.info('发现孤岛向量', {
+        module: 'VectorStore',
+        orphanCount: orphanIds.length,
+        orphanVersionIds: [...orphanVersionIds],
+      });
       await collection.delete({ ids: orphanIds });
-      logger.info('已清理孤岛向量', { module: 'VectorStore', count: orphanIds.length });
+      logger.info('已清理孤岛向量', {
+        module: 'VectorStore',
+        count: orphanIds.length,
+      });
 
       // 同步清理 BM25 索引中对应的孤岛数据
       await initializeBM25Index();
@@ -534,7 +684,10 @@ export async function cleanOrphanVectors(validVersionIds: string[]): Promise<num
         }
         if (bm25CleanedCount > 0) {
           await saveBM25Index();
-          logger.info('已从 BM25 索引清理孤岛数据', { module: 'VectorStore', count: bm25CleanedCount });
+          logger.info('已从 BM25 索引清理孤岛数据', {
+            module: 'VectorStore',
+            count: bm25CleanedCount,
+          });
         }
       }
     } else {
@@ -543,7 +696,10 @@ export async function cleanOrphanVectors(validVersionIds: string[]): Promise<num
 
     return orphanIds.length;
   } catch (error: any) {
-    logger.error('清理孤岛向量失败', { module: 'VectorStore', error: error.message });
+    logger.error('清理孤岛向量失败', {
+      module: 'VectorStore',
+      error: error.message,
+    });
     throw error;
   }
 }
@@ -553,7 +709,10 @@ export async function cleanOrphanVectors(validVersionIds: string[]): Promise<num
  * 将所有 draft 状态的向量更新为 active（用于修复历史数据问题）
  * @returns 修复的 ChromaDB 和 BM25 向量数量
  */
-export async function fixDraftVectors(): Promise<{ fixedChromaCount: number; fixedBM25Count: number }> {
+export async function fixDraftVectors(): Promise<{
+  fixedChromaCount: number;
+  fixedBM25Count: number;
+}> {
   logger.info('开始修复 draft 状态向量', { module: 'VectorStore' });
 
   const store = await initializeVectorStore();
@@ -585,7 +744,10 @@ export async function fixDraftVectors(): Promise<{ fixedChromaCount: number; fix
         ids: draftIds,
         metadatas: draftMetadatas,
       });
-      logger.info('已修复 draft 状态向量', { module: 'VectorStore', count: draftIds.length });
+      logger.info('已修复 draft 状态向量', {
+        module: 'VectorStore',
+        count: draftIds.length,
+      });
 
       // 同步更新 BM25 索引
       await initializeBM25Index();
@@ -599,15 +761,24 @@ export async function fixDraftVectors(): Promise<{ fixedChromaCount: number; fix
       }
       if (bm25FixedCount > 0) {
         await saveBM25Index();
-        logger.info('已修复 BM25 索引中 draft 状态', { module: 'VectorStore', count: bm25FixedCount });
+        logger.info('已修复 BM25 索引中 draft 状态', {
+          module: 'VectorStore',
+          count: bm25FixedCount,
+        });
       }
     } else {
       logger.info('未发现 draft 状态向量', { module: 'VectorStore' });
     }
 
-    return { fixedChromaCount: draftIds.length, fixedBM25Count: bm25FixedCount };
+    return {
+      fixedChromaCount: draftIds.length,
+      fixedBM25Count: bm25FixedCount,
+    };
   } catch (error: any) {
-    logger.error('修复 draft 状态向量失败', { module: 'VectorStore', error: error.message });
+    logger.error('修复 draft 状态向量失败', {
+      module: 'VectorStore',
+      error: error.message,
+    });
     throw error;
   }
 }

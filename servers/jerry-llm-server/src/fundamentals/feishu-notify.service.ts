@@ -17,7 +17,13 @@
 import { config } from './config';
 import { logger } from './logger';
 import { getRedis, isRedisReady } from './redis-client';
-import { deliverWithRetry, registerRetryHandler, retryDeadLetters, type FeishuApiResult, type DeadLetterEntry } from './feishu-delivery.js';
+import {
+  deliverWithRetry,
+  registerRetryHandler,
+  retryDeadLetters,
+  type FeishuApiResult,
+  type DeadLetterEntry,
+} from './feishu-delivery.js';
 import crypto from 'crypto';
 
 // 注：飞书 App ID / Secret / 域名等配置项通过函数内访问 config.notify，
@@ -44,7 +50,10 @@ const LARK_API_BASE = 'https://open.larksuite.com/open-apis';
  *
  * Redis 不可用时静默降级到 L1 + 远端拉取，业务零感知。
  */
-const tenantTokenCache = new Map<string, { token: string; expiresAt: number }>();
+const tenantTokenCache = new Map<
+  string,
+  { token: string; expiresAt: number }
+>();
 const inflightTokenRequests = new Map<string, Promise<string>>();
 
 /** Redis 中保存 tenant_access_token 的 key 前缀（与全局 keyPrefix 拼接） */
@@ -158,12 +167,15 @@ async function fetchTokenFromFeishu(
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const resp = await fetch(`${apiBase}/auth/v3/tenant_access_token/internal`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-      signal: ctrl.signal,
-    });
+    const resp = await fetch(
+      `${apiBase}/auth/v3/tenant_access_token/internal`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+        signal: ctrl.signal,
+      },
+    );
     const data = (await resp.json()) as {
       code: number;
       msg: string;
@@ -328,7 +340,17 @@ export async function uploadImage(
  */
 function inferFeishuFileType(filename: string): string {
   const ext = filename.toLowerCase().split('.').pop() || '';
-  const supported = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'mp4', 'opus'];
+  const supported = [
+    'pdf',
+    'doc',
+    'docx',
+    'xls',
+    'xlsx',
+    'ppt',
+    'pptx',
+    'mp4',
+    'opus',
+  ];
   return supported.includes(ext) ? ext : 'stream';
 }
 
@@ -400,7 +422,9 @@ export async function uploadFile(
  *   elements[]      — 正文（lark_md）、附件列表（fields）、按钮（actions）
  *   若指定 cardId   — 则输出更新卡片格式（仅 elements + header）
  */
-export function buildCardJson(params: FeishuCardTemplate): Record<string, unknown> {
+export function buildCardJson(
+  params: FeishuCardTemplate,
+): Record<string, unknown> {
   const elements: Array<Record<string, unknown>> = [];
 
   // 正文：使用 lark_md 标签，支持 Markdown 子集（加粗、斜体、链接、代码块）
@@ -419,7 +443,10 @@ export function buildCardJson(params: FeishuCardTemplate): Record<string, unknow
       elements.push({
         tag: 'div',
         fields: [
-          { is_short: true, text: { tag: 'lark_md', content: `**${field.label}**` } },
+          {
+            is_short: true,
+            text: { tag: 'lark_md', content: `**${field.label}**` },
+          },
           { is_short: true, text: { tag: 'lark_md', content: field.value } },
         ],
       });
@@ -497,7 +524,10 @@ export function detectReceiveIdType(id: string): FeishuReceiveIdType {
  */
 const EMAIL_TO_OPENID_CACHE_MAX = 500;
 const EMAIL_TO_OPENID_TTL_MS = 60 * 60 * 1000;
-const emailToOpenIdCache = new Map<string, { openId: string; expiresAt: number }>();
+const emailToOpenIdCache = new Map<
+  string,
+  { openId: string; expiresAt: number }
+>();
 
 /** 内部：缓存写入（带 LRU 淘汰） */
 function setEmailCache(email: string, openId: string): void {
@@ -528,7 +558,9 @@ function setEmailCache(email: string, openId: string): void {
  *
  * @returns open_id；如果飞书查不到该邮箱（用户不在租户内）则返回 null
  */
-export async function resolveOpenIdByEmail(email: string): Promise<string | null> {
+export async function resolveOpenIdByEmail(
+  email: string,
+): Promise<string | null> {
   const normalized = email.trim().toLowerCase();
 
   // 1) 缓存命中
@@ -721,28 +753,37 @@ async function postImMessage(
 ): Promise<FeishuSendResult> {
   const apiBase = getApiBase();
 
-  const result = await deliverWithRetry<FeishuApiResult & { messageId?: string; msg?: string }>(
+  const result = await deliverWithRetry<
+    FeishuApiResult & { messageId?: string; msg?: string }
+  >(
     async () => {
       let token: string;
       try {
         token = await getTenantToken();
       } catch (e: any) {
         // token 获取失败按网络错误处理 → 可重试
-        return { code: -1, networkError: true, msg: `获取 token 失败: ${e?.message || String(e)}` };
+        return {
+          code: -1,
+          networkError: true,
+          msg: `获取 token 失败: ${e?.message || String(e)}`,
+        };
       }
 
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
       try {
-        const resp = await fetch(`${apiBase}/im/v1/messages?receive_id_type=${idType}`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
+        const resp = await fetch(
+          `${apiBase}/im/v1/messages?receive_id_type=${idType}`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body),
+            signal: ctrl.signal,
           },
-          body: JSON.stringify(body),
-          signal: ctrl.signal,
-        });
+        );
         const data = (await resp.json()) as {
           code: number;
           msg: string;
@@ -767,8 +808,14 @@ async function postImMessage(
     },
   );
 
-  if (result.code !== 0 || (result.httpStatus !== undefined && result.httpStatus >= 400)) {
-    return { success: false, error: `${errLabel}: ${result.msg || `code=${result.code}`}` };
+  if (
+    result.code !== 0 ||
+    (result.httpStatus !== undefined && result.httpStatus >= 400)
+  ) {
+    return {
+      success: false,
+      error: `${errLabel}: ${result.msg || `code=${result.code}`}`,
+    };
   }
   return { success: true, messageId: result.messageId };
 }
@@ -886,7 +933,10 @@ export async function updateCard(
   try {
     token = await getTenantToken();
   } catch (e: any) {
-    return { success: false, error: `获取 token 失败: ${e.message || String(e)}` };
+    return {
+      success: false,
+      error: `获取 token 失败: ${e.message || String(e)}`,
+    };
   }
   const apiBase = getApiBase();
 
@@ -923,7 +973,10 @@ export async function updateCard(
       clearTimeout(timer);
     }
   }
-  return { success: false, error: `卡片更新失败（${MAX_ATTEMPTS} 次尝试后放弃）: ${lastError}` };
+  return {
+    success: false,
+    error: `卡片更新失败（${MAX_ATTEMPTS} 次尝试后放弃）: ${lastError}`,
+  };
 }
 
 // ==================== 纯文本消息（D1/D2 长聊天流式） ====================
@@ -951,7 +1004,12 @@ export async function sendPlainTextMessage(
     body.uuid = uuid;
   }
   // F4：限流 + 指数退避重试 + 死信，统一走 postImMessage（取代原 3 次抖动重试）
-  return postImMessage('sendPlainTextMessage', idType, body, '飞书发送文本失败');
+  return postImMessage(
+    'sendPlainTextMessage',
+    idType,
+    body,
+    '飞书发送文本失败',
+  );
 }
 
 /**
@@ -974,7 +1032,10 @@ export async function updateTextMessage(
   try {
     token = await getTenantToken();
   } catch (e: any) {
-    return { success: false, error: `获取 token 失败: ${e.message || String(e)}` };
+    return {
+      success: false,
+      error: `获取 token 失败: ${e.message || String(e)}`,
+    };
   }
   const apiBase = getApiBase();
 
@@ -1010,7 +1071,10 @@ export async function updateTextMessage(
       clearTimeout(timer);
     }
   }
-  return { success: false, error: `文本消息更新失败（${MAX_ATTEMPTS} 次尝试后放弃）: ${lastError}` };
+  return {
+    success: false,
+    error: `文本消息更新失败（${MAX_ATTEMPTS} 次尝试后放弃）: ${lastError}`,
+  };
 }
 
 // ==================== 事件回调验证 ====================

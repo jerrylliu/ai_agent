@@ -3,11 +3,20 @@
  */
 
 jest.mock('./logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 import { z } from 'zod';
-import { extractJsonText, parseLlmJson, parseToolResultJson } from './llm-json-parser';
+import {
+  extractJsonText,
+  parseLlmJson,
+  parseToolResultJson,
+} from './llm-json-parser';
 
 describe('extractJsonText', () => {
   it('应能从 ```json``` 围栏中抽出对象', () => {

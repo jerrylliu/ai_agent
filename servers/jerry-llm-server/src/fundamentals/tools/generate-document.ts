@@ -41,15 +41,22 @@ let documentStorageService: {
   read: (
     key: string,
     userId: string | null,
-  ) => Promise<{ entity: { mimeType: string; filename: string }; buffer: Buffer } | null>;
+  ) => Promise<{
+    entity: { mimeType: string; filename: string };
+    buffer: Buffer;
+  } | null>;
 } | null = null;
 
 /**
  * 注入持久化服务实例（由 AppModule.onModuleInit 调用）
  */
-export function initGenerateDocumentTool(service: typeof documentStorageService): void {
+export function initGenerateDocumentTool(
+  service: typeof documentStorageService,
+): void {
   documentStorageService = service;
-  logger.info('generate_document：DocumentStorageService 已注入', { module: 'Tool:GenerateDocument' });
+  logger.info('generate_document：DocumentStorageService 已注入', {
+    module: 'Tool:GenerateDocument',
+  });
 }
 
 // ==================== 内部协议 ====================
@@ -78,7 +85,11 @@ export async function getCachedDocument(
   if (!key || !documentStorageService) return null;
   const result = await documentStorageService.read(key, null);
   if (!result) return null;
-  return { buffer: result.buffer, filename: result.entity.filename, mimeType: result.entity.mimeType };
+  return {
+    buffer: result.buffer,
+    filename: result.entity.filename,
+    mimeType: result.entity.mimeType,
+  };
 }
 
 // ==================== 工具 Schema ====================
@@ -101,7 +112,9 @@ export const generateDocumentParamsSchema = z.object({
     ),
 });
 
-export type GenerateDocumentParams = z.infer<typeof generateDocumentParamsSchema>;
+export type GenerateDocumentParams = z.infer<
+  typeof generateDocumentParamsSchema
+>;
 
 /**
  * 文档导出意图（P1：正文与格式分离）
@@ -147,7 +160,9 @@ export const generateDocumentResultSchema = z.looseObject({
   message: z.string(),
 });
 
-export type GenerateDocumentResult = z.infer<typeof generateDocumentResultSchema>;
+export type GenerateDocumentResult = z.infer<
+  typeof generateDocumentResultSchema
+>;
 
 interface ToolContext {
   userId?: string;
@@ -278,25 +293,32 @@ export async function executeGenerateDocument(
   // 否则"登记"永远没人兑现，只会给模型一个假成功，不如直接失败让它把正文写进回复里。
   if (!body) {
     if (!context?.docIntents || !context?.res) {
-      logger.warn('FC工具 [generate_document] 未提供正文且上下文不支持延迟生成', {
-        module: 'Tool:GenerateDocument',
-        title,
-        format,
-        hasRes: !!context?.res,
-        hasDocIntents: !!context?.docIntents,
-      });
+      logger.warn(
+        'FC工具 [generate_document] 未提供正文且上下文不支持延迟生成',
+        {
+          module: 'Tool:GenerateDocument',
+          title,
+          format,
+          hasRes: !!context?.res,
+          hasDocIntents: !!context?.docIntents,
+        },
+      );
       return {
         success: false,
-        message: '缺少文档正文：请把文档正文写入你的回复正文，或将 Markdown 正文放进 content 参数后再调用本工具',
+        message:
+          '缺少文档正文：请把文档正文写入你的回复正文，或将 Markdown 正文放进 content 参数后再调用本工具',
       };
     }
     context.docIntents.push({ title, format });
-    logger.info('FC工具 [generate_document] 已登记文档导出意图（正文走回复正文通道）', {
-      module: 'Tool:GenerateDocument',
-      title,
-      format,
-      intentCount: context.docIntents.length,
-    });
+    logger.info(
+      'FC工具 [generate_document] 已登记文档导出意图（正文走回复正文通道）',
+      {
+        module: 'Tool:GenerateDocument',
+        title,
+        format,
+        intentCount: context.docIntents.length,
+      },
+    );
     return {
       success: true,
       type: 'document',

@@ -67,15 +67,19 @@ export interface MarkdownToHtmlOptions {
 }
 
 /** Markdown → 完整 HTML 字符串 */
-export function markdownToHtml(markdown: string, options: MarkdownToHtmlOptions = {}): string {
+export function markdownToHtml(
+  markdown: string,
+  options: MarkdownToHtmlOptions = {},
+): string {
   const { title = '', withHeader = true, extraStyle = '' } = options;
   // marked 11+ 默认同步，但类型签名是 string | Promise<string>，统一转字符串
   const body = String(marked.parse(markdown, { async: false }));
 
-  const headerHtml = withHeader && title
-    ? `<h1 class="doc-title">${escapeHtml(title)}</h1>
+  const headerHtml =
+    withHeader && title
+      ? `<h1 class="doc-title">${escapeHtml(title)}</h1>
        <div class="doc-meta">生成时间：${new Date().toLocaleString('zh-CN')}</div>`
-    : '';
+      : '';
 
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -115,13 +119,22 @@ export async function markdownToPdf(
   options: MarkdownToPdfOptions = {},
 ): Promise<Buffer> {
   const html = markdownToHtml(markdown, options);
-  const format = options.format || (config.document.pdfFormat as 'A4' | 'Letter' | 'Legal');
-  const margin = options.margin || { top: '20mm', right: '18mm', bottom: '20mm', left: '18mm' };
+  const format =
+    options.format || (config.document.pdfFormat as 'A4' | 'Letter' | 'Legal');
+  const margin = options.margin || {
+    top: '20mm',
+    right: '18mm',
+    bottom: '20mm',
+    left: '18mm',
+  };
 
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
-    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.setContent(html, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30000,
+    });
     // 等待字体加载，避免 PDF 中文字体未就绪
     await page.evaluateHandle('document.fonts.ready');
 
@@ -247,7 +260,13 @@ export async function markdownToDocx(
     if (/^>\s+/.test(line)) {
       paragraphs.push(
         new Paragraph({
-          children: [new TextRun({ text: line.replace(/^>\s+/, ''), italics: true, color: '6B7280' })],
+          children: [
+            new TextRun({
+              text: line.replace(/^>\s+/, ''),
+              italics: true,
+              color: '6B7280',
+            }),
+          ],
           indent: { left: 360 },
         }),
       );
@@ -286,7 +305,13 @@ export async function markdownToDocx(
   if (inCodeBlock && codeBuffer.length > 0) {
     paragraphs.push(
       new Paragraph({
-        children: [new TextRun({ text: codeBuffer.join('\n'), font: 'Consolas', size: 20 })],
+        children: [
+          new TextRun({
+            text: codeBuffer.join('\n'),
+            font: 'Consolas',
+            size: 20,
+          }),
+        ],
       }),
     );
   }
@@ -366,7 +391,10 @@ function parseInlineRuns(text: string): TextRun[] {
  * 注：不写 BOM —— GitHub / VSCode / Typora 等主流场景对无 BOM UTF-8 兼容性最佳，
  * 写 BOM 反而会让某些 Markdown 渲染器把首个 # 当作普通字符。
  */
-export function markdownToMd(markdown: string, options: { title?: string } = {}): Buffer {
+export function markdownToMd(
+  markdown: string,
+  options: { title?: string } = {},
+): Buffer {
   const { title = '' } = options;
   const trimmed = markdown.trimStart();
   // 若用户已经在内容里写了 H1 则不重复加；否则用 title 补一个
@@ -401,7 +429,10 @@ export function getDocumentMimeType(format: DocumentFormat): string {
  * - 已有其他文件扩展名（如 .txt / .md）：剥离后追加目标扩展名
  * - 没有扩展名：直接追加
  */
-export function ensureExtension(filename: string, format: DocumentFormat): string {
+export function ensureExtension(
+  filename: string,
+  format: DocumentFormat,
+): string {
   const target = `.${format}`;
   if (filename.toLowerCase().endsWith(target)) return filename;
 

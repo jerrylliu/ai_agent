@@ -20,7 +20,9 @@ export const listKnowledgeBaseParamsSchema = z.object({
     .describe('概览详细程度：brief=仅文档名和类型，detailed=包含内容摘要'),
 });
 
-export type ListKnowledgeBaseParams = z.infer<typeof listKnowledgeBaseParamsSchema>;
+export type ListKnowledgeBaseParams = z.infer<
+  typeof listKnowledgeBaseParamsSchema
+>;
 
 // ==================== OpenAI Function Calling Schema ====================
 
@@ -54,16 +56,22 @@ export async function executeListKnowledgeBase(
   params: unknown,
 ): Promise<ListKnowledgeBaseResult> {
   // zod 校验：失败时按"宽松"策略走默认值，保持原行为不抛错
-  const parsed = safeParseToolParams(listKnowledgeBaseParamsSchema, params ?? {});
+  const parsed = safeParseToolParams(
+    listKnowledgeBaseParamsSchema,
+    params ?? {},
+  );
   const detailLevel: 'brief' | 'detailed' = parsed.success
     ? parsed.data.detail_level
     : 'brief';
 
   if (!parsed.success) {
-    logger.warn('FC工具 [list_knowledge_base] 参数校验失败，已降级到默认 brief', {
-      module: 'Tool:ListKnowledgeBase',
-      error: parsed.error,
-    });
+    logger.warn(
+      'FC工具 [list_knowledge_base] 参数校验失败，已降级到默认 brief',
+      {
+        module: 'Tool:ListKnowledgeBase',
+        error: parsed.error,
+      },
+    );
   }
 
   logger.info('FC工具 [list_knowledge_base] 开始执行', {
@@ -75,11 +83,15 @@ export async function executeListKnowledgeBase(
     const allDocs = await getAllDocuments();
 
     // 按 source 分组聚合
-    const sourceMap = new Map<string, { docType: string; chunkCount: number; preview?: string }>();
+    const sourceMap = new Map<
+      string,
+      { docType: string; chunkCount: number; preview?: string }
+    >();
 
     for (const doc of allDocs) {
       const source = doc.metadata?.source || 'unknown';
-      const docType = doc.metadata?.doc_type || doc.metadata?.docType || 'unknown';
+      const docType =
+        doc.metadata?.doc_type || doc.metadata?.docType || 'unknown';
       const existing = sourceMap.get(source);
 
       if (existing) {
@@ -88,7 +100,10 @@ export async function executeListKnowledgeBase(
         sourceMap.set(source, {
           docType,
           chunkCount: 1,
-          preview: detailLevel === 'detailed' ? doc.content.substring(0, 200) : undefined,
+          preview:
+            detailLevel === 'detailed'
+              ? doc.content.substring(0, 200)
+              : undefined,
         });
       }
     }

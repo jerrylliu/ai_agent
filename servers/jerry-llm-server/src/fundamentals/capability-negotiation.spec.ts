@@ -53,8 +53,15 @@ jest.mock('./model-provider', () => ({
   createRateLimitedLLM: jest.fn(),
   buildModelConfig: jest.fn(),
   getCurrentModelId: jest.fn(() => 'mock-model'),
-  getModelInfo: jest.fn(() => ({ supportsFunctionCalling: true, supportsVision: true })),
-  getModelCapabilities: jest.fn(() => ({ supportsFC: true, supportsToolChoice: true, contextLength: 8000 })),
+  getModelInfo: jest.fn(() => ({
+    supportsFunctionCalling: true,
+    supportsVision: true,
+  })),
+  getModelCapabilities: jest.fn(() => ({
+    supportsFC: true,
+    supportsToolChoice: true,
+    contextLength: 8000,
+  })),
 }));
 
 jest.mock('./tools', () => ({
@@ -124,7 +131,12 @@ jest.mock('@langchain/core/messages', () => ({
 // ==================== Import 被测模块 ====================
 
 import { detectToolIntent, ToolIntentDetection } from './prompt';
-import { routeRequest, getAgent, applyAgentToolWhitelist, AgentConfig } from './router/agent-router';
+import {
+  routeRequest,
+  getAgent,
+  applyAgentToolWhitelist,
+  AgentConfig,
+} from './router/agent-router';
 
 // ==================== 测试用例 ====================
 
@@ -188,7 +200,8 @@ describe('Agent 能力协商逻辑（P2）', () => {
 
       // 验证 generate_image 在 creative 白名单内
       const whitelist = routing.agent.toolWhitelist;
-      const toolAvailable = !whitelist || whitelist.includes(intent.specificTool!);
+      const toolAvailable =
+        !whitelist || whitelist.includes(intent.specificTool!);
       expect(toolAvailable).toBe(true);
     });
   });
@@ -208,7 +221,8 @@ describe('Agent 能力协商逻辑（P2）', () => {
       // 模拟路由到 search Agent
       const searchAgent = getAgent('search');
       const whitelist = searchAgent.toolWhitelist;
-      const toolAvailable = !whitelist || whitelist.includes(intent.specificTool!);
+      const toolAvailable =
+        !whitelist || whitelist.includes(intent.specificTool!);
 
       expect(toolAvailable).toBe(false);
 
@@ -233,7 +247,8 @@ describe('Agent 能力协商逻辑（P2）', () => {
 
       const documentAgent = getAgent('document');
       const whitelist = documentAgent.toolWhitelist;
-      const toolAvailable = !whitelist || whitelist.includes(intent.specificTool!);
+      const toolAvailable =
+        !whitelist || whitelist.includes(intent.specificTool!);
 
       expect(toolAvailable).toBe(false);
       expect(whitelist!.includes('generate_image')).toBe(false);
@@ -248,7 +263,8 @@ describe('Agent 能力协商逻辑（P2）', () => {
 
       const analysisAgent = getAgent('analysis');
       const whitelist = analysisAgent.toolWhitelist;
-      const toolAvailable = !whitelist || whitelist.includes(intent.specificTool!);
+      const toolAvailable =
+        !whitelist || whitelist.includes(intent.specificTool!);
 
       expect(toolAvailable).toBe(false);
     });
@@ -303,27 +319,37 @@ describe('Agent 能力协商逻辑（P2）', () => {
       const generalAgent = getAgent('general');
       const filtered = applyAgentToolWhitelist(mockSchemas, generalAgent);
       expect(filtered.length).toBe(4);
-      expect(filtered.some(s => s.function.name === 'generate_image')).toBe(true);
+      expect(filtered.some((s) => s.function.name === 'generate_image')).toBe(
+        true,
+      );
     });
 
     it('search Agent → 只返回白名单内的工具（不含 generate_image）', () => {
       const searchAgent = getAgent('search');
       const filtered = applyAgentToolWhitelist(mockSchemas, searchAgent);
-      expect(filtered.some(s => s.function.name === 'generate_image')).toBe(false);
-      expect(filtered.some(s => s.function.name === 'search_knowledge_base')).toBe(true);
-      expect(filtered.some(s => s.function.name === 'search_web')).toBe(true);
+      expect(filtered.some((s) => s.function.name === 'generate_image')).toBe(
+        false,
+      );
+      expect(
+        filtered.some((s) => s.function.name === 'search_knowledge_base'),
+      ).toBe(true);
+      expect(filtered.some((s) => s.function.name === 'search_web')).toBe(true);
     });
 
     it('fallback 到 general 后，generate_image 会保留在 filteredToolSchemas 中', () => {
       // 模拟完整链路：search Agent fallback 到 general → applyAgentToolWhitelist 不过滤
       const searchAgent = getAgent('search');
       const filteredBefore = applyAgentToolWhitelist(mockSchemas, searchAgent);
-      expect(filteredBefore.some(s => s.function.name === 'generate_image')).toBe(false);
+      expect(
+        filteredBefore.some((s) => s.function.name === 'generate_image'),
+      ).toBe(false);
 
       // fallback
       const generalAgent = getAgent('general');
       const filteredAfter = applyAgentToolWhitelist(mockSchemas, generalAgent);
-      expect(filteredAfter.some(s => s.function.name === 'generate_image')).toBe(true);
+      expect(
+        filteredAfter.some((s) => s.function.name === 'generate_image'),
+      ).toBe(true);
     });
   });
 
@@ -346,7 +372,8 @@ describe('Agent 能力协商逻辑（P2）', () => {
 
       // Step 3: 能力协商检查
       const whitelist = routing.agent.toolWhitelist;
-      const toolAvailable = !whitelist || whitelist.includes(intent.specificTool!);
+      const toolAvailable =
+        !whitelist || whitelist.includes(intent.specificTool!);
       expect(toolAvailable).toBe(true);
 
       // Step 4: 不触发 fallback，extraPrompt 正常追加
@@ -372,7 +399,8 @@ describe('Agent 能力协商逻辑（P2）', () => {
       //         这里模拟"路由误判"场景）
       const misroutedAgent = getAgent('search');
       const whitelist = misroutedAgent.toolWhitelist;
-      const toolAvailable = !whitelist || whitelist.includes(intent.specificTool!);
+      const toolAvailable =
+        !whitelist || whitelist.includes(intent.specificTool!);
       expect(toolAvailable).toBe(false);
 
       // Step 3: fallback 到 general
@@ -389,7 +417,9 @@ describe('Agent 能力协商逻辑（P2）', () => {
         { function: { name: 'search_knowledge_base' } },
       ];
       const filtered = applyAgentToolWhitelist(mockSchemas, fallbackAgent);
-      expect(filtered.some(s => s.function.name === 'generate_image')).toBe(true);
+      expect(filtered.some((s) => s.function.name === 'generate_image')).toBe(
+        true,
+      );
     });
 
     /**

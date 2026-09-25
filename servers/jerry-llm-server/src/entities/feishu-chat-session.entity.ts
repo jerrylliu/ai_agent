@@ -8,7 +8,11 @@ import {
 } from 'typeorm';
 
 @Entity('feishu_chat_session')
-@Index('IDX_feishu_chat_session_identity', ['ownerUserId', 'chatType', 'chatId', 'senderOpenId'], { unique: true })
+@Index(
+  'IDX_feishu_chat_session_identity',
+  ['ownerUserId', 'chatType', 'chatId', 'senderOpenId'],
+  { unique: true },
+)
 export class FeishuChatSession {
   @PrimaryGeneratedColumn()
   id: number;

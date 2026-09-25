@@ -2,11 +2,28 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { createHash } from 'crypto';
-import { KnowledgeSource, SourceType, SyncStatus } from '../entities/knowledge-source.entity.js';
-import { KnowledgeSourceSyncLog, SyncLogStatus } from '../entities/knowledge-source-sync-log.entity.js';
+import {
+  KnowledgeSource,
+  SourceType,
+  SyncStatus,
+} from '../entities/knowledge-source.entity.js';
+import {
+  KnowledgeSourceSyncLog,
+  SyncLogStatus,
+} from '../entities/knowledge-source-sync-log.entity.js';
 import { KnowledgeSourcePage } from '../entities/knowledge-source-page.entity.js';
-import { crawlWebsite, type WebCrawlConfig, type CrawlResult, type CrawlPage } from '../fundamentals/web-crawler';
-import { fetchFeishuContent, type FeishuConfig, type FeishuFetchResult, type FeishuPage } from '../fundamentals/feishu-connector';
+import {
+  crawlWebsite,
+  type WebCrawlConfig,
+  type CrawlResult,
+  type CrawlPage,
+} from '../fundamentals/web-crawler';
+import {
+  fetchFeishuContent,
+  type FeishuConfig,
+  type FeishuFetchResult,
+  type FeishuPage,
+} from '../fundamentals/feishu-connector';
 import { addDocuments, deleteDocuments } from '../fundamentals/vector-store';
 import { logger } from '../fundamentals/logger';
 import { DocumentScanService } from './document-scan.service.js';
@@ -73,7 +90,12 @@ export class KnowledgeSourceService {
     });
 
     const saved = await this.sourceRepo.save(source);
-    logger.info('知识源创建成功', { module: 'KnowledgeSourceService', sourceId: saved.id, name: saved.name, type: saved.type });
+    logger.info('知识源创建成功', {
+      module: 'KnowledgeSourceService',
+      sourceId: saved.id,
+      name: saved.name,
+      type: saved.type,
+    });
     return saved;
   }
 
@@ -87,11 +109,29 @@ export class KnowledgeSourceService {
     return source;
   }
 
-  async update(id: number, data: Partial<Pick<KnowledgeSource, 'name' | 'config' | 'syncInterval' | 'maxDepth' | 'maxPages' | 'preferMarkdown' | 'enableJsRendering' | 'enabled'>>): Promise<KnowledgeSource> {
+  async update(
+    id: number,
+    data: Partial<
+      Pick<
+        KnowledgeSource,
+        | 'name'
+        | 'config'
+        | 'syncInterval'
+        | 'maxDepth'
+        | 'maxPages'
+        | 'preferMarkdown'
+        | 'enableJsRendering'
+        | 'enabled'
+      >
+    >,
+  ): Promise<KnowledgeSource> {
     const source = await this.findOne(id);
     Object.assign(source, data);
     const saved = await this.sourceRepo.save(source);
-    logger.info('知识源更新成功', { module: 'KnowledgeSourceService', sourceId: id });
+    logger.info('知识源更新成功', {
+      module: 'KnowledgeSourceService',
+      sourceId: id,
+    });
     return saved;
   }
 
@@ -101,17 +141,31 @@ export class KnowledgeSourceService {
     // 先删除向量数据（ChromaDB + BM25），避免删除数据库记录后向量变成孤岛
     try {
       await deleteDocuments({ sourceId: id });
-      logger.info('知识源向量数据已删除', { module: 'KnowledgeSourceService', sourceId: id });
+      logger.info('知识源向量数据已删除', {
+        module: 'KnowledgeSourceService',
+        sourceId: id,
+      });
     } catch (err: any) {
-      logger.error('知识源向量数据删除失败', { module: 'KnowledgeSourceService', sourceId: id, error: err.message });
+      logger.error('知识源向量数据删除失败', {
+        module: 'KnowledgeSourceService',
+        sourceId: id,
+        error: err.message,
+      });
     }
 
     await this.pageRepo.delete({ sourceId: id });
     await this.sourceRepo.remove(source);
-    logger.info('知识源删除成功', { module: 'KnowledgeSourceService', sourceId: id, name: source.name });
+    logger.info('知识源删除成功', {
+      module: 'KnowledgeSourceService',
+      sourceId: id,
+      name: source.name,
+    });
   }
 
-  async getSyncLogs(sourceId: number, limit: number = 20): Promise<KnowledgeSourceSyncLog[]> {
+  async getSyncLogs(
+    sourceId: number,
+    limit: number = 20,
+  ): Promise<KnowledgeSourceSyncLog[]> {
     return this.syncLogRepo.find({
       where: { sourceId },
       order: { createdAt: 'DESC' },
@@ -119,14 +173,23 @@ export class KnowledgeSourceService {
     });
   }
 
-  async getStats(): Promise<{ total: number; enabled: number; syncing: number; failed: number; success: number }> {
+  async getStats(): Promise<{
+    total: number;
+    enabled: number;
+    syncing: number;
+    failed: number;
+    success: number;
+  }> {
     const sources = await this.sourceRepo.find();
     return {
       total: sources.length,
-      enabled: sources.filter(s => s.enabled).length,
-      syncing: sources.filter(s => s.lastSyncStatus === SyncStatus.SYNCING).length,
-      failed: sources.filter(s => s.lastSyncStatus === SyncStatus.FAILED).length,
-      success: sources.filter(s => s.lastSyncStatus === SyncStatus.SUCCESS).length,
+      enabled: sources.filter((s) => s.enabled).length,
+      syncing: sources.filter((s) => s.lastSyncStatus === SyncStatus.SYNCING)
+        .length,
+      failed: sources.filter((s) => s.lastSyncStatus === SyncStatus.FAILED)
+        .length,
+      success: sources.filter((s) => s.lastSyncStatus === SyncStatus.SUCCESS)
+        .length,
     };
   }
 
@@ -145,8 +208,14 @@ export class KnowledgeSourceService {
    */
   async markAllForResync(): Promise<number> {
     // 清空所有知识源的页面数据（TypeORM 不允许空条件 delete，使用 createQueryBuilder）
-    const pageDeleteResult = await this.pageRepo.createQueryBuilder().delete().execute();
-    logger.info('已清空知识源页面数据', { module: 'KnowledgeSourceService', deletedPages: pageDeleteResult.affected });
+    const pageDeleteResult = await this.pageRepo
+      .createQueryBuilder()
+      .delete()
+      .execute();
+    logger.info('已清空知识源页面数据', {
+      module: 'KnowledgeSourceService',
+      deletedPages: pageDeleteResult.affected,
+    });
 
     // 标记所有启用的知识源需要重新同步
     const sources = await this.sourceRepo.find({ where: { enabled: true } });
@@ -158,7 +227,10 @@ export class KnowledgeSourceService {
       await this.sourceRepo.save(source);
       count++;
     }
-    logger.info('已标记所有知识源需要重新同步', { module: 'KnowledgeSourceService', count });
+    logger.info('已标记所有知识源需要重新同步', {
+      module: 'KnowledgeSourceService',
+      count,
+    });
     return count;
   }
 
@@ -183,7 +255,12 @@ export class KnowledgeSourceService {
     });
     await this.syncLogRepo.save(syncLog);
 
-    logger.info('知识源同步开始', { module: 'KnowledgeSourceService', sourceId, name: source.name, type: source.type });
+    logger.info('知识源同步开始', {
+      module: 'KnowledgeSourceService',
+      sourceId,
+      name: source.name,
+      type: source.type,
+    });
 
     try {
       let pagesFetched = 0;
@@ -194,7 +271,11 @@ export class KnowledgeSourceService {
       let pagesDeleted = 0;
       let updatedPageDetails: Array<{ title: string; url: string }> = [];
       let pagesSkippedByScan = 0;
-      let skippedPageDetails: Array<{ title: string; url: string; reason: string }> = [];
+      let skippedPageDetails: Array<{
+        title: string;
+        url: string;
+        reason: string;
+      }> = [];
 
       switch (source.type) {
         case SourceType.WEB: {
@@ -236,10 +317,12 @@ export class KnowledgeSourceService {
       syncLog.pagesNew = pagesNew;
       syncLog.pagesUpdated = pagesUpdated;
       syncLog.pagesDeleted = pagesDeleted;
-      syncLog.updatedPageDetails = updatedPageDetails.length > 0 ? updatedPageDetails : null;
+      syncLog.updatedPageDetails =
+        updatedPageDetails.length > 0 ? updatedPageDetails : null;
       // 注入扫描拦截统计：便于在同步日志中追溯哪些页面因安全扫描未入库
       syncLog.pagesSkippedByScan = pagesSkippedByScan;
-      syncLog.skippedPageDetails = skippedPageDetails.length > 0 ? skippedPageDetails : null;
+      syncLog.skippedPageDetails =
+        skippedPageDetails.length > 0 ? skippedPageDetails : null;
       syncLog.finishedAt = new Date();
 
       source.lastSyncStatus = SyncStatus.SUCCESS;
@@ -282,12 +365,19 @@ export class KnowledgeSourceService {
     return syncLog;
   }
 
-  private async incrementalSync(source: KnowledgeSource, pages: PageItem[]): Promise<IncrementalSyncResult> {
-    const existingPages = await this.pageRepo.find({ where: { sourceId: source.id } });
-    const existingMap = new Map(existingPages.map(p => [p.pageKey, p]));
-    const activeMap = new Map(existingPages.filter(p => !p.isDeleted).map(p => [p.pageKey, p]));
+  private async incrementalSync(
+    source: KnowledgeSource,
+    pages: PageItem[],
+  ): Promise<IncrementalSyncResult> {
+    const existingPages = await this.pageRepo.find({
+      where: { sourceId: source.id },
+    });
+    const existingMap = new Map(existingPages.map((p) => [p.pageKey, p]));
+    const activeMap = new Map(
+      existingPages.filter((p) => !p.isDeleted).map((p) => [p.pageKey, p]),
+    );
 
-    const currentKeys = new Set(pages.map(p => p.key));
+    const currentKeys = new Set(pages.map((p) => p.key));
 
     const newPages: PageItem[] = [];
     const updatedPages: PageItem[] = [];
@@ -324,10 +414,21 @@ export class KnowledgeSourceService {
         const page = existingMap.get(key);
         if (page?.pageUrl) {
           try {
-            await deleteDocuments({ source: page.pageUrl, sourceId: source.id });
-            logger.info('已删除远端移除页面的向量', { module: 'KnowledgeSourceService', sourceId: source.id, pageKey: key });
+            await deleteDocuments({
+              source: page.pageUrl,
+              sourceId: source.id,
+            });
+            logger.info('已删除远端移除页面的向量', {
+              module: 'KnowledgeSourceService',
+              sourceId: source.id,
+              pageKey: key,
+            });
           } catch (e: any) {
-            logger.warn('删除远端移除页面的向量失败', { module: 'KnowledgeSourceService', pageKey: key, error: e.message });
+            logger.warn('删除远端移除页面的向量失败', {
+              module: 'KnowledgeSourceService',
+              pageKey: key,
+              error: e.message,
+            });
           }
         }
       }
@@ -350,19 +451,31 @@ export class KnowledgeSourceService {
         module: 'KnowledgeSourceService',
         sourceId: source.id,
         skippedCount: skippedByScan.length,
-        skippedPages: skippedByScan.map(p => ({ title: p.title, url: p.url, reason: p.reason })),
+        skippedPages: skippedByScan.map((p) => ({
+          title: p.title,
+          url: p.url,
+          reason: p.reason,
+        })),
       });
     }
 
     // 仅对通过扫描的更新页面删除旧向量（对象引用比对：
     // scanKnowledgePages 原样透传页面对象，safePages 元素与 updatedPages 同源）
-    const safeUpdatedPages = safePages.filter(p => updatedPages.includes(p));
+    const safeUpdatedPages = safePages.filter((p) => updatedPages.includes(p));
     for (const page of safeUpdatedPages) {
       try {
         await deleteDocuments({ source: page.url, sourceId: source.id });
-        logger.info('已删除更新页面的旧向量', { module: 'KnowledgeSourceService', sourceId: source.id, pageUrl: page.url });
+        logger.info('已删除更新页面的旧向量', {
+          module: 'KnowledgeSourceService',
+          sourceId: source.id,
+          pageUrl: page.url,
+        });
       } catch (e: any) {
-        logger.warn('删除更新页面的旧向量失败', { module: 'KnowledgeSourceService', pageUrl: page.url, error: e.message });
+        logger.warn('删除更新页面的旧向量失败', {
+          module: 'KnowledgeSourceService',
+          pageUrl: page.url,
+          error: e.message,
+        });
       }
     }
 
@@ -371,7 +484,15 @@ export class KnowledgeSourceService {
 
     if (safePages.length > 0) {
       const texts: string[] = [];
-      const metadataList: Array<{ source: string; docType: string; sourceType: string; sourceId: number; sourceName: string; crawledAt: string; [key: string]: any }> = [];
+      const metadataList: Array<{
+        source: string;
+        docType: string;
+        sourceType: string;
+        sourceId: number;
+        sourceName: string;
+        crawledAt: string;
+        [key: string]: any;
+      }> = [];
 
       for (const page of safePages) {
         const content = `# ${page.title}\n\n来源: ${page.url}\n\n${page.content}`;
@@ -394,8 +515,11 @@ export class KnowledgeSourceService {
         chunkingStrategy: 'parent-child',
       });
       // 按通过扫描的新增页面比例估算 added/updated
-      const safeNewCount = safePages.filter(p => newPages.includes(p)).length;
-      chunksAdded = safeNewCount > 0 ? Math.round(chunkCount * (safeNewCount / safePages.length)) : 0;
+      const safeNewCount = safePages.filter((p) => newPages.includes(p)).length;
+      chunksAdded =
+        safeNewCount > 0
+          ? Math.round(chunkCount * (safeNewCount / safePages.length))
+          : 0;
       chunksUpdated = chunkCount - chunksAdded;
     }
 
@@ -435,10 +559,16 @@ export class KnowledgeSourceService {
     }
 
     if (deletedKeys.length > 0) {
-      await this.pageRepo.update({ sourceId: source.id, pageKey: In(deletedKeys) }, { isDeleted: true, syncedAt: now });
+      await this.pageRepo.update(
+        { sourceId: source.id, pageKey: In(deletedKeys) },
+        { isDeleted: true, syncedAt: now },
+      );
     }
 
-    const updatedPageDetails = updatedPages.map(p => ({ title: p.title, url: p.url }));
+    const updatedPageDetails = updatedPages.map((p) => ({
+      title: p.title,
+      url: p.url,
+    }));
 
     return {
       pagesFetched: pages.length,
@@ -453,7 +583,9 @@ export class KnowledgeSourceService {
     };
   }
 
-  private async syncWebSource(source: KnowledgeSource): Promise<IncrementalSyncResult> {
+  private async syncWebSource(
+    source: KnowledgeSource,
+  ): Promise<IncrementalSyncResult> {
     const config: WebCrawlConfig = {
       startUrl: source.config?.startUrl || source.config?.url,
       maxDepth: source.maxDepth,
@@ -471,8 +603,21 @@ export class KnowledgeSourceService {
     const crawlResult: CrawlResult = await crawlWebsite(config);
 
     if (crawlResult.pages.length === 0) {
-      logger.warn('Web 爬取未获取到有效页面', { module: 'KnowledgeSourceService', sourceId: source.id });
-      return { pagesFetched: 0, chunksAdded: 0, chunksUpdated: 0, pagesNew: 0, pagesUpdated: 0, pagesDeleted: 0, updatedPageDetails: [], pagesSkippedByScan: 0, skippedPageDetails: [] };
+      logger.warn('Web 爬取未获取到有效页面', {
+        module: 'KnowledgeSourceService',
+        sourceId: source.id,
+      });
+      return {
+        pagesFetched: 0,
+        chunksAdded: 0,
+        chunksUpdated: 0,
+        pagesNew: 0,
+        pagesUpdated: 0,
+        pagesDeleted: 0,
+        updatedPageDetails: [],
+        pagesSkippedByScan: 0,
+        skippedPageDetails: [],
+      };
     }
 
     const pages: PageItem[] = crawlResult.pages.map((p: CrawlPage) => ({
@@ -485,7 +630,9 @@ export class KnowledgeSourceService {
     return this.incrementalSync(source, pages);
   }
 
-  private async syncFeishuSource(source: KnowledgeSource): Promise<IncrementalSyncResult> {
+  private async syncFeishuSource(
+    source: KnowledgeSource,
+  ): Promise<IncrementalSyncResult> {
     const config: FeishuConfig = {
       appId: source.config?.appId,
       appSecret: source.config?.appSecret,
@@ -507,8 +654,21 @@ export class KnowledgeSourceService {
     const fetchResult: FeishuFetchResult = await fetchFeishuContent(config);
 
     if (fetchResult.pages.length === 0) {
-      logger.warn('飞书未获取到有效页面', { module: 'KnowledgeSourceService', sourceId: source.id });
-      return { pagesFetched: 0, chunksAdded: 0, chunksUpdated: 0, pagesNew: 0, pagesUpdated: 0, pagesDeleted: 0, updatedPageDetails: [], pagesSkippedByScan: 0, skippedPageDetails: [] };
+      logger.warn('飞书未获取到有效页面', {
+        module: 'KnowledgeSourceService',
+        sourceId: source.id,
+      });
+      return {
+        pagesFetched: 0,
+        chunksAdded: 0,
+        chunksUpdated: 0,
+        pagesNew: 0,
+        pagesUpdated: 0,
+        pagesDeleted: 0,
+        updatedPageDetails: [],
+        pagesSkippedByScan: 0,
+        skippedPageDetails: [],
+      };
     }
 
     const pages: PageItem[] = fetchResult.pages.map((p: FeishuPage) => ({
@@ -524,7 +684,7 @@ export class KnowledgeSourceService {
   async getSourcesNeedingSync(): Promise<KnowledgeSource[]> {
     const sources = await this.sourceRepo.find({ where: { enabled: true } });
 
-    return sources.filter(source => {
+    return sources.filter((source) => {
       if (source.lastSyncStatus === SyncStatus.SYNCING) return false;
       if (!source.lastSyncAt) return true;
 
@@ -539,7 +699,10 @@ export class KnowledgeSourceService {
       source.lastSyncStatus = SyncStatus.IDLE;
       source.lastSyncError = null;
       await this.sourceRepo.save(source);
-      logger.info('知识源同步状态已重置', { module: 'KnowledgeSourceService', sourceId });
+      logger.info('知识源同步状态已重置', {
+        module: 'KnowledgeSourceService',
+        sourceId,
+      });
     }
   }
 
@@ -547,16 +710,32 @@ export class KnowledgeSourceService {
     const source = await this.findOne(sourceId);
     source.hasContentUpdate = false;
     await this.sourceRepo.save(source);
-    logger.info('知识源内容更新已确认', { module: 'KnowledgeSourceService', sourceId });
+    logger.info('知识源内容更新已确认', {
+      module: 'KnowledgeSourceService',
+      sourceId,
+    });
   }
 
-  async batchSync(sourceIds: number[]): Promise<Array<{ sourceId: number; success: boolean; message: string }>> {
-    const results: Array<{ sourceId: number; success: boolean; message: string }> = [];
+  async batchSync(
+    sourceIds: number[],
+  ): Promise<Array<{ sourceId: number; success: boolean; message: string }>> {
+    const results: Array<{
+      sourceId: number;
+      success: boolean;
+      message: string;
+    }> = [];
 
     for (const id of sourceIds) {
       try {
         const log = await this.syncSource(id);
-        results.push({ sourceId: id, success: log.status === SyncLogStatus.SUCCESS, message: log.status === SyncLogStatus.SUCCESS ? '同步成功' : (log.errorMessage || '同步失败') });
+        results.push({
+          sourceId: id,
+          success: log.status === SyncLogStatus.SUCCESS,
+          message:
+            log.status === SyncLogStatus.SUCCESS
+              ? '同步成功'
+              : log.errorMessage || '同步失败',
+        });
       } catch (error: any) {
         results.push({ sourceId: id, success: false, message: error.message });
       }

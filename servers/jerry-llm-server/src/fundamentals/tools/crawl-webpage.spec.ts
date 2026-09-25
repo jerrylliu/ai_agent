@@ -6,7 +6,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../web-crawler', () => ({
@@ -52,7 +57,9 @@ describe('crawl_webpage 工具', () => {
     it('应委托 crawlWebsite 并返回结果', async () => {
       const { crawlWebsite } = require('../web-crawler');
       crawlWebsite.mockResolvedValue({
-        pages: [{ url: 'https://example.com', title: 'Test', markdown: '# Hello' }],
+        pages: [
+          { url: 'https://example.com', title: 'Test', markdown: '# Hello' },
+        ],
         errors: [],
       });
 

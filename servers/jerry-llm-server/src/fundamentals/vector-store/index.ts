@@ -89,9 +89,7 @@ export {
   getAllDocuments,
 } from './vector-crud.js';
 
-export type {
-  ImageChunkInput,
-} from './vector-crud.js';
+export type { ImageChunkInput } from './vector-crud.js';
 
 // ==================== 检索 ====================
 export {
@@ -100,15 +98,9 @@ export {
 } from './vector-search.js';
 
 // ==================== 检索增强 ====================
-export {
-  rewriteQuery,
-  type RewrittenQuery,
-} from './query-rewriter.js';
+export { rewriteQuery, type RewrittenQuery } from './query-rewriter.js';
 
-export {
-  multiHopSearch,
-  type MultiHopResult,
-} from './multi-hop-search.js';
+export { multiHopSearch, type MultiHopResult } from './multi-hop-search.js';
 
 export {
   rerankResults,

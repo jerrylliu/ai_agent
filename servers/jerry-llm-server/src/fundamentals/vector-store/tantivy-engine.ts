@@ -99,7 +99,12 @@ export class TantivyBM25Engine implements BM25Engine {
    *
    * @param skipCommit 批量操作时设为 true，由调用方统一 commit，避免逐条落盘
    */
-  async add(id: string, content: string, metadata: any, skipCommit: boolean = false): Promise<void> {
+  async add(
+    id: string,
+    content: string,
+    metadata: any,
+    skipCommit: boolean = false,
+  ): Promise<void> {
     if (!this.initialized) {
       await this.init();
     }
@@ -124,7 +129,10 @@ export class TantivyBM25Engine implements BM25Engine {
       this.writer.commit();
       this.index.reload();
     } catch (error) {
-      logger.error('Tantivy BM25 索引提交失败', { module: 'VectorStore', error: String(error) });
+      logger.error('Tantivy BM25 索引提交失败', {
+        module: 'VectorStore',
+        error: String(error),
+      });
     }
   }
 
@@ -143,7 +151,9 @@ export class TantivyBM25Engine implements BM25Engine {
     }
 
     // parseQueryLenient 返回 [Query, errors[]]，best-effort 解析，避免非法查询抛错击穿检索
-    const [parsedQuery, parseErrors] = this.index!.parseQueryLenient(query, ['content']);
+    const [parsedQuery, parseErrors] = this.index!.parseQueryLenient(query, [
+      'content',
+    ]);
     if (parseErrors && parseErrors.length > 0) {
       logger.debug('Tantivy 查询宽松解析产生告警', {
         module: 'VectorStore',
@@ -196,7 +206,10 @@ export class TantivyBM25Engine implements BM25Engine {
       this.writer!.commit();
       this.index!.reload();
     } catch (error) {
-      logger.error('Tantivy BM25 清空索引失败', { module: 'VectorStore', error: String(error) });
+      logger.error('Tantivy BM25 清空索引失败', {
+        module: 'VectorStore',
+        error: String(error),
+      });
     }
   }
 

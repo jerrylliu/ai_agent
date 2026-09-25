@@ -20,7 +20,12 @@
  * Mock：仅隔离 logger 与 PERSIST_DIR，fs / 原生绑定保持真实
  * ==================================================================*/
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // tantivy-engine 仅从 store-state 取 PERSIST_DIR；指向系统临时目录下的固定子目录

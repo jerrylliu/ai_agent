@@ -16,12 +16,20 @@
  */
 
 import { logger } from '../logger';
-import { hasPipelineTemplate, listPipelineTemplates } from '../workflow/pipeline-templates';
+import {
+  hasPipelineTemplate,
+  listPipelineTemplates,
+} from '../workflow/pipeline-templates';
 
 // ==================== Agent 定义 ====================
 
 /** Agent 的"专长"标识 */
-export type AgentRole = 'general' | 'search' | 'analysis' | 'creative' | 'document';
+export type AgentRole =
+  | 'general'
+  | 'search'
+  | 'analysis'
+  | 'creative'
+  | 'document';
 
 /** Agent 配置 */
 export interface AgentConfig {
@@ -72,7 +80,8 @@ const AGENTS: Record<AgentRole, AgentConfig> = {
       'update_plan_step',
       'get_plan',
     ],
-    extraPrompt: '\n\n你当前是信息检索专家，请优先使用搜索类工具帮助用户查找信息。如果用户的需求是一个多步任务（如搜索后整理为图表/思维导图），请先尝试用 execute_workflow 触发预置流水线。',
+    extraPrompt:
+      '\n\n你当前是信息检索专家，请优先使用搜索类工具帮助用户查找信息。如果用户的需求是一个多步任务（如搜索后整理为图表/思维导图），请先尝试用 execute_workflow 触发预置流水线。',
   },
   analysis: {
     role: 'analysis',
@@ -88,7 +97,8 @@ const AGENTS: Record<AgentRole, AgentConfig> = {
       'update_plan_step',
       'get_plan',
     ],
-    extraPrompt: '\n\n你当前是数据分析师，请优先使用计算和图表工具。生成图表时务必调用 generate_chart 而非用文字描述。',
+    extraPrompt:
+      '\n\n你当前是数据分析师，请优先使用计算和图表工具。生成图表时务必调用 generate_chart 而非用文字描述。',
   },
   creative: {
     role: 'creative',
@@ -104,7 +114,8 @@ const AGENTS: Record<AgentRole, AgentConfig> = {
       'update_plan_step',
       'get_plan',
     ],
-    extraPrompt: '\n\n你当前是创意助手，请优先使用 generate_image / create_mindmap 等可视化工具。生成图片或思维导图时务必调用对应工具，不要仅用文字描述。',
+    extraPrompt:
+      '\n\n你当前是创意助手，请优先使用 generate_image / create_mindmap 等可视化工具。生成图片或思维导图时务必调用对应工具，不要仅用文字描述。',
   },
   document: {
     role: 'document',
@@ -122,7 +133,8 @@ const AGENTS: Record<AgentRole, AgentConfig> = {
       'update_plan_step',
       'get_plan',
     ],
-    extraPrompt: '\n\n你当前是文档管理专家，请使用文档相关工具帮助用户管理知识库内容。',
+    extraPrompt:
+      '\n\n你当前是文档管理专家，请使用文档相关工具帮助用户管理知识库内容。',
   },
 };
 
@@ -135,17 +147,71 @@ const AGENTS: Record<AgentRole, AgentConfig> = {
  */
 const ROUTING_KEYWORDS: Record<AgentRole, string[]> = {
   general: [],
-  search: ['搜索', '搜', '查找', '查一下', '查询', '检索', '联网', '资料', '知识库', '文档里', '上传过', '最新', '新闻', '实时', '网页'],
-  analysis: ['计算', '算一下', '运算', '图表', '可视化', '柱状图', '折线图', '饼图', '雷达图', '数据', '统计', '分析'],
-  creative: ['画', '画图', '画一', '生成图', '生成图片', '文生图', '思维导图', '脑图', '导图'],
-  document: ['创建文档', '新建文档', '写一篇', '更新文档', '摘要', '对比文档', '总结文档', '文档版本'],
+  search: [
+    '搜索',
+    '搜',
+    '查找',
+    '查一下',
+    '查询',
+    '检索',
+    '联网',
+    '资料',
+    '知识库',
+    '文档里',
+    '上传过',
+    '最新',
+    '新闻',
+    '实时',
+    '网页',
+  ],
+  analysis: [
+    '计算',
+    '算一下',
+    '运算',
+    '图表',
+    '可视化',
+    '柱状图',
+    '折线图',
+    '饼图',
+    '雷达图',
+    '数据',
+    '统计',
+    '分析',
+  ],
+  creative: [
+    '画',
+    '画图',
+    '画一',
+    '生成图',
+    '生成图片',
+    '文生图',
+    '思维导图',
+    '脑图',
+    '导图',
+  ],
+  document: [
+    '创建文档',
+    '新建文档',
+    '写一篇',
+    '更新文档',
+    '摘要',
+    '对比文档',
+    '总结文档',
+    '文档版本',
+  ],
 };
 
 /**
  * 平局裁决优先级（前者优先）
  * 一般来说"具体能力 Agent" > "通用 Agent"
  */
-const AGENT_PRIORITY: AgentRole[] = ['creative', 'analysis', 'document', 'search', 'general'];
+const AGENT_PRIORITY: AgentRole[] = [
+  'creative',
+  'analysis',
+  'document',
+  'search',
+  'general',
+];
 
 /**
  * Pipeline 模板触发关键词
@@ -210,7 +276,9 @@ export function routeRequest(userInput: string | undefined): RoutingResult {
     document: 0,
   };
 
-  for (const [role, keywords] of Object.entries(ROUTING_KEYWORDS) as Array<[AgentRole, string[]]>) {
+  for (const [role, keywords] of Object.entries(ROUTING_KEYWORDS) as Array<
+    [AgentRole, string[]]
+  >) {
     for (const kw of keywords) {
       if (text.includes(kw.toLowerCase())) {
         scores[role] += 1;
@@ -229,7 +297,8 @@ export function routeRequest(userInput: string | undefined): RoutingResult {
     selectedRole = 'general';
   } else {
     // 平局按优先级裁决
-    selectedRole = AGENT_PRIORITY.find(role => scores[role] === maxScore) || 'general';
+    selectedRole =
+      AGENT_PRIORITY.find((role) => scores[role] === maxScore) || 'general';
   }
 
   // 检查是否匹配某个 Pipeline 模板
@@ -259,14 +328,16 @@ export function routeRequest(userInput: string | undefined): RoutingResult {
  * 匹配 Pipeline 模板
  * 规则：每组 keywords 数组都需要至少命中一个关键词（AND-of-OR）
  */
-function matchPipelineTemplate(text: string): { templateId: string; reason: string } | undefined {
+function matchPipelineTemplate(
+  text: string,
+): { templateId: string; reason: string } | undefined {
   for (const trigger of PIPELINE_TRIGGERS) {
-    const allGroupsMatched = trigger.keywords.every(group =>
-      group.some(kw => text.includes(kw.toLowerCase()))
+    const allGroupsMatched = trigger.keywords.every((group) =>
+      group.some((kw) => text.includes(kw.toLowerCase())),
     );
     if (allGroupsMatched && hasPipelineTemplate(trigger.templateId)) {
       const matchedKws = trigger.keywords
-        .map(group => group.find(kw => text.includes(kw.toLowerCase())))
+        .map((group) => group.find((kw) => text.includes(kw.toLowerCase())))
         .filter(Boolean)
         .join('+');
       return {
@@ -296,18 +367,21 @@ export function getAgent(role: AgentRole): AgentConfig {
  * 应用 Agent 的工具白名单：从 schemas 中过滤出该 Agent 可用的子集
  * 当 Agent 未配置 toolWhitelist 时返回原列表（不过滤）
  */
-export function applyAgentToolWhitelist(schemas: any[], agent: AgentConfig): any[] {
+export function applyAgentToolWhitelist(
+  schemas: any[],
+  agent: AgentConfig,
+): any[] {
   if (!agent.toolWhitelist || agent.toolWhitelist.length === 0) {
     return schemas;
   }
   const whitelistSet = new Set(agent.toolWhitelist);
-  const filtered = schemas.filter(s => whitelistSet.has(s?.function?.name));
+  const filtered = schemas.filter((s) => whitelistSet.has(s?.function?.name));
   logger.info('Agent Router：已应用工具白名单', {
     module: 'AgentRouter',
     agentRole: agent.role,
     originalCount: schemas.length,
     filteredCount: filtered.length,
-    filteredTools: filtered.map(s => s?.function?.name).join(', '),
+    filteredTools: filtered.map((s) => s?.function?.name).join(', '),
   });
   return filtered;
 }

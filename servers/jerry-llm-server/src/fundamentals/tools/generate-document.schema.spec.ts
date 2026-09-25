@@ -5,7 +5,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // 阻断 document-generator 真实加载（依赖 puppeteer / docx / pdf-parse 等）
@@ -33,12 +38,21 @@ describe('generateDocumentSchema 结构', () => {
   it('title / format 必填，content 为可选（P1：正文走回复正文通道）', () => {
     const params = generateDocumentSchema.function.parameters as any;
     expect(params.required.sort()).toEqual(['format', 'title']);
-    expect(Object.keys(params.properties).sort()).toEqual(['content', 'format', 'title']);
+    expect(Object.keys(params.properties).sort()).toEqual([
+      'content',
+      'format',
+      'title',
+    ]);
   });
 
   it('format enum 应为 pdf / docx / html / md', () => {
     const params = generateDocumentSchema.function.parameters as any;
-    expect(params.properties.format.enum).toEqual(['pdf', 'docx', 'html', 'md']);
+    expect(params.properties.format.enum).toEqual([
+      'pdf',
+      'docx',
+      'html',
+      'md',
+    ]);
   });
 });
 
