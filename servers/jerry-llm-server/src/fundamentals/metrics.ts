@@ -25,10 +25,11 @@
  *      - 写入拒绝：rejected{reason=oversize|budget}
  *      - 淘汰归因：evicted{reason=size|budget|ttl|config}
  *      - 击穿压力：coalesced_requests（被单飞合并掉的并发回源次数）
+ *                 / dedupe_timeouts（回源超时次数，上游劣化的最早预警）
  *      - 每次 scrape 时主动调 getStats()，容量治理类指标为可选字段
  *        （MultiLevelCache 不提供，序列缺失而非写 0）
  *      - 用途：观察命中率、定位容量瓶颈（条数上限还是字节预算先触顶）、
- *             判断缓存是否正在被击穿
+ *             判断缓存是否正在被击穿、Embedding / 向量库是否开始变慢
  *
  * 使用：
  *   - 业务侧：import { metrics } from './metrics'; metrics.feishuMessageSent.inc({ channel: 'card', status: 'success' });
@@ -95,6 +96,13 @@ interface CacheStatsProvider {
     evictedByConfig?: number;
     /** 被单飞合并掉的并发回源次数 */
     coalescedRequests?: number;
+    /**
+     * 单飞回源超时次数
+     *
+     * 这是判断「上游变慢」的最早信号：l2Errors 要等 Redis 真挂了才动，
+     * 而回源超时在 Embedding / ChromaDB 刚开始变慢时就会出现。
+     */
+    dedupeTimeouts?: number;
   };
 }
 
@@ -208,6 +216,14 @@ const cacheCoalescedRequests = new Gauge({
   labelNames: ['namespace'] as const,
   registers: [metricsRegistry],
 });
+const cacheDedupeTimeouts = new Gauge({
+  name: 'jerry_multilevel_cache_dedupe_timeouts',
+  help:
+    '单飞回源超时次数（非 0 即说明 Embedding / 向量库出现过挂死），' +
+    '是上游劣化的最早预警信号，建议对此配告警而非只看命中率',
+  labelNames: ['namespace'] as const,
+  registers: [metricsRegistry],
+});
 
 /** 缓存读取耗时分布（Histogram：P50/P99 延迟） */
 const cacheGetDuration = new Histogram({
@@ -272,6 +288,7 @@ function refreshCacheGauges(): void {
     setIfDefined(cacheAvgEntrySizeBytes, stats.avgEntrySizeBytes);
     setIfDefined(cacheP95EntrySizeBytes, stats.p95EntrySizeBytes);
     setIfDefined(cacheCoalescedRequests, stats.coalescedRequests);
+    setIfDefined(cacheDedupeTimeouts, stats.dedupeTimeouts);
 
     setReasonIfDefined(cacheRejected, 'oversize', stats.rejectedOversize);
     setReasonIfDefined(cacheRejected, 'budget', stats.rejectedBudget);

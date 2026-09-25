@@ -94,6 +94,13 @@ export interface CacheStats {
   evictedByConfig: number;
   /** 被单飞合并掉的并发回源次数，数值越高说明击穿压力越大 */
   coalescedRequests: number;
+  /**
+   * 单飞回源超时次数（累计），非 0 说明 Embedding / 向量库出现过挂死
+   *
+   * 这是所有缓存指标里最该配告警的一个：它比 l2Errors 更早触发 ——
+   * Redis 挂了只是丢了加速层，而上游回源挂死意味着检索功能本身已经不可用。
+   */
+  dedupeTimeouts: number;
   /** L2（Redis）读写异常次数 */
   l2Errors: number;
   /** L2 是否已就绪（世代号已从 Redis 载入） */
@@ -916,6 +923,7 @@ export class LRUCache<V> {
       evictedByTTL: this.evictedByTTL,
       evictedByConfig: this.evictedByConfig,
       coalescedRequests: this.flight.coalescedCount,
+      dedupeTimeouts: this.flight.timeoutCount,
       l2Errors: this.l2Errors,
       l2Enabled: this.l2Generation !== null,
     };
@@ -956,6 +964,7 @@ export class LRUCache<V> {
       evictedByTTL: this.evictedByTTL,
       evictedByConfig: this.evictedByConfig,
       coalescedRequests: this.flight.coalescedCount,
+      dedupeTimeouts: this.flight.timeoutCount,
     };
   }
 

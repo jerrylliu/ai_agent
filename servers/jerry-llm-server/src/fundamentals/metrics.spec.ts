@@ -118,6 +118,84 @@ describe('metrics', () => {
       );
     });
 
+    it('容量治理扩展指标应写入对应 Gauge', async () => {
+      metrics.registerCacheInstance('cap-cache', {
+        getStats: () => ({
+          namespace: 'cap-cache',
+          l1Hits: 0,
+          l2Hits: 0,
+          misses: 0,
+          l2Errors: 0,
+          total: 0,
+          l1HitRate: 0,
+          overallHitRate: 0,
+          l1Size: 0,
+          l1MaxSize: 0,
+          weightedSizeBytes: 2048,
+          maxTotalSizeBytes: 33554432,
+          avgEntrySizeBytes: 512,
+          p95EntrySizeBytes: 900,
+          rejectedOversize: 1,
+          rejectedBudget: 2,
+          evictedBySize: 3,
+          evictedByBudget: 4,
+          evictedByTTL: 5,
+          evictedByConfig: 6,
+          coalescedRequests: 7,
+          dedupeTimeouts: 2,
+        }),
+      });
+      metrics.refreshCacheGauges();
+
+      const text = await metricsRegistry.metrics();
+      expect(text).toMatch(
+        /jerry_multilevel_cache_weighted_size_bytes\{namespace="cap-cache"\} 2048/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_p95_entry_size_bytes\{namespace="cap-cache"\} 900/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_rejected\{namespace="cap-cache",reason="budget"\} 2/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_evicted\{namespace="cap-cache",reason="config"\} 6/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_coalesced_requests\{namespace="cap-cache"\} 7/,
+      );
+      expect(text).toMatch(
+        /jerry_multilevel_cache_dedupe_timeouts\{namespace="cap-cache"\} 2/,
+      );
+    });
+
+    it('未提供扩展字段的缓存不应写出假的 0 序列', async () => {
+      metrics.registerCacheInstance('plain-cache', {
+        getStats: () => ({
+          namespace: 'plain-cache',
+          l1Hits: 1,
+          l2Hits: 0,
+          misses: 0,
+          l2Errors: 0,
+          total: 1,
+          l1HitRate: 1,
+          overallHitRate: 1,
+          l1Size: 1,
+          l1MaxSize: 10,
+        }),
+      });
+      metrics.refreshCacheGauges();
+
+      const text = await metricsRegistry.metrics();
+      // 序列缺失才是「这个缓存没有这个概念」的正确表达；写 0 会在 Grafana 上
+      // 变成「有预算且占用为零」的假信号
+      expect(text).not.toMatch(
+        /jerry_multilevel_cache_dedupe_timeouts\{namespace="plain-cache"\}/,
+      );
+      expect(text).not.toMatch(
+        /jerry_multilevel_cache_weighted_size_bytes\{namespace="plain-cache"\}/,
+      );
+    });
+
     it('多个 namespace 应独立统计', async () => {
       metrics.registerCacheInstance('a', {
         getStats: () => ({

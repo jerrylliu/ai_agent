@@ -375,6 +375,23 @@ describe('LRUCache', () => {
         /回源超时（20ms）/,
       );
     });
+
+    // 超时次数必须能从 getStats() 透出：它是「上游 Embedding / 向量库开始变慢」
+    // 的最早预警，比 l2Errors 更早触发，藏在 SingleFlight 内部等于没有可观测性
+    it('超时应计入 dedupeTimeouts 指标，resetStats 后归零', async () => {
+      expect(cache.getStats().dedupeTimeouts).toBe(0);
+
+      const hanging = (): Promise<string> => new Promise(() => undefined);
+      await expect(cache.dedupe('k1', hanging, 20)).rejects.toThrow(/回源超时/);
+      await expect(cache.dedupe('k2', hanging, 20)).rejects.toThrow(/回源超时/);
+
+      expect(cache.getStats().dedupeTimeouts).toBe(2);
+      // 合并计数与超时计数互不干扰
+      expect(cache.getStats().coalescedRequests).toBe(0);
+
+      cache.resetStats();
+      expect(cache.getStats().dedupeTimeouts).toBe(0);
+    });
   });
 
   // ==================== L2（Redis）异步读写 ====================

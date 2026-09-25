@@ -71,7 +71,8 @@ export class AppController {
    * 分层命中（hits / l2Hits）、加权体积与字节预算（weightedSizeKB / maxTotalSizeKB）、
    * 单条均值与 P95（avgEntrySizeKB / p95EntrySizeKB）、写入拒绝归因（rejectedOversize /
    * rejectedBudget）、淘汰归因（evictedBySize / ByBudget / ByTTL / ByConfig）、
-   * 击穿压力（coalescedRequests）与 L2 健康度（l2Errors / l2Enabled）。
+   * 击穿压力（coalescedRequests）、上游健康度（dedupeTimeouts）与
+   * L2 健康度（l2Errors / l2Enabled）。
    */
   @Get('cache/stats')
   @Throttle(ADMIN_THROTTLE)
