@@ -112,6 +112,17 @@ end
  * 服务重启时，上一轮的锁全是残留的，直接清理即可。
  *
  * 仅清理 chat:session: 命名空间的锁，不影响其他用途的锁。
+ *
+ * ⚠️ keyPrefix 的两个陷阱（原实现因此从未真正清理到任何锁）：
+ * 1. ioredis 的 keyPrefix 只对 GET/SET/DEL 这类命令的 key 参数生效，
+ *    **对 KEYS/SCAN 的 pattern 参数不生效** —— 传 'lock:chat:session:*'
+ *    实际匹配的是无业务前缀的 key，永远返回空数组。必须自己把前缀拼上。
+ * 2. KEYS 的返回值是 Redis 里的**原始完整 key**（已含前缀），
+ *    再交给 del() 会被二次加前缀 → 删的是一个不存在的 key，静默失败。
+ *    必须先 strip 掉前缀再删。
+ *
+ * 与 releaseLock 改用「GET 校验 + DEL」而非 Lua EVAL 是同一类问题
+ * （EVAL 的 KEYS 参数同样不受 keyPrefix 影响）。
  */
 export async function cleanupStaleSessionLocks(): Promise<number> {
   if (!isRedisReady()) return 0;
@@ -120,19 +131,25 @@ export async function cleanupStaleSessionLocks(): Promise<number> {
 
   try {
     // KEYS 命令在启动时使用是安全的（此时没有请求在处理）
-    const keys = await redis.keys('lock:chat:session:*');
+    const prefix = redis.options.keyPrefix ?? '';
+    const keys = await redis.keys(`${prefix}lock:chat:session:*`);
     if (keys.length > 0) {
-      await redis.del(...keys);
+      // 返回值含前缀，del() 会再加一次，必须先还原成逻辑 key
+      const logicalKeys = keys.map((k) =>
+        prefix && k.startsWith(prefix) ? k.slice(prefix.length) : k,
+      );
+      await redis.del(...logicalKeys);
     }
     logger.info('DistributedLock: 启动锁清理完成', {
       module: 'DistributedLock',
       cleaned: keys.length,
     });
     return keys.length;
-  } catch (e: any) {
+  } catch (e: unknown) {
+    const err = e as Error;
     logger.warn('DistributedLock: 清理残留锁失败', {
       module: 'DistributedLock',
-      err: (e?.message || String(e)).slice(0, 200),
+      err: (err?.message || String(e)).slice(0, 200),
     });
     return 0;
   }
@@ -219,10 +236,13 @@ export async function acquireLock(
 async function releaseLock(key: string, token: string): Promise<boolean> {
   const redis = getRedis();
   if (!redis || !isRedisReady()) {
-    logger.warn('DistributedLock: Redis 不可用，无法释放锁（将随 TTL 自动过期）', {
-      module: 'DistributedLock',
-      key,
-    });
+    logger.warn(
+      'DistributedLock: Redis 不可用，无法释放锁（将随 TTL 自动过期）',
+      {
+        module: 'DistributedLock',
+        key,
+      },
+    );
     return false;
   }
 
@@ -239,7 +259,10 @@ async function releaseLock(key: string, token: string): Promise<boolean> {
     }
     // DEL 删除（redis.del 的 keyPrefix 一定生效）
     await redis.del(key);
-    logger.debug('DistributedLock: 释放锁成功', { module: 'DistributedLock', key });
+    logger.debug('DistributedLock: 释放锁成功', {
+      module: 'DistributedLock',
+      key,
+    });
     return true;
   } catch (e: any) {
     logger.warn('DistributedLock: 释放锁异常', {
@@ -260,12 +283,21 @@ async function releaseLock(key: string, token: string): Promise<boolean> {
  *
  * 当前实现没自动启 watchdog，由业务侧决定是否调用，避免增加心智负担。
  */
-export async function renewLock(lock: DistributedLock, newTtlSec?: number): Promise<boolean> {
+export async function renewLock(
+  lock: DistributedLock,
+  newTtlSec?: number,
+): Promise<boolean> {
   const redis = getRedis();
   if (!redis || !isRedisReady()) return false;
   const ttl = newTtlSec ?? lock.ttlSec;
   try {
-    const result = (await redis.eval(RENEW_LOCK_SCRIPT, 1, lock.key, lock.token, ttl)) as number;
+    const result = (await redis.eval(
+      RENEW_LOCK_SCRIPT,
+      1,
+      lock.key,
+      lock.token,
+      ttl,
+    )) as number;
     return result === 1;
   } catch (e: any) {
     logger.warn('DistributedLock: 续期锁异常', {

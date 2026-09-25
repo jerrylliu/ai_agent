@@ -13,17 +13,23 @@ import { config } from './config.js';
 
 // ==================== 配置结构 ====================
 
-// 运行时配置的 zod schema：所有字段可选（partial），加载时与默认值深合并
+// 运行时配置的 zod schema：所有字段可选（partial），加载时与默认值深合并。
+//
+// 加载路径刻意保持宽松（nonnegative 而非 positive）：
+// 历史脏文件不应让配置整体作废，真正拦住非法值的是「写入路径」的
+// RuntimeConfigUpdateSchema（见下方「写入校验」区块）。
 const RuntimeConfigCacheSchema = z.object({
   maxEntries: z.number().int().nonnegative().optional(),
   maxItemSizeKB: z.number().int().nonnegative().optional(),
   defaultTTLMinutes: z.number().int().nonnegative().optional(),
+  maxTotalSizeMB: z.number().int().nonnegative().optional(),
 });
 
 const RuntimeConfigRateLimiterSchema = z.object({
   fastPoolMax: z.number().int().nonnegative().optional(),
   streamingPoolMax: z.number().int().nonnegative().optional(),
   tokenWaitTimeout: z.number().int().nonnegative().optional(),
+  queueWaitTimeout: z.number().int().nonnegative().optional(),
 });
 
 // 嵌入生效模式：本地 Ollama / 云端 OpenAI 兼容端点
@@ -66,14 +72,104 @@ const RuntimeConfigEmbeddingSchema = z
   // 否则 loadRuntimeConfig 会整体回退默认值，导致已保存的云端 API Key 密文丢失
   .loose();
 
-const RuntimeConfigPartialSchema = z
+/**
+ * 逐区块校验：失败时记录告警并返回 undefined（调用方用默认值补齐）
+ *
+ * 为什么分区块而不是整份 safeParse：
+ * 整份校验一旦失败就全量回退默认值，单个区块的脏数据（例如被外部工具
+ * 写坏的 cache.maxEntries）会连坐 embedding.cloud.apiKeyEncrypted，
+ * 用户被迫重新填写并验证云端嵌入 API Key。分区块后坏的那块单独回退。
+ */
+function parseSection<T extends z.ZodType>(
+  schema: T,
+  raw: unknown,
+  section: string,
+): z.infer<T> | undefined {
+  if (raw === undefined) return undefined;
+  const result = schema.safeParse(raw);
+  if (result.success) return result.data as z.infer<T>;
+
+  const issues = result.error.issues
+    .map((i) => `${i.path.join('.') || section}: ${i.message}`)
+    .join('; ');
+  logger.warn('运行时配置区块结构不符合预期，该区块回退默认值', {
+    module: 'RuntimeConfig',
+    section,
+    issues,
+  });
+  return undefined;
+}
+
+// ==================== 写入校验 ====================
+
+/**
+ * 写入路径的严格 schema（与加载路径的宽松 schema 分工）
+ *
+ * 为什么必须严格：
+ * - `cache.maxEntries: 0` 一旦落盘，缓存淘汰循环 `while (size >= maxEntries)`
+ *   在空缓存上恒真且取不到可删条目，会立刻死循环阻塞事件循环（进程假死）；
+ * - `rateLimiter.fastPoolMax: 0` 一旦落盘，信号量 `running < max` 永不成立，
+ *   所有 LLM 请求永久挂起，HTTP 连接堆积直至服务不可用。
+ * 而这两个值在前端只要「清空输入框再保存」就能产生（`Number('') === 0`），
+ * 所以必须在写入前 fail-fast 抛错，绝不让脏值落盘。
+ */
+export const CacheConfigUpdateSchema = z.object({
+  maxEntries: z.number().int().positive().max(100000).optional(),
+  maxItemSizeKB: z.number().int().positive().max(10240).optional(),
+  // TTL 允许 0，这是「永不过期」的既定语义，不能一并禁掉
+  defaultTTLMinutes: z.number().int().min(0).max(1440).optional(),
+  /**
+   * 缓存总字节预算（MB）
+   *
+   * 为什么条目数上限还不够：`maxEntries` 只约束「条数」，真实内存占用是
+   * 条数 × 单条大小的乘积。把 maxEntries 调到 1000、单条上限 50KB，
+   * 理论峰值就是 50MB —— 而这个乘积在 UI 上完全看不出来。
+   * 字节预算是一道与条数无关的硬顶，两个约束取先到者触发淘汰。
+   */
+  maxTotalSizeMB: z.number().int().positive().max(2048).optional(),
+});
+
+export const RateLimiterConfigUpdateSchema = z.object({
+  fastPoolMax: z.number().int().positive().max(1000).optional(),
+  streamingPoolMax: z.number().int().positive().max(1000).optional(),
+  tokenWaitTimeout: z.number().int().positive().max(600000).optional(),
+  queueWaitTimeout: z.number().int().positive().max(3600000).optional(),
+});
+
+export const RuntimeConfigUpdateSchema = z
   .object({
-    cache: RuntimeConfigCacheSchema.optional(),
-    rateLimiter: RuntimeConfigRateLimiterSchema.optional(),
+    cache: CacheConfigUpdateSchema.optional(),
+    rateLimiter: RateLimiterConfigUpdateSchema.optional(),
     embedding: RuntimeConfigEmbeddingSchema.optional(),
   })
-  // 文件中可能含未来扩展字段，loose 模式静默忽略
   .loose();
+
+export interface ConfigIssue {
+  /** 出错字段路径，如 `cache.maxEntries` */
+  path: string;
+  /** 中文可读的错误说明 */
+  message: string;
+}
+
+/**
+ * 运行时配置写入校验失败
+ *
+ * Controller 捕获后转成 400，前端据此提示用户具体哪个字段非法，
+ * 而不是笼统的「保存失败」。
+ */
+export class RuntimeConfigValidationError extends Error {
+  readonly issues: ConfigIssue[];
+
+  constructor(issues: ConfigIssue[]) {
+    super(
+      `运行时配置校验失败: ${issues
+        .map((i) => `${i.path} ${i.message}`)
+        .join('; ')}`,
+    );
+    this.name = 'RuntimeConfigValidationError';
+    this.issues = issues;
+  }
+}
 
 export interface EmbeddingRuntimeConfig {
   /**
@@ -101,11 +197,22 @@ export interface RuntimeConfig {
     maxEntries: number;
     maxItemSizeKB: number;
     defaultTTLMinutes: number;
+    /** 缓存总字节预算（MB），与 maxEntries 构成双约束淘汰 */
+    maxTotalSizeMB: number;
   };
   rateLimiter: {
     fastPoolMax: number;
     streamingPoolMax: number;
     tokenWaitTimeout: number;
+    /**
+     * 并发池排队等待上限（毫秒）
+     *
+     * 与 tokenWaitTimeout 是两件不同的事：
+     * - tokenWaitTimeout：等「provider RPM 令牌」的超时
+     * - queueWaitTimeout：等「并发槽位」的超时
+     * 没有后者时，池子被打满 + 上游长时间不释放会让请求永久挂起。
+     */
+    queueWaitTimeout: number;
   };
   embedding: EmbeddingRuntimeConfig;
 }
@@ -117,11 +224,17 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
     maxEntries: 200,
     maxItemSizeKB: 50,
     defaultTTLMinutes: 5,
+    // 32MB：默认参数下（200 条 × 瘦身后约 18KB/条 ≈ 3.6MB）几乎不会触发，
+    // 它的作用是给「用户把 maxEntries 调到上千」这类组合上一道硬顶
+    maxTotalSizeMB: 32,
   },
   rateLimiter: {
     fastPoolMax: 10,
     streamingPoolMax: 5,
     tokenWaitTimeout: 10000,
+    // 2 分钟：足够长以容忍一次完整的流式生成排队，
+    // 又足够短以避免请求永久挂起拖垮连接池
+    queueWaitTimeout: 120000,
   },
   embedding: {
     // 默认开启本地嵌入：装了 Ollama 的用户零配置可用；
@@ -193,37 +306,48 @@ export function loadRuntimeConfig(): RuntimeConfig {
       return { ...DEFAULT_RUNTIME_CONFIG };
     }
 
-    const validated = RuntimeConfigPartialSchema.safeParse(savedRaw);
-    if (!validated.success) {
-      const issues = validated.error.issues
-        .map((i) => `${i.path.join('.') || '<root>'}: ${i.message}`)
-        .join('; ');
-      logger.warn('运行时配置文件结构不符合预期，使用默认配置', {
-        module: 'RuntimeConfig',
-        issues,
-      });
-      return { ...DEFAULT_RUNTIME_CONFIG };
-    }
-    const saved = validated.data;
+    // 逐区块校验：单个区块脏数据只让该区块回退默认值，不连坐其它区块
+    const savedObj =
+      typeof savedRaw === 'object' &&
+      savedRaw !== null &&
+      !Array.isArray(savedRaw)
+        ? (savedRaw as Record<string, unknown>)
+        : {};
+
+    const savedCache = parseSection(
+      RuntimeConfigCacheSchema,
+      savedObj.cache,
+      'cache',
+    );
+    const savedRateLimiter = parseSection(
+      RuntimeConfigRateLimiterSchema,
+      savedObj.rateLimiter,
+      'rateLimiter',
+    );
+    const savedEmbedding = parseSection(
+      RuntimeConfigEmbeddingSchema,
+      savedObj.embedding,
+      'embedding',
+    );
 
     // 深度合并：默认值 + 文件中的值
     const config: RuntimeConfig = {
-      cache: { ...DEFAULT_RUNTIME_CONFIG.cache, ...saved.cache },
+      cache: { ...DEFAULT_RUNTIME_CONFIG.cache, ...savedCache },
       rateLimiter: {
         ...DEFAULT_RUNTIME_CONFIG.rateLimiter,
-        ...saved.rateLimiter,
+        ...savedRateLimiter,
       },
       embedding: {
         localEnabled:
-          saved.embedding?.localEnabled ??
+          savedEmbedding?.localEnabled ??
           DEFAULT_RUNTIME_CONFIG.embedding.localEnabled,
         ollama: {
           ...DEFAULT_RUNTIME_CONFIG.embedding.ollama,
-          ...saved.embedding?.ollama,
+          ...savedEmbedding?.ollama,
         },
         cloud: {
           ...DEFAULT_RUNTIME_CONFIG.embedding.cloud,
-          ...saved.embedding?.cloud,
+          ...savedEmbedding?.cloud,
         },
       },
     };
@@ -300,6 +424,24 @@ export function updateRuntimeConfig(partial: {
     cloud?: Partial<EmbeddingRuntimeConfig['cloud']>;
   };
 }): RuntimeConfig {
+  // 写入前严格校验：非法值一律抛错，绝不落盘。
+  //
+  // 校验通过后仍合并「原始 partial」而不是 validation.data：
+  // zod 默认会 strip 掉未声明字段，用 data 合并会静默丢弃调用方额外携带的
+  // 字段，改变既有行为。这里只借用 zod 做「拦截」，不做「重塑」。
+  const validation = RuntimeConfigUpdateSchema.safeParse(partial);
+  if (!validation.success) {
+    const issues: ConfigIssue[] = validation.error.issues.map((i) => ({
+      path: i.path.join('.') || '(root)',
+      message: i.message,
+    }));
+    logger.error('运行时配置更新被拒绝：参数非法', {
+      module: 'RuntimeConfig',
+      issues,
+    });
+    throw new RuntimeConfigValidationError(issues);
+  }
+
   if (partial.cache) {
     currentConfig.cache = mergeDefined(currentConfig.cache, partial.cache);
   }

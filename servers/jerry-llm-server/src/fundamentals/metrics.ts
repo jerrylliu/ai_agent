@@ -19,9 +19,16 @@
  *      - 用途：观察 HITL 双通道使用占比、用户是否倾向手机审批
  *
  *   3. multilevel_cache (Gauge)
- *      - l1_hits / l2_hits / misses / l2_errors / l1_hit_rate / overall_hit_rate
- *      - 通过 collectDefaultMetrics 自动采集，每次 scrape 时主动调 getStats()
- *      - 用途：观察缓存命中率，调整 TTL 和 L1 容量
+ *      - 命中：l1_hits / l2_hits / misses / l2_errors / overall_hit_rate
+ *      - 容量：l1_size / l1_max_size / weighted_size_bytes / max_total_size_bytes
+ *             / avg_entry_size_bytes / p95_entry_size_bytes
+ *      - 写入拒绝：rejected{reason=oversize|budget}
+ *      - 淘汰归因：evicted{reason=size|budget|ttl|config}
+ *      - 击穿压力：coalesced_requests（被单飞合并掉的并发回源次数）
+ *      - 每次 scrape 时主动调 getStats()，容量治理类指标为可选字段
+ *        （MultiLevelCache 不提供，序列缺失而非写 0）
+ *      - 用途：观察命中率、定位容量瓶颈（条数上限还是字节预算先触顶）、
+ *             判断缓存是否正在被击穿
  *
  * 使用：
  *   - 业务侧：import { metrics } from './metrics'; metrics.feishuMessageSent.inc({ channel: 'card', status: 'success' });
@@ -35,7 +42,13 @@
  *     原因：MultiLevelCache 已经内部维护命中计数，重复计数浪费
  */
 
-import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import {
+  Counter,
+  Gauge,
+  Histogram,
+  Registry,
+  collectDefaultMetrics,
+} from 'prom-client';
 
 /**
  * 缓存实例的最小接口（避免循环依赖直接 import MultiLevelCache 类型）
@@ -52,6 +65,36 @@ interface CacheStatsProvider {
     overallHitRate: number;
     l1Size: number;
     l1MaxSize: number;
+
+    // ==================== 容量治理扩展指标（可选） ====================
+    // 为什么全部可选：registerCacheInstance 有两类调用方 ——
+    // LRUCache（有字节预算、单飞、拒绝计数）与 MultiLevelCache（只有 L1 条数 + Redis）。
+    // 强行要求会让 MultiLevelCache 和 metrics.spec.ts 里的 fake 全部编译失败。
+    // refreshCacheGauges 对 undefined 直接跳过，不写 Gauge（Prometheus 侧表现为该序列缺失，
+    // 而不是一个假的 0 —— 缺失才是「这个缓存没有这个概念」的正确表达）。
+
+    /** 当前条目加权体积（字节），非真实 RSS */
+    weightedSizeBytes?: number;
+    /** 字节预算上限（字节） */
+    maxTotalSizeBytes?: number;
+    /** 平均条目大小（字节） */
+    avgEntrySizeBytes?: number;
+    /** 条目大小 95 分位（字节） */
+    p95EntrySizeBytes?: number;
+    /** 因超过单条上限被拒绝写入的次数 */
+    rejectedOversize?: number;
+    /** 因撑爆字节预算被拒绝写入的次数 */
+    rejectedBudget?: number;
+    /** 因条目数上限淘汰的次数 */
+    evictedBySize?: number;
+    /** 因字节预算淘汰的次数 */
+    evictedByBudget?: number;
+    /** 因 TTL 过期在读取时回收的次数 */
+    evictedByTTL?: number;
+    /** 因配置调小淘汰的次数 */
+    evictedByConfig?: number;
+    /** 被单飞合并掉的并发回源次数 */
+    coalescedRequests?: number;
   };
 }
 
@@ -121,6 +164,51 @@ const cacheL1MaxSize = new Gauge({
   registers: [metricsRegistry],
 });
 
+// ==================== 容量治理 Gauge ====================
+
+const cacheWeightedSizeBytes = new Gauge({
+  name: 'jerry_multilevel_cache_weighted_size_bytes',
+  help: '缓存条目加权体积（序列化字节数之和，非真实 RSS，实际占用约为其 1.5~3 倍）',
+  labelNames: ['namespace'] as const,
+  registers: [metricsRegistry],
+});
+const cacheMaxTotalSizeBytes = new Gauge({
+  name: 'jerry_multilevel_cache_max_total_size_bytes',
+  help: '缓存总字节预算上限',
+  labelNames: ['namespace'] as const,
+  registers: [metricsRegistry],
+});
+const cacheAvgEntrySizeBytes = new Gauge({
+  name: 'jerry_multilevel_cache_avg_entry_size_bytes',
+  help: '缓存条目平均大小',
+  labelNames: ['namespace'] as const,
+  registers: [metricsRegistry],
+});
+const cacheP95EntrySizeBytes = new Gauge({
+  name: 'jerry_multilevel_cache_p95_entry_size_bytes',
+  help: '缓存条目大小 95 分位（检索结果长尾分布，平均值会掩盖少数巨型条目吃掉大半预算的事实）',
+  labelNames: ['namespace'] as const,
+  registers: [metricsRegistry],
+});
+const cacheRejected = new Gauge({
+  name: 'jerry_multilevel_cache_rejected',
+  help: '缓存写入被拒绝次数（reason: oversize=超单条上限 / budget=撑爆总字节预算）',
+  labelNames: ['namespace', 'reason'] as const,
+  registers: [metricsRegistry],
+});
+const cacheEvicted = new Gauge({
+  name: 'jerry_multilevel_cache_evicted',
+  help: '缓存淘汰次数（reason: size=条目数上限 / budget=字节预算 / ttl=过期回收 / config=配置调小）',
+  labelNames: ['namespace', 'reason'] as const,
+  registers: [metricsRegistry],
+});
+const cacheCoalescedRequests = new Gauge({
+  name: 'jerry_multilevel_cache_coalesced_requests',
+  help: '被单飞合并掉的并发回源次数，数值越高说明缓存击穿压力越大',
+  labelNames: ['namespace'] as const,
+  registers: [metricsRegistry],
+});
+
 /** 缓存读取耗时分布（Histogram：P50/P99 延迟） */
 const cacheGetDuration = new Histogram({
   name: 'jerry_multilevel_cache_get_duration_seconds',
@@ -139,7 +227,10 @@ const registeredCaches = new Map<string, CacheStatsProvider>();
  *
  * 幂等：同 namespace 重复注册会覆盖旧实例（用于热重载场景）。
  */
-function registerCacheInstance(namespace: string, instance: CacheStatsProvider): void {
+function registerCacheInstance(
+  namespace: string,
+  instance: CacheStatsProvider,
+): void {
   registeredCaches.set(namespace, instance);
 }
 
@@ -158,6 +249,36 @@ function refreshCacheGauges(): void {
     cacheOverallHitRate.set(labels, stats.overallHitRate);
     cacheL1Size.set(labels, stats.l1Size);
     cacheL1MaxSize.set(labels, stats.l1MaxSize);
+
+    // 容量治理指标都是可选字段：MultiLevelCache 没有字节预算与单飞概念，
+    // 缺失时保持「序列不存在」而不是写 0 —— 写 0 会在 Grafana 上变成
+    // 「这个缓存有预算且占用为零」的假信号，比缺失更难排查。
+    const setIfDefined = (
+      gauge: Gauge<'namespace'>,
+      value: number | undefined,
+    ): void => {
+      if (value !== undefined) gauge.set(labels, value);
+    };
+    const setReasonIfDefined = (
+      gauge: Gauge<'namespace' | 'reason'>,
+      reason: string,
+      value: number | undefined,
+    ): void => {
+      if (value !== undefined) gauge.set({ ...labels, reason }, value);
+    };
+
+    setIfDefined(cacheWeightedSizeBytes, stats.weightedSizeBytes);
+    setIfDefined(cacheMaxTotalSizeBytes, stats.maxTotalSizeBytes);
+    setIfDefined(cacheAvgEntrySizeBytes, stats.avgEntrySizeBytes);
+    setIfDefined(cacheP95EntrySizeBytes, stats.p95EntrySizeBytes);
+    setIfDefined(cacheCoalescedRequests, stats.coalescedRequests);
+
+    setReasonIfDefined(cacheRejected, 'oversize', stats.rejectedOversize);
+    setReasonIfDefined(cacheRejected, 'budget', stats.rejectedBudget);
+    setReasonIfDefined(cacheEvicted, 'size', stats.evictedBySize);
+    setReasonIfDefined(cacheEvicted, 'budget', stats.evictedByBudget);
+    setReasonIfDefined(cacheEvicted, 'ttl', stats.evictedByTTL);
+    setReasonIfDefined(cacheEvicted, 'config', stats.evictedByConfig);
   }
 }
 

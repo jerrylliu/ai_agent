@@ -44,6 +44,7 @@ import {
   saveRuntimeConfig,
   getRuntimeConfig,
   updateRuntimeConfig,
+  RuntimeConfigValidationError,
   type RuntimeConfig,
 } from './runtime-config';
 
@@ -60,6 +61,7 @@ describe('RuntimeConfig', () => {
         maxEntries: 200,
         maxItemSizeKB: 50,
         defaultTTLMinutes: 5,
+        maxTotalSizeMB: 32,
       });
     });
 
@@ -68,6 +70,7 @@ describe('RuntimeConfig', () => {
         fastPoolMax: 10,
         streamingPoolMax: 5,
         tokenWaitTimeout: 10000,
+        queueWaitTimeout: 120000,
       });
     });
   });
@@ -83,10 +86,12 @@ describe('RuntimeConfig', () => {
 
     it('文件存在时应加载并合并配置', () => {
       (existsSync as jest.Mock).mockReturnValue(true);
-      (readFileSync as jest.Mock).mockReturnValue(JSON.stringify({
-        cache: { maxEntries: 100 },
-        rateLimiter: { fastPoolMax: 5 },
-      }));
+      (readFileSync as jest.Mock).mockReturnValue(
+        JSON.stringify({
+          cache: { maxEntries: 100 },
+          rateLimiter: { fastPoolMax: 5 },
+        }),
+      );
 
       const config = loadRuntimeConfig();
       expect(config.cache.maxEntries).toBe(100);
@@ -101,6 +106,29 @@ describe('RuntimeConfig', () => {
 
       const config = loadRuntimeConfig();
       expect(config).toEqual(DEFAULT_RUNTIME_CONFIG);
+    });
+
+    it('单个区块脏数据只让该区块回退默认值，不连坐其它区块', () => {
+      // 历史版本会把非法值静默写盘（如前端清空输入框产生 maxEntries: 0），
+      // 若加载时整体校验失败就会回退到全默认，导致已保存的云端嵌入 Key 丢失
+      (existsSync as jest.Mock).mockReturnValue(true);
+      (readFileSync as jest.Mock).mockReturnValue(
+        JSON.stringify({
+          cache: { maxEntries: 'abc' },
+          rateLimiter: { fastPoolMax: 3 },
+          embedding: {
+            localEnabled: false,
+            cloud: { apiKeyEncrypted: 'encrypted-secret' },
+          },
+        }),
+      );
+
+      const config = loadRuntimeConfig();
+
+      expect(config.cache).toEqual(DEFAULT_RUNTIME_CONFIG.cache); // 脏区块回退默认
+      expect(config.rateLimiter.fastPoolMax).toBe(3); // 正常区块保留
+      expect(config.embedding.localEnabled).toBe(false);
+      expect(config.embedding.cloud.apiKeyEncrypted).toBe('encrypted-secret');
     });
   });
 
@@ -163,11 +191,15 @@ describe('RuntimeConfig', () => {
       const result = updateRuntimeConfig({ rateLimiter: { fastPoolMax: 3 } });
 
       expect(result.rateLimiter.fastPoolMax).toBe(3);
-      expect(result.rateLimiter.streamingPoolMax).toBe(before.rateLimiter.streamingPoolMax);
+      expect(result.rateLimiter.streamingPoolMax).toBe(
+        before.rateLimiter.streamingPoolMax,
+      );
       expect(writeFileSync).toHaveBeenCalled();
 
       // 恢复
-      updateRuntimeConfig({ rateLimiter: { fastPoolMax: before.rateLimiter.fastPoolMax } });
+      updateRuntimeConfig({
+        rateLimiter: { fastPoolMax: before.rateLimiter.fastPoolMax },
+      });
     });
 
     it('同时更新 cache 和 rateLimiter', () => {
@@ -197,6 +229,88 @@ describe('RuntimeConfig', () => {
 
       expect(result.cache).toEqual(before.cache);
       expect(result.rateLimiter).toEqual(before.rateLimiter);
+    });
+
+    it('非法值应抛错且不落盘、不改内存', () => {
+      (existsSync as jest.Mock).mockReturnValue(false);
+      const before = getRuntimeConfig();
+
+      // maxEntries: 0 会让缓存淘汰循环空转、fastPoolMax: 0 会让信号量永久挂起，
+      // 这两个值前端「清空输入框再保存」就能产生，必须在写入前 fail-fast
+      expect(() => updateRuntimeConfig({ cache: { maxEntries: 0 } })).toThrow(
+        RuntimeConfigValidationError,
+      );
+      expect(writeFileSync).not.toHaveBeenCalled();
+      expect(getRuntimeConfig().cache.maxEntries).toBe(before.cache.maxEntries);
+    });
+
+    it('校验失败应返回字段级 issues', () => {
+      const attempt = (): unknown => {
+        try {
+          updateRuntimeConfig({
+            cache: { maxEntries: 10 ** 9 },
+            rateLimiter: { fastPoolMax: -1, tokenWaitTimeout: 0 },
+          });
+          return undefined;
+        } catch (err) {
+          return err;
+        }
+      };
+
+      const error = attempt();
+      expect(error).toBeInstanceOf(RuntimeConfigValidationError);
+      const paths = (error as RuntimeConfigValidationError).issues.map(
+        (i) => i.path,
+      );
+      expect(paths).toEqual(
+        expect.arrayContaining([
+          'cache.maxEntries',
+          'rateLimiter.fastPoolMax',
+          'rateLimiter.tokenWaitTimeout',
+        ]),
+      );
+      expect(writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('TTL 为 0（永不过期）应被接受', () => {
+      (existsSync as jest.Mock).mockReturnValue(false);
+      const before = getRuntimeConfig();
+
+      const result = updateRuntimeConfig({ cache: { defaultTTLMinutes: 0 } });
+      expect(result.cache.defaultTTLMinutes).toBe(0);
+
+      // 恢复
+      updateRuntimeConfig({
+        cache: { defaultTTLMinutes: before.cache.defaultTTLMinutes },
+      });
+    });
+
+    it('总字节预算为 0 应抛错且不落盘', () => {
+      (existsSync as jest.Mock).mockReturnValue(false);
+      const before = getRuntimeConfig();
+
+      // maxTotalSizeMB: 0 等价于「一条都放不下」，所有写入都会走 rejectedBudget 分支，
+      // 缓存事实上被禁用却从 UI 上看不出来，必须在写入前 fail-fast
+      expect(() =>
+        updateRuntimeConfig({ cache: { maxTotalSizeMB: 0 } }),
+      ).toThrow(RuntimeConfigValidationError);
+      expect(writeFileSync).not.toHaveBeenCalled();
+      expect(getRuntimeConfig().cache.maxTotalSizeMB).toBe(
+        before.cache.maxTotalSizeMB,
+      );
+    });
+
+    it('应支持更新总字节预算', () => {
+      (existsSync as jest.Mock).mockReturnValue(false);
+      const before = getRuntimeConfig();
+
+      const result = updateRuntimeConfig({ cache: { maxTotalSizeMB: 64 } });
+      expect(result.cache.maxTotalSizeMB).toBe(64);
+
+      // 恢复
+      updateRuntimeConfig({
+        cache: { maxTotalSizeMB: before.cache.maxTotalSizeMB },
+      });
     });
   });
 });
