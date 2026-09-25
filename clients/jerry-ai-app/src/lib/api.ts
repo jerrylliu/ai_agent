@@ -2260,6 +2260,11 @@ export interface CacheStats {
   evictedByConfig: number;
   /** 被单飞合并掉的并发回源次数，数值越高说明击穿压力越大 */
   coalescedRequests: number;
+  /**
+   * 单飞回源超时次数，非 0 说明 Embedding / 向量库出现过挂死。
+   * 比 l2Errors 更早的劣化预警信号。
+   */
+  dedupeTimeouts: number;
   /** L2（Redis）读写异常次数 */
   l2Errors: number;
   /** L2 是否已就绪 */

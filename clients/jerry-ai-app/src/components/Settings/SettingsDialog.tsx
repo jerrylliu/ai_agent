@@ -1000,6 +1000,20 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                       {cacheStats.l2Enabled ? '已启用' : '未启用'} · 异常 {cacheStats.l2Errors}
                     </span>
                   </div>
+                  {/* 回源超时是最该警惕的一项：非 0 说明 Embedding / 向量库出现过挂死，
+                      比 L2 异常更早暴露上游劣化，因此用告警色而不是普通前景色 */}
+                  <div
+                    className="flex items-center justify-between gap-2"
+                    title="单飞回源超时次数。超过 30 秒仍未拿到检索结果时计入，非 0 说明向量库或 Embedding 服务出现过挂死"
+                  >
+                    <span className="text-muted-foreground">回源超时</span>
+                    <span
+                      className={`font-medium ${cacheStats.dedupeTimeouts > 0 ? 'text-destructive' : 'text-foreground'}`}
+                    >
+                      {cacheStats.dedupeTimeouts}
+                      {cacheStats.dedupeTimeouts > 0 ? ' · 上游异常' : ''}
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
