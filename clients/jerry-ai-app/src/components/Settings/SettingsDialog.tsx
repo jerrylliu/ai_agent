@@ -71,6 +71,46 @@ const openBeianSite = async (): Promise<void> => {
   }
 };
 
+// ==================== 缓存 / 限流配置的输入校验 ====================
+
+/**
+ * 各数值字段的合法区间
+ *
+ * 与后端 CacheConfigUpdateSchema / RateLimiterConfigUpdateSchema 对齐，
+ * 且比后端上界更严：本地校验通过就一定不会被后端 400 拒绝。
+ */
+const NUMERIC_FIELD_RULES: Record<string, { label: string; min: number; max: number }> = {
+  maxEntries: { label: '最大条目数', min: 10, max: 1000 },
+  maxItemSizeKB: { label: '单条大小上限', min: 10, max: 1024 },
+  defaultTTLMinutes: { label: '过期时间', min: 1, max: 60 },
+  maxTotalSizeMB: { label: '总字节预算', min: 8, max: 1024 },
+  fastPoolMax: { label: '快速池并发数', min: 1, max: 50 },
+  streamingPoolMax: { label: '流式池并发数', min: 1, max: 20 },
+  tokenWaitTimeout: { label: '令牌等待超时', min: 1000, max: 60000 },
+  queueWaitTimeout: { label: '排队等待超时', min: 1000, max: 600000 },
+};
+
+/**
+ * 提交前本地预校验，返回第一条错误文案（全部合法时返回 null）
+ *
+ * 必须显式判 Number.isFinite / 整数：输入框被清空时 `Number('') === 0`，
+ * 会伪装成合法数字提交上去，后端整单拒绝，用户只看到笼统的「校验失败」，
+ * 定位不到是哪个字段的问题。
+ */
+const validateNumericFields = (edited: Record<string, number | undefined>): string | null => {
+  for (const [key, value] of Object.entries(edited)) {
+    if (value === undefined) continue;
+    const rule = NUMERIC_FIELD_RULES[key];
+    if (!rule) continue;
+    if (!Number.isFinite(value)) return `${rule.label}必须是数字`;
+    if (!Number.isInteger(value)) return `${rule.label}必须是整数`;
+    if (value < rule.min || value > rule.max) {
+      return `${rule.label}需在 ${rule.min} ~ ${rule.max} 之间`;
+    }
+  }
+  return null;
+};
+
 const SettingsDialog: React.FC<SettingsDialogProps> = ({
   open,
   onClose,
@@ -94,6 +134,12 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [editCache, setEditCache] = useState<Partial<CacheConfig>>({});
   // 编辑中的限流配置（本地暂存）
   const [editRateLimiter, setEditRateLimiter] = useState<Partial<RateLimiterConfig>>({});
+  // 缓存 / 限流区块的局部提示条：加载失败、校验不通过、保存失败都在这里显式反馈，
+  // 不再静默吞掉——否则用户以为保存成功了，实际后端根本没接受
+  const [cacheNotice, setCacheNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [rateLimiterNotice, setRateLimiterNotice] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
 
   // 知识库嵌入配置状态（本地优先总开关 + 云端兜底）
   const [embeddingCfg, setEmbeddingCfg] = useState<EmbeddingConfigResponse['config'] | null>(null);
@@ -118,21 +164,37 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
   // 加载缓存和限流配置
   const loadConfig = useCallback(async () => {
+    // 缓存与限流分开加载：一方失败不影响另一方，且失败必须显式告知用户。
+    // 静默失败会让输入框回落到前端硬编码的兜底值（200/50/5/32、10/5/10000），
+    // 用户误以为这就是当前生效配置，一旦点保存就会把真实配置覆盖掉。
     try {
-      const [cc, cs, rc, rs] = await Promise.all([
-        getCacheConfig(),
-        getCacheStats(),
-        getRateLimiterConfig(),
-        getRateLimiterStatus(),
-      ]);
+      const [cc, cs] = await Promise.all([getCacheConfig(), getCacheStats()]);
       setCacheConfig(cc);
       setCacheStats(cs);
+      setEditCache({});
+      setCacheNotice(null);
+    } catch (err) {
+      setCacheConfig(null);
+      setCacheStats(null);
+      setCacheNotice({
+        ok: false,
+        text: `缓存配置加载失败：${(err as Error).message}（下方显示的是默认值，请勿直接保存）`,
+      });
+    }
+
+    try {
+      const [rc, rs] = await Promise.all([getRateLimiterConfig(), getRateLimiterStatus()]);
       setRateLimiterConfig(rc);
       setRateLimiterStatus(rs);
-      setEditCache({});
       setEditRateLimiter({});
-    } catch {
-      // 静默处理，不影响设置面板打开
+      setRateLimiterNotice(null);
+    } catch (err) {
+      setRateLimiterConfig(null);
+      setRateLimiterStatus(null);
+      setRateLimiterNotice({
+        ok: false,
+        text: `限流配置加载失败：${(err as Error).message}（下方显示的是默认值，请勿直接保存）`,
+      });
     }
 
     // 嵌入配置独立加载：失败只影响嵌入区块，不阻塞其他设置项
@@ -235,12 +297,21 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   // 保存缓存配置
   const handleSaveCacheConfig = async () => {
     if (Object.keys(editCache).length === 0) return;
+    // 本地预校验：把非法值挡在提交前，用户立刻看到「哪个字段不合法」，
+    // 不必等后端 400 再猜原因
+    const invalid = validateNumericFields(editCache);
+    if (invalid) {
+      setCacheNotice({ ok: false, text: invalid });
+      return;
+    }
     setCacheLoading(true);
+    setCacheNotice(null);
     try {
       await updateCacheConfig(editCache);
       await loadConfig();
-    } catch {
-      // 错误已由 api.ts 处理
+      setCacheNotice({ ok: true, text: '缓存配置已保存并生效' });
+    } catch (err) {
+      setCacheNotice({ ok: false, text: `保存失败：${(err as Error).message}` });
     } finally {
       setCacheLoading(false);
     }
@@ -249,11 +320,13 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   // 清空缓存
   const handleClearCache = async () => {
     setCacheLoading(true);
+    setCacheNotice(null);
     try {
-      await clearCache();
+      const result = await clearCache();
       await loadConfig();
-    } catch {
-      // 错误已由 api.ts 处理
+      setCacheNotice({ ok: true, text: result.message || '缓存已清空' });
+    } catch (err) {
+      setCacheNotice({ ok: false, text: `清空失败：${(err as Error).message}` });
     } finally {
       setCacheLoading(false);
     }
@@ -262,12 +335,19 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   // 保存限流配置
   const handleSaveRateLimiterConfig = async () => {
     if (Object.keys(editRateLimiter).length === 0) return;
+    const invalid = validateNumericFields(editRateLimiter);
+    if (invalid) {
+      setRateLimiterNotice({ ok: false, text: invalid });
+      return;
+    }
     setRateLimiterLoading(true);
+    setRateLimiterNotice(null);
     try {
       await updateRateLimiterConfig(editRateLimiter);
       await loadConfig();
-    } catch {
-      // 错误已由 api.ts 处理
+      setRateLimiterNotice({ ok: true, text: '限流配置已保存并生效' });
+    } catch (err) {
+      setRateLimiterNotice({ ok: false, text: `保存失败：${(err as Error).message}` });
     } finally {
       setRateLimiterLoading(false);
     }
@@ -824,28 +904,116 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
               </div>
             </div>
 
+            {/* 缓存区块提示条：加载失败 / 校验不通过 / 保存结果都在这里显式反馈 */}
+            {cacheNotice && (
+              <p
+                className={`text-xs ${cacheNotice.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}
+              >
+                {cacheNotice.text}
+              </p>
+            )}
+
             {/* 缓存统计 */}
             {cacheStats && (
-              <div className="grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-md bg-muted/50 px-2 py-1.5">
-                  <p className="text-xs text-muted-foreground">命中</p>
-                  <p className="text-sm font-medium">{cacheStats.hits}</p>
+              <div className="space-y-2">
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-md bg-muted/50 px-2 py-1.5" title="L1（进程内存）命中次数">
+                    <p className="text-xs text-muted-foreground">L1 命中</p>
+                    <p className="text-sm font-medium">{cacheStats.hits}</p>
+                  </div>
+                  <div
+                    className="rounded-md bg-muted/50 px-2 py-1.5"
+                    title="L2（Redis）命中次数，Redis 未启用时恒为 0"
+                  >
+                    <p className="text-xs text-muted-foreground">L2 命中</p>
+                    <p className="text-sm font-medium">{cacheStats.l2Hits}</p>
+                  </div>
+                  <div className="rounded-md bg-muted/50 px-2 py-1.5" title="两层都未命中的次数">
+                    <p className="text-xs text-muted-foreground">未命中</p>
+                    <p className="text-sm font-medium">{cacheStats.misses}</p>
+                  </div>
+                  <div
+                    className="rounded-md bg-muted/50 px-2 py-1.5"
+                    title="综合命中率 =（L1 命中 + L2 命中）/（L1 命中 + L2 命中 + 未命中）"
+                  >
+                    <p className="text-xs text-muted-foreground">命中率</p>
+                    <p className="text-sm font-medium">{(cacheStats.hitRate * 100).toFixed(1)}%</p>
+                  </div>
+                  <div className="rounded-md bg-muted/50 px-2 py-1.5" title="当前条目数 / 条目数上限">
+                    <p className="text-xs text-muted-foreground">条目数</p>
+                    <p className="text-sm font-medium">
+                      {cacheStats.size}/{cacheStats.maxSize}
+                    </p>
+                  </div>
+                  <div
+                    className="rounded-md bg-muted/50 px-2 py-1.5"
+                    title="当前条目序列化后的总字节数，不是进程真实驻留内存（真实占用约为其 1.5~3 倍）"
+                  >
+                    <p className="text-xs text-muted-foreground">缓存体积</p>
+                    <p className="text-sm font-medium">{cacheStats.weightedSizeKB}KB</p>
+                  </div>
+                  <div className="rounded-md bg-muted/50 px-2 py-1.5" title="当前条目的平均大小">
+                    <p className="text-xs text-muted-foreground">单条均值</p>
+                    <p className="text-sm font-medium">{cacheStats.avgEntrySizeKB}KB</p>
+                  </div>
+                  <div
+                    className="rounded-md bg-muted/50 px-2 py-1.5"
+                    title="条目大小的 95 分位。均值会被大量小结果拉低，掩盖少数巨型条目；P95 × 条目数上限才接近真实峰值"
+                  >
+                    <p className="text-xs text-muted-foreground">单条 P95</p>
+                    <p className="text-sm font-medium">{cacheStats.p95EntrySizeKB}KB</p>
+                  </div>
+                  <div
+                    className="rounded-md bg-muted/50 px-2 py-1.5"
+                    title="被单飞（single-flight）合并掉的并发回源次数，数值越高说明击穿压力越大"
+                  >
+                    <p className="text-xs text-muted-foreground">合并回源</p>
+                    <p className="text-sm font-medium">{cacheStats.coalescedRequests}</p>
+                  </div>
                 </div>
-                <div className="rounded-md bg-muted/50 px-2 py-1.5">
-                  <p className="text-xs text-muted-foreground">未命中</p>
-                  <p className="text-sm font-medium">{cacheStats.misses}</p>
-                </div>
-                <div className="rounded-md bg-muted/50 px-2 py-1.5">
-                  <p className="text-xs text-muted-foreground">命中率</p>
-                  <p className="text-sm font-medium">{(cacheStats.hitRate * 100).toFixed(1)}%</p>
-                </div>
-                <div className="rounded-md bg-muted/50 px-2 py-1.5">
-                  <p className="text-xs text-muted-foreground">条目数</p>
-                  <p className="text-sm font-medium">{cacheStats.size}/{cacheStats.maxSize}</p>
-                </div>
-                <div className="rounded-md bg-muted/50 px-2 py-1.5">
-                  <p className="text-xs text-muted-foreground">内存</p>
-                  <p className="text-sm font-medium">{cacheStats.memoryUsageKB}KB</p>
+
+                {/* 归因明细：上面的数字只说明「有多少」，这里才说明「为什么」 */}
+                <div className="space-y-1 rounded-md border border-border bg-muted/30 px-2.5 py-2 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">体积 / 预算</span>
+                    <span className="font-medium text-foreground">
+                      {cacheStats.weightedSizeKB}KB / {cacheStats.maxTotalSizeKB}KB
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">淘汰归因</span>
+                    <span className="font-medium text-foreground">
+                      条数 {cacheStats.evictedBySize} · 预算 {cacheStats.evictedByBudget} · 过期{' '}
+                      {cacheStats.evictedByTTL} · 改配 {cacheStats.evictedByConfig}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">写入拒绝</span>
+                    <span className="font-medium text-foreground">
+                      超单条上限 {cacheStats.rejectedOversize} · 超总预算{' '}
+                      {cacheStats.rejectedBudget}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">L2 (Redis)</span>
+                    <span className="font-medium text-foreground">
+                      {cacheStats.l2Enabled ? '已启用' : '未启用'} · 异常 {cacheStats.l2Errors}
+                    </span>
+                  </div>
+                  {/* 回源超时是最该警惕的一项：非 0 说明 Embedding / 向量库出现过挂死，
+                      比 L2 异常更早暴露上游劣化，因此用告警色而不是普通前景色 */}
+                  <div
+                    className="flex items-center justify-between gap-2"
+                    title="单飞回源超时次数。超过 30 秒仍未拿到检索结果时计入，非 0 说明向量库或 Embedding 服务出现过挂死"
+                  >
+                    <span className="text-muted-foreground">回源超时</span>
+                    <span
+                      className={`font-medium ${cacheStats.dedupeTimeouts > 0 ? 'text-destructive' : 'text-foreground'}`}
+                    >
+                      {cacheStats.dedupeTimeouts}
+                      {cacheStats.dedupeTimeouts > 0 ? ' · 上游异常' : ''}
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
@@ -870,7 +1038,9 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
               <div className="flex items-center justify-between gap-3">
                 <div className="flex-1">
                   <p className="text-sm text-foreground">单条大小上限 (KB)</p>
-                  <p className="text-xs text-muted-foreground">超过此大小的结果不缓存，防止内存膨胀</p>
+                  <p className="text-xs text-muted-foreground">
+                    超过此大小的结果不缓存，防止内存膨胀。调整只影响后续写入，已缓存的条目不会被追溯淘汰
+                  </p>
                 </div>
                 <Input
                   type="number"
@@ -885,7 +1055,9 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
               <div className="flex items-center justify-between gap-3">
                 <div className="flex-1">
                   <p className="text-sm text-foreground">过期时间 (分钟)</p>
-                  <p className="text-xs text-muted-foreground">缓存条目的存活时间，过期自动失效</p>
+                  <p className="text-xs text-muted-foreground">
+                    缓存条目的存活时间，过期自动失效。调整只影响后续写入，已有条目仍按写入时的 TTL 过期
+                  </p>
                 </div>
                 <Input
                   type="number"
@@ -894,6 +1066,24 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   className="w-24 h-8 text-sm"
                   value={editCache.defaultTTLMinutes ?? cacheConfig?.defaultTTLMinutes ?? 5}
                   onChange={(e) => setEditCache({ ...editCache, defaultTTLMinutes: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex-1">
+                  <p className="text-sm text-foreground">总字节预算 (MB)</p>
+                  <p className="text-xs text-muted-foreground">
+                    与最大条目数构成双约束：条数上限只约束「条数」，真实占用是条数 × 单条大小的乘积。
+                    超出预算时按 LRU 淘汰，调小会立即追溯淘汰已有条目
+                  </p>
+                </div>
+                <Input
+                  type="number"
+                  min={8}
+                  max={1024}
+                  className="w-24 h-8 text-sm"
+                  value={editCache.maxTotalSizeMB ?? cacheConfig?.maxTotalSizeMB ?? 32}
+                  onChange={(e) => setEditCache({ ...editCache, maxTotalSizeMB: Number(e.target.value) })}
                 />
               </div>
             </div>
@@ -930,6 +1120,15 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 <RefreshCw className="h-3.5 w-3.5" />
               </Button>
             </div>
+
+            {/* 限流区块提示条：加载失败 / 校验不通过 / 保存结果都在这里显式反馈 */}
+            {rateLimiterNotice && (
+              <p
+                className={`text-xs ${rateLimiterNotice.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}
+              >
+                {rateLimiterNotice.text}
+              </p>
+            )}
 
             {/* 限流状态 */}
             {rateLimiterStatus && (
@@ -993,8 +1192,10 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
 
               <div className="flex items-center justify-between gap-3">
                 <div className="flex-1">
-                  <p className="text-sm text-foreground">等待超时 (毫秒)</p>
-                  <p className="text-xs text-muted-foreground">请求排队等待的最大时间，超时则拒绝</p>
+                  <p className="text-sm text-foreground">令牌等待超时 (毫秒)</p>
+                  <p className="text-xs text-muted-foreground">
+                    等待模型厂商 RPM 配额令牌的上限，超时则拒绝本次请求
+                  </p>
                 </div>
                 <Input
                   type="number"
@@ -1004,6 +1205,24 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   className="w-24 h-8 text-sm"
                   value={editRateLimiter.tokenWaitTimeout ?? rateLimiterConfig?.tokenWaitTimeout ?? 10000}
                   onChange={(e) => setEditRateLimiter({ ...editRateLimiter, tokenWaitTimeout: Number(e.target.value) })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex-1">
+                  <p className="text-sm text-foreground">排队等待超时 (毫秒)</p>
+                  <p className="text-xs text-muted-foreground">
+                    并发池占满时排队等待槽位的上限，超时则拒绝。调大可减少拒绝，但请求会挂更久
+                  </p>
+                </div>
+                <Input
+                  type="number"
+                  min={1000}
+                  max={600000}
+                  step={10000}
+                  className="w-24 h-8 text-sm"
+                  value={editRateLimiter.queueWaitTimeout ?? rateLimiterConfig?.queueWaitTimeout ?? 120000}
+                  onChange={(e) => setEditRateLimiter({ ...editRateLimiter, queueWaitTimeout: Number(e.target.value) })}
                 />
               </div>
             </div>

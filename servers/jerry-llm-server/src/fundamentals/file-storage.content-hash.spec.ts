@@ -7,7 +7,12 @@
 // file-storage 顶部 import 了 logger 与 config，而真实 config 会做环境变量校验，
 // 单测环境没有必需的环境变量（如 jwtSecret），必须 mock 掉
 jest.mock('./logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('./config', () => ({

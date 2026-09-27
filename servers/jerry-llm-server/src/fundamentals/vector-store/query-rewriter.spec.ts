@@ -8,7 +8,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../model-provider', () => ({
@@ -42,7 +47,9 @@ describe('QueryRewriter', () => {
 
   describe('extractKeywordsSimple（降级关键词提取）', () => {
     it('中文查询应提取关键词', async () => {
-      const r = await rewriteQuery('什么是 RAG 检索增强生成', { enabled: false });
+      const r = await rewriteQuery('什么是 RAG 检索增强生成', {
+        enabled: false,
+      });
       expect(r.keywords).toContain('RAG');
       expect(r.keywords).toContain('检索增强生成');
     });
@@ -64,7 +71,9 @@ describe('QueryRewriter', () => {
   describe('rewriteQuery — LLM 调用失败降级', () => {
     it('LLM 抛出异常时应降级返回原始查询', async () => {
       const { createRateLimitedLLM } = require('../model-provider');
-      const mockLLM = { invoke: jest.fn().mockRejectedValue(new Error('Network error')) };
+      const mockLLM = {
+        invoke: jest.fn().mockRejectedValue(new Error('Network error')),
+      };
       createRateLimitedLLM.mockReturnValue(mockLLM);
 
       const r = await rewriteQuery('测试查询', { timeout: 100 });

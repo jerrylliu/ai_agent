@@ -43,7 +43,10 @@ let renderersOverride: Renderers | null = null;
 async function loadRenderers(): Promise<Renderers> {
   if (renderersOverride) return renderersOverride;
   const mod = await import('../tools/multimodal-output.js');
-  return { chartPngDataUri: mod.chartPngDataUri, mindmapPngDataUri: mod.mindmapPngDataUri };
+  return {
+    chartPngDataUri: mod.chartPngDataUri,
+    mindmapPngDataUri: mod.mindmapPngDataUri,
+  };
 }
 
 /** 仅测试用：注入渲染器，避免动态 import puppeteer */
@@ -111,13 +114,22 @@ const LOCAL_DOC_SENT_MAX = 500;
  * 标记某会话的某文档已同步过飞书；返回 true 表示这是首次（应发送），false 表示已发过（跳过）。
  * Redis 用 SETNX + TTL；Redis 不可用时降级到进程内 Map（简化 LRU）。
  */
-async function markDocSentOnce(sessionId: string, docKey: string): Promise<boolean> {
+async function markDocSentOnce(
+  sessionId: string,
+  docKey: string,
+): Promise<boolean> {
   const id = `${sessionId}:${docKey}`;
   if (isRedisReady()) {
     try {
       const redis = getRedis();
       if (redis) {
-        const ok = await redis.set(`${DOC_SENT_KEY_PREFIX}${id}`, '1', 'EX', DOC_SENT_TTL_SEC, 'NX');
+        const ok = await redis.set(
+          `${DOC_SENT_KEY_PREFIX}${id}`,
+          '1',
+          'EX',
+          DOC_SENT_TTL_SEC,
+          'NX',
+        );
         return ok === 'OK';
       }
     } catch {
@@ -155,14 +167,25 @@ export interface SyncRichAssetsParams {
  * 把图表/思维导图/文档统一同步为飞书原生消息。
  * 单条产物失败只 warn 不抛，避免一个产物失败拖垮整条消息同步。
  */
-export async function syncRichAssetsToFeishu(params: SyncRichAssetsParams): Promise<void> {
-  const { receiveId, receiveIdType, charts, mindmaps, documents, idempotencyBase, sessionId } = params;
+export async function syncRichAssetsToFeishu(
+  params: SyncRichAssetsParams,
+): Promise<void> {
+  const {
+    receiveId,
+    receiveIdType,
+    charts,
+    mindmaps,
+    documents,
+    idempotencyBase,
+    sessionId,
+  } = params;
 
   const derive = (kind: string, idx: number): string =>
     createHash('md5').update(`${idempotencyBase}|${kind}|${idx}`).digest('hex');
 
   // 仅当存在图表/思维导图时才加载渲染器（避免无谓引入 puppeteer）
-  const renderers = charts.length > 0 || mindmaps.length > 0 ? await loadRenderers() : null;
+  const renderers =
+    charts.length > 0 || mindmaps.length > 0 ? await loadRenderers() : null;
 
   // 1) 图表 → PNG → image 消息
   for (let i = 0; i < charts.length; i++) {
@@ -171,10 +194,21 @@ export async function syncRichAssetsToFeishu(params: SyncRichAssetsParams): Prom
       const dataUri = await renderers!.chartPngDataUri(option);
       const buffer = dataUri ? dataUriToBuffer(dataUri) : null;
       if (!buffer) {
-        logger.warn('飞书图表同步：PNG 渲染失败，跳过', { module: 'FeishuAssetSync', sessionId, index: i });
+        logger.warn('飞书图表同步：PNG 渲染失败，跳过', {
+          module: 'FeishuAssetSync',
+          sessionId,
+          index: i,
+        });
         continue;
       }
-      await uploadAndSendImage(receiveId, receiveIdType, buffer, derive('chart', i), sessionId, '图表');
+      await uploadAndSendImage(
+        receiveId,
+        receiveIdType,
+        buffer,
+        derive('chart', i),
+        sessionId,
+        '图表',
+      );
     } catch (e: any) {
       logger.warn('飞书图表同步：异常，跳过', {
         module: 'FeishuAssetSync',
@@ -191,10 +225,21 @@ export async function syncRichAssetsToFeishu(params: SyncRichAssetsParams): Prom
       const dataUri = await renderers!.mindmapPngDataUri(mindmaps[i]);
       const buffer = dataUri ? dataUriToBuffer(dataUri) : null;
       if (!buffer) {
-        logger.warn('飞书思维导图同步：PNG 渲染失败，跳过', { module: 'FeishuAssetSync', sessionId, index: i });
+        logger.warn('飞书思维导图同步：PNG 渲染失败，跳过', {
+          module: 'FeishuAssetSync',
+          sessionId,
+          index: i,
+        });
         continue;
       }
-      await uploadAndSendImage(receiveId, receiveIdType, buffer, derive('mindmap', i), sessionId, '思维导图');
+      await uploadAndSendImage(
+        receiveId,
+        receiveIdType,
+        buffer,
+        derive('mindmap', i),
+        sessionId,
+        '思维导图',
+      );
     } catch (e: any) {
       logger.warn('飞书思维导图同步：异常，跳过', {
         module: 'FeishuAssetSync',
@@ -219,7 +264,11 @@ export async function syncRichAssetsToFeishu(params: SyncRichAssetsParams): Prom
         });
         continue;
       }
-      const uploadResult = await uploadFile(`fc://document/${doc.key}`, doc.filename, doc.buffer);
+      const uploadResult = await uploadFile(
+        `fc://document/${doc.key}`,
+        doc.filename,
+        doc.buffer,
+      );
       if (!uploadResult.success || !uploadResult.key) {
         logger.warn('飞书文档同步：上传失败，跳过', {
           module: 'FeishuAssetSync',
@@ -229,7 +278,12 @@ export async function syncRichAssetsToFeishu(params: SyncRichAssetsParams): Prom
         });
         continue;
       }
-      const sendResult = await sendFileMessage(receiveId, receiveIdType, uploadResult.key, derive('doc', i));
+      const sendResult = await sendFileMessage(
+        receiveId,
+        receiveIdType,
+        uploadResult.key,
+        derive('doc', i),
+      );
       if (sendResult.success) {
         logger.info('飞书文档同步：发送成功', {
           module: 'FeishuAssetSync',
@@ -274,7 +328,12 @@ async function uploadAndSendImage(
     });
     return;
   }
-  const sendResult = await sendImageMessage(receiveId, receiveIdType, uploadResult.key, uuid);
+  const sendResult = await sendImageMessage(
+    receiveId,
+    receiveIdType,
+    uploadResult.key,
+    uuid,
+  );
   if (sendResult.success) {
     logger.info(`飞书${label}同步：发送成功`, {
       module: 'FeishuAssetSync',

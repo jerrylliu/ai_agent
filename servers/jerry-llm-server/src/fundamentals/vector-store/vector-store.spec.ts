@@ -80,7 +80,8 @@ describe('text-splitter', () => {
     });
 
     it('应识别包含代码块和链接的 Markdown', () => {
-      const content = '使用 `npm install` 安装依赖，参考[文档](https://example.com)';
+      const content =
+        '使用 `npm install` 安装依赖，参考[文档](https://example.com)';
       expect(isMarkdownContent(content)).toBe(true);
     });
 
@@ -216,7 +217,9 @@ describe('bm25-index', () => {
   describe('addToBM25Index', () => {
     it('应添加文档到索引', async () => {
       await initializeBM25Index();
-      await addToBM25Index('doc1', '机器学习是人工智能的子领域', { source: 'test' });
+      await addToBM25Index('doc1', '机器学习是人工智能的子领域', {
+        source: 'test',
+      });
 
       const index = getBM25Index();
       expect(index.documentCount).toBe(1);
@@ -282,9 +285,18 @@ describe('bm25-index', () => {
   describe('rebuildBM25Index', () => {
     it('应从文档列表重建索引', async () => {
       const mockGetAllDocs = jest.fn().mockResolvedValue([
-        { content: '文档一内容', metadata: { source: 'a', versionStatus: 'active' } },
-        { content: '文档二内容', metadata: { source: 'b', versionStatus: 'active' } },
-        { content: '已归档文档', metadata: { source: 'c', versionStatus: 'archived' } },
+        {
+          content: '文档一内容',
+          metadata: { source: 'a', versionStatus: 'active' },
+        },
+        {
+          content: '文档二内容',
+          metadata: { source: 'b', versionStatus: 'active' },
+        },
+        {
+          content: '已归档文档',
+          metadata: { source: 'c', versionStatus: 'archived' },
+        },
       ]);
 
       await rebuildBM25Index(mockGetAllDocs);
@@ -295,9 +307,11 @@ describe('bm25-index', () => {
     });
 
     it('应保留无 versionStatus 的旧数据', async () => {
-      const mockGetAllDocs = jest.fn().mockResolvedValue([
-        { content: '旧文档', metadata: { source: 'old' } },
-      ]);
+      const mockGetAllDocs = jest
+        .fn()
+        .mockResolvedValue([
+          { content: '旧文档', metadata: { source: 'old' } },
+        ]);
 
       await rebuildBM25Index(mockGetAllDocs);
 
@@ -316,9 +330,15 @@ describe('bm25-index', () => {
   describe('BM25 搜索功能', () => {
     it('应能搜索到已添加的文档', async () => {
       await initializeBM25Index();
-      await addToBM25Index('doc1', '机器学习是人工智能的重要分支', { source: 'ml' });
-      await addToBM25Index('doc2', '深度学习是机器学习的子领域', { source: 'dl' });
-      await addToBM25Index('doc3', '自然语言处理处理人类语言', { source: 'nlp' });
+      await addToBM25Index('doc1', '机器学习是人工智能的重要分支', {
+        source: 'ml',
+      });
+      await addToBM25Index('doc2', '深度学习是机器学习的子领域', {
+        source: 'dl',
+      });
+      await addToBM25Index('doc3', '自然语言处理处理人类语言', {
+        source: 'nlp',
+      });
 
       const index = getBM25Index();
       const results = index.search('机器学习');
@@ -485,8 +505,14 @@ describe('vector-search', () => {
 
     it('应过滤掉 draft 状态的文档', async () => {
       mockStore.similaritySearchWithScore.mockResolvedValue([
-        [{ pageContent: 'active 文档', metadata: { versionStatus: 'active' } }, 0.3],
-        [{ pageContent: 'draft 文档', metadata: { versionStatus: 'draft' } }, 0.3],
+        [
+          { pageContent: 'active 文档', metadata: { versionStatus: 'active' } },
+          0.3,
+        ],
+        [
+          { pageContent: 'draft 文档', metadata: { versionStatus: 'draft' } },
+          0.3,
+        ],
       ]);
 
       const results = await searchKnowledgeBase('测试查询', 5);
@@ -505,7 +531,9 @@ describe('vector-search', () => {
     });
 
     it('搜索失败应返回空数组', async () => {
-      mockStore.similaritySearchWithScore.mockRejectedValue(new Error('连接失败'));
+      mockStore.similaritySearchWithScore.mockRejectedValue(
+        new Error('连接失败'),
+      );
 
       const results = await searchKnowledgeBase('测试查询', 5);
       expect(results).toEqual([]);
@@ -514,7 +542,10 @@ describe('vector-search', () => {
     it('应从 filter 中移除 versionStatus（不在 ChromaDB where 中过滤）', async () => {
       mockStore.similaritySearchWithScore.mockResolvedValue([]);
 
-      await searchKnowledgeBase('测试', 5, 0.55, { versionStatus: 'active', source: 'test' });
+      await searchKnowledgeBase('测试', 5, 0.55, {
+        versionStatus: 'active',
+        source: 'test',
+      });
 
       // similaritySearchWithScore 的第三个参数不应包含 versionStatus
       const callArgs = mockStore.similaritySearchWithScore.mock.calls[0];
@@ -535,16 +566,18 @@ describe('vector-search', () => {
       // Mock BM25 索引
       const stateMod = require('./store-state');
       const mockBM25Index = {
-        search: jest.fn().mockReturnValue([
-          { id: 'bm1', score: 5.0, content: 'BM25结果1' },
-        ]),
+        search: jest
+          .fn()
+          .mockReturnValue([{ id: 'bm1', score: 5.0, content: 'BM25结果1' }]),
         documentCount: 1,
       };
       const mockBM25DocStore = new Map([
         ['bm1', { content: 'BM25结果1', metadata: { source: 'bm1' } }],
       ]);
       stateMod.getBM25Index = jest.fn().mockReturnValue(mockBM25Index);
-      stateMod.getBM25DocumentStore = jest.fn().mockReturnValue(mockBM25DocStore);
+      stateMod.getBM25DocumentStore = jest
+        .fn()
+        .mockReturnValue(mockBM25DocStore);
 
       const results = await hybridSearchKnowledgeBase('测试查询', 5);
 
@@ -577,16 +610,18 @@ describe('vector-search', () => {
 
       const stateMod = require('./store-state');
       const mockBM25Index = {
-        search: jest.fn().mockReturnValue([
-          { id: 'bm1', score: 3.0, content: 'BM25结果' },
-        ]),
+        search: jest
+          .fn()
+          .mockReturnValue([{ id: 'bm1', score: 3.0, content: 'BM25结果' }]),
         documentCount: 1,
       };
       const mockBM25DocStore = new Map([
         ['bm1', { content: 'BM25结果', metadata: { source: 'bm' } }],
       ]);
       stateMod.getBM25Index = jest.fn().mockReturnValue(mockBM25Index);
-      stateMod.getBM25DocumentStore = jest.fn().mockReturnValue(mockBM25DocStore);
+      stateMod.getBM25DocumentStore = jest
+        .fn()
+        .mockReturnValue(mockBM25DocStore);
 
       const results = await hybridSearchKnowledgeBase('测试查询', 5);
       expect(results.length).toBe(1);
@@ -654,10 +689,7 @@ describe('vector-crud', () => {
       bm25Mod.addToBM25Index = jest.fn().mockResolvedValue(undefined);
       bm25Mod.saveBM25Index = jest.fn().mockResolvedValue(undefined);
 
-      const count = await addDocuments(
-        ['短文本'],
-        [{ source: 'test.txt' }],
-      );
+      const count = await addDocuments(['短文本'], [{ source: 'test.txt' }]);
 
       expect(count).toBeGreaterThan(0);
       // 批量失败后应逐条调用 addDocuments
@@ -671,7 +703,7 @@ describe('vector-crud', () => {
       bm25Mod.initializeBM25Index = jest.fn().mockResolvedValue(undefined);
 
       await expect(
-        addDocuments(['测试文本'], [{ source: 'test.txt' }])
+        addDocuments(['测试文本'], [{ source: 'test.txt' }]),
       ).rejects.toThrow('个文本块写入失败');
     });
   });
@@ -689,14 +721,18 @@ describe('vector-crud', () => {
       stateMod.getBM25Index = jest.fn().mockReturnValue(null);
 
       await deleteDocuments({ source: 'test.txt' });
-      expect(mockStore.delete).toHaveBeenCalledWith({ filter: { source: 'test.txt' } });
+      expect(mockStore.delete).toHaveBeenCalledWith({
+        filter: { source: 'test.txt' },
+      });
     });
 
     it('BM25 增量删除失败时应降级为全量重建', async () => {
       mockStore.delete.mockResolvedValue(undefined);
 
       const bm25Mod = require('./bm25-index');
-      bm25Mod.initializeBM25Index = jest.fn().mockRejectedValue(new Error('BM25 初始化失败'));
+      bm25Mod.initializeBM25Index = jest
+        .fn()
+        .mockRejectedValue(new Error('BM25 初始化失败'));
       bm25Mod.rebuildBM25Index = jest.fn().mockResolvedValue(undefined);
 
       await deleteDocuments({ source: 'test.txt' });

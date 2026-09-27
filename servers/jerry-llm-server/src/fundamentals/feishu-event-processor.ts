@@ -37,7 +37,10 @@ import {
   getOrCreateChatSession,
 } from './feishu/feishu-chat-session.js';
 import { splitMarkdownImages } from './feishu/feishu-markdown-image.js';
-import { extractRichAssets, syncRichAssetsToFeishu } from './feishu/feishu-asset-sync.js';
+import {
+  extractRichAssets,
+  syncRichAssetsToFeishu,
+} from './feishu/feishu-asset-sync.js';
 import { createFeishuStreamEditor } from './feishu/feishu-message-throttle.js';
 import { createFeishuFakeResponse } from './feishu/feishu-fake-response.js';
 
@@ -229,7 +232,10 @@ export function __resetFeishuEventDedupForTest(): void {
  * 关键原因：飞书 PATCH /im/v1/messages/{id} 只能更新互动卡片，不能更新普通 text 消息。
  * 如果用 msg_type=text 发占位，再 PATCH 会报：This message is NOT a card。
  */
-function buildChatStreamCard(content: string, done = false): Record<string, unknown> {
+function buildChatStreamCard(
+  content: string,
+  done = false,
+): Record<string, unknown> {
   return buildCardJson({
     title: done ? 'AI 回复' : 'AI 回复中...',
     content: content || '思考中...',
@@ -239,7 +245,9 @@ function buildChatStreamCard(content: string, done = false): Record<string, unkn
 
 function isClearSessionCommand(text: string): boolean {
   const normalized = text.trim().toLowerCase();
-  return ['清空', '清空聊天记录', '重置会话', '/clear', '/reset'].includes(normalized);
+  return ['清空', '清空聊天记录', '重置会话', '/clear', '/reset'].includes(
+    normalized,
+  );
 }
 
 /**
@@ -296,22 +304,30 @@ let sessionCleanerRef: FeishuSessionCleaner | null = null;
 let documentFetcherRef: FeishuDocumentFetcher | null = null;
 
 /** 注入 promptInvoker —— 应用启动时调用一次 */
-export function setFeishuPromptInvoker(invoker: FeishuPromptInvoker | null): void {
+export function setFeishuPromptInvoker(
+  invoker: FeishuPromptInvoker | null,
+): void {
   promptInvokerRef = invoker;
 }
 
 /** 注入 assistant 历史持久化 —— 应用启动时调用一次 */
-export function setFeishuAssistantPersister(persister: FeishuAssistantPersister | null): void {
+export function setFeishuAssistantPersister(
+  persister: FeishuAssistantPersister | null,
+): void {
   assistantPersistRef = persister;
 }
 
 /** 注入飞书会话清理器 —— 应用启动时调用一次 */
-export function setFeishuSessionCleaner(cleaner: FeishuSessionCleaner | null): void {
+export function setFeishuSessionCleaner(
+  cleaner: FeishuSessionCleaner | null,
+): void {
   sessionCleanerRef = cleaner;
 }
 
 /** 注入会话文档查询器 —— 应用启动时调用一次 */
-export function setFeishuDocumentFetcher(fetcher: FeishuDocumentFetcher | null): void {
+export function setFeishuDocumentFetcher(
+  fetcher: FeishuDocumentFetcher | null,
+): void {
   documentFetcherRef = fetcher;
 }
 
@@ -361,7 +377,9 @@ function parseIncomingMessage(event: any): ParsedFeishuMessage | null {
   // 飞书 mentions 数组形如 [{ key: '@_user_1', id: { open_id }, name, ... }]
   // 机器人对应 entry key 出现在 text 里（如 "@_user_1 你好"），把这些占位符剥掉
   let mentionsBot = chatType === 'p2p'; // p2p 默认满足
-  const mentions: Array<any> = Array.isArray(message.mentions) ? message.mentions : [];
+  const mentions: Array<any> = Array.isArray(message.mentions)
+    ? message.mentions
+    : [];
   if (chatType === 'group' && mentions.length > 0) {
     logger.info('飞书群聊 mentions 解析', {
       module: 'FeishuEventProcessor',
@@ -505,7 +523,10 @@ export async function processIncomingMessage(
   const lock = await acquireLock(`feishu-chat:${sessionId}`, 300);
   if (!lock) {
     // 锁被占（也可能 Redis 不可用，这里偏保守 —— 一律告知用户稍后）
-    await sendFeishuFallbackError(parsed, '⏳ 上一条还在处理中，请等它返回后再发');
+    await sendFeishuFallbackError(
+      parsed,
+      '⏳ 上一条还在处理中，请等它返回后再发',
+    );
     return;
   }
 
@@ -577,15 +598,24 @@ export async function processIncomingMessage(
     // 这里先剥离图表/思维导图代码块，再剥离图片，卡片只展示文字；
     // 图片随后用 image 消息发原生图，图表/思维导图/文档随后用 syncRichAssetsToFeishu 发原生形态。
     const rawBuffer = editor.getBuffer();
-    const { text: richStripped, charts, mindmaps } = extractRichAssets(rawBuffer || '');
+    const {
+      text: richStripped,
+      charts,
+      mindmaps,
+    } = extractRichAssets(rawBuffer || '');
     const { text: cardText, imageUrls } = splitMarkdownImages(richStripped);
-    const hasAnyAsset = imageUrls.length > 0 || charts.length > 0 || mindmaps.length > 0;
+    const hasAnyAsset =
+      imageUrls.length > 0 || charts.length > 0 || mindmaps.length > 0;
     const displayText = cardText || (hasAnyAsset ? 'AI 生成了内容：' : '');
 
     // 超时场景：在最终内容尾部追加提示，并把 PATCH 一次完整写出
     if (timedOut && placeholderMessageId) {
-      const finalText = (displayText || '') + '\n\n⏱️ 已达 5 分钟超时，本次中止';
-      await updateCard(placeholderMessageId, buildChatStreamCard(finalText, true)).catch(() => {});
+      const finalText =
+        (displayText || '') + '\n\n⏱️ 已达 5 分钟超时，本次中止';
+      await updateCard(
+        placeholderMessageId,
+        buildChatStreamCard(finalText, true),
+      ).catch(() => {});
       finalCardAlreadyUpdated = true;
     }
 
@@ -634,14 +664,22 @@ export async function processIncomingMessage(
       const imageUuid = createHash('md5')
         .update(`feishu-img|${sessionId}|${i}|${imageUrl}`)
         .digest('hex');
-      await sendFeishuNativeImage(parsed.chatId, imageUrl, sessionId, imageUuid);
+      await sendFeishuNativeImage(
+        parsed.chatId,
+        imageUrl,
+        sessionId,
+        imageUuid,
+      );
     }
 
     // 把图表/思维导图/文档同步为飞书原生消息（图表/思维导图渲染 PNG，文档发 file 消息）
     let docs: Array<{ key: string; filename: string; buffer: Buffer }> = [];
     if (documentFetcherRef) {
       try {
-        docs = await documentFetcherRef({ sessionId, afterMs: processingStartMs });
+        docs = await documentFetcherRef({
+          sessionId,
+          afterMs: processingStartMs,
+        });
       } catch (e: any) {
         logger.warn('飞书文档同步：查询会话文档失败，跳过', {
           module: 'FeishuEventProcessor',
@@ -657,7 +695,9 @@ export async function processIncomingMessage(
         charts,
         mindmaps,
         documents: docs,
-        idempotencyBase: createHash('md5').update(`feishu-asset|${sessionId}|${processingStartMs}`).digest('hex'),
+        idempotencyBase: createHash('md5')
+          .update(`feishu-asset|${sessionId}|${processingStartMs}`)
+          .digest('hex'),
         sessionId,
       });
     }
@@ -709,7 +749,12 @@ async function sendFeishuNativeImage(
       });
       return;
     }
-    const sendResult = await sendImageMessage(chatId, 'chat_id', uploadResult.key, uuid);
+    const sendResult = await sendImageMessage(
+      chatId,
+      'chat_id',
+      uploadResult.key,
+      uuid,
+    );
     if (!sendResult.success) {
       logger.warn('飞书原生图片：发送失败', {
         module: 'FeishuEventProcessor',

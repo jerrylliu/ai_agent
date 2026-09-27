@@ -2,7 +2,18 @@
 // 负责处理用户记忆（长期知识存储）和会话摘要的 CRUD 操作
 // 路由前缀：/memory
 
-import { Controller, Get, Post, Put, Delete, Body, Query, Param, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Query,
+  Param,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
 import { MemoryService } from '../services/memory.service';
 import { SummaryService } from '../services/summary.service';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard.js';
@@ -23,10 +34,7 @@ export class MemoryController {
    * 获取指定用户的所有记忆列表
    */
   @Get('memories')
-  async getUserMemories(
-    @Query('userId') userId?: string,
-    @Req() req?: any,
-  ) {
+  async getUserMemories(@Query('userId') userId?: string, @Req() req?: any) {
     const effectiveUserId = req?.userId || userId || 'default';
     const memories = await this.memoryService.getUserMemories(effectiveUserId);
     return { success: true, memories, count: memories.length };
@@ -38,7 +46,13 @@ export class MemoryController {
    */
   @Post('memories')
   async addUserMemory(
-    @Body() body: { content: string; category?: string; importance?: number; userId?: string },
+    @Body()
+    body: {
+      content: string;
+      category?: string;
+      importance?: number;
+      userId?: string;
+    },
     @Req() req: any,
   ) {
     if (!body.content) {
@@ -59,10 +73,7 @@ export class MemoryController {
    * 清空指定用户的所有记忆
    */
   @Delete('memories')
-  async clearUserMemories(
-    @Query('userId') userId?: string,
-    @Req() req?: any,
-  ) {
+  async clearUserMemories(@Query('userId') userId?: string, @Req() req?: any) {
     const effectiveUserId = req?.userId || userId || 'default';
     await this.memoryService.clearUserMemories(effectiveUserId);
     return { success: true, message: '所有记忆已清空' };
@@ -80,7 +91,12 @@ export class MemoryController {
     if (!body.content) {
       return { success: false, message: '请提供 content 参数' };
     }
-    const memory = await this.memoryService.updateUserMemory(parseInt(id), body.content, body.category, body.importance);
+    const memory = await this.memoryService.updateUserMemory(
+      parseInt(id),
+      body.content,
+      body.category,
+      body.importance,
+    );
     return { success: true, memory };
   }
 
@@ -89,9 +105,7 @@ export class MemoryController {
    * 删除指定的一条记忆
    */
   @Delete('memories/:id')
-  async deleteUserMemory(
-    @Param('id') id: string,
-  ) {
+  async deleteUserMemory(@Param('id') id: string) {
     await this.memoryService.deleteUserMemory(parseInt(id));
     return { success: true, message: '记忆已删除' };
   }
@@ -117,9 +131,7 @@ export class MemoryController {
    * 获取指定会话的摘要信息
    */
   @Get('sessions/:sessionId/summary')
-  async getSessionSummary(
-    @Param('sessionId') sessionId: string,
-  ) {
+  async getSessionSummary(@Param('sessionId') sessionId: string) {
     const summary = await this.summaryService.getSessionSummary(sessionId);
     return summary || { sessionId, summaryContent: '', coveredMessageCount: 0 };
   }
@@ -129,18 +141,23 @@ export class MemoryController {
    * 手动触发生成或更新指定会话的摘要
    */
   @Post('sessions/:sessionId/summary')
-  async generateSessionSummary(
-    @Param('sessionId') sessionId: string,
-  ) {
+  async generateSessionSummary(@Param('sessionId') sessionId: string) {
     try {
       await this.summaryService.checkAndUpdateSummary(sessionId);
       const summary = await this.summaryService.getSessionSummary(sessionId);
       if (summary) {
         return summary;
       }
-      return { success: false, message: '摘要生成失败 - checkAndUpdateSummary 未抛异常但摘要为空' };
+      return {
+        success: false,
+        message: '摘要生成失败 - checkAndUpdateSummary 未抛异常但摘要为空',
+      };
     } catch (error: any) {
-      return { success: false, message: `摘要生成异常: ${error.message}`, stack: error.stack };
+      return {
+        success: false,
+        message: `摘要生成异常: ${error.message}`,
+        stack: error.stack,
+      };
     }
   }
 }

@@ -8,7 +8,12 @@
 //          但代码移除了所有 ToolMessage），本模块是修复后的实现。
 // ============================================================================
 
-import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
+import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+  ToolMessage,
+} from '@langchain/core/messages';
 
 /**
  * 为"达到最大轮数强制总结"场景清理消息列表。
@@ -42,7 +47,11 @@ export function cleanMessagesForFinalSummary(
   let lastToolCallAiIdx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg instanceof AIMessage && msg.tool_calls && msg.tool_calls.length > 0) {
+    if (
+      msg instanceof AIMessage &&
+      msg.tool_calls &&
+      msg.tool_calls.length > 0
+    ) {
       lastToolCallAiIdx = i;
       break;
     }
@@ -52,7 +61,8 @@ export function cleanMessagesForFinalSummary(
     // 保留 SystemMessage（约定为数组第一个）
     if (idx === 0 && msg instanceof SystemMessage) return true;
     // 移除所有带 tool_calls 的 AIMessage（防止模型模仿工具调用格式）
-    if (msg instanceof AIMessage && msg.tool_calls && msg.tool_calls.length > 0) return false;
+    if (msg instanceof AIMessage && msg.tool_calls && msg.tool_calls.length > 0)
+      return false;
     // ToolMessage：只保留最后一轮（最后一个带 tool_calls 的 AIMessage 之后的）
     // lastToolCallAiIdx === -1 时（无工具调用历史）移除所有 ToolMessage
     if (msg instanceof ToolMessage) {

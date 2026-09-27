@@ -5,7 +5,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../config', () => ({
@@ -94,7 +99,10 @@ describe('generateImageSchema', () => {
   });
 
   it('model 越界应被拦截', () => {
-    const r = generateImageParamsSchema.safeParse({ prompt: 'x', model: 'sd-xl' });
+    const r = generateImageParamsSchema.safeParse({
+      prompt: 'x',
+      model: 'sd-xl',
+    });
     expect(r.success).toBe(false);
   });
 });

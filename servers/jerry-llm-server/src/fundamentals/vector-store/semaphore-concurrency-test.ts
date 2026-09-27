@@ -10,7 +10,11 @@
 // ==================== 信号量实现（独立副本，不依赖 ChromaDB/Ollama） ====================
 
 class Semaphore {
-  private queue: Array<{ resolve: () => void; callerId: string; enqueuedAt: number }> = [];
+  private queue: Array<{
+    resolve: () => void;
+    callerId: string;
+    enqueuedAt: number;
+  }> = [];
   private running = 0;
   private nextCallerId = 0;
   private log: Array<Record<string, any>> = [];
@@ -44,7 +48,11 @@ class Semaphore {
     });
 
     return new Promise<string>((resolve) => {
-      this.queue.push({ resolve: () => resolve(callerId), callerId, enqueuedAt });
+      this.queue.push({
+        resolve: () => resolve(callerId),
+        callerId,
+        enqueuedAt,
+      });
     });
   }
 
@@ -77,7 +85,11 @@ class Semaphore {
   }
 
   getStatus(): { running: number; max: number; queueLength: number } {
-    return { running: this.running, max: this.max, queueLength: this.queue.length };
+    return {
+      running: this.running,
+      max: this.max,
+      queueLength: this.queue.length,
+    };
   }
 
   getLog(): Array<Record<string, any>> {
@@ -134,7 +146,12 @@ async function testConcurrency1(): Promise<boolean> {
 
   // 验证：任何时刻 running <= 1
   // 通过检查时间线来验证
-  const timeline: Array<{ tag: string; startMs: number; endMs: number; waitMs: number }> = results;
+  const timeline: Array<{
+    tag: string;
+    startMs: number;
+    endMs: number;
+    waitMs: number;
+  }> = results;
   const baseTs = Math.min(...timeline.map((r) => r.startMs));
 
   console.log('\n执行时间线：');
@@ -143,7 +160,9 @@ async function testConcurrency1(): Promise<boolean> {
     const endOffset = r.endMs - baseTs;
     const bar = '█'.repeat(Math.round((r.endMs - r.startMs) / 10));
     const waitBar = r.waitMs > 0 ? `⏳等待${r.waitMs}ms` : '立即执行';
-    console.log(`  ${r.tag.padEnd(16)} | ${startOffset.toString().padStart(4)}ms - ${endOffset.toString().padStart(4)}ms | ${bar} | ${waitBar}`);
+    console.log(
+      `  ${r.tag.padEnd(16)} | ${startOffset.toString().padStart(4)}ms - ${endOffset.toString().padStart(4)}ms | ${bar} | ${waitBar}`,
+    );
   }
 
   // 检查是否有重叠（同一时刻有多个任务在执行）
@@ -162,12 +181,16 @@ async function testConcurrency1(): Promise<boolean> {
   }
 
   const passed = maxOverlap <= 1;
-  console.log(`\n最大并发数: ${maxOverlap} (限制: 1) → ${passed ? '✅ 通过' : '❌ 失败'}`);
+  console.log(
+    `\n最大并发数: ${maxOverlap} (限制: 1) → ${passed ? '✅ 通过' : '❌ 失败'}`,
+  );
 
   // 打印信号量日志
   console.log('\n信号量日志：');
   for (const entry of semaphore.getLog()) {
-    console.log(`  [${entry.event}] ${JSON.stringify({ ...entry, ts: undefined })}`);
+    console.log(
+      `  [${entry.event}] ${JSON.stringify({ ...entry, ts: undefined })}`,
+    );
   }
 
   return passed;
@@ -202,7 +225,9 @@ async function testConcurrency2(): Promise<boolean> {
     const endOffset = r.endMs - baseTs;
     const bar = '█'.repeat(Math.round((r.endMs - r.startMs) / 10));
     const waitBar = r.waitMs > 0 ? `⏳等待${r.waitMs}ms` : '立即执行';
-    console.log(`  ${r.tag.padEnd(16)} | ${startOffset.toString().padStart(4)}ms - ${endOffset.toString().padStart(4)}ms | ${bar} | ${waitBar}`);
+    console.log(
+      `  ${r.tag.padEnd(16)} | ${startOffset.toString().padStart(4)}ms - ${endOffset.toString().padStart(4)}ms | ${bar} | ${waitBar}`,
+    );
   }
 
   let maxOverlap = 0;
@@ -220,7 +245,9 @@ async function testConcurrency2(): Promise<boolean> {
   }
 
   const passed = maxOverlap <= 2;
-  console.log(`\n最大并发数: ${maxOverlap} (限制: 2) → ${passed ? '✅ 通过' : '❌ 失败'}`);
+  console.log(
+    `\n最大并发数: ${maxOverlap} (限制: 2) → ${passed ? '✅ 通过' : '❌ 失败'}`,
+  );
 
   return passed;
 }
@@ -234,7 +261,12 @@ async function testSequential(): Promise<boolean> {
   const semaphore = new Semaphore(1);
 
   // 顺序执行，不并发
-  const results: Array<{ tag: string; startMs: number; endMs: number; waitMs: number }> = [];
+  const results: Array<{
+    tag: string;
+    startMs: number;
+    endMs: number;
+    waitMs: number;
+  }> = [];
 
   for (let i = 0; i < 3; i++) {
     const result = await mockAddDocuments(semaphore, `顺序任务-${i + 1}`, 50);
@@ -263,21 +295,44 @@ async function testMixedScenario(): Promise<boolean> {
 
   // 知识源同步：每个源有多个页面，每个页面调用一次 addDocuments
   // 文档上传：每个文档调用一次 addDocuments
-  const tasks: Promise<{ tag: string; startMs: number; endMs: number; waitMs: number }>[] = [];
+  const tasks: Promise<{
+    tag: string;
+    startMs: number;
+    endMs: number;
+    waitMs: number;
+  }>[] = [];
 
   // 知识源 A：3 个页面
   for (let i = 0; i < 3; i++) {
-    tasks.push(mockAddDocuments(semaphore, `知识源A-页面${i + 1}`, 100 + Math.random() * 100));
+    tasks.push(
+      mockAddDocuments(
+        semaphore,
+        `知识源A-页面${i + 1}`,
+        100 + Math.random() * 100,
+      ),
+    );
   }
 
   // 知识源 B：2 个页面
   for (let i = 0; i < 2; i++) {
-    tasks.push(mockAddDocuments(semaphore, `知识源B-页面${i + 1}`, 100 + Math.random() * 100));
+    tasks.push(
+      mockAddDocuments(
+        semaphore,
+        `知识源B-页面${i + 1}`,
+        100 + Math.random() * 100,
+      ),
+    );
   }
 
   // 知识源 C：4 个页面
   for (let i = 0; i < 4; i++) {
-    tasks.push(mockAddDocuments(semaphore, `知识源C-页面${i + 1}`, 100 + Math.random() * 100));
+    tasks.push(
+      mockAddDocuments(
+        semaphore,
+        `知识源C-页面${i + 1}`,
+        100 + Math.random() * 100,
+      ),
+    );
   }
 
   // 文档上传 1
@@ -296,7 +351,9 @@ async function testMixedScenario(): Promise<boolean> {
     const endOffset = r.endMs - baseTs;
     const bar = '█'.repeat(Math.round((r.endMs - r.startMs) / 10));
     const waitBar = r.waitMs > 0 ? `⏳${r.waitMs}ms` : '立即';
-    console.log(`  ${r.tag.padEnd(20)} | ${startOffset.toString().padStart(4)}ms - ${endOffset.toString().padStart(4)}ms | ${bar} | ${waitBar}`);
+    console.log(
+      `  ${r.tag.padEnd(20)} | ${startOffset.toString().padStart(4)}ms - ${endOffset.toString().padStart(4)}ms | ${bar} | ${waitBar}`,
+    );
   }
 
   // 验证最大并发
@@ -315,7 +372,9 @@ async function testMixedScenario(): Promise<boolean> {
   }
 
   const passed = maxOverlap <= 1;
-  console.log(`\n最大并发数: ${maxOverlap} (限制: 1) → ${passed ? '✅ 通过' : '❌ 失败'}`);
+  console.log(
+    `\n最大并发数: ${maxOverlap} (限制: 1) → ${passed ? '✅ 通过' : '❌ 失败'}`,
+  );
 
   // 统计排队情况
   const log = semaphore.getLog();
@@ -336,10 +395,19 @@ async function main() {
 
   const results: Array<{ name: string; passed: boolean }> = [];
 
-  results.push({ name: '测试1: MAX=1, 5并发', passed: await testConcurrency1() });
-  results.push({ name: '测试2: MAX=2, 6并发', passed: await testConcurrency2() });
+  results.push({
+    name: '测试1: MAX=1, 5并发',
+    passed: await testConcurrency1(),
+  });
+  results.push({
+    name: '测试2: MAX=2, 6并发',
+    passed: await testConcurrency2(),
+  });
   results.push({ name: '测试3: 顺序执行', passed: await testSequential() });
-  results.push({ name: '测试4: 真实场景模拟', passed: await testMixedScenario() });
+  results.push({
+    name: '测试4: 真实场景模拟',
+    passed: await testMixedScenario(),
+  });
 
   console.log('\n╔══════════════════════════════════════════════╗');
   console.log('║  测试结果汇总                                 ║');
@@ -350,7 +418,9 @@ async function main() {
   }
 
   const allPassed = results.every((r) => r.passed);
-  console.log(`\n总计: ${results.filter((r) => r.passed).length}/${results.length} 通过 → ${allPassed ? '✅ 全部通过' : '❌ 存在失败'}`);
+  console.log(
+    `\n总计: ${results.filter((r) => r.passed).length}/${results.length} 通过 → ${allPassed ? '✅ 全部通过' : '❌ 存在失败'}`,
+  );
 
   process.exit(allPassed ? 0 : 1);
 }

@@ -171,7 +171,10 @@ export class CacheAliasLearner {
   ): VerificationResult {
     const actualFingerprints = buildResultFingerprints(actualResults);
     const cachedFingerprints = buildResultFingerprints(cachedResults);
-    const overlapRate = calculateOverlapRate(actualFingerprints, cachedFingerprints);
+    const overlapRate = calculateOverlapRate(
+      actualFingerprints,
+      cachedFingerprints,
+    );
 
     const passed = overlapRate >= RESULT_OVERLAP_THRESHOLD;
     const existing = this.aliases.get(sourceKey);

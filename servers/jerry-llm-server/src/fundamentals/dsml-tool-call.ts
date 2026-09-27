@@ -124,8 +124,14 @@ export function parseDSMLToolCalls(
     const invokeBody = invokeMatch[2];
 
     // 工具名必须在可用列表中才信任（防止模型幻觉出不存在的工具名）
-    if (availableToolNames.length > 0 && !availableToolNames.includes(toolName)) {
-      logger.warn('DSML 解析：跳过不可用的工具名', { module: 'DsmlToolCall', toolName });
+    if (
+      availableToolNames.length > 0 &&
+      !availableToolNames.includes(toolName)
+    ) {
+      logger.warn('DSML 解析：跳过不可用的工具名', {
+        module: 'DsmlToolCall',
+        toolName,
+      });
       continue;
     }
 
@@ -138,7 +144,8 @@ export function parseDSMLToolCalls(
       // 尝试还原基本类型（数字/布尔），失败保持字符串（大多数工具参数如 query 本就是 string）
       if (rawValue === 'true') args[paramName] = true;
       else if (rawValue === 'false') args[paramName] = false;
-      else if (/^-?\d+(\.\d+)?$/.test(rawValue)) args[paramName] = Number(rawValue);
+      else if (/^-?\d+(\.\d+)?$/.test(rawValue))
+        args[paramName] = Number(rawValue);
       else args[paramName] = rawValue;
     }
 
@@ -229,7 +236,9 @@ function parseControlTag(buffer: string): TagMatchResult {
     //   - 名字后面已出现非名字符（如 "<div "、"1 < 2"、"<to>"）→ 名字已终结且对不上，
     //     必须立刻判定为普通文本，否则 scanBuffer 会被永久毒化成 prefix，块永远收不了尾
     if (j < buffer.length) return null;
-    return CONTROL_TAG_NAMES.some((n) => n.startsWith(rawName)) ? 'prefix' : null;
+    return CONTROL_TAG_NAMES.some((n) => n.startsWith(rawName))
+      ? 'prefix'
+      : null;
   }
 
   // ---------- 属性区 + 闭合尖括号 ----------
@@ -382,7 +391,10 @@ export class StreamingDsmlSuppressor {
 /**
  * 同步整段抑制（非流式路径：fallback / invoke 等值于 push(全文) + flush()）
  */
-export function suppressRawToolCallBlocks(text: string): { safeText: string; captured: string } {
+export function suppressRawToolCallBlocks(text: string): {
+  safeText: string;
+  captured: string;
+} {
   const suppressor = new StreamingDsmlSuppressor();
   const safeText = suppressor.push(text) + suppressor.flush();
   return { safeText, captured: suppressor.getCaptured() };

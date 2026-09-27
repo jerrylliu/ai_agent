@@ -12,7 +12,9 @@ import { logger } from '../fundamentals/logger.js';
  */
 @Injectable()
 export class GeneratedDocumentSchedulerService implements OnModuleInit {
-  private readonly nestLogger = new Logger(GeneratedDocumentSchedulerService.name);
+  private readonly nestLogger = new Logger(
+    GeneratedDocumentSchedulerService.name,
+  );
 
   constructor(
     private readonly schedulerRegistry: SchedulerRegistry,
@@ -20,7 +22,8 @@ export class GeneratedDocumentSchedulerService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    const intervalMs = Math.max(config.document.cleanupIntervalMin, 1) * 60 * 1000;
+    const intervalMs =
+      Math.max(config.document.cleanupIntervalMin, 1) * 60 * 1000;
     const timer = setInterval(() => {
       this.runCleanup();
     }, intervalMs);

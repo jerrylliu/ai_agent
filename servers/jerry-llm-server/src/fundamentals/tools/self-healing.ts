@@ -91,7 +91,11 @@ export function applySelfHealing(input: SelfHealingInput): SelfHealingDecision {
   const { toolName, sessionId, result } = input;
 
   // 结果不是带 success 的对象 → 不参与自愈
-  if (!result || typeof result !== 'object' || typeof result.success !== 'boolean') {
+  if (
+    !result ||
+    typeof result !== 'object' ||
+    typeof result.success !== 'boolean'
+  ) {
     return { result, consumedAttempt: false, currentAttempt: 0 };
   }
 
@@ -115,7 +119,8 @@ export function applySelfHealing(input: SelfHealingInput): SelfHealingDecision {
 
   const existing = attempts.get(key);
   const now = Date.now();
-  const newCount = existing && existing.expiresAt > now ? existing.count + 1 : 1;
+  const newCount =
+    existing && existing.expiresAt > now ? existing.count + 1 : 1;
 
   attempts.set(key, { count: newCount, expiresAt: now + ATTEMPT_TTL_MS });
 

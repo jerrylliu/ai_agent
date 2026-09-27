@@ -69,10 +69,9 @@ describe('检索评估指标', () => {
 
     it('部分命中 → 命中数 / K', () => {
       // top3 中 2 条命中 → 2/3
-      expect(precisionAtK(['d1', 'd2', 'd4'], ['d1', 'd2', 'd3'], 3)).toBeCloseTo(
-        2 / 3,
-        4,
-      );
+      expect(
+        precisionAtK(['d1', 'd2', 'd4'], ['d1', 'd2', 'd3'], 3),
+      ).toBeCloseTo(2 / 3, 4);
     });
 
     it('无命中 → 0', () => {

@@ -1,4 +1,9 @@
-import { Injectable, UnauthorizedException, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../entities/user.entity.js';
@@ -74,7 +79,9 @@ export class AuthService {
     }
 
     if (username) {
-      const existing = await this.userRepository.findOne({ where: { username } });
+      const existing = await this.userRepository.findOne({
+        where: { username },
+      });
       if (existing) {
         throw new BadRequestException('该用户名已被使用');
       }
@@ -114,7 +121,10 @@ export class AuthService {
 
     const user = await this.userRepository
       .createQueryBuilder('user')
-      .where('user.email = :account OR user.phone = :account OR user.username = :account', { account })
+      .where(
+        'user.email = :account OR user.phone = :account OR user.username = :account',
+        { account },
+      )
       .getOne();
 
     if (!user) {
@@ -140,7 +150,10 @@ export class AuthService {
     };
   }
 
-  async updateProfile(userId: number, body: { username?: string; avatar?: string }) {
+  async updateProfile(
+    userId: number,
+    body: { username?: string; avatar?: string },
+  ) {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new BadRequestException('用户不存在');
@@ -152,7 +165,9 @@ export class AuthService {
         if (username.length < 2 || username.length > 20) {
           throw new BadRequestException('用户名长度应在2-20位之间');
         }
-        const existing = await this.userRepository.findOne({ where: { username } });
+        const existing = await this.userRepository.findOne({
+          where: { username },
+        });
         if (existing) {
           throw new BadRequestException('该用户名已被使用');
         }
@@ -164,7 +179,9 @@ export class AuthService {
       // 校验 avatar URL 协议，防止 javascript: 等恶意 URL
       const avatarUrl = body.avatar.trim();
       if (!/^https?:\/\//i.test(avatarUrl)) {
-        throw new BadRequestException('头像 URL 必须以 http:// 或 https:// 开头');
+        throw new BadRequestException(
+          '头像 URL 必须以 http:// 或 https:// 开头',
+        );
       }
       user.avatar = avatarUrl;
     }
@@ -186,7 +203,11 @@ export class AuthService {
     return this.sanitizeUser(user);
   }
 
-  async changePassword(userId: number, oldPassword: string, newPassword: string) {
+  async changePassword(
+    userId: number,
+    oldPassword: string,
+    newPassword: string,
+  ) {
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new BadRequestException('用户不存在');
@@ -202,7 +223,9 @@ export class AuthService {
     }
 
     if (newPassword.length > MAX_PASSWORD_LENGTH) {
-      throw new BadRequestException(`新密码长度不能超过${MAX_PASSWORD_LENGTH}位`);
+      throw new BadRequestException(
+        `新密码长度不能超过${MAX_PASSWORD_LENGTH}位`,
+      );
     }
 
     user.password = await bcrypt.hash(newPassword, 10);
@@ -218,7 +241,10 @@ export class AuthService {
   async resetPassword(account: string, newPassword: string) {
     const user = await this.userRepository
       .createQueryBuilder('user')
-      .where('user.email = :account OR user.phone = :account OR user.username = :account', { account: account.trim() })
+      .where(
+        'user.email = :account OR user.phone = :account OR user.username = :account',
+        { account: account.trim() },
+      )
       .getOne();
 
     if (!user) {
@@ -230,7 +256,9 @@ export class AuthService {
     }
 
     if (newPassword.length > MAX_PASSWORD_LENGTH) {
-      throw new BadRequestException(`新密码长度不能超过${MAX_PASSWORD_LENGTH}位`);
+      throw new BadRequestException(
+        `新密码长度不能超过${MAX_PASSWORD_LENGTH}位`,
+      );
     }
 
     user.password = await bcrypt.hash(newPassword, 10);

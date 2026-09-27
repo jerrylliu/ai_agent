@@ -6,14 +6,22 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../vector-store/index', () => ({
   getAllDocuments: jest.fn(),
 }));
 
-import { executeListKnowledgeBase, listKnowledgeBaseSchema } from './list-knowledge-base';
+import {
+  executeListKnowledgeBase,
+  listKnowledgeBaseSchema,
+} from './list-knowledge-base';
 
 describe('list_knowledge_base 工具', () => {
   describe('listKnowledgeBaseSchema', () => {
@@ -22,7 +30,8 @@ describe('list_knowledge_base 工具', () => {
     });
 
     it('detail_level 应有 enum 约束', () => {
-      const props = listKnowledgeBaseSchema.function.parameters.properties as any;
+      const props = listKnowledgeBaseSchema.function.parameters
+        .properties as any;
       expect(props.detail_level.enum).toEqual(['brief', 'detailed']);
     });
   });
@@ -35,20 +44,29 @@ describe('list_knowledge_base 工具', () => {
     it('按 source 分组聚合', async () => {
       const { getAllDocuments } = require('../vector-store/index');
       getAllDocuments.mockResolvedValue([
-        { content: 'doc A content chunk 1', metadata: { source: 'file-a.txt', doc_type: 'text' } },
-        { content: 'doc A content chunk 2', metadata: { source: 'file-a.txt', doc_type: 'text' } },
-        { content: 'doc B chunk 1', metadata: { source: 'file-b.pdf', docType: 'pdf' } },
+        {
+          content: 'doc A content chunk 1',
+          metadata: { source: 'file-a.txt', doc_type: 'text' },
+        },
+        {
+          content: 'doc A content chunk 2',
+          metadata: { source: 'file-a.txt', doc_type: 'text' },
+        },
+        {
+          content: 'doc B chunk 1',
+          metadata: { source: 'file-b.pdf', docType: 'pdf' },
+        },
       ]);
 
       const r = await executeListKnowledgeBase({ detail_level: 'brief' });
       expect(r.totalDocuments).toBe(2);
       expect(r.totalChunks).toBe(3);
 
-      const fileA = r.documents.find(d => d.source === 'file-a.txt');
+      const fileA = r.documents.find((d) => d.source === 'file-a.txt');
       expect(fileA).toBeDefined();
       expect(fileA!.chunkCount).toBe(2);
 
-      const fileB = r.documents.find(d => d.source === 'file-b.pdf');
+      const fileB = r.documents.find((d) => d.source === 'file-b.pdf');
       expect(fileB).toBeDefined();
       expect(fileB!.chunkCount).toBe(1);
     });
@@ -56,7 +74,10 @@ describe('list_knowledge_base 工具', () => {
     it('detailed 模式应包含 contentPreview', async () => {
       const { getAllDocuments } = require('../vector-store/index');
       getAllDocuments.mockResolvedValue([
-        { content: 'Hello World', metadata: { source: 'test.txt', docType: 'text' } },
+        {
+          content: 'Hello World',
+          metadata: { source: 'test.txt', docType: 'text' },
+        },
       ]);
 
       const r = await executeListKnowledgeBase({ detail_level: 'detailed' });
@@ -84,9 +105,7 @@ describe('list_knowledge_base 工具', () => {
 
     it('未知 source 标记为 unknown', async () => {
       const { getAllDocuments } = require('../vector-store/index');
-      getAllDocuments.mockResolvedValue([
-        { content: 'c', metadata: {} },
-      ]);
+      getAllDocuments.mockResolvedValue([{ content: 'c', metadata: {} }]);
 
       const r = await executeListKnowledgeBase({});
       expect(r.documents[0].source).toBe('unknown');

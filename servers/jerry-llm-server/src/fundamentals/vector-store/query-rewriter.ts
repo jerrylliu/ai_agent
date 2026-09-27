@@ -165,7 +165,10 @@ const RewriteResponseSchema = z.object({
   hypothetical_answer: z.string().optional(),
 });
 
-function parseRewriteResponse(content: string, originalQuery: string): RewrittenQuery {
+function parseRewriteResponse(
+  content: string,
+  originalQuery: string,
+): RewrittenQuery {
   const fallback = (): RewrittenQuery => ({
     mainQuery: originalQuery,
     subQueries: [],
@@ -183,7 +186,8 @@ function parseRewriteResponse(content: string, originalQuery: string): Rewritten
     return fallback();
   }
 
-  const { main_query, sub_queries, keywords, query_type, hypothetical_answer } = result.data;
+  const { main_query, sub_queries, keywords, query_type, hypothetical_answer } =
+    result.data;
 
   const mainQuery =
     main_query && main_query.trim() ? main_query.trim() : originalQuery;
@@ -215,14 +219,61 @@ function extractKeywordsSimple(query: string): string[] {
 
   // 中文停用词
   const stopWords = new Set([
-    '的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都',
-    '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会',
-    '着', '没有', '看', '好', '自己', '这', '他', '她', '它', '吗', '呢',
-    '什么', '怎么', '如何', '哪', '哪些', '为什么', '可以', '能', '还是',
-    '那个', '这个', '那个', '哪个', '多少', '几', '做', '把', '让', '被',
+    '的',
+    '了',
+    '在',
+    '是',
+    '我',
+    '有',
+    '和',
+    '就',
+    '不',
+    '人',
+    '都',
+    '一',
+    '一个',
+    '上',
+    '也',
+    '很',
+    '到',
+    '说',
+    '要',
+    '去',
+    '你',
+    '会',
+    '着',
+    '没有',
+    '看',
+    '好',
+    '自己',
+    '这',
+    '他',
+    '她',
+    '它',
+    '吗',
+    '呢',
+    '什么',
+    '怎么',
+    '如何',
+    '哪',
+    '哪些',
+    '为什么',
+    '可以',
+    '能',
+    '还是',
+    '那个',
+    '这个',
+    '那个',
+    '哪个',
+    '多少',
+    '几',
+    '做',
+    '把',
+    '让',
+    '被',
   ]);
 
   return query
     .split(/[\s,，。？?！!、；;：:""''（）()\[\]【】{}]+/)
-    .filter(word => word.length >= 2 && !stopWords.has(word));
+    .filter((word) => word.length >= 2 && !stopWords.has(word));
 }

@@ -27,7 +27,14 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
-import { isChartImageUrl, parseChartImageUrl, chartPngDataUri, isMindmapImageUrl, parseMindmapImageUrl, mindmapPngDataUri } from './multimodal-output';
+import {
+  isChartImageUrl,
+  parseChartImageUrl,
+  chartPngDataUri,
+  isMindmapImageUrl,
+  parseMindmapImageUrl,
+  mindmapPngDataUri,
+} from './multimodal-output';
 import { isDocumentUrl, getCachedDocument } from './generate-document';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
 import { metrics } from '../metrics';
@@ -66,18 +73,34 @@ const webhookAvailable = true;
  * 任何一个通道可用即可注册工具，由 isSendNotificationAvailable() 决定是否注册
  */
 export function validateSendNotificationConfig(): boolean {
-  feishuAvailable = !!(config.notify.feishuAppId && config.notify.feishuAppSecret);
-  emailAvailable = !!(config.notify.smtpHost && config.notify.smtpUser && config.notify.smtpPass);
+  feishuAvailable = !!(
+    config.notify.feishuAppId && config.notify.feishuAppSecret
+  );
+  emailAvailable = !!(
+    config.notify.smtpHost &&
+    config.notify.smtpUser &&
+    config.notify.smtpPass
+  );
 
   if (feishuAvailable) {
-    logger.info('send_notification：飞书通道配置就绪', { module: 'Tool:SendNotification' });
+    logger.info('send_notification：飞书通道配置就绪', {
+      module: 'Tool:SendNotification',
+    });
   } else {
-    logger.info('send_notification：飞书通道未配置（缺少 NOTIFY_FEISHU_APP_ID/SECRET）', { module: 'Tool:SendNotification' });
+    logger.info(
+      'send_notification：飞书通道未配置（缺少 NOTIFY_FEISHU_APP_ID/SECRET）',
+      { module: 'Tool:SendNotification' },
+    );
   }
   if (emailAvailable) {
-    logger.info('send_notification：邮件通道配置就绪', { module: 'Tool:SendNotification' });
+    logger.info('send_notification：邮件通道配置就绪', {
+      module: 'Tool:SendNotification',
+    });
   } else {
-    logger.info('send_notification：邮件通道未配置（缺少 NOTIFY_SMTP_HOST/USER/PASS）', { module: 'Tool:SendNotification' });
+    logger.info(
+      'send_notification：邮件通道未配置（缺少 NOTIFY_SMTP_HOST/USER/PASS）',
+      { module: 'Tool:SendNotification' },
+    );
   }
 
   return feishuAvailable || emailAvailable || webhookAvailable;
@@ -110,7 +133,8 @@ function coerceStringToAttachments(v: unknown): unknown {
   if (!url) return [];
   let filename = 'attachment';
   try {
-    const basename = new URL(url).pathname.split('/').filter(Boolean).pop() || '';
+    const basename =
+      new URL(url).pathname.split('/').filter(Boolean).pop() || '';
     if (/\.[a-z0-9]{1,8}$/i.test(basename)) filename = basename;
   } catch {
     // URL 解析失败（如裸 fc:// 短引用解析异常）使用通用文件名
@@ -141,7 +165,8 @@ function normalizeRecipient(raw: string): string {
 }
 
 /** 严格邮箱校验：引号、空格、中文标点等一律拒绝，作为归一化之后的最后防线 */
-const EMAIL_STRICT_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
+const EMAIL_STRICT_RE =
+  /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
 
 // 单个附件 schema：filename 必填，url / content / cid 均可选
 const sendNotificationAttachmentSchema = z.object({
@@ -172,24 +197,26 @@ export const sendNotificationParamsSchema = z.object({
     .enum(['feishu', 'email', 'webhook'])
     .describe(
       '通知通道，三选一：\n' +
-      '- **feishu**：通过飞书自建应用 OpenAPI 发送。**所有"发到飞书"/"发到飞书群"/"发到飞书的某某群"的请求都必须用此通道**。支持发给个人 open_id (ou_xxx)、群聊 chat_id (oc_xxx)、邮箱、user_id；支持互动卡片、图片消息、文件消息。\n' +
-      '- **email**：通过 SMTP 发邮件，recipients 传邮箱地址。\n' +
-      '- **webhook**：通过用户**显式提供**的 HTTP POST URL（钉钉群机器人、企微群机器人、自建服务等）。**仅当用户明确给出 https:// 开头的 Webhook 地址时才用此通道**。⚠️ 不要为"发飞书群"选 webhook —— 飞书群已通过 feishu 通道 + chat_id 直接发送，不需要 Webhook。',
+        '- **feishu**：通过飞书自建应用 OpenAPI 发送。**所有"发到飞书"/"发到飞书群"/"发到飞书的某某群"的请求都必须用此通道**。支持发给个人 open_id (ou_xxx)、群聊 chat_id (oc_xxx)、邮箱、user_id；支持互动卡片、图片消息、文件消息。\n' +
+        '- **email**：通过 SMTP 发邮件，recipients 传邮箱地址。\n' +
+        '- **webhook**：通过用户**显式提供**的 HTTP POST URL（钉钉群机器人、企微群机器人、自建服务等）。**仅当用户明确给出 https:// 开头的 Webhook 地址时才用此通道**。⚠️ 不要为"发飞书群"选 webhook —— 飞书群已通过 feishu 通道 + chat_id 直接发送，不需要 Webhook。',
     ),
   title: z.string().min(1).describe('通知标题（邮件主题、卡片标题）'),
   content: z
     .string()
     .min(1)
-    .describe('通知正文，支持 Markdown 文本。webhook 通道会原样作为 text 字段发送'),
+    .describe(
+      '通知正文，支持 Markdown 文本。webhook 通道会原样作为 text 字段发送',
+    ),
   recipients: z
     .preprocess(coerceStringToArray, z.array(z.string()).optional())
     .describe(
       '接收人列表。feishu 通道支持四种 ID：① 邮箱（飞书绑定的邮箱）② open_id（ou_ 开头，个人）③ chat_id（oc_ 开头，群聊）④ user_id（企业内编号）；email 通道传邮箱地址；webhook 通道忽略此参数。\n' +
-      '⚠️ 重要规则：\n' +
-      '- 用户明确指定接收人时（"发到 xx 群"/"发给 yy 用户"），**只**发给该指定接收人，不要额外追加其他记忆里的接收人。\n' +
-      '- 用户提到群名称（如"测试群""超级群"）时，应使用群的 chat_id (oc_xxx)，不要把群名字符串当 recipient 传入。\n' +
-      '- 同一个通知**不要拆成多次工具调用**：所有需要发的接收人放进同一个 recipients 数组，一次调用完成。\n' +
-      '- ⚠️ 邮箱地址必须传纯文本（如 user@qq.com），**禁止**用引号（"..."、“...”）、尖括号（<...>）包裹，或附加任何说明文字，否则会被 SMTP 服务器拒收退信。',
+        '⚠️ 重要规则：\n' +
+        '- 用户明确指定接收人时（"发到 xx 群"/"发给 yy 用户"），**只**发给该指定接收人，不要额外追加其他记忆里的接收人。\n' +
+        '- 用户提到群名称（如"测试群""超级群"）时，应使用群的 chat_id (oc_xxx)，不要把群名字符串当 recipient 传入。\n' +
+        '- 同一个通知**不要拆成多次工具调用**：所有需要发的接收人放进同一个 recipients 数组，一次调用完成。\n' +
+        '- ⚠️ 邮箱地址必须传纯文本（如 user@qq.com），**禁止**用引号（"..."、“...”）、尖括号（<...>）包裹，或附加任何说明文字，否则会被 SMTP 服务器拒收退信。',
     ),
   webhookUrl: z
     .string()
@@ -198,16 +225,21 @@ export const sendNotificationParamsSchema = z.object({
       'Webhook 地址，仅 channel=webhook 时必填，必须是 https 开头的外网地址',
     ),
   attachments: z
-    .preprocess(coerceStringToAttachments, z.array(sendNotificationAttachmentSchema).optional())
+    .preprocess(
+      coerceStringToAttachments,
+      z.array(sendNotificationAttachmentSchema).optional(),
+    )
     .describe(
       '附件列表，**全部三个通道（feishu/email/webhook）均生效**。\n' +
-      '- email 通道：图片自动内嵌正文，PDF/Word/Markdown 等作为邮件附件。\n' +
-      '- feishu 通道：图片上传飞书素材库后作为「图片消息」单独发出，可点击放大；PDF/Word/Excel 作为「文件消息」发出，群里可在线预览。\n' +
-      '- 重要：用户要求"把图发飞书""把 PDF 发飞书""三个东西都发飞书"等场景，**必须**把 generate_chart / create_mindmap / generate_image / generate_document 返回的 url（含 fc:// 协议）填入此字段，不能只在 content 里描述文字。少传 attachments 等于没发附件。',
+        '- email 通道：图片自动内嵌正文，PDF/Word/Markdown 等作为邮件附件。\n' +
+        '- feishu 通道：图片上传飞书素材库后作为「图片消息」单独发出，可点击放大；PDF/Word/Excel 作为「文件消息」发出，群里可在线预览。\n' +
+        '- 重要：用户要求"把图发飞书""把 PDF 发飞书""三个东西都发飞书"等场景，**必须**把 generate_chart / create_mindmap / generate_image / generate_document 返回的 url（含 fc:// 协议）填入此字段，不能只在 content 里描述文字。少传 attachments 等于没发附件。',
     ),
 });
 
-export type SendNotificationParams = z.infer<typeof sendNotificationParamsSchema>;
+export type SendNotificationParams = z.infer<
+  typeof sendNotificationParamsSchema
+>;
 
 export const sendNotificationSchema = buildToolJsonSchema(
   'send_notification',
@@ -254,7 +286,9 @@ export interface SendNotificationResult {
  * 提取正文中的 Markdown 图片语法（alt + url）
  * 仅匹配 http/https URL；fc:// 内部协议与 data URI 不会出现在正文中，无需处理
  */
-function extractMarkdownImages(content: string): Array<{ alt: string; url: string }> {
+function extractMarkdownImages(
+  content: string,
+): Array<{ alt: string; url: string }> {
   // 每次调用创建新正则，避免 /g 正则 lastIndex 共享状态陷阱
   const regex = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
   const results: Array<{ alt: string; url: string }> = [];
@@ -271,7 +305,8 @@ function extractMarkdownImages(content: string): Array<{ alt: string; url: strin
  */
 function inferImageFilenameFromUrl(url: string, index: number): string {
   try {
-    const basename = new URL(url).pathname.split('/').filter(Boolean).pop() || '';
+    const basename =
+      new URL(url).pathname.split('/').filter(Boolean).pop() || '';
     if (/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(basename)) {
       return basename;
     }
@@ -287,12 +322,16 @@ function inferImageFilenameFromUrl(url: string, index: number): string {
  *   - 已在 attachments 中出现的 URL 不重复添加
  *   - 同一 URL 在正文中出现多次只提取一次
  */
-function mergeContentImagesIntoAttachments(params: SendNotificationParams): void {
+function mergeContentImagesIntoAttachments(
+  params: SendNotificationParams,
+): void {
   const images = extractMarkdownImages(params.content);
   if (images.length === 0) return;
 
   const existingUrls = new Set(
-    (params.attachments || []).map((a) => a.url).filter((u): u is string => !!u),
+    (params.attachments || [])
+      .map((a) => a.url)
+      .filter((u): u is string => !!u),
   );
   const autoAttachments = images
     .filter((img) => !existingUrls.has(img.url))
@@ -334,7 +373,9 @@ function replaceMarkdownImagesWithPlaceholder(content: string): string {
  *   4. http(s) URL → 网络下载
  * 与 downloadAttachmentToBase64 共享逻辑，但返回 Buffer 而非 base64 字符串
  */
-async function resolveAttachmentBuffer(url: string): Promise<{ buffer: Buffer; mimeType: string } | null> {
+async function resolveAttachmentBuffer(
+  url: string,
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
   // 复用邮件通道已有的 base64 解析逻辑
   const result = await downloadAttachmentToBase64(url);
   if (!result) return null;
@@ -373,7 +414,9 @@ function buildIdempotentUuid(
  *   - 单个 recipient 失败不影响其他人
  *   - 附件上传失败时降级为"卡片 + 错误提示"，主消息照常发送
  */
-async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNotificationResult> {
+async function sendFeishuMessage(
+  params: SendNotificationParams,
+): Promise<SendNotificationResult> {
   if (!feishuAvailable) {
     return {
       success: false,
@@ -397,8 +440,16 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
   }
 
   // ----- 处理附件：分为图片/文件，统一预先上传到飞书素材库 -----
-  const imageAttachments: Array<{ filename: string; key: string; sourceUrl?: string }> = [];
-  const fileAttachments: Array<{ filename: string; key: string; sizeKB: number }> = [];
+  const imageAttachments: Array<{
+    filename: string;
+    key: string;
+    sourceUrl?: string;
+  }> = [];
+  const fileAttachments: Array<{
+    filename: string;
+    key: string;
+    sizeKB: number;
+  }> = [];
   const attachmentErrors: string[] = [];
 
   if (params.attachments && params.attachments.length > 0) {
@@ -414,7 +465,10 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
         const resolved = await resolveAttachmentBuffer(att.url);
         if (resolved) {
           buffer = resolved.buffer;
-          if (resolved.mimeType && resolved.mimeType !== 'application/octet-stream') {
+          if (
+            resolved.mimeType &&
+            resolved.mimeType !== 'application/octet-stream'
+          ) {
             mimeType = resolved.mimeType;
           }
         }
@@ -444,11 +498,19 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
           imageAttachments.push({
             filename,
             key: r.key,
-            sourceUrl: att.url && (att.url.startsWith('http://') || att.url.startsWith('https://')) ? att.url : undefined,
+            sourceUrl:
+              att.url &&
+              (att.url.startsWith('http://') || att.url.startsWith('https://'))
+                ? att.url
+                : undefined,
           });
         } else {
           attachmentErrors.push(`图片 ${filename} 上传失败: ${r.error}`);
-          logger.warn('飞书附件：图片上传失败', { module: 'SendNotification', filename, error: r.error });
+          logger.warn('飞书附件：图片上传失败', {
+            module: 'SendNotification',
+            filename,
+            error: r.error,
+          });
         }
       } else {
         // 上传文件素材
@@ -461,7 +523,11 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
           });
         } else {
           attachmentErrors.push(`文件 ${filename} 上传失败: ${r.error}`);
-          logger.warn('飞书附件：文件上传失败', { module: 'SendNotification', filename, error: r.error });
+          logger.warn('飞书附件：文件上传失败', {
+            module: 'SendNotification',
+            filename,
+            error: r.error,
+          });
         }
       }
     }
@@ -472,13 +538,20 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
   if (imageAttachments.length > 0) {
     cardFields.push({
       label: '图片附件',
-      value: imageAttachments.map((img) => `• ${img.filename}${img.sourceUrl ? ` ([原图](${img.sourceUrl}))` : ''}`).join('\n'),
+      value: imageAttachments
+        .map(
+          (img) =>
+            `• ${img.filename}${img.sourceUrl ? ` ([原图](${img.sourceUrl}))` : ''}`,
+        )
+        .join('\n'),
     });
   }
   if (fileAttachments.length > 0) {
     cardFields.push({
       label: '文件附件',
-      value: fileAttachments.map((f) => `• ${f.filename} (${f.sizeKB} KB)`).join('\n'),
+      value: fileAttachments
+        .map((f) => `• ${f.filename} (${f.sizeKB} KB)`)
+        .join('\n'),
     });
   }
   if (attachmentErrors.length > 0) {
@@ -507,7 +580,12 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
     // 自动调 contact API 把邮箱换成 open_id 再重试（C1 兜底）
     let recipient = originalRecipient;
     let idType = detectReceiveIdType(recipient);
-    const uuid = buildIdempotentUuid(recipient, params.title, params.content, (params.attachments || []).length);
+    const uuid = buildIdempotentUuid(
+      recipient,
+      params.title,
+      params.content,
+      (params.attachments || []).length,
+    );
 
     // 1) 发送主卡片消息
     let cardResult = await sendCardMessage(recipient, idType, card, uuid);
@@ -520,7 +598,12 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
       if (openId) {
         recipient = openId;
         idType = 'open_id';
-        const retryUuid = buildIdempotentUuid(recipient, params.title, params.content, (params.attachments || []).length);
+        const retryUuid = buildIdempotentUuid(
+          recipient,
+          params.title,
+          params.content,
+          (params.attachments || []).length,
+        );
         cardResult = await sendCardMessage(recipient, idType, card, retryUuid);
       }
     }
@@ -534,19 +617,34 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
     metrics.feishuMessageSent.inc({ channel: 'card', status: 'success' });
 
     // 用最终生效的 recipient/idType 发送附件，保持与主卡片同一目标用户
-    const attachmentUuid = buildIdempotentUuid(recipient, params.title, params.content, (params.attachments || []).length);
+    const attachmentUuid = buildIdempotentUuid(
+      recipient,
+      params.title,
+      params.content,
+      (params.attachments || []).length,
+    );
 
     // 飞书 uuid 限制：仅 [0-9a-zA-Z]，最长 50 字符。
     // 直接拼 attachmentUuid+img.key 会含下划线且长度超限 → field validation failed。
     // 改为对每个附件再做一次 MD5 哈希，得到 32 位纯 hex 字符串。
     const subUuid = (kind: string, key: string): string =>
-      crypto.createHash('md5').update(`${attachmentUuid}|${kind}|${key}`).digest('hex');
+      crypto
+        .createHash('md5')
+        .update(`${attachmentUuid}|${kind}|${key}`)
+        .digest('hex');
 
     // 2) 逐个发送图片消息（每个图片单独发，飞书原生预览体验最佳）
     for (const img of imageAttachments) {
-      const r = await sendImageMessage(recipient, idType, img.key, subUuid('img', img.key));
+      const r = await sendImageMessage(
+        recipient,
+        idType,
+        img.key,
+        subUuid('img', img.key),
+      );
       if (!r.success) {
-        errors.push(`recipient=${originalRecipient}, 图片 ${img.filename}: ${r.error}`);
+        errors.push(
+          `recipient=${originalRecipient}, 图片 ${img.filename}: ${r.error}`,
+        );
         metrics.feishuMessageSent.inc({ channel: 'image', status: 'failure' });
       } else {
         if (r.messageId) refIds.push(r.messageId);
@@ -556,9 +654,16 @@ async function sendFeishuMessage(params: SendNotificationParams): Promise<SendNo
 
     // 3) 逐个发送文件消息
     for (const f of fileAttachments) {
-      const r = await sendFileMessage(recipient, idType, f.key, subUuid('file', f.key));
+      const r = await sendFileMessage(
+        recipient,
+        idType,
+        f.key,
+        subUuid('file', f.key),
+      );
       if (!r.success) {
-        errors.push(`recipient=${originalRecipient}, 文件 ${f.filename}: ${r.error}`);
+        errors.push(
+          `recipient=${originalRecipient}, 文件 ${f.filename}: ${r.error}`,
+        );
         metrics.feishuMessageSent.inc({ channel: 'file', status: 'failure' });
       } else {
         if (r.messageId) refIds.push(r.messageId);
@@ -604,7 +709,12 @@ function getSmtpTransporter(): nodemailer.Transporter {
 /** 构造邮件 HTML 正文：内嵌图片 + 普通附件列表 */
 function buildEmailHtml(
   content: string,
-  inlineImages: Array<{ cid: string; filename: string; sizeBytes: number; sourceUrl?: string }>,
+  inlineImages: Array<{
+    cid: string;
+    filename: string;
+    sizeBytes: number;
+    sourceUrl?: string;
+  }>,
   fileAttachments: Array<{ filename: string; sizeBytes: number }>,
 ): string {
   // 正文中的 Markdown 图片语法（![图片 N](url)）在邮件客户端无法渲染，
@@ -618,7 +728,8 @@ function buildEmailHtml(
   // 生成图片 <img> 标签
   let imagesHtml = '';
   for (const img of inlineImages) {
-    const sizeStr = img.sizeBytes > 0 ? ` (${(img.sizeBytes / 1024).toFixed(1)} KB)` : '';
+    const sizeStr =
+      img.sizeBytes > 0 ? ` (${(img.sizeBytes / 1024).toFixed(1)} KB)` : '';
     const linkHtml = img.sourceUrl
       ? ` <a href="${img.sourceUrl}" style="color:#2196F3;font-size:11px;">查看原图</a>`
       : '';
@@ -631,10 +742,13 @@ function buildEmailHtml(
   // 生成普通附件列表
   let filesHtml = '';
   if (fileAttachments.length > 0) {
-    filesHtml = '<hr style="border:none;border-top:1px solid #e0e0e0;margin:20px 0;"/>\n';
-    filesHtml += '<p style="color:#666;font-size:14px;"><strong>附件：</strong></p>\n<ul style="color:#888;font-size:13px;padding-left:18px;">\n';
+    filesHtml =
+      '<hr style="border:none;border-top:1px solid #e0e0e0;margin:20px 0;"/>\n';
+    filesHtml +=
+      '<p style="color:#666;font-size:14px;"><strong>附件：</strong></p>\n<ul style="color:#888;font-size:13px;padding-left:18px;">\n';
     for (const f of fileAttachments) {
-      const sizeStr = f.sizeBytes > 0 ? ` (${(f.sizeBytes / 1024).toFixed(1)} KB)` : '';
+      const sizeStr =
+        f.sizeBytes > 0 ? ` (${(f.sizeBytes / 1024).toFixed(1)} KB)` : '';
       filesHtml += `  <li>${f.filename}${sizeStr}</li>\n`;
     }
     filesHtml += '</ul>\n';
@@ -652,7 +766,9 @@ function buildEmailHtml(
 }
 
 /** 解析 base64 data URI，支持任意 MIME 类型（image/png, application/pdf, text/plain 等） */
-function parseDataUri(uri: string): { mimeType: string; base64: string } | null {
+function parseDataUri(
+  uri: string,
+): { mimeType: string; base64: string } | null {
   if (!uri.startsWith('data:')) return null;
   const match = uri.match(/^data:([^;]+);base64,(.+)$/);
   if (match) {
@@ -706,7 +822,9 @@ function isImageMime(mimeType: string): boolean {
 }
 
 /** 从 URL 下载文件并转为 Base64，支持 data URI 直接解析、内部图表协议 */
-async function downloadAttachmentToBase64(url: string): Promise<{ base64: string; mimeType: string } | null> {
+async function downloadAttachmentToBase64(
+  url: string,
+): Promise<{ base64: string; mimeType: string } | null> {
   // data URI：直接解析
   const parsed = parseDataUri(url);
   if (parsed) return parsed;
@@ -715,7 +833,10 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
   if (isChartImageUrl(url)) {
     const option = await parseChartImageUrl(url);
     if (!option) {
-      logger.warn('邮件附件：图表缓存已过期或不存在', { module: 'SendNotification', url });
+      logger.warn('邮件附件：图表缓存已过期或不存在', {
+        module: 'SendNotification',
+        url,
+      });
       return null;
     }
     const dataUri = await chartPngDataUri(option);
@@ -723,7 +844,9 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
     // chartPngDataUri 一定返回标准 data:image/png;base64,xxx 格式
     const result = parseDataUri(dataUri);
     if (!result) {
-      logger.warn('邮件附件：图表 data URI 解析失败', { module: 'SendNotification' });
+      logger.warn('邮件附件：图表 data URI 解析失败', {
+        module: 'SendNotification',
+      });
     }
     return result;
   }
@@ -732,14 +855,19 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
   if (isMindmapImageUrl(url)) {
     const mermaidCode = await parseMindmapImageUrl(url);
     if (!mermaidCode) {
-      logger.warn('邮件附件：思维导图缓存已过期或不存在', { module: 'SendNotification', url });
+      logger.warn('邮件附件：思维导图缓存已过期或不存在', {
+        module: 'SendNotification',
+        url,
+      });
       return null;
     }
     const dataUri = await mindmapPngDataUri(mermaidCode);
     if (!dataUri) return null;
     const result = parseDataUri(dataUri);
     if (!result) {
-      logger.warn('邮件附件：思维导图 data URI 解析失败', { module: 'SendNotification' });
+      logger.warn('邮件附件：思维导图 data URI 解析失败', {
+        module: 'SendNotification',
+      });
     }
     return result;
   }
@@ -748,7 +876,10 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
   if (isDocumentUrl(url)) {
     const doc = await getCachedDocument(url);
     if (!doc) {
-      logger.warn('邮件附件：文档已过期/不存在或权限不足', { module: 'SendNotification', url });
+      logger.warn('邮件附件：文档已过期/不存在或权限不足', {
+        module: 'SendNotification',
+        url,
+      });
       return null;
     }
     return {
@@ -763,7 +894,8 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
     const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
     // DashScope OSS 签名 URL 需要 Bearer Token 鉴权，否则 403
     const fetchHeaders: Record<string, string> = {};
-    const isDashScopeOss = url.includes('dashscope') || url.includes('oss-accelerate');
+    const isDashScopeOss =
+      url.includes('dashscope') || url.includes('oss-accelerate');
     if (isDashScopeOss && config.dashscopeApiKey) {
       fetchHeaders['Authorization'] = `Bearer ${config.dashscopeApiKey}`;
     }
@@ -771,7 +903,10 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
 
     // 如果带 Auth 仍然 403，回退到不带鉴权重试
     if (resp.status === 403 && Object.keys(fetchHeaders).length > 0) {
-      logger.info('邮件附件：带鉴权下载 403，回退到无鉴权重试', { module: 'SendNotification', url: url.substring(0, 100) });
+      logger.info('邮件附件：带鉴权下载 403，回退到无鉴权重试', {
+        module: 'SendNotification',
+        url: url.substring(0, 100),
+      });
       const ctrl2 = new AbortController();
       const timer2 = setTimeout(() => ctrl2.abort(), REQUEST_TIMEOUT_MS);
       try {
@@ -783,32 +918,55 @@ async function downloadAttachmentToBase64(url: string): Promise<{ base64: string
     clearTimeout(timer);
 
     if (!resp.ok) {
-      logger.warn('邮件附件：下载文件失败', { module: 'SendNotification', url, status: resp.status });
+      logger.warn('邮件附件：下载文件失败', {
+        module: 'SendNotification',
+        url,
+        status: resp.status,
+      });
       return null;
     }
 
     const arrayBuffer = await resp.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    const mimeType = resp.headers.get('content-type') || 'application/octet-stream';
+    const mimeType =
+      resp.headers.get('content-type') || 'application/octet-stream';
     const base64 = buffer.toString('base64');
     return { mimeType, base64 };
   } catch (e: any) {
-    logger.warn('邮件附件：下载文件异常', { module: 'SendNotification', url, error: e.message });
+    logger.warn('邮件附件：下载文件异常', {
+      module: 'SendNotification',
+      url,
+      error: e.message,
+    });
     return null;
   }
 }
 
 /** 通过 SMTP 发邮件，支持内嵌图片附件 */
-async function sendEmail(params: SendNotificationParams): Promise<SendNotificationResult> {
+async function sendEmail(
+  params: SendNotificationParams,
+): Promise<SendNotificationResult> {
   if (!emailAvailable) {
-    return { success: false, channel: 'email', delivered: 0, errors: ['邮件通道未配置 NOTIFY_SMTP_HOST/USER/PASS'] };
+    return {
+      success: false,
+      channel: 'email',
+      delivered: 0,
+      errors: ['邮件通道未配置 NOTIFY_SMTP_HOST/USER/PASS'],
+    };
   }
   if (!params.recipients || params.recipients.length === 0) {
-    return { success: false, channel: 'email', delivered: 0, errors: ['recipients 不能为空'] };
+    return {
+      success: false,
+      channel: 'email',
+      delivered: 0,
+      errors: ['recipients 不能为空'],
+    };
   }
 
   // 邮箱格式校验：严格正则作为最后防线，拒绝引号/中文标点/空格等脏字符（退信案例见 EMAIL_STRICT_RE 注释）
-  const validRecipients = params.recipients.filter((r) => EMAIL_STRICT_RE.test(r));
+  const validRecipients = params.recipients.filter((r) =>
+    EMAIL_STRICT_RE.test(r),
+  );
   if (validRecipients.length < params.recipients.length) {
     logger.warn('邮件通道：以下收件人格式非法被剔除', {
       module: 'SendNotification',
@@ -823,14 +981,20 @@ async function sendEmail(params: SendNotificationParams): Promise<SendNotificati
       errors: ['recipients 中没有合法邮箱地址'],
       suggestion: {
         action: 'fix_recipient',
-        reason: 'email 通道需要标准邮箱格式（如 user@example.com），但收到的 recipients 中没有任何符合该格式。',
+        reason:
+          'email 通道需要标准邮箱格式（如 user@example.com），但收到的 recipients 中没有任何符合该格式。',
         hint: '若用户给的是飞书 ID（ou_/oc_ 开头），请改用 channel="feishu"；若是 webhook URL，请改用 channel="webhook"。',
       },
     };
   }
 
   // ----- 处理附件：分为内嵌图片和普通附件 -----
-  const inlineImages: Array<{ cid: string; filename: string; sizeBytes: number; sourceUrl?: string }> = [];
+  const inlineImages: Array<{
+    cid: string;
+    filename: string;
+    sizeBytes: number;
+    sourceUrl?: string;
+  }> = [];
   const fileAttachments: Array<{ filename: string; sizeBytes: number }> = [];
   const nodemailerAttachments: Array<{
     filename: string;
@@ -855,7 +1019,10 @@ async function sendEmail(params: SendNotificationParams): Promise<SendNotificati
         if (result) {
           base64 = result.base64;
           // url 下载的 MIME 优先于文件名推断
-          if (result.mimeType && result.mimeType !== 'application/octet-stream') {
+          if (
+            result.mimeType &&
+            result.mimeType !== 'application/octet-stream'
+          ) {
             mimeType = result.mimeType;
           }
         }
@@ -896,12 +1063,21 @@ async function sendEmail(params: SendNotificationParams): Promise<SendNotificati
       if (isImage) {
         // 保留原始来源 URL（仅 http/https，data URI 与 fc:// 内部协议无法在邮件客户端打开）
         const sourceUrl =
-          att.url && (att.url.startsWith('http://') || att.url.startsWith('https://'))
+          att.url &&
+          (att.url.startsWith('http://') || att.url.startsWith('https://'))
             ? att.url
             : undefined;
-        inlineImages.push({ cid: attCid, filename: attFilename, sizeBytes: contentBuffer.length, sourceUrl });
+        inlineImages.push({
+          cid: attCid,
+          filename: attFilename,
+          sizeBytes: contentBuffer.length,
+          sourceUrl,
+        });
       } else {
-        fileAttachments.push({ filename: attFilename, sizeBytes: contentBuffer.length });
+        fileAttachments.push({
+          filename: attFilename,
+          sizeBytes: contentBuffer.length,
+        });
       }
 
       logger.info('邮件附件：文件已加载', {
@@ -927,7 +1103,8 @@ async function sendEmail(params: SendNotificationParams): Promise<SendNotificati
       subject: params.title,
       text: textContent,
       html,
-      attachments: nodemailerAttachments.length > 0 ? nodemailerAttachments : undefined,
+      attachments:
+        nodemailerAttachments.length > 0 ? nodemailerAttachments : undefined,
     });
     return {
       success: true,
@@ -936,7 +1113,12 @@ async function sendEmail(params: SendNotificationParams): Promise<SendNotificati
       refIds: info.messageId ? [info.messageId] : undefined,
     };
   } catch (e: any) {
-    return { success: false, channel: 'email', delivered: 0, errors: [e.message || String(e)] };
+    return {
+      success: false,
+      channel: 'email',
+      delivered: 0,
+      errors: [e.message || String(e)],
+    };
   }
 }
 
@@ -973,7 +1155,9 @@ function isWebhookUrlSafe(url: string): { ok: boolean; reason?: string } {
 }
 
 /** 发送 webhook（兼容钉钉/企微群机器人） */
-async function sendWebhook(params: SendNotificationParams): Promise<SendNotificationResult> {
+async function sendWebhook(
+  params: SendNotificationParams,
+): Promise<SendNotificationResult> {
   if (!params.webhookUrl) {
     // 结构化错误反馈：LLM 看到 suggestion 会自动改 channel 重试
     // 90% 触发场景：用户说"发飞书群"，LLM 误选 webhook（飞书群 ≠ Webhook）
@@ -985,14 +1169,20 @@ async function sendWebhook(params: SendNotificationParams): Promise<SendNotifica
       suggestion: {
         action: 'switch_channel',
         to: 'feishu',
-        reason: 'webhook 通道需要 webhookUrl 参数，但用户未提供。若用户提到"飞书群/飞书"，应改用 feishu 通道发送。',
+        reason:
+          'webhook 通道需要 webhookUrl 参数，但用户未提供。若用户提到"飞书群/飞书"，应改用 feishu 通道发送。',
         hint: '若用户需求是发飞书群，请改用 channel="feishu" + recipients=["oc_xxx"]（群的 chat_id）；若是发钉钉/企微群，请向用户索要 webhook URL。',
       },
     };
   }
   const safe = isWebhookUrlSafe(params.webhookUrl);
   if (!safe.ok) {
-    return { success: false, channel: 'webhook', delivered: 0, errors: [`Webhook URL 不安全：${safe.reason}`] };
+    return {
+      success: false,
+      channel: 'webhook',
+      delivered: 0,
+      errors: [`Webhook URL 不安全：${safe.reason}`],
+    };
   }
 
   // 钉钉/企微的群机器人格式：{ msgtype: 'text', text: { content: '...' } }
@@ -1013,11 +1203,21 @@ async function sendWebhook(params: SendNotificationParams): Promise<SendNotifica
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => '');
-      return { success: false, channel: 'webhook', delivered: 0, errors: [`HTTP ${resp.status}: ${text.slice(0, 200)}`] };
+      return {
+        success: false,
+        channel: 'webhook',
+        delivered: 0,
+        errors: [`HTTP ${resp.status}: ${text.slice(0, 200)}`],
+      };
     }
     return { success: true, channel: 'webhook', delivered: 1 };
   } catch (e: any) {
-    return { success: false, channel: 'webhook', delivered: 0, errors: [e.message || String(e)] };
+    return {
+      success: false,
+      channel: 'webhook',
+      delivered: 0,
+      errors: [e.message || String(e)],
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -1029,7 +1229,9 @@ async function sendWebhook(params: SendNotificationParams): Promise<SendNotifica
  * 工具主执行函数
  * 根据 channel 路由到具体的实现，并统一记录日志
  */
-export async function executeSendNotification(rawParams: unknown): Promise<SendNotificationResult> {
+export async function executeSendNotification(
+  rawParams: unknown,
+): Promise<SendNotificationResult> {
   const parsed = safeParseToolParams(sendNotificationParamsSchema, rawParams);
   if (!parsed.success) {
     logger.warn('send_notification：参数校验失败', {
@@ -1057,7 +1259,9 @@ export async function executeSendNotification(rawParams: unknown): Promise<SendN
 
   // 收件人归一化：清洗引号/尖括号/零宽字符（退信案例见 normalizeRecipient 注释），三通道统一生效
   if (params.recipients && params.recipients.length > 0) {
-    const normalized = params.recipients.map(normalizeRecipient).filter((r) => r.length > 0);
+    const normalized = params.recipients
+      .map(normalizeRecipient)
+      .filter((r) => r.length > 0);
     if (normalized.length !== params.recipients.length) {
       logger.warn('send_notification：部分收件人归一化后为空，已剔除', {
         module: 'Tool:SendNotification',
@@ -1090,7 +1294,12 @@ export async function executeSendNotification(rawParams: unknown): Promise<SendN
       result = await sendWebhook(params);
       break;
     default:
-      result = { success: false, channel: params.channel, delivered: 0, errors: [`不支持的通道：${params.channel}`] };
+      result = {
+        success: false,
+        channel: params.channel,
+        delivered: 0,
+        errors: [`不支持的通道：${params.channel}`],
+      };
   }
 
   logger.info('send_notification：发送完成', {

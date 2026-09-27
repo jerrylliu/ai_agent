@@ -5,7 +5,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // 隔离 config，避免 get-weather.ts 顶层访问 qweatherApiKey 时触发真实校验
@@ -55,7 +60,10 @@ describe('getWeatherParamsSchema 校验', () => {
   });
 
   it('type 越界应被拦截', () => {
-    const r = getWeatherParamsSchema.safeParse({ city: '北京', type: 'monthly' });
+    const r = getWeatherParamsSchema.safeParse({
+      city: '北京',
+      type: 'monthly',
+    });
     expect(r.success).toBe(false);
   });
 

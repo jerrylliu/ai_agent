@@ -74,7 +74,7 @@ export async function executeCrawlWebpage(
     url: params.url,
     enableJsRendering: params.enable_js_rendering,
   });
-  
+
   try {
     const result: CrawlResult = await crawlWebsite({
       startUrl: params.url,
@@ -98,7 +98,7 @@ export async function executeCrawlWebpage(
         title: '',
         content: '',
         contentLength: 0,
-        error: result.errors.map(e => e.error).join('; '),
+        error: result.errors.map((e) => e.error).join('; '),
       };
     }
 
@@ -115,9 +115,10 @@ export async function executeCrawlWebpage(
     const page = result.pages[0];
     // 截断过长内容，避免消耗过多 token
     const maxContentLength = 8000;
-    const content = page.markdown.length > maxContentLength
-      ? page.markdown.substring(0, maxContentLength) + '\n\n...（内容已截断）'
-      : page.markdown;
+    const content =
+      page.markdown.length > maxContentLength
+        ? page.markdown.substring(0, maxContentLength) + '\n\n...（内容已截断）'
+        : page.markdown;
 
     logger.info('FC工具 [crawl_webpage] 执行完成', {
       module: 'Tool:CrawlWebpage',

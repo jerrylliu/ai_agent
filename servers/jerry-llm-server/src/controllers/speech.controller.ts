@@ -30,7 +30,6 @@ import * as fs from 'fs';
 @Controller('speech')
 @UseGuards(AuthGuard)
 export class SpeechController {
-
   constructor(private readonly speechService: SpeechService) {}
 
   /**
@@ -41,7 +40,9 @@ export class SpeechController {
    * 然后通过 HTTP URL 提交给火山引擎录音文件识别服务。
    */
   @Post('transcribe')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } }))
+  @UseInterceptors(
+    FileInterceptor('file', { limits: { fileSize: 100 * 1024 * 1024 } }),
+  )
   async transcribe(
     @Req() req: any,
     @UploadedFile() file: any,
@@ -71,7 +72,11 @@ export class SpeechController {
     const audioFormat = (format || ext.replace('.', '') || 'wav').toLowerCase();
 
     try {
-      const result = await this.speechService.submitTranscribe(audioUrl, audioFormat, userId);
+      const result = await this.speechService.submitTranscribe(
+        audioUrl,
+        audioFormat,
+        userId,
+      );
       return { taskId: result.taskId, status: 'pending' };
     } catch (e: any) {
       throw new BadRequestException(`提交转写任务失败: ${e.message}`);

@@ -22,26 +22,56 @@ jest.mock('./fundamentals/logger', () => ({
 
 jest.mock('./fundamentals/runtime-config', () => ({
   getRuntimeConfig: jest.fn(() => ({
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+      queueWaitTimeout: 120000,
+    },
     // store-state.ts 在模块加载时会读取 embedding.localEnabled 推导初始生效模式，
     // mock 必须提供该字段；测试环境无 Ollama，置为 false 直接走云端分支，避免网络探测
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   })),
   updateRuntimeConfig: jest.fn(),
   loadRuntimeConfig: jest.fn(),
   saveRuntimeConfig: jest.fn(),
   DEFAULT_RUNTIME_CONFIG: {
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+      queueWaitTimeout: 120000,
+    },
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   },
 }));
@@ -61,7 +91,9 @@ describe('AppController - 缓存与限流 API', () => {
   beforeEach(() => {
     const { AppService } = require('./app.service');
     // HealthService mock：健康检查端点的依赖，这里返回空对象即可通过构造
-    const mockHealthService = { getHealthStatus: () => ({ status: 'ok', checks: [] }) };
+    const mockHealthService = {
+      getHealthStatus: () => ({ status: 'ok', checks: [] }),
+    };
     controller = new AppController(new AppService(), mockHealthService as any);
   });
 
@@ -76,7 +108,22 @@ describe('AppController - 缓存与限流 API', () => {
       expect(result).toHaveProperty('hitRate');
       expect(result).toHaveProperty('size');
       expect(result).toHaveProperty('maxSize');
-      expect(result).toHaveProperty('memoryUsageKB');
+      expect(result).toHaveProperty('weightedSizeKB');
+      // 容量治理指标：分层命中、体积归因、拒绝与淘汰归因、击穿压力、L2 健康度
+      expect(result).toHaveProperty('l2Hits');
+      expect(result).toHaveProperty('maxTotalSizeKB');
+      expect(result).toHaveProperty('avgEntrySizeKB');
+      expect(result).toHaveProperty('p95EntrySizeKB');
+      expect(result).toHaveProperty('rejectedOversize');
+      expect(result).toHaveProperty('rejectedBudget');
+      expect(result).toHaveProperty('evictedTotal');
+      expect(result).toHaveProperty('evictedBySize');
+      expect(result).toHaveProperty('evictedByBudget');
+      expect(result).toHaveProperty('evictedByTTL');
+      expect(result).toHaveProperty('evictedByConfig');
+      expect(result).toHaveProperty('coalescedRequests');
+      expect(result).toHaveProperty('l2Errors');
+      expect(result).toHaveProperty('l2Enabled');
     });
   });
 
@@ -87,6 +134,7 @@ describe('AppController - 缓存与限流 API', () => {
       expect(result).toHaveProperty('maxEntries');
       expect(result).toHaveProperty('maxItemSizeKB');
       expect(result).toHaveProperty('defaultTTLMinutes');
+      expect(result).toHaveProperty('maxTotalSizeMB');
     });
   });
 
@@ -114,6 +162,14 @@ describe('AppController - 缓存与限流 API', () => {
       expect(result).toEqual({ success: true, message: '缓存配置已更新' });
 
       controller.updateCacheConfig({ defaultTTLMinutes: 5 });
+    });
+
+    it('应支持更新 maxTotalSizeMB', () => {
+      const result = controller.updateCacheConfig({ maxTotalSizeMB: 64 });
+
+      expect(result).toEqual({ success: true, message: '缓存配置已更新' });
+
+      controller.updateCacheConfig({ maxTotalSizeMB: 32 });
     });
 
     it('应支持同时更新多个配置', () => {
@@ -163,6 +219,7 @@ describe('AppController - 缓存与限流 API', () => {
       expect(result).toHaveProperty('fastPoolMax');
       expect(result).toHaveProperty('streamingPoolMax');
       expect(result).toHaveProperty('tokenWaitTimeout');
+      expect(result).toHaveProperty('queueWaitTimeout');
     });
   });
 
@@ -176,7 +233,9 @@ describe('AppController - 缓存与限流 API', () => {
     });
 
     it('应支持更新 streamingPoolMax', () => {
-      const result = controller.updateRateLimiterConfig({ streamingPoolMax: 3 });
+      const result = controller.updateRateLimiterConfig({
+        streamingPoolMax: 3,
+      });
 
       expect(result).toEqual({ success: true, message: '限流器配置已更新' });
 
@@ -184,11 +243,23 @@ describe('AppController - 缓存与限流 API', () => {
     });
 
     it('应支持更新 tokenWaitTimeout', () => {
-      const result = controller.updateRateLimiterConfig({ tokenWaitTimeout: 5000 });
+      const result = controller.updateRateLimiterConfig({
+        tokenWaitTimeout: 5000,
+      });
 
       expect(result).toEqual({ success: true, message: '限流器配置已更新' });
 
       controller.updateRateLimiterConfig({ tokenWaitTimeout: 10000 });
+    });
+
+    it('应支持更新 queueWaitTimeout', () => {
+      const result = controller.updateRateLimiterConfig({
+        queueWaitTimeout: 30000,
+      });
+
+      expect(result).toEqual({ success: true, message: '限流器配置已更新' });
+
+      controller.updateRateLimiterConfig({ queueWaitTimeout: 120000 });
     });
 
     it('应支持同时更新多个配置', () => {
@@ -196,6 +267,7 @@ describe('AppController - 缓存与限流 API', () => {
         fastPoolMax: 5,
         streamingPoolMax: 3,
         tokenWaitTimeout: 5000,
+        queueWaitTimeout: 30000,
       });
 
       expect(result).toEqual({ success: true, message: '限流器配置已更新' });
@@ -204,6 +276,7 @@ describe('AppController - 缓存与限流 API', () => {
         fastPoolMax: 10,
         streamingPoolMax: 5,
         tokenWaitTimeout: 10000,
+        queueWaitTimeout: 120000,
       });
     });
   });

@@ -150,7 +150,9 @@ export class SemanticCache<V> {
 
     // 清理过期条目与旧版本条目（值语义变更后旧缓存直接失效，防止新旧数据混存）
     const now = Date.now();
-    this.entries = this.entries.filter((e) => e.expireAt > now && e.version === this.version);
+    this.entries = this.entries.filter(
+      (e) => e.expireAt > now && e.version === this.version,
+    );
 
     // 暴力遍历找最相似
     let bestScore = -1;

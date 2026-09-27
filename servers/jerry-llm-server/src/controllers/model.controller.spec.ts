@@ -12,7 +12,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ModelController } from './model.controller';
 
 jest.mock('../fundamentals/logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 describe('ModelController', () => {
@@ -45,12 +50,18 @@ describe('ModelController', () => {
    * ==================================================================*/
   describe('setApiKey', () => {
     it('apiKey 为空时应返回失败', async () => {
-      const r = await controller.setApiKey({ provider: 'deepseek', apiKey: '' });
+      const r = await controller.setApiKey({
+        provider: 'deepseek',
+        apiKey: '',
+      });
       expect(r.success).toBe(false);
     });
 
     it('不支持的 provider 应返回失败', async () => {
-      const r = await controller.setApiKey({ provider: 'openai', apiKey: 'sk-openai' });
+      const r = await controller.setApiKey({
+        provider: 'openai',
+        apiKey: 'sk-openai',
+      });
       expect(r.success).toBe(false);
     });
   });

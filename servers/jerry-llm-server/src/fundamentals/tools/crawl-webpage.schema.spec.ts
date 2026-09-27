@@ -5,7 +5,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../web-crawler', () => ({
@@ -36,7 +41,9 @@ describe('crawlWebpageSchema 结构', () => {
 
 describe('crawlWebpageParamsSchema 校验', () => {
   it('合法 https URL 应通过', () => {
-    const r = crawlWebpageParamsSchema.safeParse({ url: 'https://example.com' });
+    const r = crawlWebpageParamsSchema.safeParse({
+      url: 'https://example.com',
+    });
     expect(r.success).toBe(true);
     if (r.success) {
       expect(r.data.enable_js_rendering).toBe(false);

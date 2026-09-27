@@ -6,7 +6,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 import {
@@ -34,12 +39,12 @@ describe('Pipeline 模板库', () => {
     });
 
     it('应包含 search_kb_and_chart 模板', () => {
-      const ids = listPipelineTemplates().map(t => t.id);
+      const ids = listPipelineTemplates().map((t) => t.id);
       expect(ids).toContain('search_kb_and_chart');
     });
 
     it('应包含 web_search_and_document 模板', () => {
-      const ids = listPipelineTemplates().map(t => t.id);
+      const ids = listPipelineTemplates().map((t) => t.id);
       expect(ids).toContain('web_search_and_document');
     });
   });

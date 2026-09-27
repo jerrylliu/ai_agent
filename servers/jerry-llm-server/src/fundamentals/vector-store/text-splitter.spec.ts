@@ -100,7 +100,9 @@ describe('textSplitter', () => {
     });
 
     it('应识别含粗体和列表的 Markdown', () => {
-      expect(isMarkdownContent('**bold** text\n\n- item 1\n- item 2')).toBe(true);
+      expect(isMarkdownContent('**bold** text\n\n- item 1\n- item 2')).toBe(
+        true,
+      );
     });
 
     it('不应将普通文本识别为 Markdown', () => {
@@ -114,25 +116,37 @@ describe('textSplitter', () => {
 
   describe('getAdaptiveChunkingProfile', () => {
     it('Markdown 内容应使用 markdown 配置', () => {
-      const profile = getAdaptiveChunkingProfile({ fileType: '.md', content: '# 标题\n\n- 列表' });
+      const profile = getAdaptiveChunkingProfile({
+        fileType: '.md',
+        content: '# 标题\n\n- 列表',
+      });
       expect(profile.documentType).toBe('markdown');
       expect(profile.chunkSize).toBeGreaterThan(500);
     });
 
     it('代码文件应使用更小的 child chunk', () => {
-      const profile = getAdaptiveChunkingProfile({ fileType: '.ts', content: 'function main() { return true; }' });
+      const profile = getAdaptiveChunkingProfile({
+        fileType: '.ts',
+        content: 'function main() { return true; }',
+      });
       expect(profile.documentType).toBe('code');
       expect(profile.childChunkSize).toBeLessThan(300);
     });
 
     it('PDF 应使用更大的父块', () => {
-      const profile = getAdaptiveChunkingProfile({ mimeType: 'application/pdf', content: 'plain text' });
+      const profile = getAdaptiveChunkingProfile({
+        mimeType: 'application/pdf',
+        content: 'plain text',
+      });
       expect(profile.documentType).toBe('pdf');
       expect(profile.parentChunkSize).toBeGreaterThan(2000);
     });
 
     it('未知类型应使用默认配置', () => {
-      const profile = getAdaptiveChunkingProfile({ fileType: '.unknown', content: 'plain text' });
+      const profile = getAdaptiveChunkingProfile({
+        fileType: '.unknown',
+        content: 'plain text',
+      });
       expect(profile.documentType).toBe('default');
     });
   });
@@ -188,8 +202,8 @@ describe('textSplitter', () => {
       expect(result.length).toBeGreaterThan(1);
 
       // Markdown 切分器会按标题边界切，父块文本应包含标题标记
-      const parentTexts = result.map(pc => pc.parent.text);
-      const hasHeading = parentTexts.some(t => /^#{1,6}\s/m.test(t));
+      const parentTexts = result.map((pc) => pc.parent.text);
+      const hasHeading = parentTexts.some((t) => /^#{1,6}\s/m.test(t));
       expect(hasHeading).toBe(true);
 
       // 每个父块都应有子块

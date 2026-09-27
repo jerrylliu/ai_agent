@@ -165,7 +165,9 @@ export async function initMcpProxy(): Promise<void> {
 
   const servers = parseMcpServersConfig();
   if (servers.length === 0) {
-    logger.info('mcp_proxy：未配置任何 MCP Server，跳过初始化', { module: 'Tool:McpProxy' });
+    logger.info('mcp_proxy：未配置任何 MCP Server，跳过初始化', {
+      module: 'Tool:McpProxy',
+    });
     mcpAvailable = false;
     initializationCompleted = true;
     return;
@@ -177,14 +179,18 @@ export async function initMcpProxy(): Promise<void> {
   try {
     // SDK 子路径采用 ESM 格式，注意保留 .js 后缀
     const clientMod = await import('@modelcontextprotocol/sdk/client/index.js');
-    const transportMod = await import('@modelcontextprotocol/sdk/client/stdio.js');
+    const transportMod =
+      await import('@modelcontextprotocol/sdk/client/stdio.js');
     Client = clientMod.Client;
     StdioClientTransport = transportMod.StdioClientTransport;
   } catch (e: any) {
-    logger.error('mcp_proxy：@modelcontextprotocol/sdk 未安装或加载失败，工具不可用', {
-      module: 'Tool:McpProxy',
-      error: e.message,
-    });
+    logger.error(
+      'mcp_proxy：@modelcontextprotocol/sdk 未安装或加载失败，工具不可用',
+      {
+        module: 'Tool:McpProxy',
+        error: e.message,
+      },
+    );
     mcpAvailable = false;
     initializationCompleted = true;
     return;
@@ -200,7 +206,10 @@ export async function initMcpProxy(): Promise<void> {
         env: cfg.env,
       });
       // Client 名字仅用于身份标识，对功能无影响
-      const client = new Client({ name: 'jerry-llm-server', version: '1.0.0' }, { capabilities: {} });
+      const client = new Client(
+        { name: 'jerry-llm-server', version: '1.0.0' },
+        { capabilities: {} },
+      );
       await client.connect(transport);
 
       // 拉取 tools/list 作为健康检查：连接成功但无法列出工具时视为不可用
@@ -254,7 +263,9 @@ export async function initMcpProxy(): Promise<void> {
 export function validateMcpProxyConfig(): boolean {
   const servers = parseMcpServersConfig();
   if (servers.length === 0) {
-    logger.info('mcp_proxy 工具未配置：NOTIFY_MCP_SERVERS 为空', { module: 'Tool:McpProxy' });
+    logger.info('mcp_proxy 工具未配置：NOTIFY_MCP_SERVERS 为空', {
+      module: 'Tool:McpProxy',
+    });
     return false;
   }
   return true;
@@ -279,10 +290,15 @@ export function buildMcpProxySchema(): any {
   const lines: string[] = [];
   for (const [serverName, runtime] of runtimeMap.entries()) {
     for (const t of runtime.tools) {
-      lines.push(`- ${serverName}.${t.name}${t.description ? `：${t.description}` : ''}`);
+      lines.push(
+        `- ${serverName}.${t.name}${t.description ? `：${t.description}` : ''}`,
+      );
     }
   }
-  const toolList = lines.length > 0 ? lines.join('\n') : '（暂无可用工具，请检查 MCP Server 是否启动成功）';
+  const toolList =
+    lines.length > 0
+      ? lines.join('\n')
+      : '（暂无可用工具，请检查 MCP Server 是否启动成功）';
 
   return {
     type: 'function' as const,
@@ -305,7 +321,8 @@ ${toolList}
           },
           arguments: {
             type: 'object',
-            description: '传给 MCP 工具的参数对象，结构由具体工具的 inputSchema 决定',
+            description:
+              '传给 MCP 工具的参数对象，结构由具体工具的 inputSchema 决定',
           },
         },
         required: ['server', 'tool'],
@@ -357,7 +374,9 @@ export interface McpProxyResult {
  *   3. 调用 client.callTool() 转发参数
  *   4. 包装返回值
  */
-export async function executeMcpProxy(rawParams: unknown): Promise<McpProxyResult> {
+export async function executeMcpProxy(
+  rawParams: unknown,
+): Promise<McpProxyResult> {
   // 入口兜底：校验入参形状（server/tool 必填、arguments 必须为对象）
   // 不校验 server / tool 的具体值，因为这些是动态注册的，由 runtimeMap 在下方做检查
   const parsed = safeParseToolParams(mcpProxyParamsSchema, rawParams);
@@ -440,9 +459,16 @@ export async function shutdownMcpProxy(): Promise<void> {
   for (const [name, runtime] of runtimeMap.entries()) {
     try {
       await runtime.client.close();
-      logger.info('mcp_proxy：Server 已关闭', { module: 'Tool:McpProxy', server: name });
+      logger.info('mcp_proxy：Server 已关闭', {
+        module: 'Tool:McpProxy',
+        server: name,
+      });
     } catch (e: any) {
-      logger.warn('mcp_proxy：Server 关闭失败', { module: 'Tool:McpProxy', server: name, error: e.message });
+      logger.warn('mcp_proxy：Server 关闭失败', {
+        module: 'Tool:McpProxy',
+        server: name,
+        error: e.message,
+      });
     }
   }
   runtimeMap.clear();

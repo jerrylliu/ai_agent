@@ -11,9 +11,11 @@ jest.mock('../fundamentals/metrics.js', () => {
       refreshCacheGauges: jest.fn(),
     },
     metricsRegistry: {
-      metrics: jest.fn().mockResolvedValue(
-        '# HELP jerry_test mock-only\n# TYPE jerry_test counter\njerry_test 0\n',
-      ),
+      metrics: jest
+        .fn()
+        .mockResolvedValue(
+          '# HELP jerry_test mock-only\n# TYPE jerry_test counter\njerry_test 0\n',
+        ),
     },
   };
 });

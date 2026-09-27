@@ -3,7 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { ChatHistory } from '../entities/chat-history.entity';
 import { UserMemory } from '../entities/user-memory.entity';
-import { extractMemories, mergeMemories, shouldExtractMemory } from '../fundamentals/memory-extractor';
+import {
+  extractMemories,
+  mergeMemories,
+  shouldExtractMemory,
+} from '../fundamentals/memory-extractor';
 import { logger } from '../fundamentals/logger';
 
 @Injectable()
@@ -28,7 +32,10 @@ export class MemoryService {
   /**
    * 获取用户记忆的文本内容（用于注入 System Prompt）
    */
-  async getUserMemoryTexts(userId: string, limit: number = 20): Promise<string[]> {
+  async getUserMemoryTexts(
+    userId: string,
+    limit: number = 20,
+  ): Promise<string[]> {
     const memories = await this.userMemoryRepository.find({
       where: { userId },
       order: { importance: 'DESC', updatedAt: 'DESC' },
@@ -40,7 +47,10 @@ export class MemoryService {
   /**
    * 获取用户记忆并更新访问计数（用于 prompt 注入场景）
    */
-  async getMemoriesForInjection(userId: string, limit: number = 20): Promise<{ memoryTexts: string[]; injectedIds: number[] }> {
+  async getMemoriesForInjection(
+    userId: string,
+    limit: number = 20,
+  ): Promise<{ memoryTexts: string[]; injectedIds: number[] }> {
     const userMemories = await this.userMemoryRepository.find({
       where: { userId },
       order: { importance: 'DESC', updatedAt: 'DESC' },
@@ -65,7 +75,10 @@ export class MemoryService {
   /**
    * 检查并提取用户记忆
    */
-  async checkAndExtractMemories(sessionId: string, userId: string = 'default'): Promise<void> {
+  async checkAndExtractMemories(
+    sessionId: string,
+    userId: string = 'default',
+  ): Promise<void> {
     try {
       const messageCount = await this.chatHistoryRepository.count({
         where: { sessionId },
@@ -74,15 +87,17 @@ export class MemoryService {
       const sessionMemories = await this.userMemoryRepository.find({
         where: { sourceSessionId: sessionId },
       });
-      const lastExtractionCount = sessionMemories.length > 0
-        ? messageCount
-        : 0;
+      const lastExtractionCount = sessionMemories.length > 0 ? messageCount : 0;
 
       if (!shouldExtractMemory(lastExtractionCount, messageCount)) {
         return;
       }
 
-      logger.info('会话需要提取记忆', { module: 'MemoryService', sessionId, messageCount });
+      logger.info('会话需要提取记忆', {
+        module: 'MemoryService',
+        sessionId,
+        messageCount,
+      });
 
       const messages = await this.chatHistoryRepository.find({
         where: { sessionId },
@@ -101,7 +116,10 @@ export class MemoryService {
       );
 
       if (newMemories.length === 0) {
-        logger.info('会话未提取到新记忆', { module: 'MemoryService', sessionId });
+        logger.info('会话未提取到新记忆', {
+          module: 'MemoryService',
+          sessionId,
+        });
         return;
       }
 
@@ -118,22 +136,32 @@ export class MemoryService {
         if (action.action === 'new') {
           const memory = this.userMemoryRepository.create({
             content: action.newMemory,
-            category: newMemories.find((m) => m.content === action.newMemory)?.category || 'fact',
-            importance: newMemories.find((m) => m.content === action.newMemory)?.importance || 3,
+            category:
+              newMemories.find((m) => m.content === action.newMemory)
+                ?.category || 'fact',
+            importance:
+              newMemories.find((m) => m.content === action.newMemory)
+                ?.importance || 3,
             sourceSessionId: sessionId,
             userId,
           });
           await this.userMemoryRepository.save(memory);
           addedCount++;
-        } else if (action.action === 'update' && action.existingMemoryIndex >= 0) {
+        } else if (
+          action.action === 'update' &&
+          action.existingMemoryIndex >= 0
+        ) {
           const existing = existingMemories[action.existingMemoryIndex];
           if (existing) {
             await this.userMemoryRepository.update(
               { id: existing.id },
               {
                 content: action.newMemory,
-                importance: Math.max(existing.importance,
-                  newMemories.find((m) => m.content === action.newMemory)?.importance || 3),
+                importance: Math.max(
+                  existing.importance,
+                  newMemories.find((m) => m.content === action.newMemory)
+                    ?.importance || 3,
+                ),
               },
             );
             updatedCount++;
@@ -143,16 +171,29 @@ export class MemoryService {
         }
       }
 
-      logger.info('记忆提取完成', { module: 'MemoryService', added: addedCount, updated: updatedCount, skipped: skippedCount });
+      logger.info('记忆提取完成', {
+        module: 'MemoryService',
+        added: addedCount,
+        updated: updatedCount,
+        skipped: skippedCount,
+      });
     } catch (error: any) {
-      logger.error('提取用户记忆失败', { module: 'MemoryService', error: error.message });
+      logger.error('提取用户记忆失败', {
+        module: 'MemoryService',
+        error: error.message,
+      });
     }
   }
 
   /**
    * 手动添加一条用户记忆
    */
-  async addUserMemory(content: string, category: string, importance: number, userId: string = 'default'): Promise<UserMemory> {
+  async addUserMemory(
+    content: string,
+    category: string,
+    importance: number,
+    userId: string = 'default',
+  ): Promise<UserMemory> {
     const memory = this.userMemoryRepository.create({
       content,
       category,
@@ -172,7 +213,12 @@ export class MemoryService {
   /**
    * 更新一条用户记忆
    */
-  async updateUserMemory(id: number, content: string, category?: string, importance?: number): Promise<UserMemory> {
+  async updateUserMemory(
+    id: number,
+    content: string,
+    category?: string,
+    importance?: number,
+  ): Promise<UserMemory> {
     const memory = await this.userMemoryRepository.findOne({ where: { id } });
     if (!memory) {
       throw new Error('记忆不存在');

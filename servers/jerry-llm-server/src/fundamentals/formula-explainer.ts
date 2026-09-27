@@ -417,8 +417,7 @@ function insertExplanations(
       insertPos = nextNewline >= 0 ? nextNewline : result.length;
     }
 
-    result =
-      result.slice(0, insertPos) + insertText + result.slice(insertPos);
+    result = result.slice(0, insertPos) + insertText + result.slice(insertPos);
   }
 
   return result;

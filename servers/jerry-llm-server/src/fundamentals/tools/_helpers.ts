@@ -121,9 +121,7 @@ export function formatZodIssues(error: z.ZodError): string {
 export function safeParseToolParams<T extends ZodType>(
   schema: T,
   params: unknown,
-):
-  | { success: true; data: z.infer<T> }
-  | { success: false; error: string } {
+): { success: true; data: z.infer<T> } | { success: false; error: string } {
   const result = schema.safeParse(params);
   if (result.success) {
     return { success: true, data: result.data };

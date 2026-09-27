@@ -20,7 +20,11 @@
 import { z } from 'zod';
 import { logger } from '../logger.js';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers.js';
-import { sendCardMessage, buildCardJson, detectReceiveIdType } from '../feishu-notify.service.js';
+import {
+  sendCardMessage,
+  buildCardJson,
+  detectReceiveIdType,
+} from '../feishu-notify.service.js';
 import { getRedis, isRedisReady } from '../redis-client.js';
 
 // 内存中的计划存储（按会话隔离）—— 作为 L1 缓存，Redis 为 L2 持久层
@@ -134,28 +138,43 @@ export function resolveBinding(expression: string, plan: Plan): any {
   // 解析 $stepN.output.xxx 格式
   const match = expression.match(/^\$step(\d+)\.output(.*)$/);
   if (!match) {
-    logger.warn('数据绑定：无法解析表达式', { module: 'Tool:PlanExecute', expression });
+    logger.warn('数据绑定：无法解析表达式', {
+      module: 'Tool:PlanExecute',
+      expression,
+    });
     return undefined;
   }
 
   const stepId = parseInt(match[1], 10);
   const pathParts = match[2] ? match[2].split('.').filter(Boolean) : [];
 
-  const step = plan.steps.find(s => s.id === stepId);
+  const step = plan.steps.find((s) => s.id === stepId);
   if (!step) {
-    logger.warn('数据绑定：引用的步骤不存在', { module: 'Tool:PlanExecute', stepId, expression });
+    logger.warn('数据绑定：引用的步骤不存在', {
+      module: 'Tool:PlanExecute',
+      stepId,
+      expression,
+    });
     return undefined;
   }
 
   if (step.status !== 'completed') {
-    logger.warn('数据绑定：引用的步骤尚未完成', { module: 'Tool:PlanExecute', stepId, stepStatus: step.status });
+    logger.warn('数据绑定：引用的步骤尚未完成', {
+      module: 'Tool:PlanExecute',
+      stepId,
+      stepStatus: step.status,
+    });
     return undefined;
   }
 
   let value = step.output;
   for (const part of pathParts) {
     if (value == null || typeof value !== 'object') {
-      logger.warn('数据绑定：路径中途值为 null 或非对象', { module: 'Tool:PlanExecute', expression, pathPart: part });
+      logger.warn('数据绑定：路径中途值为 null 或非对象', {
+        module: 'Tool:PlanExecute',
+        expression,
+        pathPart: part,
+      });
       return undefined;
     }
     value = value[part];
@@ -172,7 +191,10 @@ export function resolveBinding(expression: string, plan: Plan): any {
  * @param plan 当前计划
  * @returns 解析后的参数
  */
-export function resolveDataBindings(params: Record<string, any>, plan: Plan): Record<string, any> {
+export function resolveDataBindings(
+  params: Record<string, any>,
+  plan: Plan,
+): Record<string, any> {
   const resolved: Record<string, any> = {};
 
   for (const [key, value] of Object.entries(params)) {
@@ -180,13 +202,26 @@ export function resolveDataBindings(params: Record<string, any>, plan: Plan): Re
       const resolvedValue = resolveBinding(value, plan);
       if (resolvedValue !== undefined) {
         resolved[key] = resolvedValue;
-        logger.info('数据绑定：已解析', { module: 'Tool:PlanExecute', key, expression: value, resolvedType: typeof resolvedValue });
+        logger.info('数据绑定：已解析', {
+          module: 'Tool:PlanExecute',
+          key,
+          expression: value,
+          resolvedType: typeof resolvedValue,
+        });
       } else {
         // 解析失败，保留原始表达式（LLM 可能自行处理）
         resolved[key] = value;
-        logger.warn('数据绑定：解析失败，保留原始表达式', { module: 'Tool:PlanExecute', key, expression: value });
+        logger.warn('数据绑定：解析失败，保留原始表达式', {
+          module: 'Tool:PlanExecute',
+          key,
+          expression: value,
+        });
       }
-    } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    } else if (
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value)
+    ) {
       // 递归解析嵌套对象
       resolved[key] = resolveDataBindings(value, plan);
     } else {
@@ -227,11 +262,15 @@ export async function preloadSessionPlan(sessionId: string): Promise<boolean> {
  * 将工具执行结果存储到计划步骤的 output 中
  * 由 FC 循环在工具执行成功后调用
  */
-export function storeStepOutput(sessionId: string, stepId: number, output: any): void {
+export function storeStepOutput(
+  sessionId: string,
+  stepId: number,
+  output: any,
+): void {
   const plan = plans.get(sessionId || 'default');
   if (!plan) return;
 
-  const step = plan.steps.find(s => s.id === stepId);
+  const step = plan.steps.find((s) => s.id === stepId);
   if (!step) return;
 
   step.output = output;
@@ -252,12 +291,15 @@ export function storeStepOutput(sessionId: string, stepId: number, output: any):
  * 查找计划中匹配指定工具名称的下一个待执行步骤
  * 用于 FC 循环判断当前工具调用是否属于某个计划步骤
  */
-export function findMatchingStep(sessionId: string, toolName: string): PlanStep | undefined {
+export function findMatchingStep(
+  sessionId: string,
+  toolName: string,
+): PlanStep | undefined {
   const plan = plans.get(sessionId || 'default');
   if (!plan || plan.status !== 'executing') return undefined;
 
-  return plan.steps.find(s =>
-    s.status === 'pending' && s.toolName === toolName
+  return plan.steps.find(
+    (s) => s.status === 'pending' && s.toolName === toolName,
   );
 }
 
@@ -345,7 +387,9 @@ export async function executeCreatePlan(
     sessionId,
     goal: params.goal,
     stepCount: steps.length,
-    hasInputMapping: steps.filter(s => s.inputMapping && Object.keys(s.inputMapping).length > 0).length,
+    hasInputMapping: steps.filter(
+      (s) => s.inputMapping && Object.keys(s.inputMapping).length > 0,
+    ).length,
   });
 
   return {
@@ -354,7 +398,9 @@ export async function executeCreatePlan(
     totalSteps: steps.length,
     steps,
     message: `已创建执行计划，共 ${steps.length} 个步骤。请按顺序执行，每完成一步调用 update_plan_step 更新状态。${
-      steps.some(s => s.inputMapping && Object.keys(s.inputMapping).length > 0)
+      steps.some(
+        (s) => s.inputMapping && Object.keys(s.inputMapping).length > 0,
+      )
         ? ' 本计划包含数据绑定，步骤间的数据会自动传递。'
         : ''
     }`,
@@ -365,12 +411,13 @@ export async function executeCreatePlan(
 
 export const updatePlanStepParamsSchema = z.object({
   stepId: z.number().int().positive().describe('步骤编号（从1开始）'),
-  status: z
-    .enum(['completed', 'failed', 'skipped'])
-    .describe('步骤的新状态'),
+  status: z.enum(['completed', 'failed', 'skipped']).describe('步骤的新状态'),
   result: z.string().optional().describe('步骤执行结果的简要描述'),
   // output 是自由结构，前序步骤可能输出任意 JSON
-  output: z.unknown().optional().describe('步骤的结构化输出数据，供后续步骤通过 $stepN.output.xxx 引用'),
+  output: z
+    .unknown()
+    .optional()
+    .describe('步骤的结构化输出数据，供后续步骤通过 $stepN.output.xxx 引用'),
 });
 
 export type UpdatePlanStepParams = z.infer<typeof updatePlanStepParamsSchema>;
@@ -427,13 +474,13 @@ export async function executeUpdatePlanStep(
     };
   }
 
-  const step = plan.steps.find(s => s.id === params.stepId);
+  const step = plan.steps.find((s) => s.id === params.stepId);
   if (!step) {
     return {
       stepId: params.stepId,
       status: params.status,
       planStatus: plan.status,
-      completedSteps: plan.steps.filter(s => s.status === 'completed').length,
+      completedSteps: plan.steps.filter((s) => s.status === 'completed').length,
       totalSteps: plan.steps.length,
       message: `步骤 ${params.stepId} 不存在。`,
     };
@@ -448,9 +495,11 @@ export async function executeUpdatePlanStep(
   // 持久化更新到 Redis（await 确保写入完成后才返回）
   await persistPlan(plan);
 
-  const completedSteps = plan.steps.filter(s => s.status === 'completed').length;
-  const failedSteps = plan.steps.filter(s => s.status === 'failed').length;
-  const nextStep = plan.steps.find(s => s.status === 'pending');
+  const completedSteps = plan.steps.filter(
+    (s) => s.status === 'completed',
+  ).length;
+  const failedSteps = plan.steps.filter((s) => s.status === 'failed').length;
+  const nextStep = plan.steps.find((s) => s.status === 'pending');
 
   // 检查计划是否完成
   if (!nextStep) {
@@ -537,7 +586,9 @@ export async function executeGetPlan(
     };
   }
 
-  const completedSteps = plan.steps.filter(s => s.status === 'completed').length;
+  const completedSteps = plan.steps.filter(
+    (s) => s.status === 'completed',
+  ).length;
 
   return {
     goal: plan.goal,
@@ -554,7 +605,11 @@ export async function executeGetPlan(
  * 仅当配置了 NOTIFY_FEISHU_HITL_USER 时发送（复用同一接收人）
  * 失败静默，不影响 Plan 主流程
  */
-async function notifyPlanCompletion(plan: Plan, completedSteps: number, failedSteps: number): Promise<void> {
+async function notifyPlanCompletion(
+  plan: Plan,
+  completedSteps: number,
+  failedSteps: number,
+): Promise<void> {
   const recipient = process.env.NOTIFY_FEISHU_HITL_USER;
   if (!recipient) return;
 
@@ -568,15 +623,24 @@ async function notifyPlanCompletion(plan: Plan, completedSteps: number, failedSt
         { label: '总步数', value: String(plan.steps.length) },
         { label: '成功', value: String(completedSteps) },
         { label: '失败', value: String(failedSteps) },
-        { label: '耗时', value: `${Math.round((Date.now() - plan.createdAt.getTime()) / 1000)}s` },
+        {
+          label: '耗时',
+          value: `${Math.round((Date.now() - plan.createdAt.getTime()) / 1000)}s`,
+        },
       ],
     });
     const idType = detectReceiveIdType(recipient);
     const result = await sendCardMessage(recipient, idType, card);
     if (!result.success) {
-      logger.warn('Plan 完成飞书播报失败', { module: 'Tool:PlanExecute', error: result.error });
+      logger.warn('Plan 完成飞书播报失败', {
+        module: 'Tool:PlanExecute',
+        error: result.error,
+      });
     }
   } catch (error: any) {
-    logger.warn('Plan 完成飞书播报异常', { module: 'Tool:PlanExecute', error: error.message });
+    logger.warn('Plan 完成飞书播报异常', {
+      module: 'Tool:PlanExecute',
+      error: error.message,
+    });
   }
 }

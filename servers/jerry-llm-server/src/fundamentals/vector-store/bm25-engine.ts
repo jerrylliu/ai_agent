@@ -51,7 +51,12 @@ export interface BM25Engine {
    * 添加文档到索引
    * @param skipCommit 批量操作时设为 true，由调用方统一 commit，避免逐条落盘
    */
-  add(id: string, content: string, metadata: any, skipCommit?: boolean): Promise<void>;
+  add(
+    id: string,
+    content: string,
+    metadata: any,
+    skipCommit?: boolean,
+  ): Promise<void>;
   /** 将索引变更持久化（MiniSearch=写 JSON 文件；Tantivy=目录 commit） */
   commit(): Promise<void>;
   /** 关键词检索，按相关性降序返回至多 limit 条 */

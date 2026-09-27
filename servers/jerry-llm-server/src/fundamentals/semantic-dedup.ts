@@ -97,8 +97,14 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
  * @param textB 文本 B
  * @returns 相似度 [0, 1]
  */
-export function calculateJaccardSimilarity(textA: string, textB: string): number {
-  return jaccardSimilarity(tokenizeForJaccard(textA), tokenizeForJaccard(textB));
+export function calculateJaccardSimilarity(
+  textA: string,
+  textB: string,
+): number {
+  return jaccardSimilarity(
+    tokenizeForJaccard(textA),
+    tokenizeForJaccard(textB),
+  );
 }
 
 // ==================== 语义去重追踪器 ====================
@@ -113,7 +119,10 @@ export function calculateJaccardSimilarity(textA: string, textB: string): number
  * @param args 工具参数
  * @returns query 文本，如果无法提取返回 null
  */
-function extractQueryFromArgs(toolName: string, args: Record<string, unknown>): string | null {
+function extractQueryFromArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+): string | null {
   // 统一从 query 字段提取
   const query = args?.query;
   if (typeof query === 'string' && query.trim().length > 0) {
@@ -151,7 +160,10 @@ export interface SemanticDedupResult {
  */
 export class SemanticDedupTracker {
   /** sessionId → 已执行的 query 列表 */
-  private history: Map<string, Array<{ toolName: string; query: string; tokens: Set<string> }>> = new Map();
+  private history: Map<
+    string,
+    Array<{ toolName: string; query: string; tokens: Set<string> }>
+  > = new Map();
 
   /**
    * 检查工具调用是否语义重复
@@ -161,7 +173,11 @@ export class SemanticDedupTracker {
    * @param args 工具参数
    * @returns 检测结果
    */
-  check(sessionId: string, toolName: string, args: Record<string, unknown>): SemanticDedupResult {
+  check(
+    sessionId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): SemanticDedupResult {
     // 非白名单工具，不检查
     if (!SEMANTIC_DEDUP_TOOLS.has(toolName)) {
       return { isDuplicate: false, similarity: 0, matchedQuery: null };
@@ -201,7 +217,11 @@ export class SemanticDedupTracker {
       return { isDuplicate: true, similarity: maxSimilarity, matchedQuery };
     }
 
-    return { isDuplicate: false, similarity: maxSimilarity, matchedQuery: null };
+    return {
+      isDuplicate: false,
+      similarity: maxSimilarity,
+      matchedQuery: null,
+    };
   }
 
   /**
@@ -213,7 +233,11 @@ export class SemanticDedupTracker {
    * @param toolName 工具名
    * @param args 工具参数
    */
-  record(sessionId: string, toolName: string, args: Record<string, unknown>): void {
+  record(
+    sessionId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): void {
     if (!SEMANTIC_DEDUP_TOOLS.has(toolName)) return;
 
     const query = extractQueryFromArgs(toolName, args);

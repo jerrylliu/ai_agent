@@ -63,7 +63,8 @@ const MAX_INFO_FINDINGS = 3;
 function visualizeInvisibleChars(text: string): string {
   return text.replace(
     /[\u200b\u200c\u200d\u2060\ufeff\u202a-\u202e\u2066-\u2069]/g,
-    (ch) => `[U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}]`,
+    (ch) =>
+      `[U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}]`,
   );
 }
 

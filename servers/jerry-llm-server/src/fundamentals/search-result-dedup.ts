@@ -42,7 +42,7 @@ const FINGERPRINT_CONTENT_PREFIX = 200;
 function simpleHash(s: string): string {
   let hash = 5381;
   for (let i = 0; i < s.length; i++) {
-    hash = ((hash << 5) + hash) + s.charCodeAt(i); // hash * 33 + char
+    hash = (hash << 5) + hash + s.charCodeAt(i); // hash * 33 + char
     hash |= 0; // 强制转 32 位整数
   }
   return Math.abs(hash).toString(36);
@@ -63,7 +63,10 @@ function fingerprintResult(result: {
   content?: string;
 }): string {
   const docId = result.documentId || 'unknown';
-  const contentPrefix = (result.content || '').substring(0, FINGERPRINT_CONTENT_PREFIX);
+  const contentPrefix = (result.content || '').substring(
+    0,
+    FINGERPRINT_CONTENT_PREFIX,
+  );
   return `${docId}:${simpleHash(contentPrefix)}`;
 }
 

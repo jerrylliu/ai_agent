@@ -1,4 +1,12 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  OneToMany,
+  Index,
+} from 'typeorm';
 import { KnowledgeSourceSyncLog } from './knowledge-source-sync-log.entity.js';
 
 export enum SourceType {
@@ -63,6 +71,6 @@ export class KnowledgeSource {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @OneToMany(() => KnowledgeSourceSyncLog, log => log.source)
+  @OneToMany(() => KnowledgeSourceSyncLog, (log) => log.source)
   syncLogs: KnowledgeSourceSyncLog[];
 }

@@ -5,9 +5,21 @@
  */
 
 import {
-  Controller, Get, Post, Put, Delete, Patch,
-  Body, Param, Query, Res, UseGuards, UseInterceptors,
-  UploadedFile, ParseIntPipe, HttpException,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Patch,
+  Body,
+  Param,
+  Query,
+  Res,
+  UseGuards,
+  UseInterceptors,
+  UploadedFile,
+  ParseIntPipe,
+  HttpException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
@@ -15,7 +27,10 @@ import type { Response } from 'express';
 import { DocumentService } from '../services/document.service';
 import { DocumentScanService } from '../services/document-scan.service';
 import { DocumentSchedulerService } from '../services/document-scheduler.service';
-import { VersionStatus, DocumentVersion } from '../entities/document-version.entity';
+import {
+  VersionStatus,
+  DocumentVersion,
+} from '../entities/document-version.entity';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { logger } from '../fundamentals/logger';
 
@@ -42,7 +57,6 @@ const WRITE_THROTTLE = { default: { ttl: 60000, limit: 10 } };
 @Throttle({ default: { ttl: 60000, limit: 60 } })
 @UseGuards(OptionalAuthGuard)
 export class DocumentController {
-
   constructor(
     private readonly documentService: DocumentService,
     private readonly schedulerService: DocumentSchedulerService,
@@ -70,13 +84,22 @@ export class DocumentController {
       }
 
       const operator = body?.userId || 'anonymous';
-      const documentId = documentIdStr ? parseInt(documentIdStr, 10) : undefined;
+      const documentId = documentIdStr
+        ? parseInt(documentIdStr, 10)
+        : undefined;
       const tags = tagsStr ? JSON.parse(tagsStr) : undefined;
 
-      const originalname = Buffer.from(file.originalname, 'latin1').toString('utf8');
+      const originalname = Buffer.from(file.originalname, 'latin1').toString(
+        'utf8',
+      );
 
       const result = await this.documentService.uploadDocument(
-        { buffer: file.buffer, originalname, size: file.size, mimetype: file.mimetype },
+        {
+          buffer: file.buffer,
+          originalname,
+          size: file.size,
+          mimetype: file.mimetype,
+        },
         { documentId, title, description, tags, operator },
       );
 
@@ -87,7 +110,10 @@ export class DocumentController {
         version: serializeVersion(result.version),
       };
     } catch (error: any) {
-      logger.error('文档上传失败', { module: 'DocumentController', error: error.message });
+      logger.error('文档上传失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -102,7 +128,12 @@ export class DocumentController {
   @Post('save-draft')
   @Throttle(WRITE_THROTTLE)
   async saveDraft(
-    @Body() body: { fileName: string; contentJson: unknown; contentText: string },
+    @Body()
+    body: {
+      fileName: string;
+      contentJson: unknown;
+      contentText: string;
+    },
   ) {
     try {
       if (!body.fileName) {
@@ -126,7 +157,10 @@ export class DocumentController {
         isNew: result.isNew,
       };
     } catch (error: any) {
-      logger.error('草稿保存失败', { module: 'DocumentController', error: error.message });
+      logger.error('草稿保存失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -141,7 +175,10 @@ export class DocumentController {
       const documents = await this.documentService.listDocuments();
       return { success: true, documents };
     } catch (error: any) {
-      logger.error('获取文档列表失败', { module: 'DocumentController', error: error.message });
+      logger.error('获取文档列表失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, 500);
     }
   }
@@ -159,7 +196,11 @@ export class DocumentController {
       const document = await this.documentService.findByTitle(title);
       return { success: true, document };
     } catch (error: any) {
-      logger.error('按标题查找文档失败', { module: 'DocumentController', title, error: error.message });
+      logger.error('按标题查找文档失败', {
+        module: 'DocumentController',
+        title,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -170,12 +211,21 @@ export class DocumentController {
    */
   @Post('batch-archive')
   @Throttle(WRITE_THROTTLE)
-  async batchArchive(@Body('versionIds') versionIds: number[], @Body('operator') operator?: string) {
+  async batchArchive(
+    @Body('versionIds') versionIds: number[],
+    @Body('operator') operator?: string,
+  ) {
     try {
-      const count = await this.documentService.batchArchive(versionIds, operator || 'anonymous');
+      const count = await this.documentService.batchArchive(
+        versionIds,
+        operator || 'anonymous',
+      );
       return { success: true, message: `已归档 ${count} 个版本` };
     } catch (error: any) {
-      logger.error('批量归档失败', { module: 'DocumentController', error: error.message });
+      logger.error('批量归档失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -186,12 +236,21 @@ export class DocumentController {
    */
   @Post('batch-delete')
   @Throttle(WRITE_THROTTLE)
-  async batchDelete(@Body('versionIds') versionIds: number[], @Body('operator') operator?: string) {
+  async batchDelete(
+    @Body('versionIds') versionIds: number[],
+    @Body('operator') operator?: string,
+  ) {
     try {
-      const count = await this.documentService.batchDelete(versionIds, operator || 'anonymous');
+      const count = await this.documentService.batchDelete(
+        versionIds,
+        operator || 'anonymous',
+      );
       return { success: true, message: `已删除 ${count} 个版本` };
     } catch (error: any) {
-      logger.error('批量删除失败', { module: 'DocumentController', error: error.message });
+      logger.error('批量删除失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -207,9 +266,16 @@ export class DocumentController {
   async scanArchivedVersions() {
     try {
       const oldVersions = await this.schedulerService.scanArchivedVersions();
-      return { success: true, count: oldVersions.length, versions: oldVersions };
+      return {
+        success: true,
+        count: oldVersions.length,
+        versions: oldVersions,
+      };
     } catch (error: any) {
-      logger.error('扫描 archived 版本失败', { module: 'DocumentController', error: error.message });
+      logger.error('扫描 archived 版本失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, 500);
     }
   }
@@ -225,7 +291,10 @@ export class DocumentController {
       const result = await this.schedulerService.verifyVectorConsistency();
       return { success: true, ...result };
     } catch (error: any) {
-      logger.error('向量一致性校验失败', { module: 'DocumentController', error: error.message });
+      logger.error('向量一致性校验失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, 500);
     }
   }
@@ -241,7 +310,10 @@ export class DocumentController {
       const count = await this.schedulerService.cleanOrphans();
       return { success: true, message: `已清理 ${count} 个孤岛向量` };
     } catch (error: any) {
-      logger.error('清理孤岛向量失败', { module: 'DocumentController', error: error.message });
+      logger.error('清理孤岛向量失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, 500);
     }
   }
@@ -255,9 +327,16 @@ export class DocumentController {
   async retryFailedOps() {
     try {
       const result = await this.schedulerService.retryFailedOps();
-      return { success: true, message: `已重试 ${result.retried}/${result.total} 个向量操作`, ...result };
+      return {
+        success: true,
+        message: `已重试 ${result.retried}/${result.total} 个向量操作`,
+        ...result,
+      };
     } catch (error: any) {
-      logger.error('重试向量操作失败', { module: 'DocumentController', error: error.message });
+      logger.error('重试向量操作失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, 500);
     }
   }
@@ -273,7 +352,10 @@ export class DocumentController {
       const count = await this.schedulerService.cleanOldAuditLogs();
       return { success: true, message: `已清理 ${count} 条过期审计日志` };
     } catch (error: any) {
-      logger.error('清理审计日志失败', { module: 'DocumentController', error: error.message });
+      logger.error('清理审计日志失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, 500);
     }
   }
@@ -293,7 +375,10 @@ export class DocumentController {
         ...result,
       };
     } catch (error: any) {
-      logger.error('修复 draft 向量失败', { module: 'DocumentController', error: error.message });
+      logger.error('修复 draft 向量失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, 500);
     }
   }
@@ -304,7 +389,10 @@ export class DocumentController {
       const ops = await this.documentService.getPendingVectorOps();
       return { success: true, ops };
     } catch (error: any) {
-      logger.error('获取重试队列失败', { module: 'DocumentController', error: error.message });
+      logger.error('获取重试队列失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, 500);
     }
   }
@@ -326,7 +414,11 @@ export class DocumentController {
         reason: result.reason,
       };
     } catch (error: any) {
-      logger.error('单条重试失败', { module: 'DocumentController', opId: id, error: error.message });
+      logger.error('单条重试失败', {
+        module: 'DocumentController',
+        opId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -338,7 +430,11 @@ export class DocumentController {
       await this.documentService.deletePendingVectorOp(id);
       return { success: true, message: '已清除重试队列记录' };
     } catch (error: any) {
-      logger.error('清除重试队列记录失败', { module: 'DocumentController', opId: id, error: error.message });
+      logger.error('清除重试队列记录失败', {
+        module: 'DocumentController',
+        opId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -363,7 +459,10 @@ export class DocumentController {
         })),
       };
     } catch (error: any) {
-      logger.error('获取待复核列表失败', { module: 'DocumentController', error: error.message });
+      logger.error('获取待复核列表失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -379,10 +478,17 @@ export class DocumentController {
     @Body('operator') operator?: string,
   ) {
     try {
-      const version = await this.documentScanService.approveVersion(versionId, operator || 'anonymous');
+      const version = await this.documentScanService.approveVersion(
+        versionId,
+        operator || 'anonymous',
+      );
       return { success: true, version: serializeVersion(version) };
     } catch (error: any) {
-      logger.error('复核通过失败', { module: 'DocumentController', versionId, error: error.message });
+      logger.error('复核通过失败', {
+        module: 'DocumentController',
+        versionId,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -399,10 +505,18 @@ export class DocumentController {
     @Body('reason') reason?: string,
   ) {
     try {
-      const version = await this.documentScanService.rejectVersion(versionId, operator || 'anonymous', reason);
+      const version = await this.documentScanService.rejectVersion(
+        versionId,
+        operator || 'anonymous',
+        reason,
+      );
       return { success: true, version: serializeVersion(version) };
     } catch (error: any) {
-      logger.error('复核拒绝失败', { module: 'DocumentController', versionId, error: error.message });
+      logger.error('复核拒绝失败', {
+        module: 'DocumentController',
+        versionId,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -425,10 +539,21 @@ export class DocumentController {
     @Body('operator') operator?: string,
   ) {
     try {
-      const result = await this.documentScanService.publishWithScanGate(versionId, operator || 'anonymous');
-      return { success: true, version: serializeVersion(result.version), scanGate: result.scanGate };
+      const result = await this.documentScanService.publishWithScanGate(
+        versionId,
+        operator || 'anonymous',
+      );
+      return {
+        success: true,
+        version: serializeVersion(result.version),
+        scanGate: result.scanGate,
+      };
     } catch (error: any) {
-      logger.error('发布到知识库失败', { module: 'DocumentController', versionId, error: error.message });
+      logger.error('发布到知识库失败', {
+        module: 'DocumentController',
+        versionId,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -443,7 +568,11 @@ export class DocumentController {
       const versions = await this.documentService.listVersions(id);
       return { success: true, versions: serializeVersions(versions) };
     } catch (error: any) {
-      logger.error('获取版本列表失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('获取版本列表失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -461,7 +590,11 @@ export class DocumentController {
       const version = await this.documentService.getVersion(versionId);
       return { success: true, version: serializeVersion(version) };
     } catch (error: any) {
-      logger.error('获取版本详情失败', { module: 'DocumentController', versionId, error: error.message });
+      logger.error('获取版本详情失败', {
+        module: 'DocumentController',
+        versionId,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -479,7 +612,11 @@ export class DocumentController {
       const status = await this.documentService.getVersionStatus(versionId);
       return { success: true, ...status };
     } catch (error: any) {
-      logger.error('获取版本状态失败', { module: 'DocumentController', versionId, error: error.message });
+      logger.error('获取版本状态失败', {
+        module: 'DocumentController',
+        versionId,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -508,12 +645,22 @@ export class DocumentController {
         csv: 'text/csv',
       };
 
-      res.setHeader('Content-Type', mimeTypeMap[result.fileType] || 'application/octet-stream');
+      res.setHeader(
+        'Content-Type',
+        mimeTypeMap[result.fileType] || 'application/octet-stream',
+      );
       const encodedName = encodeURIComponent(result.fileName);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
+      );
       res.send(result.buffer);
     } catch (error: any) {
-      logger.error('下载版本文件失败', { module: 'DocumentController', versionId, error: error.message });
+      logger.error('下载版本文件失败', {
+        module: 'DocumentController',
+        versionId,
+        error: error.message,
+      });
       return res.status(500).json({ success: false, message: error.message });
     }
   }
@@ -531,16 +678,29 @@ export class DocumentController {
   ) {
     try {
       if (!['md', 'txt', 'docx'].includes(format)) {
-        return res.status(400).json({ success: false, message: 'format 仅支持 md / txt / docx' });
+        return res
+          .status(400)
+          .json({ success: false, message: 'format 仅支持 md / txt / docx' });
       }
 
-      const result = await this.documentService.exportVersion(versionId, format);
+      const result = await this.documentService.exportVersion(
+        versionId,
+        format,
+      );
       res.setHeader('Content-Type', result.mimeType);
       const encodedName = encodeURIComponent(result.fileName);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${encodedName}"; filename*=UTF-8''${encodedName}`,
+      );
       res.send(result.buffer);
     } catch (error: any) {
-      logger.error('导出版本失败', { module: 'DocumentController', versionId, format, error: error.message });
+      logger.error('导出版本失败', {
+        module: 'DocumentController',
+        versionId,
+        format,
+        error: error.message,
+      });
       return res.status(500).json({ success: false, message: error.message });
     }
   }
@@ -558,10 +718,18 @@ export class DocumentController {
     @Body('operator') operator?: string,
   ) {
     try {
-      const version = await this.documentService.updateVersionStatus(versionId, status, operator || 'anonymous');
+      const version = await this.documentService.updateVersionStatus(
+        versionId,
+        status,
+        operator || 'anonymous',
+      );
       return { success: true, version: serializeVersion(version) };
     } catch (error: any) {
-      logger.error('修改版本状态失败', { module: 'DocumentController', versionId, error: error.message });
+      logger.error('修改版本状态失败', {
+        module: 'DocumentController',
+        versionId,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -575,7 +743,11 @@ export class DocumentController {
     try {
       return await this.documentService.getDocument(id);
     } catch (error: any) {
-      logger.error('获取文档详情失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('获取文档详情失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -590,7 +762,11 @@ export class DocumentController {
       const content = await this.documentService.getDocumentContent(id);
       return { success: true, ...content };
     } catch (error: any) {
-      logger.error('获取文档内容失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('获取文档内容失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -619,7 +795,11 @@ export class DocumentController {
         contentUpdatedAt: document.contentUpdatedAt,
       };
     } catch (error: any) {
-      logger.error('保存文档内容失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('保存文档内容失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -638,7 +818,11 @@ export class DocumentController {
       const document = await this.documentService.updateDocument(id, body);
       return { success: true, document };
     } catch (error: any) {
-      logger.error('修改文档信息失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('修改文档信息失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -655,10 +839,22 @@ export class DocumentController {
     @Body('operator') operator?: string,
   ) {
     try {
-      const version = await this.documentService.rollbackVersion(id, versionId, operator || 'anonymous');
-      return { success: true, message: `已回滚到版本 v${version.versionNumber}`, version: serializeVersion(version) };
+      const version = await this.documentService.rollbackVersion(
+        id,
+        versionId,
+        operator || 'anonymous',
+      );
+      return {
+        success: true,
+        message: `已回滚到版本 v${version.versionNumber}`,
+        version: serializeVersion(version),
+      };
     } catch (error: any) {
-      logger.error('版本回滚失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('版本回滚失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -675,10 +871,17 @@ export class DocumentController {
     @Body('operator') operator?: string,
   ) {
     try {
-      await this.documentService.deleteVersion(versionId, operator || 'anonymous');
+      await this.documentService.deleteVersion(
+        versionId,
+        operator || 'anonymous',
+      );
       return { success: true, message: '版本已删除' };
     } catch (error: any) {
-      logger.error('删除版本失败', { module: 'DocumentController', versionId, error: error.message });
+      logger.error('删除版本失败', {
+        module: 'DocumentController',
+        versionId,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -697,7 +900,11 @@ export class DocumentController {
       await this.documentService.deleteDocument(id, operator || 'anonymous');
       return { success: true, message: '文档已删除' };
     } catch (error: any) {
-      logger.error('删除文档失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('删除文档失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -716,7 +923,11 @@ export class DocumentController {
       const changes = await this.documentService.diffVersions(id, v1, v2);
       return { success: true, diff: changes };
     } catch (error: any) {
-      logger.error('版本对比失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('版本对比失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }
@@ -731,7 +942,11 @@ export class DocumentController {
       const logs = await this.documentService.getAuditLog(id);
       return { success: true, logs };
     } catch (error: any) {
-      logger.error('获取审计日志失败', { module: 'DocumentController', documentId: id, error: error.message });
+      logger.error('获取审计日志失败', {
+        module: 'DocumentController',
+        documentId: id,
+        error: error.message,
+      });
       throw new HttpException(error.message, error.status || 500);
     }
   }

@@ -61,7 +61,9 @@ describe('calculateJaccardSimilarity', () => {
   });
 
   it('英文文本应不区分大小写', () => {
-    expect(calculateJaccardSimilarity('ProjectA Progress', 'projecta progress')).toBe(1);
+    expect(
+      calculateJaccardSimilarity('ProjectA Progress', 'projecta progress'),
+    ).toBe(1);
   });
 });
 
@@ -82,7 +84,9 @@ describe('SemanticDedupTracker', () => {
   });
 
   it('完全相同的参数应判定为重复', () => {
-    tracker.record('session-1', 'search_knowledge_base', { query: '项目A 进度' });
+    tracker.record('session-1', 'search_knowledge_base', {
+      query: '项目A 进度',
+    });
     const result = tracker.check('session-1', 'search_knowledge_base', {
       query: '项目A 进度',
     });
@@ -91,7 +95,9 @@ describe('SemanticDedupTracker', () => {
   });
 
   it('语义相似的参数（换措辞）应判定为重复', () => {
-    tracker.record('session-1', 'search_knowledge_base', { query: '项目A 进度' });
+    tracker.record('session-1', 'search_knowledge_base', {
+      query: '项目A 进度',
+    });
     // "项目A 进度" vs "项目A 进度报告"：相似度约 0.73 > 0.6 阈值
     const result = tracker.check('session-1', 'search_knowledge_base', {
       query: '项目A 进度报告',
@@ -101,7 +107,9 @@ describe('SemanticDedupTracker', () => {
   });
 
   it('语义不同的参数不应判定为重复', () => {
-    tracker.record('session-1', 'search_knowledge_base', { query: '项目A 进度' });
+    tracker.record('session-1', 'search_knowledge_base', {
+      query: '项目A 进度',
+    });
     const result = tracker.check('session-1', 'search_knowledge_base', {
       query: '天气预报',
     });
@@ -109,7 +117,9 @@ describe('SemanticDedupTracker', () => {
   });
 
   it('不同会话应独立追踪', () => {
-    tracker.record('session-1', 'search_knowledge_base', { query: '项目A 进度' });
+    tracker.record('session-1', 'search_knowledge_base', {
+      query: '项目A 进度',
+    });
     const result = tracker.check('session-2', 'search_knowledge_base', {
       query: '项目A 进度',
     });
@@ -118,13 +128,17 @@ describe('SemanticDedupTracker', () => {
 
   it('不在白名单中的工具不应检测', () => {
     tracker.record('session-1', 'calculate', { expression: '1+1' });
-    const result = tracker.check('session-1', 'calculate', { expression: '1+1' });
+    const result = tracker.check('session-1', 'calculate', {
+      expression: '1+1',
+    });
     expect(result.isDuplicate).toBe(false);
   });
 
   it('空 query 参数不应判定为重复', () => {
     tracker.record('session-1', 'search_knowledge_base', { query: '' });
-    const result = tracker.check('session-1', 'search_knowledge_base', { query: '' });
+    const result = tracker.check('session-1', 'search_knowledge_base', {
+      query: '',
+    });
     expect(result.isDuplicate).toBe(false);
   });
 });
@@ -197,7 +211,11 @@ describe('SearchResultDedupTracker', () => {
   });
 
   it('空结果不应判定为重叠', () => {
-    tracker.record('session-1', '查询1', makeResults([{ id: 'doc1', content: '内容1' }]));
+    tracker.record(
+      'session-1',
+      '查询1',
+      makeResults([{ id: 'doc1', content: '内容1' }]),
+    );
     const result = tracker.check('session-1', '查询2', []);
     expect(result.isHighOverlap).toBe(false);
   });
@@ -211,7 +229,9 @@ describe('SearchResultDedupTracker', () => {
 
   it('同一文档不同 chunk 内容应有不同指纹', () => {
     const firstResults = makeResults([{ id: 'doc1', content: '前半部分内容' }]);
-    const secondResults = makeResults([{ id: 'doc1', content: '后半部分内容' }]);
+    const secondResults = makeResults([
+      { id: 'doc1', content: '后半部分内容' },
+    ]);
     tracker.record('session-1', '查询1', firstResults);
     const result = tracker.check('session-1', '查询2', secondResults);
     // 同 documentId 但 content 不同 → 指纹不同 → 不重叠
@@ -297,7 +317,10 @@ describe('evaluateRewriteQuality', () => {
       mainQuery: '项目A 进度',
       subQueries: [],
       keywords: [],
-      wasRewritten: false, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: false,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
     const result = evaluateRewriteQuality('项目A 进度', rewritten);
     expect(result.useRewritten).toBe(false);
     expect(result.fallbackReason).toBe('no_rewrite');
@@ -308,7 +331,10 @@ describe('evaluateRewriteQuality', () => {
       mainQuery: '项目A 当前进度情况',
       subQueries: [],
       keywords: [],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
     const result = evaluateRewriteQuality('项目A 进度', rewritten);
     expect(result.useRewritten).toBe(true);
     expect(result.similarity).toBeGreaterThan(0.3);
@@ -319,7 +345,10 @@ describe('evaluateRewriteQuality', () => {
       mainQuery: 'Q2 季度财务报告',
       subQueries: [],
       keywords: [],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
     const result = evaluateRewriteQuality('项目A 进度', rewritten);
     expect(result.useRewritten).toBe(false);
     expect(result.fallbackReason).toBe('semantic_deviation');
@@ -331,7 +360,10 @@ describe('evaluateRewriteQuality', () => {
       mainQuery: '项目A 进度',
       subQueries: [],
       keywords: [],
-      wasRewritten: true, queryType: 'keyword' as const, hypotheticalAnswer: '', };
+      wasRewritten: true,
+      queryType: 'keyword' as const,
+      hypotheticalAnswer: '',
+    };
     const result = evaluateRewriteQuality('项目A 进度', rewritten);
     expect(result.similarity).toBe(1);
   });

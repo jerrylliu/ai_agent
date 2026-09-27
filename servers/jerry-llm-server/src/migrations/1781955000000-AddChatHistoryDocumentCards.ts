@@ -1,4 +1,4 @@
-import { MigrationInterface, QueryRunner } from "typeorm";
+import { MigrationInterface, QueryRunner } from 'typeorm';
 
 /**
  * 给 chat_history 表新增 documentCards 列（longtext，可空）
@@ -12,17 +12,17 @@ import { MigrationInterface, QueryRunner } from "typeorm";
  * 仅扩展字段，不影响存量数据：允许 NULL，老消息保持不变。
  */
 export class AddChatHistoryDocumentCards1781955000000 implements MigrationInterface {
-    name = 'AddChatHistoryDocumentCards1781955000000'
+  name = 'AddChatHistoryDocumentCards1781955000000';
 
-    public async up(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(
-            `ALTER TABLE \`chat_history\` ADD \`documentCards\` longtext NULL`,
-        );
-    }
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(
+      `ALTER TABLE \`chat_history\` ADD \`documentCards\` longtext NULL`,
+    );
+  }
 
-    public async down(queryRunner: QueryRunner): Promise<void> {
-        await queryRunner.query(
-            `ALTER TABLE \`chat_history\` DROP COLUMN \`documentCards\``,
-        );
-    }
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(
+      `ALTER TABLE \`chat_history\` DROP COLUMN \`documentCards\``,
+    );
+  }
 }

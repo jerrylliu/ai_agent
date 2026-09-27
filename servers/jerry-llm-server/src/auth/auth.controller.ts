@@ -1,14 +1,35 @@
-import { Controller, Post, Body, Get, Put, UseGuards, Req, UseInterceptors, UploadedFile, BadRequestException } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Put,
+  UseGuards,
+  Req,
+  UseInterceptors,
+  UploadedFile,
+  BadRequestException,
+} from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service.js';
 import { AuthGuard } from './auth.guard.js';
-import { RegisterDto, LoginDto, ChangePasswordDto, ResetPasswordDto } from './dto.js';
+import {
+  RegisterDto,
+  LoginDto,
+  ChangePasswordDto,
+  ResetPasswordDto,
+} from './dto.js';
 import * as path from 'path';
 import * as fs from 'fs';
 import { config, runtimePaths } from '../fundamentals/config';
 
-const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+const ALLOWED_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+];
 const ALLOWED_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
@@ -70,7 +91,9 @@ export class AuthController {
     const randomStr = Math.random().toString(36).substring(2, 8);
     const ext = path.extname(file.originalname).toLowerCase();
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
-      throw new BadRequestException('不支持的文件扩展名，仅支持 jpg、png、gif、webp');
+      throw new BadRequestException(
+        '不支持的文件扩展名，仅支持 jpg、png、gif、webp',
+      );
     }
     const safeFilename = `${timestamp}_${randomStr}${ext}`;
 
@@ -84,11 +107,12 @@ export class AuthController {
 
   @Put('password')
   @UseGuards(AuthGuard)
-  async changePassword(
-    @Req() req: any,
-    @Body() body: ChangePasswordDto,
-  ) {
-    return this.authService.changePassword(req.user.sub, body.oldPassword, body.newPassword);
+  async changePassword(@Req() req: any, @Body() body: ChangePasswordDto) {
+    return this.authService.changePassword(
+      req.user.sub,
+      body.oldPassword,
+      body.newPassword,
+    );
   }
 
   @Post('reset-password')

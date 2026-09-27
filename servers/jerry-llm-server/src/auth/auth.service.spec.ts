@@ -27,7 +27,13 @@ jest.mock('../fundamentals/config', () => ({
   config: {
     jwtSecret: 'test-jwt-secret-key-for-unit-tests',
     port: 3000,
-    db: { host: 'localhost', port: 3306, username: 'root', password: '', database: 'test' },
+    db: {
+      host: 'localhost',
+      port: 3306,
+      username: 'root',
+      password: '',
+      database: 'test',
+    },
     ollamaBaseUrl: 'http://localhost:11434',
     chromaUrl: 'http://localhost:8000',
     chromaHost: 'localhost',
@@ -146,7 +152,11 @@ describe('AuthService', () => {
 
     it('应拒绝无效用户名', async () => {
       await expect(
-        service.register({ email: 'a@b.com', password: '123456', username: 'x' }),
+        service.register({
+          email: 'a@b.com',
+          password: '123456',
+          username: 'x',
+        }),
       ).rejects.toThrow('用户名长度应在2-20位之间');
     });
 
@@ -159,7 +169,9 @@ describe('AuthService', () => {
 
     it('手机号已注册时应拒绝', async () => {
       // register({ phone: '...' }) 中 email 为空跳过 email check，只调一次 findOne 用于 phone check
-      userRepo.findOne.mockResolvedValueOnce(makeUser({ phone: '13800138000' }));
+      userRepo.findOne.mockResolvedValueOnce(
+        makeUser({ phone: '13800138000' }),
+      );
       await expect(
         service.register({ phone: '13800138000', password: '12345678' }),
       ).rejects.toThrow('该手机号已注册');
@@ -168,20 +180,30 @@ describe('AuthService', () => {
     it('用户名被占用时应拒绝', async () => {
       // register 依次检查 email（不存在）→ phone（跳过）→ username（冲突）
       userRepo.findOne
-        .mockResolvedValueOnce(null)  // email 不存在
+        .mockResolvedValueOnce(null) // email 不存在
         .mockResolvedValueOnce(makeUser({ username: 'taken' })); // username 冲突
       await expect(
-        service.register({ email: 'new@test.com', password: '12345678', username: 'taken' }),
+        service.register({
+          email: 'new@test.com',
+          password: '12345678',
+          username: 'taken',
+        }),
       ).rejects.toThrow('该用户名已被使用');
     });
 
     it('成功注册应返回 user 和 token', async () => {
       userRepo.findOne.mockResolvedValue(null);
-      const saved = makeUser({ id: 1, email: 'new@test.com', username: 'newbie' });
+      const saved = makeUser({
+        id: 1,
+        email: 'new@test.com',
+        username: 'newbie',
+      });
       userRepo.save.mockResolvedValue(saved);
 
       const result = await service.register({
-        email: 'new@test.com', password: '12345678', username: 'newbie',
+        email: 'new@test.com',
+        password: '12345678',
+        username: 'newbie',
       });
 
       expect(result.success).toBe(true);
@@ -195,7 +217,10 @@ describe('AuthService', () => {
       const saved = makeUser({ id: 2, phone: '13912345678' });
       userRepo.save.mockResolvedValue(saved);
 
-      const result = await service.register({ phone: '13912345678', password: 'abcdef' });
+      const result = await service.register({
+        phone: '13912345678',
+        password: 'abcdef',
+      });
       expect(result.success).toBe(true);
     });
   });
@@ -215,7 +240,10 @@ describe('AuthService', () => {
     });
 
     it('账号不存在时拒绝', async () => {
-      const qb = { where: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(null) };
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      };
       userRepo.createQueryBuilder.mockReturnValue(qb);
 
       await expect(
@@ -224,7 +252,10 @@ describe('AuthService', () => {
     });
 
     it('密码错误时拒绝', async () => {
-      const qb = { where: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(makeUser({ email: 'u@t.com' })) };
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(makeUser({ email: 'u@t.com' })),
+      };
       userRepo.createQueryBuilder.mockReturnValue(qb);
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
 
@@ -234,7 +265,12 @@ describe('AuthService', () => {
     });
 
     it('账号被禁用时拒绝', async () => {
-      const qb = { where: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(makeUser({ email: 'b@t.com', isActive: false })) };
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        getOne: jest
+          .fn()
+          .mockResolvedValue(makeUser({ email: 'b@t.com', isActive: false })),
+      };
       userRepo.createQueryBuilder.mockReturnValue(qb);
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
@@ -245,11 +281,17 @@ describe('AuthService', () => {
 
     it('登录成功应返回 user 和 token', async () => {
       const u = makeUser({ id: 10, email: 'ok@t.com', tokenVersion: 3 });
-      const qb = { where: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(u) };
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(u),
+      };
       userRepo.createQueryBuilder.mockReturnValue(qb);
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
-      const result = await service.login({ account: 'ok@t.com', password: 'right' });
+      const result = await service.login({
+        account: 'ok@t.com',
+        password: 'right',
+      });
       expect(result.success).toBe(true);
       expect(result.token).toBe('login-jwt-token');
       expect((result.user as any).password).toBeUndefined();
@@ -268,7 +310,9 @@ describe('AuthService', () => {
   describe('Token 管理', () => {
     it('generateToken 应使用 JWT_SECRET 签名', () => {
       (jwt.sign as jest.Mock).mockReturnValue('signed');
-      const token = service.generateToken(makeUser({ id: 5, tokenVersion: 1 }) as any);
+      const token = service.generateToken(
+        makeUser({ id: 5, tokenVersion: 1 }) as any,
+      );
       expect(token).toBe('signed');
       expect(jwt.sign).toHaveBeenCalledWith(
         { sub: 5, tokenVersion: 1 },
@@ -283,7 +327,9 @@ describe('AuthService', () => {
     });
 
     it('verifyToken 无效时返回 null', () => {
-      (jwt.verify as jest.Mock).mockImplementation(() => { throw new Error('bad'); });
+      (jwt.verify as jest.Mock).mockImplementation(() => {
+        throw new Error('bad');
+      });
       expect(service.verifyToken('bad')).toBeNull();
     });
   });
@@ -293,12 +339,16 @@ describe('AuthService', () => {
    * ==================================================================*/
   describe('sanitizeUser', () => {
     it('应移除 password 字段', () => {
-      const safe = service.sanitizeUser(makeUser({ password: 'secret' }) as any);
+      const safe = service.sanitizeUser(
+        makeUser({ password: 'secret' }) as any,
+      );
       expect((safe as any).password).toBeUndefined();
     });
 
     it('应保留其他字段', () => {
-      const safe = service.sanitizeUser(makeUser({ id: 8, email: 'e@t.com' }) as any);
+      const safe = service.sanitizeUser(
+        makeUser({ id: 8, email: 'e@t.com' }) as any,
+      );
       expect(safe.id).toBe(8);
       expect(safe.email).toBe('e@t.com');
     });
@@ -315,13 +365,17 @@ describe('AuthService', () => {
     it('原密码错误时应拒绝', async () => {
       userRepo.findOne.mockResolvedValue(makeUser({ id: 1 }));
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
-      await expect(service.changePassword(1, 'wrongOld', 'newPass')).rejects.toThrow('原密码错误');
+      await expect(
+        service.changePassword(1, 'wrongOld', 'newPass'),
+      ).rejects.toThrow('原密码错误');
     });
 
     it('新密码过短时应拒绝', async () => {
       userRepo.findOne.mockResolvedValue(makeUser({ id: 1 }));
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
-      await expect(service.changePassword(1, 'oldPwd', '12345')).rejects.toThrow('新密码长度至少6位');
+      await expect(
+        service.changePassword(1, 'oldPwd', '12345'),
+      ).rejects.toThrow('新密码长度至少6位');
     });
 
     it('修改成功应递增 tokenVersion', async () => {
@@ -337,7 +391,9 @@ describe('AuthService', () => {
 
     it('用户不存在时应拒绝', async () => {
       userRepo.findOne.mockResolvedValue(null);
-      await expect(service.changePassword(999, 'old', 'newPass')).rejects.toThrow('用户不存在');
+      await expect(
+        service.changePassword(999, 'old', 'newPass'),
+      ).rejects.toThrow('用户不存在');
     });
   });
 
@@ -346,14 +402,22 @@ describe('AuthService', () => {
    * ==================================================================*/
   describe('resetPassword', () => {
     it('账号不存在时应拒绝', async () => {
-      const qb = { where: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(null) };
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+      };
       userRepo.createQueryBuilder.mockReturnValue(qb);
-      await expect(service.resetPassword('ghost', 'newPass123')).rejects.toThrow('该账号不存在');
+      await expect(
+        service.resetPassword('ghost', 'newPass123'),
+      ).rejects.toThrow('该账号不存在');
     });
 
     it('重置成功应递增 tokenVersion', async () => {
       const u = makeUser({ id: 2, tokenVersion: 2 });
-      const qb = { where: jest.fn().mockReturnThis(), getOne: jest.fn().mockResolvedValue(u) };
+      const qb = {
+        where: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(u),
+      };
       userRepo.createQueryBuilder.mockReturnValue(qb);
       (bcrypt.hash as jest.Mock).mockResolvedValue('hashed');
       userRepo.save.mockResolvedValue(u);
@@ -370,19 +434,25 @@ describe('AuthService', () => {
   describe('updateProfile', () => {
     it('用户不存在时应拒绝', async () => {
       userRepo.findOne.mockResolvedValue(null);
-      await expect(service.updateProfile(999, { username: 'x' })).rejects.toThrow('用户不存在');
+      await expect(
+        service.updateProfile(999, { username: 'x' }),
+      ).rejects.toThrow('用户不存在');
     });
 
     it('用户名被占用时应拒绝', async () => {
       userRepo.findOne
         .mockResolvedValueOnce(makeUser({ id: 1 }))
         .mockResolvedValueOnce(makeUser({ id: 99, username: 'taken' }));
-      await expect(service.updateProfile(1, { username: 'taken' })).rejects.toThrow('该用户名已被使用');
+      await expect(
+        service.updateProfile(1, { username: 'taken' }),
+      ).rejects.toThrow('该用户名已被使用');
     });
 
     it('头像 URL 需以 http 开头', async () => {
       userRepo.findOne.mockResolvedValue(makeUser({ id: 1 }));
-      await expect(service.updateProfile(1, { avatar: 'javascript:alert(1)' })).rejects.toThrow('头像 URL 必须以 http:// 或 https:// 开头');
+      await expect(
+        service.updateProfile(1, { avatar: 'javascript:alert(1)' }),
+      ).rejects.toThrow('头像 URL 必须以 http:// 或 https:// 开头');
     });
 
     it('更新成功应返回脱敏用户', async () => {
@@ -400,7 +470,9 @@ describe('AuthService', () => {
    * ==================================================================*/
   describe('getUserById', () => {
     it('应返回脱敏用户', async () => {
-      userRepo.findOne.mockResolvedValue(makeUser({ id: 1, password: 'secret' }));
+      userRepo.findOne.mockResolvedValue(
+        makeUser({ id: 1, password: 'secret' }),
+      );
       const safe = await service.getUserById(1);
       expect((safe as any).password).toBeUndefined();
     });

@@ -54,7 +54,9 @@ describe('parseDSMLToolCalls', () => {
     const calls = parseDSMLToolCalls(LEAKED_TEXT_CALLS, AVAILABLE_TOOLS);
     expect(calls).toHaveLength(1);
     expect(calls[0].name).toBe('search_web');
-    expect(calls[0].args).toEqual({ query: '七格玛 枣庄 纳税人资质 增值税一般纳税人' });
+    expect(calls[0].args).toEqual({
+      query: '七格玛 枣庄 纳税人资质 增值税一般纳税人',
+    });
   });
 
   it('多行格式化 DSML 文本', () => {
@@ -91,7 +93,10 @@ describe('parseDSMLToolCalls', () => {
       '</｜｜DSML｜｜tool_calls>';
     const calls = parseDSMLToolCalls(text, AVAILABLE_TOOLS);
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toEqual({ name: 'search_knowledge_base', args: { query: '查询A' } });
+    expect(calls[0]).toEqual({
+      name: 'search_knowledge_base',
+      args: { query: '查询A' },
+    });
     expect(calls[1]).toEqual({ name: 'search_web', args: { query: '查询B' } });
   });
 
@@ -106,7 +111,8 @@ describe('parseDSMLToolCalls', () => {
   });
 
   it('残缺格式（半截标签）返回空数组', () => {
-    const text = '我来查询一下。<｜｜DSML｜｜tool_calls> <｜｜DSML｜｜invoke name="search_';
+    const text =
+      '我来查询一下。<｜｜DSML｜｜tool_calls> <｜｜DSML｜｜invoke name="search_';
     expect(parseDSMLToolCalls(text, AVAILABLE_TOOLS)).toEqual([]);
   });
 
@@ -129,7 +135,9 @@ describe('parseDSMLToolCalls', () => {
   });
 
   it('普通文本（无 DSML）返回空数组', () => {
-    expect(parseDSMLToolCalls('知识库中有三张液氮相关图片。', AVAILABLE_TOOLS)).toEqual([]);
+    expect(
+      parseDSMLToolCalls('知识库中有三张液氮相关图片。', AVAILABLE_TOOLS),
+    ).toEqual([]);
     expect(parseDSMLToolCalls('', AVAILABLE_TOOLS)).toEqual([]);
   });
 });
@@ -140,12 +148,18 @@ describe('containsRawToolCallFormat', () => {
     expect(containsRawToolCallFormat('<｜｜DSML｜｜tool_calls>')).toBe(true);
     expect(containsRawToolCallFormat('</｜｜DSML｜｜invoke>')).toBe(true);
     expect(containsRawToolCallFormat('<||DSML||tool_calls>')).toBe(true);
-    expect(containsRawToolCallFormat('<tool_calls>{"q":1}</tool_calls>')).toBe(true);
+    expect(containsRawToolCallFormat('<tool_calls>{"q":1}</tool_calls>')).toBe(
+      true,
+    );
     // 缩写包裹标签：装饰 calls 与裸 calls / call
     expect(containsRawToolCallFormat('<｜DSML｜calls>')).toBe(true);
     expect(containsRawToolCallFormat('</｜DSML｜calls>')).toBe(true);
-    expect(containsRawToolCallFormat(bare('calls') + bareClose('calls'))).toBe(true);
-    expect(containsRawToolCallFormat(bare('call') + bareClose('call'))).toBe(true);
+    expect(containsRawToolCallFormat(bare('calls') + bareClose('calls'))).toBe(
+      true,
+    );
+    expect(containsRawToolCallFormat(bare('call') + bareClose('call'))).toBe(
+      true,
+    );
   });
 
   it('普通文本不误报', () => {
@@ -212,18 +226,33 @@ function buildInvokeBlock(
   let text = open + 'invoke name="' + tool + '">';
   for (const [name, value] of Object.entries(params)) {
     text +=
-      open + 'parameter name="' + name + '" string="true">' + value + close + 'parameter>';
+      open +
+      'parameter name="' +
+      name +
+      '" string="true">' +
+      value +
+      close +
+      'parameter>';
   }
   return text + close + 'invoke>';
 }
 
 /** 在 invoke 块外再包一层 tool_calls 开/闭标签 */
 function wrapToolCalls(inner: string, pipe: string = FULL_PIPE): string {
-  return dsmlOpenHead(pipe) + 'tool_calls>' + inner + dsmlCloseHead(pipe) + 'tool_calls>';
+  return (
+    dsmlOpenHead(pipe) +
+    'tool_calls>' +
+    inner +
+    dsmlCloseHead(pipe) +
+    'tool_calls>'
+  );
 }
 
 /** 依次喂入 chunks 并结束流，返回安全输出文本（push 累计 + flush） */
-function runStream(suppressor: StreamingDsmlSuppressor, chunks: string[]): string {
+function runStream(
+  suppressor: StreamingDsmlSuppressor,
+  chunks: string[],
+): string {
   let out = '';
   for (const chunk of chunks) out += suppressor.push(chunk);
   return out + suppressor.flush();
@@ -232,14 +261,17 @@ function runStream(suppressor: StreamingDsmlSuppressor, chunks: string[]): strin
 /** 按指定大小切分文本（模拟任意流式切分边界） */
 function splitEvery(text: string, size: number): string[] {
   const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
+  for (let i = 0; i < text.length; i += size)
+    chunks.push(text.slice(i, i + size));
   return chunks;
 }
 
 describe('StreamingDsmlSuppressor', () => {
   it('整块抑制裸 invoke 块，捕获的全文可被解析执行', () => {
     const before = '查询结果如下：';
-    const block = buildInvokeBlock('search_knowledge_base', { query: '液氮 杜瓦冷罐 工程干员' });
+    const block = buildInvokeBlock('search_knowledge_base', {
+      query: '液氮 杜瓦冷罐 工程干员',
+    });
     const after = '\n以上。';
     const suppressor = new StreamingDsmlSuppressor();
     const safe = runStream(suppressor, [before + block + after]);
@@ -247,12 +279,18 @@ describe('StreamingDsmlSuppressor', () => {
     expect(safe).not.toContain('DSML');
     const calls = parseDSMLToolCalls(suppressor.getCaptured(), AVAILABLE_TOOLS);
     expect(calls).toEqual([
-      { name: 'search_knowledge_base', args: { query: '液氮 杜瓦冷罐 工程干员' } },
+      {
+        name: 'search_knowledge_base',
+        args: { query: '液氮 杜瓦冷罐 工程干员' },
+      },
     ]);
   });
 
   it('逐字符 / 任意分块喂入与整段喂入结果一致', () => {
-    const input = '前文 ' + buildInvokeBlock('get_weather', { city: '西安', days: '3' }) + ' 后文';
+    const input =
+      '前文 ' +
+      buildInvokeBlock('get_weather', { city: '西安', days: '3' }) +
+      ' 后文';
     const whole = new StreamingDsmlSuppressor();
     const expected = runStream(whole, [input]);
     expect(expected).toBe('前文  后文');
@@ -267,7 +305,11 @@ describe('StreamingDsmlSuppressor', () => {
     const block = buildInvokeBlock('search_web', { query: '测试' });
     const head = block.slice(0, 12); // 切点开标签中部
     const s = new StreamingDsmlSuppressor();
-    const safe = runStream(s, ['前缀', ...head.split(''), block.slice(12) + '后缀']);
+    const safe = runStream(s, [
+      '前缀',
+      ...head.split(''),
+      block.slice(12) + '后缀',
+    ]);
     expect(safe).toBe('前缀后缀');
   });
 
@@ -286,16 +328,26 @@ describe('StreamingDsmlSuppressor', () => {
   });
 
   it('ASCII 竖线变体同样整块抑制', () => {
-    const block = buildInvokeBlock('search_web', { query: 'ASCII 测试' }, ASCII_PIPE);
+    const block = buildInvokeBlock(
+      'search_web',
+      { query: 'ASCII 测试' },
+      ASCII_PIPE,
+    );
     const s = new StreamingDsmlSuppressor();
     const safe = runStream(s, ['前' + block + '后']);
     expect(safe).toBe('前后');
-    expect(parseDSMLToolCalls(s.getCaptured(), AVAILABLE_TOOLS)).toHaveLength(1);
+    expect(parseDSMLToolCalls(s.getCaptured(), AVAILABLE_TOOLS)).toHaveLength(
+      1,
+    );
   });
 
   it('连续两个裸 invoke 均被抑制且均可解析', () => {
-    const block1 = buildInvokeBlock('generate_document', { content: '第一份文档正文' });
-    const block2 = buildInvokeBlock('generate_document', { content: '第二份文档正文' });
+    const block1 = buildInvokeBlock('generate_document', {
+      content: '第一份文档正文',
+    });
+    const block2 = buildInvokeBlock('generate_document', {
+      content: '第二份文档正文',
+    });
     const s = new StreamingDsmlSuppressor();
     const safe = runStream(s, ['开始生成：' + block1 + block2]);
     expect(safe).toBe('开始生成：');
@@ -322,11 +374,15 @@ describe('StreamingDsmlSuppressor', () => {
   });
 
   it('嵌套 tool_calls 包裹：深度计数后正确回到正常文本', () => {
-    const wrapped = wrapToolCalls(buildInvokeBlock('search_web', { query: '嵌套结构' }));
+    const wrapped = wrapToolCalls(
+      buildInvokeBlock('search_web', { query: '嵌套结构' }),
+    );
     const s = new StreamingDsmlSuppressor();
     const safe = runStream(s, ['头 ' + wrapped + ' 尾']);
     expect(safe).toBe('头  尾');
-    expect(parseDSMLToolCalls(s.getCaptured(), AVAILABLE_TOOLS)).toHaveLength(1);
+    expect(parseDSMLToolCalls(s.getCaptured(), AVAILABLE_TOOLS)).toHaveLength(
+      1,
+    );
   });
 
   it('孤立闭标签仅抑制自身', () => {
@@ -338,7 +394,9 @@ describe('StreamingDsmlSuppressor', () => {
 
   it('未闭合块在 flush 时整体抑制', () => {
     const input =
-      '开头' + dsmlOpenHead(FULL_PIPE) + 'invoke name="search_web">参数内容未闭合';
+      '开头' +
+      dsmlOpenHead(FULL_PIPE) +
+      'invoke name="search_web">参数内容未闭合';
     const s = new StreamingDsmlSuppressor();
     expect(runStream(s, [input])).toBe('开头');
     expect(s.getCaptured()).toContain('search_web');
@@ -349,7 +407,9 @@ describe('StreamingDsmlSuppressor', () => {
     expect(runStream(s1, ['1 <'])).toBe('1 <');
 
     const s2 = new StreamingDsmlSuppressor();
-    expect(runStream(s2, ['文字' + dsmlOpenHead(FULL_PIPE).slice(0, 5)])).toBe('文字');
+    expect(runStream(s2, ['文字' + dsmlOpenHead(FULL_PIPE).slice(0, 5)])).toBe(
+      '文字',
+    );
     expect(s2.hasCaptured()).toBe(true);
 
     const s3 = new StreamingDsmlSuppressor();
@@ -369,26 +429,36 @@ describe('StreamingDsmlSuppressor', () => {
     expect(safe).toBe('查询结果如下：\n以上。');
     const calls = parseDSMLToolCalls(s.getCaptured(), AVAILABLE_TOOLS);
     expect(calls).toEqual([
-      { name: 'search_knowledge_base', args: { query: '液氮 杜瓦冷罐 工程干员' } },
+      {
+        name: 'search_knowledge_base',
+        args: { query: '液氮 杜瓦冷罐 工程干员' },
+      },
     ]);
   });
 
   it('回归：缩写包裹标签（LEAKED_TEXT_CALLS）整块抑制且捕获可解析', () => {
     const s = new StreamingDsmlSuppressor();
     const safe = runStream(s, [
-      '公开信息里没有直接标注它的纳税人资质，我换个关键词再核实一遍。\n\n' + LEAKED_TEXT_CALLS,
+      '公开信息里没有直接标注它的纳税人资质，我换个关键词再核实一遍。\n\n' +
+        LEAKED_TEXT_CALLS,
     ]);
-    expect(safe).toBe('公开信息里没有直接标注它的纳税人资质，我换个关键词再核实一遍。\n\n');
+    expect(safe).toBe(
+      '公开信息里没有直接标注它的纳税人资质，我换个关键词再核实一遍。\n\n',
+    );
     const calls = parseDSMLToolCalls(s.getCaptured(), AVAILABLE_TOOLS);
     expect(calls).toEqual([
-      { name: 'search_web', args: { query: '七格玛 枣庄 纳税人资质 增值税一般纳税人' } },
+      {
+        name: 'search_web',
+        args: { query: '七格玛 枣庄 纳税人资质 增值税一般纳税人' },
+      },
     ]);
   });
 });
 
 describe('suppressRawToolCallBlocks', () => {
   it('同步整段抑制与流式行为一致', () => {
-    const input = 'A' + buildInvokeBlock('search_web', { query: '同步抑制' }) + 'B';
+    const input =
+      'A' + buildInvokeBlock('search_web', { query: '同步抑制' }) + 'B';
     const { safeText, captured } = suppressRawToolCallBlocks(input);
     expect(safeText).toBe('AB');
     expect(parseDSMLToolCalls(captured, AVAILABLE_TOOLS)).toHaveLength(1);
@@ -429,7 +499,10 @@ function buildBareBlock(
 ): string {
   let text = bare('invoke', 'name="' + tool + '"');
   for (const [k, v] of Object.entries(params)) {
-    text += bare('parameter', 'name="' + k + '" string="true"') + v + bareClose('parameter');
+    text +=
+      bare('parameter', 'name="' + k + '" string="true"') +
+      v +
+      bareClose('parameter');
   }
   text += bareClose('invoke');
   return outer ? bare(outer) + text + bareClose(outer) : text;
@@ -441,13 +514,28 @@ function buildAntmlBlock(tool: string, params: Record<string, string>): string {
   let text = LT + p + 'invoke name="' + tool + '"' + GT;
   for (const [k, v] of Object.entries(params)) {
     text +=
-      LT + p + 'parameter name="' + k + '" string="true"' + GT + v + LT + SL + p + 'parameter' + GT;
+      LT +
+      p +
+      'parameter name="' +
+      k +
+      '" string="true"' +
+      GT +
+      v +
+      LT +
+      SL +
+      p +
+      'parameter' +
+      GT;
   }
   return text + LT + SL + p + 'invoke' + GT;
 }
 
 /** 断言：整段喂入与任意切分喂入结果一致，且捕获内容可解析出期望调用 */
-function expectInvariant(input: string, expectedSafe: string, expectedCalls: unknown[]): void {
+function expectInvariant(
+  input: string,
+  expectedSafe: string,
+  expectedCalls: unknown[],
+): void {
   const whole = new StreamingDsmlSuppressor();
   expect(runStream(whole, [input])).toBe(expectedSafe);
   for (const size of [1, 2, 3, 5, 7, 13]) {
@@ -455,7 +543,9 @@ function expectInvariant(input: string, expectedSafe: string, expectedCalls: unk
     expect(runStream(s, splitEvery(input, size))).toBe(expectedSafe);
     expect(s.getCaptured()).toBe(whole.getCaptured());
   }
-  expect(parseDSMLToolCalls(whole.getCaptured(), AVAILABLE_TOOLS)).toEqual(expectedCalls);
+  expect(parseDSMLToolCalls(whole.getCaptured(), AVAILABLE_TOOLS)).toEqual(
+    expectedCalls,
+  );
 }
 
 describe('P0 方言容错：检测 / 过滤 / 解析', () => {
@@ -470,8 +560,12 @@ describe('P0 方言容错：检测 / 过滤 / 解析', () => {
       bare('tool_calls') + '{"q":1}' + bareClose('tool_calls'),
       bare('TOOL_CALLS') + '{"q":1}' + bareClose('TOOL_CALLS'),
       bare('invoke', 'name = "search_web"') + '{"q":1}' + bareClose('invoke'),
-      bare('calls') + buildBareBlock(null, 'search_web', { query: 'x' }) + bareClose('calls'),
-      bare('call') + buildBareBlock(null, 'search_web', { query: 'x' }) + bareClose('call'),
+      bare('calls') +
+        buildBareBlock(null, 'search_web', { query: 'x' }) +
+        bareClose('calls'),
+      bare('call') +
+        buildBareBlock(null, 'search_web', { query: 'x' }) +
+        bareClose('call'),
     ];
     for (const s of samples) {
       expect(containsRawToolCallFormat(s)).toBe(true);
@@ -479,11 +573,17 @@ describe('P0 方言容错：检测 / 过滤 / 解析', () => {
   });
 
   it('过滤层：去掉各类控制标签，只保留参数正文', () => {
-    expect(filterRawToolCalls(buildBareBlock('tool_calls', 'search_web', { query: '甲' }))).toBe(
-      '甲',
-    );
-    expect(filterRawToolCalls(buildBareBlock(null, 'search_web', { query: '乙' }))).toBe('乙');
-    expect(filterRawToolCalls(buildAntmlBlock('search_web', { query: '丙' }))).toBe('丙');
+    expect(
+      filterRawToolCalls(
+        buildBareBlock('tool_calls', 'search_web', { query: '甲' }),
+      ),
+    ).toBe('甲');
+    expect(
+      filterRawToolCalls(buildBareBlock(null, 'search_web', { query: '乙' })),
+    ).toBe('乙');
+    expect(
+      filterRawToolCalls(buildAntmlBlock('search_web', { query: '丙' })),
+    ).toBe('丙');
     expect(
       filterRawToolCalls(
         bare('tool_call') +
@@ -491,7 +591,11 @@ describe('P0 方言容错：检测 / 过滤 / 解析', () => {
           bareClose('tool_call'),
       ),
     ).toBe('丁');
-    expect(filterRawToolCalls(buildBareBlock('calls', 'search_web', { query: '戊' }))).toBe('戊');
+    expect(
+      filterRawToolCalls(
+        buildBareBlock('calls', 'search_web', { query: '戊' }),
+      ),
+    ).toBe('戊');
   });
 
   it('解析层：单数 tool_call 包裹与裸 invoke 均可解析执行', () => {
@@ -503,7 +607,9 @@ describe('P0 方言容错：检测 / 过滤 / 解析', () => {
       { name: 'search_web', args: { query: '单数' } },
     ]);
 
-    const bareInvoke = buildBareBlock(null, 'search_knowledge_base', { query: '裸块' });
+    const bareInvoke = buildBareBlock(null, 'search_knowledge_base', {
+      query: '裸块',
+    });
     expect(parseDSMLToolCalls(bareInvoke, AVAILABLE_TOOLS)).toEqual([
       { name: 'search_knowledge_base', args: { query: '裸块' } },
     ]);
@@ -529,7 +635,9 @@ describe('P0 方言容错：流式整块抑制', () => {
   });
 
   it('完全裸 invoke（无包裹、无装饰）整块抑制', () => {
-    const block = buildBareBlock(null, 'search_knowledge_base', { query: '裸流式' });
+    const block = buildBareBlock(null, 'search_knowledge_base', {
+      query: '裸流式',
+    });
     expectInvariant('前文' + block + '后文', '前文后文', [
       { name: 'search_knowledge_base', args: { query: '裸流式' } },
     ]);
@@ -537,7 +645,9 @@ describe('P0 方言容错：流式整块抑制', () => {
 
   it('antml: 前缀块整块抑制', () => {
     const block = buildAntmlBlock('search_web', { query: '安特流式' });
-    expectInvariant('A' + block + 'B', 'AB', [{ name: 'search_web', args: { query: '安特流式' } }]);
+    expectInvariant('A' + block + 'B', 'AB', [
+      { name: 'search_web', args: { query: '安特流式' } },
+    ]);
   });
 
   it('DSML 装饰 + 单数标签整块抑制', () => {
@@ -563,7 +673,9 @@ describe('P0 方言容错：流式整块抑制', () => {
       close +
       'tool_call' +
       GT;
-    expectInvariant('X' + block + 'Y', 'XY', [{ name: 'search_web', args: { query: '装饰单数' } }]);
+    expectInvariant('X' + block + 'Y', 'XY', [
+      { name: 'search_web', args: { query: '装饰单数' } },
+    ]);
   });
 
   it('开闭标签大小写不一致仍能收尾且不泄漏', () => {
@@ -590,7 +702,8 @@ describe('P0 方言容错：流式整块抑制', () => {
   });
 
   it('只有开标签、没有闭标签时抑制到流结束（开闭不对称）', () => {
-    const input = '正文' + bare('invoke', 'name="search_web"') + '未闭合的后续内容';
+    const input =
+      '正文' + bare('invoke', 'name="search_web"') + '未闭合的后续内容';
     expectInvariant(input, '正文', []);
   });
 
@@ -649,7 +762,10 @@ describe('P0 方言容错：流式整块抑制', () => {
 
   it('DSML 装饰 + 缩写包裹标签（用户泄漏形态）整块抑制且任意切分一致', () => {
     expectInvariant('正文\n\n' + LEAKED_TEXT_CALLS, '正文\n\n', [
-      { name: 'search_web', args: { query: '七格玛 枣庄 纳税人资质 增值税一般纳税人' } },
+      {
+        name: 'search_web',
+        args: { query: '七格玛 枣庄 纳税人资质 增值税一般纳税人' },
+      },
     ]);
   });
 });

@@ -110,5 +110,9 @@ export async function rebuildBM25Index(
   }
   await saveBM25Index(); // 批量操作完成后统一保存
 
-  logger.info('BM25 索引重建完成', { module: 'VectorStore', totalCount: docs.length, activeCount: activeDocs.length });
+  logger.info('BM25 索引重建完成', {
+    module: 'VectorStore',
+    totalCount: docs.length,
+    activeCount: activeDocs.length,
+  });
 }

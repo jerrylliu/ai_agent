@@ -97,7 +97,10 @@ export async function translateImage(
       imageSize: asset.buffer.length,
       maxSizeBytes,
     });
-    const placeholderPath = `${docId}/img_${asset.sourceIndex}.png`.replace(/\\/g, '/');
+    const placeholderPath = `${docId}/img_${asset.sourceIndex}.png`.replace(
+      /\\/g,
+      '/',
+    );
     return buildFallbackResult(
       asset,
       placeholderPath,
@@ -115,7 +118,8 @@ export async function translateImage(
       imagePath = await persistImage(asset.buffer, docId, asset.sourceIndex);
     } catch (persistErr: unknown) {
       // H1 修复：落盘失败时直接走 Layer 4 兜底，避免击穿整个批量处理
-      const errMsg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+      const errMsg =
+        persistErr instanceof Error ? persistErr.message : String(persistErr);
       logger.error('图片落盘失败，直接走元数据兜底', {
         module: 'VisionTranslator',
         docId,
@@ -126,7 +130,12 @@ export async function translateImage(
       // 用占位路径（无法通过 /images 访问，但至少不会抛异常）
       // Bug 4 修复：统一使用正斜杠，与 persistImage 返回的路径格式一致
       const placeholderPath = `${docId}/img_${asset.sourceIndex}.png`;
-      return buildFallbackResult(asset, placeholderPath, imageHash, `图片落盘失败: ${errMsg}`);
+      return buildFallbackResult(
+        asset,
+        placeholderPath,
+        imageHash,
+        `图片落盘失败: ${errMsg}`,
+      );
     }
   }
 
@@ -138,7 +147,12 @@ export async function translateImage(
       imageIndex: asset.sourceIndex,
       imageHash,
     });
-    return buildFallbackResult(asset, imagePath, imageHash, 'VLM 与 OCR 均未启用');
+    return buildFallbackResult(
+      asset,
+      imagePath,
+      imageHash,
+      'VLM 与 OCR 均未启用',
+    );
   }
 
   // 2. Layer 1：VLM 主模型调用（临时错误重试 3 次；永久性错误立即降级）
@@ -303,7 +317,10 @@ export async function translateImagesBatch(
             results[idx] = await translateImage(vlmInputs[idx]);
           } catch (translateErr: unknown) {
             // H2 修复：单图翻译异常不应击穿整个批量处理，填充 Layer 4 兜底结果
-            const errMsg = translateErr instanceof Error ? translateErr.message : String(translateErr);
+            const errMsg =
+              translateErr instanceof Error
+                ? translateErr.message
+                : String(translateErr);
             logger.error('单张图片翻译异常，已填充兜底结果', {
               module: 'VisionTranslator',
               docId: vlmInputs[idx].docId,
@@ -342,7 +359,8 @@ export async function translateImagesBatch(
       );
     } catch (persistErr: unknown) {
       // S2-1 修复：落盘失败时用占位路径，避免丢失前面已完成的全部 VLM 结果
-      const errMsg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+      const errMsg =
+        persistErr instanceof Error ? persistErr.message : String(persistErr);
       logger.error('超出上限图片落盘失败，使用占位路径', {
         module: 'VisionTranslator',
         docId: input.docId,
@@ -400,7 +418,8 @@ async function buildTimeoutFallbackResult(
     );
   } catch (persistErr: unknown) {
     // S2-2 修复：落盘失败时用占位路径，避免 persistImage 异常击穿整个批量处理
-    const errMsg = persistErr instanceof Error ? persistErr.message : String(persistErr);
+    const errMsg =
+      persistErr instanceof Error ? persistErr.message : String(persistErr);
     logger.error('文档总超时兜底：图片落盘失败，使用占位路径', {
       module: 'VisionTranslator',
       docId: input.docId,
@@ -475,7 +494,9 @@ async function tryVlmWithRetry(params: {
     layer,
   } = params;
 
-  const modelLabel = fallback ? config.vlm.fallbackModel : config.vlm.primaryModel;
+  const modelLabel = fallback
+    ? config.vlm.fallbackModel
+    : config.vlm.primaryModel;
   let lastError: string = '';
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -602,15 +623,18 @@ async function callVlm(
  * 超时通过 ChatOpenAI 的 timeout 参数控制。
  */
 function createVlmModel(fallback: boolean = false): ChatOpenAI {
-  const model = fallback && config.vlm.fallbackModel
-    ? config.vlm.fallbackModel
-    : config.vlm.primaryModel;
-  const apiBase = fallback && config.vlm.fallbackApiBase
-    ? config.vlm.fallbackApiBase
-    : config.vlm.apiBase;
-  const apiKey = fallback && config.vlm.fallbackApiKey
-    ? config.vlm.fallbackApiKey
-    : config.vlm.apiKey;
+  const model =
+    fallback && config.vlm.fallbackModel
+      ? config.vlm.fallbackModel
+      : config.vlm.primaryModel;
+  const apiBase =
+    fallback && config.vlm.fallbackApiBase
+      ? config.vlm.fallbackApiBase
+      : config.vlm.apiBase;
+  const apiKey =
+    fallback && config.vlm.fallbackApiKey
+      ? config.vlm.fallbackApiKey
+      : config.vlm.apiKey;
 
   return new ChatOpenAI({
     model,
@@ -707,7 +731,7 @@ async function ocrImage(buffer: Buffer): Promise<string> {
     // 未安装时 @ts-expect-error 抑制类型解析错误，运行时会抛错由上层降级
     // @ts-expect-error - tesseract.js 是可选依赖，未安装时模块解析失败
     const { createWorker } = await import('tesseract.js');
-    worker = await createWorker() as TesseractWorkerLike;
+    worker = (await createWorker()) as TesseractWorkerLike;
     await worker.loadLanguage(config.ocr.lang);
     await worker.initialize(config.ocr.lang);
 
@@ -880,7 +904,12 @@ function detectImageMime(buffer: Buffer): string {
   if (buffer.length < 4) return 'image/png';
 
   // PNG: 89 50 4E 47
-  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+  if (
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47
+  ) {
     return 'image/png';
   }
   // JPEG: FF D8 FF
@@ -888,14 +917,25 @@ function detectImageMime(buffer: Buffer): string {
     return 'image/jpeg';
   }
   // GIF: 47 49 46 38
-  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+  if (
+    buffer[0] === 0x47 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x38
+  ) {
     return 'image/gif';
   }
   // WebP: 52 49 46 46 ... 57 45 42 50
   if (
-    buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
+    buffer[0] === 0x52 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x46 &&
     buffer.length >= 12 &&
-    buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
+    buffer[8] === 0x57 &&
+    buffer[9] === 0x45 &&
+    buffer[10] === 0x42 &&
+    buffer[11] === 0x50
   ) {
     return 'image/webp';
   }

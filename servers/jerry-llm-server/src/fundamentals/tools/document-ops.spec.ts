@@ -6,7 +6,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../model-provider', () => ({
@@ -69,7 +74,9 @@ describe('document-ops 工具', () => {
       jest.resetModules();
       const fresh = require('./document-ops');
       const mockService = {
-        uploadDocument: jest.fn().mockResolvedValue({ document: { id: 42 }, version: {} }),
+        uploadDocument: jest
+          .fn()
+          .mockResolvedValue({ document: { id: 42 }, version: {} }),
       };
       fresh.initDocumentTools(mockService);
 

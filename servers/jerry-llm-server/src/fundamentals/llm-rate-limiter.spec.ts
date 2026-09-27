@@ -19,35 +19,61 @@ jest.mock('./runtime-config', () => ({
       maxEntries: 200,
       maxItemSizeKB: 50,
       defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
     },
     rateLimiter: {
       fastPoolMax: 10,
       streamingPoolMax: 5,
       tokenWaitTimeout: 10000,
+      queueWaitTimeout: 120000,
     },
     // store-state.ts 在模块加载时会读取 embedding.localEnabled 推导初始生效模式，
     // mock 必须提供该字段；测试环境无 Ollama，置为 false 直接走云端分支，避免网络探测
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   }),
   updateRuntimeConfig: jest.fn(),
   loadRuntimeConfig: jest.fn(),
   saveRuntimeConfig: jest.fn(),
   DEFAULT_RUNTIME_CONFIG: {
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
-    rateLimiter: { fastPoolMax: 10, streamingPoolMax: 5, tokenWaitTimeout: 10000 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
+    rateLimiter: {
+      fastPoolMax: 10,
+      streamingPoolMax: 5,
+      tokenWaitTimeout: 10000,
+      queueWaitTimeout: 120000,
+    },
     embedding: {
       localEnabled: false,
       ollama: { baseUrl: 'http://localhost:11434', model: 'bge-m3' },
-      cloud: { provider: 'custom', baseUrl: '', apiKeyEncrypted: '', model: '' },
+      cloud: {
+        provider: 'custom',
+        baseUrl: '',
+        apiKeyEncrypted: '',
+        model: '',
+      },
     },
   },
 }));
 
-import { LLMRateLimiter, getRateLimiterStatus, updateRateLimiterConfig } from './llm-rate-limiter';
+import {
+  LLMRateLimiter,
+  getRateLimiterStatus,
+  updateRateLimiterConfig,
+} from './llm-rate-limiter';
 
 describe('LLMRateLimiter', () => {
   let limiter: LLMRateLimiter;
@@ -66,7 +92,11 @@ describe('LLMRateLimiter', () => {
 
   describe('信号量并发控制', () => {
     it('未超并发数时应立即执行', async () => {
-      const result = await limiter.execute('deepseek', 'fast', async () => 'ok');
+      const result = await limiter.execute(
+        'deepseek',
+        'fast',
+        async () => 'ok',
+      );
       expect(result).toBe('ok');
     });
 
@@ -147,6 +177,60 @@ describe('LLMRateLimiter', () => {
     });
   });
 
+  // ==================== 排队超时与扩容唤醒 ====================
+
+  describe('排队超时与扩容唤醒', () => {
+    it('排队超过 queueWaitTimeout 应拒绝请求而不是永久挂起', async () => {
+      // 没有超时兜底时，池子被打满 + 上游长时间不释放会让请求永久挂起，
+      // 连接一直堆积，前端表现为无限转圈
+      const tight = new LLMRateLimiter({
+        fastPoolMax: 1,
+        streamingPoolMax: 1,
+        providerRPM: {}, // 不配令牌桶，隔离出信号量行为
+        tokenWaitTimeout: 2000,
+        queueWaitTimeout: 150,
+      });
+
+      const p1 = tight.execute('openai', 'fast', async () => {
+        await delay(600);
+        return 'r1';
+      });
+      const p2 = tight.execute('openai', 'fast', async () => 'r2');
+
+      await expect(p2).rejects.toThrow('排队超时');
+      await expect(p1).resolves.toBe('r1');
+    }, 10000);
+
+    it('扩大并发上限应立即唤醒排队者', async () => {
+      const l = new LLMRateLimiter({
+        fastPoolMax: 1,
+        streamingPoolMax: 1,
+        providerRPM: {},
+        tokenWaitTimeout: 2000,
+        queueWaitTimeout: 5000,
+      });
+
+      let secondStarted = false;
+      const p1 = l.execute('openai', 'fast', async () => {
+        await delay(800);
+        return 'r1';
+      });
+      const p2 = l.execute('openai', 'fast', async () => {
+        secondStarted = true;
+        return 'r2';
+      });
+
+      await delay(50);
+      expect(secondStarted).toBe(false); // 仍在排队
+
+      l.updateConfig({ fastPoolMax: 2 });
+      await delay(20);
+      expect(secondStarted).toBe(true); // 扩容后立刻放行，无需等 release
+
+      await expect(Promise.all([p1, p2])).resolves.toEqual(['r1', 'r2']);
+    }, 10000);
+  });
+
   // ==================== Ollama 不限流 ====================
 
   describe('Ollama 不限流', () => {
@@ -175,6 +259,25 @@ describe('LLMRateLimiter', () => {
       const result = await limiter.execute('openai', 'fast', async () => 'ok');
       expect(result).toBe('ok');
     });
+
+    it('令牌超时被拒绝后应归还并发槽位', async () => {
+      const strict = new LLMRateLimiter({
+        fastPoolMax: 1,
+        streamingPoolMax: 1,
+        providerRPM: { deepseek: 1 }, // 1 RPM，抽干后 1 分钟才回补 1 个
+        tokenWaitTimeout: 100,
+        queueWaitTimeout: 200,
+      });
+
+      await strict.execute('deepseek', 'fast', async () => 'r1');
+      await expect(
+        strict.execute('deepseek', 'fast', async () => 'r2'),
+      ).rejects.toThrow('速率超限');
+
+      // 槽位若未归还，running 会一直停在 max，后续请求全部排队直至超时
+      expect(strict.getStatus().fastPool.running).toBe(0);
+      expect(strict.getStatus().fastPool.queueLength).toBe(0);
+    }, 10000);
   });
 
   // ==================== 异常处理 ====================
@@ -259,6 +362,55 @@ describe('LLMRateLimiter', () => {
       const status = limiter.getStatus();
       expect(status.tokenBuckets).toHaveProperty('openai');
     });
+
+    it('调整 provider RPM 应原地改速率，不重置令牌桶', async () => {
+      const l = new LLMRateLimiter({
+        fastPoolMax: 10,
+        streamingPoolMax: 10,
+        providerRPM: { deepseek: 2 },
+        tokenWaitTimeout: 100,
+        queueWaitTimeout: 5000,
+      });
+      await l.execute('deepseek', 'fast', async () => 'a');
+      await l.execute('deepseek', 'fast', async () => 'b'); // 令牌抽干
+
+      // 提高 RPM：若重建为满桶会立刻放行 60 个突发请求，正好打爆上游配额
+      l.updateConfig({ providerRPM: { deepseek: 60 } });
+      await expect(
+        l.execute('deepseek', 'fast', async () => 'c'),
+      ).rejects.toThrow('速率超限');
+    }, 10000);
+
+    it('tokenWaitTimeout 运行时调整应立即生效', async () => {
+      const l = new LLMRateLimiter({
+        fastPoolMax: 10,
+        streamingPoolMax: 10,
+        providerRPM: { deepseek: 60 },
+        tokenWaitTimeout: 100,
+        queueWaitTimeout: 5000,
+      });
+      // 抽干 60 个初始令牌（RPM 60 → 每秒回补 1 个）
+      for (let i = 0; i < 60; i += 1) {
+        await l.execute('deepseek', 'fast', async () => i);
+      }
+      await expect(
+        l.execute('deepseek', 'fast', async () => 'x'),
+      ).rejects.toThrow('速率超限');
+
+      l.updateConfig({ tokenWaitTimeout: 3000 });
+      await expect(
+        l.execute('deepseek', 'fast', async () => 'ok'),
+      ).resolves.toBe('ok');
+    }, 15000);
+
+    it('非法配置值应被忽略并保留原值', () => {
+      limiter.updateConfig({ fastPoolMax: 0 });
+      expect(limiter.getStatus().fastPool.max).toBe(2); // beforeEach 构造时的原值
+      limiter.updateConfig({ streamingPoolMax: -1 });
+      expect(limiter.getStatus().streamingPool.max).toBe(1);
+      limiter.updateConfig({ providerRPM: { deepseek: 0 } });
+      expect(limiter.getStatus().tokenBuckets.deepseek).toBeDefined();
+    });
   });
 });
 
@@ -282,5 +434,5 @@ describe('全局限流器工具函数', () => {
 // ==================== 辅助函数 ====================
 
 function delay(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

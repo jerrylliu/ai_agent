@@ -64,7 +64,9 @@ describe('Plan-Execute 数据绑定（P0）', () => {
 
       expect(result.totalSteps).toBe(2);
       expect(result.steps[0].id).toBe(1);
-      expect(result.steps[1].inputMapping).toEqual({ data: '$step1.output.results' });
+      expect(result.steps[1].inputMapping).toEqual({
+        data: '$step1.output.results',
+      });
       expect(result.message).toContain('数据绑定');
     });
 
@@ -96,7 +98,12 @@ describe('Plan-Execute 数据绑定（P0）', () => {
       );
 
       const result = await executeUpdatePlanStep(
-        { stepId: 1, status: 'completed', result: '搜索完成', output: { items: [1, 2, 3] } },
+        {
+          stepId: 1,
+          status: 'completed',
+          result: '搜索完成',
+          output: { items: [1, 2, 3] },
+        },
         { sessionId },
       );
 
@@ -115,7 +122,10 @@ describe('Plan-Execute 数据绑定（P0）', () => {
         { goal: 'g', steps: [{ description: 's1' }] },
         { sessionId },
       );
-      await executeUpdatePlanStep({ stepId: 1, status: 'completed' }, { sessionId });
+      await executeUpdatePlanStep(
+        { stepId: 1, status: 'completed' },
+        { sessionId },
+      );
       const plan = await executeGetPlan({}, { sessionId });
       expect(plan.status).toBe('completed');
     });
@@ -126,15 +136,24 @@ describe('Plan-Execute 数据绑定（P0）', () => {
         { goal: 'g', steps: [{ description: 's1' }] },
         { sessionId },
       );
-      await executeUpdatePlanStep({ stepId: 1, status: 'failed' }, { sessionId });
+      await executeUpdatePlanStep(
+        { stepId: 1, status: 'failed' },
+        { sessionId },
+      );
       const plan = await executeGetPlan({}, { sessionId });
       expect(plan.status).toBe('failed');
     });
 
     it('更新不存在的步骤应返回提示', async () => {
       const sessionId = newSession();
-      await executeCreatePlan({ goal: 'g', steps: [{ description: 's1' }] }, { sessionId });
-      const result = await executeUpdatePlanStep({ stepId: 99, status: 'completed' }, { sessionId });
+      await executeCreatePlan(
+        { goal: 'g', steps: [{ description: 's1' }] },
+        { sessionId },
+      );
+      const result = await executeUpdatePlanStep(
+        { stepId: 99, status: 'completed' },
+        { sessionId },
+      );
       expect(result.message).toContain('不存在');
     });
   });
@@ -254,7 +273,12 @@ describe('Plan-Execute 数据绑定（P0）', () => {
         { num: 42, str: 'hello', bool: true, nullVal: null },
         plan,
       );
-      expect(resolved).toEqual({ num: 42, str: 'hello', bool: true, nullVal: null });
+      expect(resolved).toEqual({
+        num: 42,
+        str: 'hello',
+        bool: true,
+        nullVal: null,
+      });
     });
   });
 
@@ -304,7 +328,10 @@ describe('Plan-Execute 数据绑定（P0）', () => {
         { goal: 'g', steps: [{ description: 's1', toolName: 'search_web' }] },
         { sessionId },
       );
-      await executeUpdatePlanStep({ stepId: 1, status: 'completed' }, { sessionId });
+      await executeUpdatePlanStep(
+        { stepId: 1, status: 'completed' },
+        { sessionId },
+      );
 
       // 步骤完成且计划状态变为 completed 后，findMatchingStep 应返回 undefined
       expect(findMatchingStep(sessionId, 'search_web')).toBeUndefined();
@@ -338,14 +365,24 @@ describe('Plan-Execute 数据绑定（P0）', () => {
       // Step 2: 模拟 FC 循环执行第1步成功
       const matchedStep1 = findMatchingStep(sessionId, 'search_knowledge_base');
       expect(matchedStep1?.id).toBe(1);
-      const step1Output = { items: [{ name: 'A', value: 10 }, { name: 'B', value: 20 }] };
+      const step1Output = {
+        items: [
+          { name: 'A', value: 10 },
+          { name: 'B', value: 20 },
+        ],
+      };
       storeStepOutput(sessionId, 1, step1Output);
-      await executeUpdatePlanStep({ stepId: 1, status: 'completed' }, { sessionId });
+      await executeUpdatePlanStep(
+        { stepId: 1, status: 'completed' },
+        { sessionId },
+      );
 
       // Step 3: 第2步执行前应用数据绑定
       const matchedStep2 = findMatchingStep(sessionId, 'generate_chart');
       expect(matchedStep2?.id).toBe(2);
-      expect(matchedStep2?.inputMapping).toEqual({ dataset: '$step1.output.items' });
+      expect(matchedStep2?.inputMapping).toEqual({
+        dataset: '$step1.output.items',
+      });
 
       const plan = getSessionPlan(sessionId)!;
       const llmArgs = { chartType: 'bar' }; // LLM 提供的部分参数

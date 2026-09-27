@@ -148,7 +148,9 @@ const TEMPLATES: Record<string, WorkflowDefinition> = {
 /**
  * 根据 ID 获取流水线模板
  */
-export function getPipelineTemplate(id: string): WorkflowDefinition | undefined {
+export function getPipelineTemplate(
+  id: string,
+): WorkflowDefinition | undefined {
   const template = TEMPLATES[id];
   if (template) {
     logger.debug('Pipeline 模板：命中', {
@@ -169,8 +171,12 @@ export function getPipelineTemplate(id: string): WorkflowDefinition | undefined 
 /**
  * 获取所有模板的简要清单（供 LLM 选择）
  */
-export function listPipelineTemplates(): Array<{ id: string; name: string; description: string }> {
-  return Object.values(TEMPLATES).map(tpl => ({
+export function listPipelineTemplates(): Array<{
+  id: string;
+  name: string;
+  description: string;
+}> {
+  return Object.values(TEMPLATES).map((tpl) => ({
     id: tpl.id,
     name: tpl.name,
     description: tpl.description,

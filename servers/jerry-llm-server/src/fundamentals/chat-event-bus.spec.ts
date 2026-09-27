@@ -13,7 +13,9 @@ describe('chat-event-bus', () => {
     __resetChatEventBusForTest();
   });
 
-  const baseEvent = (over: Partial<ChatHistoryEvent> = {}): ChatHistoryEvent => ({
+  const baseEvent = (
+    over: Partial<ChatHistoryEvent> = {},
+  ): ChatHistoryEvent => ({
     ownerUserId: 'u1',
     sessionId: 's1',
     role: 'assistant',

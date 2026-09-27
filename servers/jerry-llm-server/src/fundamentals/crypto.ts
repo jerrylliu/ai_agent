@@ -45,7 +45,7 @@ function initMasterKey(): void {
   if (envKey && envKey.length !== KEY_BYTES * 2) {
     logger.warn(
       `ENCRYPTION_KEY 长度应为 ${KEY_BYTES * 2} 字符（${KEY_BYTES} 字节 hex 编码），` +
-      `当前长度 ${envKey.length}，将忽略并生成临时密钥`,
+        `当前长度 ${envKey.length}，将忽略并生成临时密钥`,
       { module: 'CryptoUtil' },
     );
   }
@@ -78,7 +78,11 @@ export function encrypt(plaintext: string): string {
   ]);
   const authTag = cipher.getAuthTag();
 
-  return [iv.toString('hex'), authTag.toString('hex'), encrypted.toString('hex')].join(':');
+  return [
+    iv.toString('hex'),
+    authTag.toString('hex'),
+    encrypted.toString('hex'),
+  ].join(':');
 }
 
 /**
@@ -93,7 +97,9 @@ export function decrypt(ciphertext: string): string {
   try {
     const parts = ciphertext.split(':');
     if (parts.length !== 3) {
-      logger.warn('密文格式错误（应为 iv:authTag:ciphertext）', { module: 'CryptoUtil' });
+      logger.warn('密文格式错误（应为 iv:authTag:ciphertext）', {
+        module: 'CryptoUtil',
+      });
       return '';
     }
 

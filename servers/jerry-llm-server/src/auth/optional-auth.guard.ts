@@ -41,7 +41,10 @@ export class OptionalAuthGuard implements CanActivate {
               const currentVersion = user.tokenVersion ?? 0;
               const tokenVersion = decoded.tokenVersion ?? 0;
               if (tokenVersion !== currentVersion) {
-                logger.warn('token 已失效（tokenVersion 不匹配）', { module: 'OptionalAuthGuard', sub: decoded.sub });
+                logger.warn('token 已失效（tokenVersion 不匹配）', {
+                  module: 'OptionalAuthGuard',
+                  sub: decoded.sub,
+                });
                 request.userId = 'default';
                 return true;
               }
@@ -52,16 +55,25 @@ export class OptionalAuthGuard implements CanActivate {
           }
 
           request.userId = String(decoded.sub);
-          logger.debug('已登录用户', { module: 'OptionalAuthGuard', userId: request.userId, sub: decoded.sub });
+          logger.debug('已登录用户', {
+            module: 'OptionalAuthGuard',
+            userId: request.userId,
+            sub: decoded.sub,
+          });
           return true;
         } else {
           logger.warn('token 验证失败', { module: 'OptionalAuthGuard' });
         }
       } else {
-        logger.warn('Authorization header 格式错误', { module: 'OptionalAuthGuard' });
+        logger.warn('Authorization header 格式错误', {
+          module: 'OptionalAuthGuard',
+        });
       }
     } else {
-      logger.debug('无 Authorization header', { module: 'OptionalAuthGuard', path: request.url });
+      logger.debug('无 Authorization header', {
+        module: 'OptionalAuthGuard',
+        path: request.url,
+      });
     }
 
     // 未登录：使用默认 userId

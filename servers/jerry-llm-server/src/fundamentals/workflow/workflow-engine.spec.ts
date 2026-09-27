@@ -97,10 +97,17 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
           { id: 'step1', description: '', tool: 't1', params: {} },
-          { id: 'step2', description: '', tool: 't2', params: { all: '$step1.output' } },
+          {
+            id: 'step2',
+            description: '',
+            tool: 't2',
+            params: { all: '$step1.output' },
+          },
         ],
       };
 
@@ -116,9 +123,16 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
-          { id: 'step1', description: '', tool: 't1', params: { ref: '$step99.output' } },
+          {
+            id: 'step1',
+            description: '',
+            tool: 't1',
+            params: { ref: '$step99.output' },
+          },
         ],
       };
 
@@ -137,9 +151,16 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
-          { id: 's1', description: '', tool: 't1', params: { q: '${context.userInput}' } },
+          {
+            id: 's1',
+            description: '',
+            tool: 't1',
+            params: { q: '${context.userInput}' },
+          },
         ],
       };
 
@@ -155,10 +176,14 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
           {
-            id: 's1', description: '', tool: 't1',
+            id: 's1',
+            description: '',
+            tool: 't1',
             params: { title: '关于${context.userInput}的分析' },
           },
         ],
@@ -176,9 +201,16 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
-          { id: 's1', description: '', tool: 't1', params: { q: '前缀${context.missing}后缀' } },
+          {
+            id: 's1',
+            description: '',
+            tool: 't1',
+            params: { q: '前缀${context.missing}后缀' },
+          },
         ],
       };
 
@@ -195,7 +227,9 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
           { id: 's1', description: '', tool: 'fail_tool', params: {} },
           { id: 's2', description: '', tool: 'ok_tool', params: {} },
@@ -217,9 +251,17 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
-          { id: 's1', description: '', tool: 'fail_tool', params: {}, onError: 'continue' },
+          {
+            id: 's1',
+            description: '',
+            tool: 'fail_tool',
+            params: {},
+            onError: 'continue',
+          },
           { id: 's2', description: '', tool: 'ok_tool', params: {} },
         ],
       };
@@ -237,10 +279,24 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
-          { id: 's1', description: '', tool: 't1', params: {}, onError: 'continue' },
-          { id: 's2', description: '', tool: 't2', params: {}, onError: 'continue' },
+          {
+            id: 's1',
+            description: '',
+            tool: 't1',
+            params: {},
+            onError: 'continue',
+          },
+          {
+            id: 's2',
+            description: '',
+            tool: 't2',
+            params: {},
+            onError: 'continue',
+          },
         ],
       };
 
@@ -251,7 +307,9 @@ describe('Workflow Engine（P1）', () => {
     it('全部成功时整体状态应为 completed', async () => {
       const executor: ToolExecutor = jest.fn(async () => 'ok');
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
           { id: 's1', description: '', tool: 't1', params: {} },
           { id: 's2', description: '', tool: 't2', params: {} },
@@ -268,15 +326,15 @@ describe('Workflow Engine（P1）', () => {
       const fakeRes: any = { writableEnded: false, write: jest.fn() };
 
       const wf: WorkflowDefinition = {
-        id: 'wf-sse', name: 'n', description: '',
-        steps: [
-          { id: 's1', description: '步骤1', tool: 'tool1', params: {} },
-        ],
+        id: 'wf-sse',
+        name: 'n',
+        description: '',
+        steps: [{ id: 's1', description: '步骤1', tool: 'tool1', params: {} }],
       };
 
       await executeWorkflow(wf, {}, executor, fakeRes);
 
-      const eventTypes = mockSendWorkflowEvent.mock.calls.map(c => c[1]);
+      const eventTypes = mockSendWorkflowEvent.mock.calls.map((c) => c[1]);
       expect(eventTypes).toContain('workflow_start');
       expect(eventTypes).toContain('workflow_step_start');
       expect(eventTypes).toContain('workflow_step_done');
@@ -290,7 +348,9 @@ describe('Workflow Engine（P1）', () => {
     it('无 res 时不应调用 SSE 函数', async () => {
       const executor: ToolExecutor = jest.fn(async () => 'ok');
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [{ id: 's1', description: '', tool: 't1', params: {} }],
       };
 
@@ -307,13 +367,17 @@ describe('Workflow Engine（P1）', () => {
       const fakeRes: any = { writableEnded: false, write: jest.fn() };
 
       const wf: WorkflowDefinition = {
-        id: 'wf-err', name: 'n', description: '',
+        id: 'wf-err',
+        name: 'n',
+        description: '',
         steps: [{ id: 's1', description: '', tool: 't1', params: {} }],
       };
 
       await executeWorkflow(wf, {}, executor, fakeRes);
 
-      const stepDoneCalls = mockSendWorkflowEvent.mock.calls.filter(c => c[1] === 'workflow_step_done');
+      const stepDoneCalls = mockSendWorkflowEvent.mock.calls.filter(
+        (c) => c[1] === 'workflow_step_done',
+      );
       expect(stepDoneCalls).toHaveLength(1);
       expect(stepDoneCalls[0][2].status).toBe('failed');
       expect(stepDoneCalls[0][2].error).toContain('fail-msg');
@@ -329,11 +393,15 @@ describe('Workflow Engine（P1）', () => {
       });
 
       const wf: WorkflowDefinition = {
-        id: 'wf', name: 'n', description: '',
+        id: 'wf',
+        name: 'n',
+        description: '',
         steps: [
           { id: 's1', description: '', tool: 't1', params: {} },
           {
-            id: 's2', description: '', tool: 't2',
+            id: 's2',
+            description: '',
+            tool: 't2',
             params: {
               outer: {
                 inner: '$step1.output.value',
@@ -353,10 +421,17 @@ describe('Workflow Engine（P1）', () => {
   describe('validateWorkflow 校验', () => {
     it('合法的 workflow 应通过校验', () => {
       const wf: WorkflowDefinition = {
-        id: 'ok', name: 'n', description: '',
+        id: 'ok',
+        name: 'n',
+        description: '',
         steps: [
           { id: 's1', description: '', tool: 't1', params: {} },
-          { id: 's2', description: '', tool: 't2', params: { x: '$step1.output' } },
+          {
+            id: 's2',
+            description: '',
+            tool: 't2',
+            params: { x: '$step1.output' },
+          },
         ],
       };
       const result = validateWorkflow(wf);
@@ -368,18 +443,25 @@ describe('Workflow Engine（P1）', () => {
       const wf: any = { id: '', name: '', description: '', steps: [] };
       const result = validateWorkflow(wf);
       expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.includes('id'))).toBe(true);
+      expect(result.errors.some((e) => e.includes('id'))).toBe(true);
     });
 
     it('空步骤列表应报错', () => {
-      const wf: WorkflowDefinition = { id: 'x', name: '', description: '', steps: [] };
+      const wf: WorkflowDefinition = {
+        id: 'x',
+        name: '',
+        description: '',
+        steps: [],
+      };
       const result = validateWorkflow(wf);
       expect(result.valid).toBe(false);
     });
 
     it('重复 stepId 应报错', () => {
       const wf: WorkflowDefinition = {
-        id: 'x', name: '', description: '',
+        id: 'x',
+        name: '',
+        description: '',
         steps: [
           { id: 'dup', description: '', tool: 't', params: {} },
           { id: 'dup', description: '', tool: 't', params: {} },
@@ -387,30 +469,43 @@ describe('Workflow Engine（P1）', () => {
       };
       const result = validateWorkflow(wf);
       expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.includes('重复'))).toBe(true);
+      expect(result.errors.some((e) => e.includes('重复'))).toBe(true);
     });
 
     it('引用后定义的步骤序号应报错', () => {
       const wf: WorkflowDefinition = {
-        id: 'x', name: '', description: '',
+        id: 'x',
+        name: '',
+        description: '',
         steps: [
-          { id: 's1', description: '', tool: 't', params: { x: '$step2.output' } },
+          {
+            id: 's1',
+            description: '',
+            tool: 't',
+            params: { x: '$step2.output' },
+          },
           { id: 's2', description: '', tool: 't', params: {} },
         ],
       };
       const result = validateWorkflow(wf);
       expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.includes('步骤序号') || e.includes('$step2'))).toBe(true);
+      expect(
+        result.errors.some(
+          (e) => e.includes('步骤序号') || e.includes('$step2'),
+        ),
+      ).toBe(true);
     });
 
     it('缺少 tool 应报错', () => {
       const wf: any = {
-        id: 'x', name: '', description: '',
+        id: 'x',
+        name: '',
+        description: '',
         steps: [{ id: 's1', description: '', params: {} }],
       };
       const result = validateWorkflow(wf);
       expect(result.valid).toBe(false);
-      expect(result.errors.some(e => e.includes('tool'))).toBe(true);
+      expect(result.errors.some((e) => e.includes('tool'))).toBe(true);
     });
   });
 
@@ -432,7 +527,9 @@ describe('Workflow Engine（P1）', () => {
       setWorkflowNotifier(notifier);
 
       const wf: WorkflowDefinition = {
-        id: 'no-notify', name: 'n', description: '',
+        id: 'no-notify',
+        name: 'n',
+        description: '',
         steps: [{ id: 's1', description: '', tool: 't', params: {} }],
       };
       await executeWorkflow(wf, {}, okExecutor);
@@ -441,11 +538,15 @@ describe('Workflow Engine（P1）', () => {
 
     it('配置 notify 且 status=completed 时应触发通知（含默认标题）', async () => {
       const calls: any[] = [];
-      const notifier: WorkflowNotifier = jest.fn(async (p) => { calls.push(p); });
+      const notifier: WorkflowNotifier = jest.fn(async (p) => {
+        calls.push(p);
+      });
       setWorkflowNotifier(notifier);
 
       const wf: WorkflowDefinition = {
-        id: 'wf-default', name: '搜索并制图', description: '',
+        id: 'wf-default',
+        name: '搜索并制图',
+        description: '',
         steps: [{ id: 's1', description: '', tool: 't', params: {} }],
         notify: {
           recipients: ['ou_abc'],
@@ -464,8 +565,18 @@ describe('Workflow Engine（P1）', () => {
       setWorkflowNotifier(notifier);
 
       const wf: WorkflowDefinition = {
-        id: 'wf-trigger-success', name: 'n', description: '',
-        steps: [{ id: 's1', description: '', tool: 't', params: {}, onError: 'abort' }],
+        id: 'wf-trigger-success',
+        name: 'n',
+        description: '',
+        steps: [
+          {
+            id: 's1',
+            description: '',
+            tool: 't',
+            params: {},
+            onError: 'abort',
+          },
+        ],
         notify: { trigger: 'success', recipients: ['ou_abc'] },
       };
       await executeWorkflow(wf, {}, failExecutor);
@@ -474,12 +585,24 @@ describe('Workflow Engine（P1）', () => {
 
     it('trigger=failure + status=failed 时应触发通知', async () => {
       const calls: any[] = [];
-      const notifier: WorkflowNotifier = jest.fn(async (p) => { calls.push(p); });
+      const notifier: WorkflowNotifier = jest.fn(async (p) => {
+        calls.push(p);
+      });
       setWorkflowNotifier(notifier);
 
       const wf: WorkflowDefinition = {
-        id: 'wf-trigger-failure', name: 'n', description: '',
-        steps: [{ id: 's1', description: '', tool: 't', params: {}, onError: 'abort' }],
+        id: 'wf-trigger-failure',
+        name: 'n',
+        description: '',
+        steps: [
+          {
+            id: 's1',
+            description: '',
+            tool: 't',
+            params: {},
+            onError: 'abort',
+          },
+        ],
         notify: { trigger: 'failure', recipients: ['ou_abc'] },
       };
       await executeWorkflow(wf, {}, failExecutor);
@@ -489,17 +612,22 @@ describe('Workflow Engine（P1）', () => {
 
     it('模板支持 ${context.xxx} 和 ${workflow.xxx} 变量替换', async () => {
       const calls: any[] = [];
-      const notifier: WorkflowNotifier = jest.fn(async (p) => { calls.push(p); });
+      const notifier: WorkflowNotifier = jest.fn(async (p) => {
+        calls.push(p);
+      });
       setWorkflowNotifier(notifier);
 
       const wf: WorkflowDefinition = {
-        id: 'tpl', name: 'TplFlow', description: '',
+        id: 'tpl',
+        name: 'TplFlow',
+        description: '',
         steps: [{ id: 's1', description: '', tool: 't', params: {} }],
         notify: {
           recipients: ['user@example.com'],
           channel: 'email',
           title: '[${workflow.name}] 完成，由 ${context.userInput} 触发',
-          content: '状态=${workflow.status}，成功=${workflow.successCount}/${workflow.totalSteps}',
+          content:
+            '状态=${workflow.status}，成功=${workflow.successCount}/${workflow.totalSteps}',
         },
       };
       await executeWorkflow(wf, { userInput: 'Alice' }, okExecutor);
@@ -516,7 +644,9 @@ describe('Workflow Engine（P1）', () => {
       setWorkflowNotifier(notifier);
 
       const wf: WorkflowDefinition = {
-        id: 'wf-notifier-err', name: 'n', description: '',
+        id: 'wf-notifier-err',
+        name: 'n',
+        description: '',
         steps: [{ id: 's1', description: '', tool: 't', params: {} }],
         notify: { recipients: ['ou_abc'] },
       };
@@ -529,7 +659,9 @@ describe('Workflow Engine（P1）', () => {
     it('未注入 notifier 时配置了 notify 不应抛错', async () => {
       setWorkflowNotifier(null);
       const wf: WorkflowDefinition = {
-        id: 'wf-no-notifier', name: 'n', description: '',
+        id: 'wf-no-notifier',
+        name: 'n',
+        description: '',
         steps: [{ id: 's1', description: '', tool: 't', params: {} }],
         notify: { recipients: ['ou_abc'] },
       };

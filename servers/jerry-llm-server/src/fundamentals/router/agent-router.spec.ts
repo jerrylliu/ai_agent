@@ -21,12 +21,13 @@ jest.mock('../logger', () => ({
 
 // Mock pipeline-templates，使用受控的模板列表
 jest.mock('../workflow/pipeline-templates', () => ({
-  hasPipelineTemplate: (id: string) => [
-    'search_kb_and_chart',
-    'web_search_and_document',
-    'search_kb_and_mindmap',
-    'web_search_and_mindmap',
-  ].includes(id),
+  hasPipelineTemplate: (id: string) =>
+    [
+      'search_kb_and_chart',
+      'web_search_and_document',
+      'search_kb_and_mindmap',
+      'web_search_and_mindmap',
+    ].includes(id),
   listPipelineTemplates: () => [],
 }));
 
@@ -106,17 +107,23 @@ describe('Agent Router（P2）', () => {
 
     it('"搜索知识库 + 思维导图" 应建议 search_kb_and_mindmap', () => {
       const result = routeRequest('搜索知识库里的 React 资料，生成思维导图');
-      expect(result.suggestedWorkflow?.templateId).toBe('search_kb_and_mindmap');
+      expect(result.suggestedWorkflow?.templateId).toBe(
+        'search_kb_and_mindmap',
+      );
     });
 
     it('"联网搜索 + 整理为文档" 应建议 web_search_and_document', () => {
       const result = routeRequest('联网搜一下最新动态，整理为文档保存');
-      expect(result.suggestedWorkflow?.templateId).toBe('web_search_and_document');
+      expect(result.suggestedWorkflow?.templateId).toBe(
+        'web_search_and_document',
+      );
     });
 
     it('"联网搜索 + 思维导图" 应建议 web_search_and_mindmap', () => {
       const result = routeRequest('联网搜最新进展，做成思维导图');
-      expect(result.suggestedWorkflow?.templateId).toBe('web_search_and_mindmap');
+      expect(result.suggestedWorkflow?.templateId).toBe(
+        'web_search_and_mindmap',
+      );
     });
 
     it('单一关键词不应触发 Pipeline 建议', () => {
@@ -134,8 +141,14 @@ describe('Agent Router（P2）', () => {
   describe('Agent 配置正确性', () => {
     it('listAgents 应返回 5 个 Agent', () => {
       const agents = listAgents();
-      const roles = agents.map(a => a.role).sort();
-      expect(roles).toEqual(['analysis', 'creative', 'document', 'general', 'search']);
+      const roles = agents.map((a) => a.role).sort();
+      expect(roles).toEqual([
+        'analysis',
+        'creative',
+        'document',
+        'general',
+        'search',
+      ]);
     });
 
     it('general Agent 不应有 toolWhitelist（兜底允许全工具）', () => {
@@ -157,9 +170,9 @@ describe('Agent Router（P2）', () => {
     });
 
     it('每个 Agent 都应包含规划类工具（便于触发 plan-execute）', () => {
-      const expertAgents: Array<'search' | 'analysis' | 'creative' | 'document'> = [
-        'search', 'analysis', 'creative', 'document',
-      ];
+      const expertAgents: Array<
+        'search' | 'analysis' | 'creative' | 'document'
+      > = ['search', 'analysis', 'creative', 'document'];
       for (const role of expertAgents) {
         const agent = getAgent(role);
         expect(agent.toolWhitelist).toContain('create_plan');
@@ -187,7 +200,7 @@ describe('Agent Router（P2）', () => {
 
     it('search Agent 应只保留搜索相关工具', () => {
       const filtered = applyAgentToolWhitelist(allSchemas, getAgent('search'));
-      const names = filtered.map(s => s.function.name);
+      const names = filtered.map((s) => s.function.name);
       expect(names).toContain('search_knowledge_base');
       expect(names).toContain('search_web');
       expect(names).not.toContain('generate_image');
@@ -195,8 +208,11 @@ describe('Agent Router（P2）', () => {
     });
 
     it('creative Agent 应只保留创意类工具', () => {
-      const filtered = applyAgentToolWhitelist(allSchemas, getAgent('creative'));
-      const names = filtered.map(s => s.function.name);
+      const filtered = applyAgentToolWhitelist(
+        allSchemas,
+        getAgent('creative'),
+      );
+      const names = filtered.map((s) => s.function.name);
       expect(names).toContain('generate_image');
       expect(names).toContain('create_mindmap');
       expect(names).not.toContain('search_web');
@@ -204,16 +220,24 @@ describe('Agent Router（P2）', () => {
     });
 
     it('analysis Agent 应包含 calculate 但不含 create_document', () => {
-      const filtered = applyAgentToolWhitelist(allSchemas, getAgent('analysis'));
-      const names = filtered.map(s => s.function.name);
+      const filtered = applyAgentToolWhitelist(
+        allSchemas,
+        getAgent('analysis'),
+      );
+      const names = filtered.map((s) => s.function.name);
       expect(names).toContain('calculate');
       expect(names).not.toContain('create_document');
     });
 
     it('应保留 create_plan / execute_workflow（专家 Agent 共享）', () => {
-      for (const role of ['search', 'analysis', 'creative', 'document'] as const) {
+      for (const role of [
+        'search',
+        'analysis',
+        'creative',
+        'document',
+      ] as const) {
         const filtered = applyAgentToolWhitelist(allSchemas, getAgent(role));
-        const names = filtered.map(s => s.function.name);
+        const names = filtered.map((s) => s.function.name);
         expect(names).toContain('create_plan');
         expect(names).toContain('execute_workflow');
       }

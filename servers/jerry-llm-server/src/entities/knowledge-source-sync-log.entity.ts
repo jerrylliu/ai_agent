@@ -1,4 +1,11 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, Index } from 'typeorm';
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  ManyToOne,
+  Index,
+} from 'typeorm';
 import { KnowledgeSource } from './knowledge-source.entity.js';
 
 export enum SyncLogStatus {
@@ -45,7 +52,11 @@ export class KnowledgeSourceSyncLog {
 
   /** 被注入扫描拦截的页面明细（追溯拦截原因用；页面仍会持久化 hash，内容不变则持续拒绝） */
   @Column({ type: 'simple-json', nullable: true })
-  skippedPageDetails: Array<{ title: string; url: string; reason: string }> | null;
+  skippedPageDetails: Array<{
+    title: string;
+    url: string;
+    reason: string;
+  }> | null;
 
   @Column({ type: 'text', nullable: true })
   errorMessage: string | null;
@@ -60,6 +71,8 @@ export class KnowledgeSourceSyncLog {
   @Index()
   createdAt: Date;
 
-  @ManyToOne(() => KnowledgeSource, source => source.syncLogs, { onDelete: 'CASCADE' })
+  @ManyToOne(() => KnowledgeSource, (source) => source.syncLogs, {
+    onDelete: 'CASCADE',
+  })
   source: KnowledgeSource;
 }

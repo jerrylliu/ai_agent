@@ -77,7 +77,7 @@ export async function rerankResults(
 
   // 未启用或结果为空，直接返回
   if (!enabled || results.length === 0) {
-    return results.map(r => ({
+    return results.map((r) => ({
       ...r,
       originalScore: r.score,
       rerankScore: r.score,
@@ -86,11 +86,13 @@ export async function rerankResults(
 
   // 只有 1 个结果，无需重排
   if (results.length === 1) {
-    return [{
-      ...results[0],
-      originalScore: results[0].score,
-      rerankScore: 1.0,
-    }];
+    return [
+      {
+        ...results[0],
+        originalScore: results[0].score,
+        rerankScore: 1.0,
+      },
+    ];
   }
 
   logger.info('结果重排开始', {
@@ -114,8 +116,8 @@ export async function rerankResults(
     // 混合原始分数和重排分数
     // 最终分数 = (1 - w) * rerankScore + w * normalizedOriginalScore
     if (originalScoreWeight > 0) {
-      const maxOriginal = Math.max(...reranked.map(r => r.originalScore));
-      const minOriginal = Math.min(...reranked.map(r => r.originalScore));
+      const maxOriginal = Math.max(...reranked.map((r) => r.originalScore));
+      const minOriginal = Math.min(...reranked.map((r) => r.originalScore));
 
       if (maxOriginal === minOriginal) {
         // 所有原始分数相同：原始信号无区分度，直接采用 rerankScore。
@@ -131,7 +133,9 @@ export async function rerankResults(
         const n = reranked.length;
         const sortedIndices = reranked
           .map((_, i) => i)
-          .sort((a, b) => reranked[b].originalScore - reranked[a].originalScore);
+          .sort(
+            (a, b) => reranked[b].originalScore - reranked[a].originalScore,
+          );
         const normalizedByIndex = new Array<number>(n).fill(0);
         sortedIndices.forEach((idx, rank) => {
           normalizedByIndex[idx] = 1 - rank / (n - 1);
@@ -158,7 +162,7 @@ export async function rerankResults(
       module: 'ResultReranker',
       resultCount: reranked.length,
       strategy,
-      topScores: reranked.slice(0, 3).map(r => ({
+      topScores: reranked.slice(0, 3).map((r) => ({
         rerankScore: r.rerankScore.toFixed(3),
         originalScore: r.originalScore.toFixed(4),
         finalScore: r.score.toFixed(4),
@@ -173,7 +177,7 @@ export async function rerankResults(
       error: error.message,
     });
 
-    return results.map(r => ({
+    return results.map((r) => ({
       ...r,
       originalScore: r.score,
       rerankScore: r.score,
@@ -233,7 +237,9 @@ async function dashscopeRerank(
 ): Promise<RerankedResult[]> {
   const apiKey = config.dashscopeApiKey;
   if (!apiKey) {
-    throw new Error('DashScope API Key 未配置，请在 .env 中设置 DASHSCOPE_API_KEY');
+    throw new Error(
+      'DashScope API Key 未配置，请在 .env 中设置 DASHSCOPE_API_KEY',
+    );
   }
 
   const baseUrl = config.dashscopeBaseUrl;
@@ -244,7 +250,7 @@ async function dashscopeRerank(
   const docsToRerank = results.slice(0, maxDocs);
   const remainingDocs = results.slice(maxDocs);
 
-  const documents = docsToRerank.map(r => r.content);
+  const documents = docsToRerank.map((r) => r.content);
 
   logger.debug('DashScope Reranker 请求', {
     module: 'ResultReranker',
@@ -269,28 +275,36 @@ async function dashscopeRerank(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`DashScope Rerank API 请求失败 (${response.status}): ${errorText}`);
+    throw new Error(
+      `DashScope Rerank API 请求失败 (${response.status}): ${errorText}`,
+    );
   }
 
   const responseText = await response.text();
-  const parsed = parseToolResultJson(responseText, DashScopeRerankResponseSchema, {
-    module: 'ResultReranker',
-    api: 'dashscope-rerank',
-  });
+  const parsed = parseToolResultJson(
+    responseText,
+    DashScopeRerankResponseSchema,
+    {
+      module: 'ResultReranker',
+      api: 'dashscope-rerank',
+    },
+  );
   if (!parsed.success) {
     throw new Error(`DashScope Rerank API 响应结构异常: ${parsed.reason}`);
   }
   const data = parsed.data;
 
   if (data.code) {
-    throw new Error(`DashScope Rerank API 错误: [${data.code}] ${data.message}`);
+    throw new Error(
+      `DashScope Rerank API 错误: [${data.code}] ${data.message}`,
+    );
   }
 
   const apiResults = data.output?.results || [];
@@ -359,9 +373,10 @@ async function llmRerank(
   modelConfig.temperature = 0.1;
   const llm = createRateLimitedLLM(modelConfig, 'fast');
 
-  const prompt = RERANK_PROMPT
-    .replace('__QUERY__', query)
-    .replace('__DOCUMENTS__', documentsStr);
+  const prompt = RERANK_PROMPT.replace('__QUERY__', query).replace(
+    '__DOCUMENTS__',
+    documentsStr,
+  );
 
   // 带超时的 LLM 调用。
   // 与 query-rewriter 同因：原 Promise.race 只放弃等待、不取消在途请求，
@@ -425,7 +440,7 @@ function keywordRerank(
 ): RerankedResult[] {
   const queryTerms = extractTerms(query);
 
-  const scored = results.map(r => {
+  const scored = results.map((r) => {
     const contentTerms = extractTerms(r.content);
     let matchCount = 0;
 
@@ -450,9 +465,8 @@ function keywordRerank(
       }
     }
 
-    const rerankScore = queryTerms.size > 0
-      ? Math.min(matchCount / queryTerms.size, 1.0)
-      : 0.5;
+    const rerankScore =
+      queryTerms.size > 0 ? Math.min(matchCount / queryTerms.size, 1.0) : 0.5;
 
     return {
       ...r,

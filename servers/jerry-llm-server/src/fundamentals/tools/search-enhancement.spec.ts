@@ -43,7 +43,12 @@ jest.mock('../vector-store', () => ({
 
 jest.mock('../runtime-config.js', () => ({
   getRuntimeConfig: () => ({
-    cache: { maxEntries: 200, maxItemSizeKB: 50, defaultTTLMinutes: 5 },
+    cache: {
+      maxEntries: 200,
+      maxItemSizeKB: 50,
+      defaultTTLMinutes: 5,
+      maxTotalSizeMB: 32,
+    },
     rateLimiter: {
       fastPoolMax: 10,
       streamingPoolMax: 5,
@@ -87,7 +92,7 @@ jest.mock('../cache.js', () => ({
       hitRate: 0,
       size: 0,
       maxSize: 200,
-      memoryUsageKB: 0,
+      weightedSizeKB: 0,
     }),
   },
   getCacheStats: jest.fn(),

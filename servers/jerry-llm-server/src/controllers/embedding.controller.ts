@@ -61,7 +61,11 @@ const CloudConfigSchema = z.object({
     .optional()
     .describe('OpenAI 兼容端点地址（留空时使用供应商预设地址）'),
   // 明文 API Key，仅作为入参传递，服务端加密后存储，任何响应中都不返回
-  apiKey: z.string().max(500).optional().describe('云端 API Key（明文，服务端加密存储）'),
+  apiKey: z
+    .string()
+    .max(500)
+    .optional()
+    .describe('云端 API Key（明文，服务端加密存储）'),
   model: z
     .string()
     .max(200)
@@ -79,8 +83,12 @@ type SaveEmbeddingConfigDto = z.infer<typeof SaveEmbeddingConfigSchema>;
 const TestEmbeddingConfigSchema = z.object({
   // 验证某一条具体路径（本地 / 云端），与当前生效模式无关
   mode: EmbeddingModeSchema.describe('要验证的嵌入模式'),
-  ollama: OllamaConfigSchema.optional().describe('本地 Ollama 配置（缺省字段回退已保存配置）'),
-  cloud: CloudConfigSchema.optional().describe('云端嵌入配置（缺省字段回退已保存配置）'),
+  ollama: OllamaConfigSchema.optional().describe(
+    '本地 Ollama 配置（缺省字段回退已保存配置）',
+  ),
+  cloud: CloudConfigSchema.optional().describe(
+    '云端嵌入配置（缺省字段回退已保存配置）',
+  ),
 });
 type TestEmbeddingConfigDto = z.infer<typeof TestEmbeddingConfigSchema>;
 
@@ -135,7 +143,11 @@ async function verifyCandidateConfig(
     const cloud = await testEmbedding(cfg, 'cloud');
     return cloud.ok
       ? { ok: true }
-      : { ok: false, message: `云端嵌入不可用：${cloud.error}`, error: cloud.error };
+      : {
+          ok: false,
+          message: `云端嵌入不可用：${cloud.error}`,
+          error: cloud.error,
+        };
   }
 
   const local = await testEmbedding(cfg, 'ollama');
@@ -203,7 +215,11 @@ export class EmbeddingController {
    */
   @Post('test')
   async testConfig(
-    @Body(new ZodValidationPipe(TestEmbeddingConfigSchema, { label: 'TestEmbeddingConfig' }))
+    @Body(
+      new ZodValidationPipe(TestEmbeddingConfigSchema, {
+        label: 'TestEmbeddingConfig',
+      }),
+    )
     body: TestEmbeddingConfigDto,
   ) {
     const candidate = buildCandidateConfig(body);
@@ -225,7 +241,11 @@ export class EmbeddingController {
    */
   @Post('config')
   async saveConfig(
-    @Body(new ZodValidationPipe(SaveEmbeddingConfigSchema, { label: 'SaveEmbeddingConfig' }))
+    @Body(
+      new ZodValidationPipe(SaveEmbeddingConfigSchema, {
+        label: 'SaveEmbeddingConfig',
+      }),
+    )
     body: SaveEmbeddingConfigDto,
   ) {
     try {
@@ -271,7 +291,10 @@ export class EmbeddingController {
         module: 'EmbeddingController',
         localEnabled: getRuntimeConfig().embedding.localEnabled,
         mode: getEmbeddingMode(),
-        description: describeEmbeddingConfig(getRuntimeConfig().embedding, getEmbeddingMode()),
+        description: describeEmbeddingConfig(
+          getRuntimeConfig().embedding,
+          getEmbeddingMode(),
+        ),
       });
 
       return { success: true, config: buildConfigResponse() };
@@ -294,7 +317,11 @@ export class EmbeddingController {
    */
   @Post('switch')
   async toggleLocal(
-    @Body(new ZodValidationPipe(ToggleLocalEmbeddingSchema, { label: 'ToggleLocalEmbedding' }))
+    @Body(
+      new ZodValidationPipe(ToggleLocalEmbeddingSchema, {
+        label: 'ToggleLocalEmbedding',
+      }),
+    )
     body: ToggleLocalEmbeddingDto,
   ) {
     try {
@@ -303,7 +330,9 @@ export class EmbeddingController {
         await resolveEffectiveMode();
         return {
           success: true,
-          message: body.localEnabled ? '本地优先已开启' : '本地已关闭（仅云端）',
+          message: body.localEnabled
+            ? '本地优先已开启'
+            : '本地已关闭（仅云端）',
           config: buildConfigResponse(),
         };
       }

@@ -29,12 +29,12 @@ const BM25_INDEX_PATH = `${PERSIST_DIR}/bm25_index.json`;
 
 /** MiniSearch 实例化配置（create 与 loadJSON 必须保持一致） */
 const MINISEARCH_OPTIONS = {
-  fields: ['content'],                    // 只对 content 字段建立倒排索引
-  storeFields: ['content', 'metadata'],   // 存储原始内容，用于结果返回
+  fields: ['content'], // 只对 content 字段建立倒排索引
+  storeFields: ['content', 'metadata'], // 存储原始内容，用于结果返回
   searchOptions: {
-    boost: { content: 1 },                // content 字段权重
-    fuzzy: 0.2,                           // 模糊匹配容忍度（处理拼写错误）
-    prefix: true,                         // 支持前缀匹配（输入部分关键词即可匹配）
+    boost: { content: 1 }, // content 字段权重
+    fuzzy: 0.2, // 模糊匹配容忍度（处理拼写错误）
+    prefix: true, // 支持前缀匹配（输入部分关键词即可匹配）
   },
 };
 
@@ -72,7 +72,9 @@ export class MiniSearchBM25Engine implements BM25Engine {
     if (fs.existsSync(BM25_INDEX_PATH)) {
       await this.load();
     } else {
-      logger.info('BM25 索引文件不存在，已创建空索引', { module: 'VectorStore' });
+      logger.info('BM25 索引文件不存在，已创建空索引', {
+        module: 'VectorStore',
+      });
     }
   }
 
@@ -84,7 +86,12 @@ export class MiniSearchBM25Engine implements BM25Engine {
    * @param metadata 文档元数据
    * @param skipCommit 跳过立即保存到磁盘（批量操作时设为 true，由调用方统一 commit）
    */
-  async add(id: string, content: string, metadata: any, skipCommit: boolean = false): Promise<void> {
+  async add(
+    id: string,
+    content: string,
+    metadata: any,
+    skipCommit: boolean = false,
+  ): Promise<void> {
     if (!getBM25Index()) {
       await this.init();
     }
@@ -117,7 +124,10 @@ export class MiniSearchBM25Engine implements BM25Engine {
       };
       fs.writeFileSync(BM25_INDEX_PATH, JSON.stringify(data));
     } catch (error) {
-      logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(error) });
+      logger.error('保存 BM25 索引失败', {
+        module: 'VectorStore',
+        error: String(error),
+      });
     }
   }
 
@@ -161,9 +171,17 @@ export class MiniSearchBM25Engine implements BM25Engine {
         bm25Index.remove({ id, content: doc.content, metadata: doc.metadata });
       }
       getBM25DocumentStore().delete(id);
-      this.commit().catch(err => logger.error('保存 BM25 索引失败', { module: 'VectorStore', error: String(err) }));
+      this.commit().catch((err) =>
+        logger.error('保存 BM25 索引失败', {
+          module: 'VectorStore',
+          error: String(err),
+        }),
+      );
     } catch (error) {
-      logger.warn('删除 BM25 文档失败（可能不存在）', { module: 'VectorStore', id });
+      logger.warn('删除 BM25 文档失败（可能不存在）', {
+        module: 'VectorStore',
+        id,
+      });
     }
   }
 
@@ -179,7 +197,10 @@ export class MiniSearchBM25Engine implements BM25Engine {
         fs.unlinkSync(BM25_INDEX_PATH);
       }
     } catch (error) {
-      logger.error('删除 BM25 索引文件失败', { module: 'VectorStore', error: String(error) });
+      logger.error('删除 BM25 索引文件失败', {
+        module: 'VectorStore',
+        error: String(error),
+      });
     }
     await this.init();
   }
@@ -194,29 +215,46 @@ export class MiniSearchBM25Engine implements BM25Engine {
     try {
       const fileContent = fs.readFileSync(BM25_INDEX_PATH, 'utf-8');
       if (!fileContent || fileContent.trim().length === 0) {
-        logger.info('BM25 索引文件为空，将创建新索引', { module: 'VectorStore' });
+        logger.info('BM25 索引文件为空，将创建新索引', {
+          module: 'VectorStore',
+        });
         return;
       }
 
       const data = JSON.parse(fileContent);
       if (data?.index && data.index.serializationVersion) {
         // 使用 MiniSearch 官方 loadJSON 反序列化
-        setBM25Index(MiniSearch.loadJSON(JSON.stringify(data.index), MINISEARCH_OPTIONS));
+        setBM25Index(
+          MiniSearch.loadJSON(JSON.stringify(data.index), MINISEARCH_OPTIONS),
+        );
         setBM25DocumentStore(new Map(Object.entries(data.documentStore || {})));
-        logger.info('已加载 BM25 索引', { module: 'VectorStore', documentCount: getBM25Index().documentCount });
+        logger.info('已加载 BM25 索引', {
+          module: 'VectorStore',
+          documentCount: getBM25Index().documentCount,
+        });
       } else {
-        logger.warn('BM25 索引数据格式不正确，将创建新索引', { module: 'VectorStore' });
+        logger.warn('BM25 索引数据格式不正确，将创建新索引', {
+          module: 'VectorStore',
+        });
       }
     } catch (error: any) {
-      logger.error('加载 BM25 索引失败', { module: 'VectorStore', error: error.message });
-      logger.info('将删除损坏的索引文件并创建新索引', { module: 'VectorStore' });
+      logger.error('加载 BM25 索引失败', {
+        module: 'VectorStore',
+        error: error.message,
+      });
+      logger.info('将删除损坏的索引文件并创建新索引', {
+        module: 'VectorStore',
+      });
       try {
         if (fs.existsSync(BM25_INDEX_PATH)) {
           fs.unlinkSync(BM25_INDEX_PATH);
           logger.info('已删除损坏的索引文件', { module: 'VectorStore' });
         }
       } catch (deleteError: any) {
-        logger.error('删除损坏索引文件失败', { module: 'VectorStore', error: deleteError.message });
+        logger.error('删除损坏索引文件失败', {
+          module: 'VectorStore',
+          error: deleteError.message,
+        });
       }
     }
   }

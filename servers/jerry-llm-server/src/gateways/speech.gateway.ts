@@ -37,7 +37,9 @@ const SpeechWsInboundFrameSchema = z.discriminatedUnion('type', [
 ]);
 
 /** 解析 WS 握手查询参数中的 token */
-function extractParamsFromUrl(url: string | undefined): { token: string | null } {
+function extractParamsFromUrl(url: string | undefined): {
+  token: string | null;
+} {
   if (!url) return { token: null };
   try {
     const idx = url.indexOf('?');
@@ -107,10 +109,10 @@ export function createSpeechWsHandler(
         },
       });
 
-    // 延迟诊断：记录每帧音频从前端到转发的耗时
-    let frameCount = 0;
-    let lastFrameLogTime = 0;
-    const FRAME_LOG_INTERVAL = 5000; // 每 5 秒输出一次统计
+      // 延迟诊断：记录每帧音频从前端到转发的耗时
+      let frameCount = 0;
+      let lastFrameLogTime = 0;
+      const FRAME_LOG_INTERVAL = 5000; // 每 5 秒输出一次统计
 
       // 3. 接收前端消息
       ws.on('message', (data: Buffer, isBinary: boolean) => {
@@ -123,13 +125,22 @@ export function createSpeechWsHandler(
 
           frameCount++;
           // 每 5 秒或首帧输出一次统计
-          if (frameCount === 1 || forwardedAt - lastFrameLogTime > FRAME_LOG_INTERVAL) {
-            logger.info(`ASR 延迟统计 userId=${userId}: 已转发 ${frameCount} 帧, 本帧中转耗时=${relayMs.toFixed(2)}ms`, { module: 'SpeechGateway' });
+          if (
+            frameCount === 1 ||
+            forwardedAt - lastFrameLogTime > FRAME_LOG_INTERVAL
+          ) {
+            logger.info(
+              `ASR 延迟统计 userId=${userId}: 已转发 ${frameCount} 帧, 本帧中转耗时=${relayMs.toFixed(2)}ms`,
+              { module: 'SpeechGateway' },
+            );
             lastFrameLogTime = forwardedAt;
           }
           // 如果单帧中转超过 10ms，单独告警
           if (relayMs > 10) {
-            logger.warn(`ASR 中转耗时过高 userId=${userId}: ${relayMs.toFixed(2)}ms (帧大小=${data.length}B)`, { module: 'SpeechGateway' });
+            logger.warn(
+              `ASR 中转耗时过高 userId=${userId}: ${relayMs.toFixed(2)}ms (帧大小=${data.length}B)`,
+              { module: 'SpeechGateway' },
+            );
           }
         } else {
           // 文本帧：控制命令，先用 zod 校验形状再分发

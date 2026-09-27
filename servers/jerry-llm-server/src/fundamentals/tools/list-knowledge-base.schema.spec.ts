@@ -5,7 +5,12 @@
  */
 
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../vector-store/index', () => ({
@@ -49,12 +54,16 @@ describe('listKnowledgeBaseParamsSchema 校验', () => {
   });
 
   it('合法 detail_level=detailed 应通过', () => {
-    const r = listKnowledgeBaseParamsSchema.safeParse({ detail_level: 'detailed' });
+    const r = listKnowledgeBaseParamsSchema.safeParse({
+      detail_level: 'detailed',
+    });
     expect(r.success).toBe(true);
   });
 
   it('非法 detail_level 应被拦截', () => {
-    const r = listKnowledgeBaseParamsSchema.safeParse({ detail_level: 'verbose' });
+    const r = listKnowledgeBaseParamsSchema.safeParse({
+      detail_level: 'verbose',
+    });
     expect(r.success).toBe(false);
   });
 });

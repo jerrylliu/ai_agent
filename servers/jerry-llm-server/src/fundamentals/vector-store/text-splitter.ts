@@ -32,7 +32,13 @@ export const DEFAULT_CHILD_CHUNK_SIZE = 300;
 /** Parent-Child 切分：子块默认重叠 */
 export const DEFAULT_CHILD_CHUNK_OVERLAP = 50;
 
-export type AdaptiveDocumentType = 'markdown' | 'code' | 'pdf' | 'word' | 'text' | 'default';
+export type AdaptiveDocumentType =
+  | 'markdown'
+  | 'code'
+  | 'pdf'
+  | 'word'
+  | 'text'
+  | 'default';
 
 export interface AdaptiveChunkingProfile {
   documentType: AdaptiveDocumentType;
@@ -94,9 +100,11 @@ export async function parentChildSplit(
   },
 ): Promise<ParentChildChunk[]> {
   const parentSize = options?.parentChunkSize ?? DEFAULT_PARENT_CHUNK_SIZE;
-  const parentOverlap = options?.parentChunkOverlap ?? DEFAULT_PARENT_CHUNK_OVERLAP;
+  const parentOverlap =
+    options?.parentChunkOverlap ?? DEFAULT_PARENT_CHUNK_OVERLAP;
   const childSize = options?.childChunkSize ?? DEFAULT_CHILD_CHUNK_SIZE;
-  const childOverlap = options?.childChunkOverlap ?? DEFAULT_CHILD_CHUNK_OVERLAP;
+  const childOverlap =
+    options?.childChunkOverlap ?? DEFAULT_CHILD_CHUNK_OVERLAP;
   const documentType = options?.documentType ?? 'default';
 
   // 第一步：切成父块 —— 根据文档类型选择切分器
@@ -106,7 +114,11 @@ export async function parentChildSplit(
     parentSplitter = markdownSplitter(parentSize, parentOverlap);
   } else if (documentType === 'code') {
     // codeSplitter 内部会归一化扩展名并选择语言，未识别时降级为通用切分
-    parentSplitter = codeSplitter(options?.fileType || '', parentSize, parentOverlap);
+    parentSplitter = codeSplitter(
+      options?.fileType || '',
+      parentSize,
+      parentOverlap,
+    );
   } else {
     parentSplitter = new RecursiveCharacterTextSplitter({
       chunkSize: parentSize,
@@ -140,7 +152,9 @@ export async function parentChildSplit(
         index: cIdx,
         offsetInParent: offsetInParent >= 0 ? offsetInParent : currentOffset,
       });
-      currentOffset = (offsetInParent >= 0 ? offsetInParent : currentOffset) + childText.length;
+      currentOffset =
+        (offsetInParent >= 0 ? offsetInParent : currentOffset) +
+        childText.length;
     }
 
     results.push({
@@ -181,13 +195,13 @@ export function codeSplitter(
   const languageMap: Record<string, string> = {
     '.js': 'js',
     '.jsx': 'js',
-    '.ts': 'js',      // TypeScript 使用 JS 切分器（语法结构相似）
+    '.ts': 'js', // TypeScript 使用 JS 切分器（语法结构相似）
     '.tsx': 'js',
     '.py': 'python',
     '.java': 'java',
     '.cpp': 'cpp',
-    '.c': 'cpp',       // C 使用 C++ 切分器
-    '.cs': 'cpp',      // C# 使用 C++ 切分器（语法结构相似）
+    '.c': 'cpp', // C 使用 C++ 切分器
+    '.cs': 'cpp', // C# 使用 C++ 切分器（语法结构相似）
     '.go': 'go',
     '.rs': 'rust',
     '.rb': 'ruby',
@@ -238,7 +252,11 @@ export function getSplitterByFileType(
 
   // 归一化扩展名为带点小写，兼容数据库里存 'pdf' 或 '.pdf' 两种格式
   const rawType = (fileType || '').toLowerCase();
-  const normalizedType = rawType.startsWith('.') ? rawType : (rawType ? `.${rawType}` : '');
+  const normalizedType = rawType.startsWith('.')
+    ? rawType
+    : rawType
+      ? `.${rawType}`
+      : '';
 
   if (isMarkdown || normalizedType === '.md') {
     return markdownSplitter(chunkSize, chunkOverlap);
@@ -246,8 +264,20 @@ export function getSplitterByFileType(
 
   // 代码文件
   const codeExtensions = [
-    '.js', '.jsx', '.ts', '.tsx', '.py', '.java',
-    '.cpp', '.c', '.cs', '.go', '.rs', '.rb', '.php', '.swift',
+    '.js',
+    '.jsx',
+    '.ts',
+    '.tsx',
+    '.py',
+    '.java',
+    '.cpp',
+    '.c',
+    '.cs',
+    '.go',
+    '.rs',
+    '.rb',
+    '.php',
+    '.swift',
   ];
   if (codeExtensions.includes(normalizedType)) {
     return codeSplitter(normalizedType, chunkSize, chunkOverlap);
@@ -264,10 +294,17 @@ export function getAdaptiveChunkingProfile(options: {
 }): AdaptiveChunkingProfile {
   // 统一扩展名格式为带点小写：数据库里可能存 'pdf' 也可能存 '.pdf'，这里归一化
   const rawType = (options.fileType || '').toLowerCase();
-  const fileType = rawType.startsWith('.') ? rawType : (rawType ? `.${rawType}` : '');
+  const fileType = rawType.startsWith('.')
+    ? rawType
+    : rawType
+      ? `.${rawType}`
+      : '';
   const mimeType = (options.mimeType || '').toLowerCase();
   const content = options.content || '';
-  const isMarkdown = fileType === '.md' || mimeType.includes('markdown') || isMarkdownContent(content);
+  const isMarkdown =
+    fileType === '.md' ||
+    mimeType.includes('markdown') ||
+    isMarkdownContent(content);
 
   if (isMarkdown) {
     return {
@@ -282,7 +319,20 @@ export function getAdaptiveChunkingProfile(options: {
   }
 
   const codeExtensions = [
-    '.js', '.jsx', '.ts', '.tsx', '.py', '.java', '.cpp', '.c', '.cs', '.go', '.rs', '.rb', '.php', '.swift',
+    '.js',
+    '.jsx',
+    '.ts',
+    '.tsx',
+    '.py',
+    '.java',
+    '.cpp',
+    '.c',
+    '.cs',
+    '.go',
+    '.rs',
+    '.rb',
+    '.php',
+    '.swift',
   ];
   if (codeExtensions.includes(fileType) || mimeType.startsWith('text/x-')) {
     return {
@@ -308,7 +358,11 @@ export function getAdaptiveChunkingProfile(options: {
     };
   }
 
-  if (['.doc', '.docx'].includes(fileType) || mimeType.includes('wordprocessingml') || mimeType.includes('msword')) {
+  if (
+    ['.doc', '.docx'].includes(fileType) ||
+    mimeType.includes('wordprocessingml') ||
+    mimeType.includes('msword')
+  ) {
     return {
       documentType: 'word',
       chunkSize: 850,
@@ -349,13 +403,13 @@ export function getAdaptiveChunkingProfile(options: {
  */
 export function isMarkdownContent(content: string): boolean {
   const markdownPatterns = [
-    /^#{1,6}\s/m,           // 标题 # ## ###
-    /\*\*[^*]+\*\*/,        // 粗体 **text**
-    /`[^`]+`/,              // 行内代码 `code`
-    /^\s*[-*+]\s/m,         // 无序列表 - * +
-    /^\s*\d+\.\s/m,         // 有序列表 1. 2.
-    /^\s*>\s/m,             // 引用 >
-    /\[.+\]\(.+\)/,         // 链接 [text](url)
+    /^#{1,6}\s/m, // 标题 # ## ###
+    /\*\*[^*]+\*\*/, // 粗体 **text**
+    /`[^`]+`/, // 行内代码 `code`
+    /^\s*[-*+]\s/m, // 无序列表 - * +
+    /^\s*\d+\.\s/m, // 有序列表 1. 2.
+    /^\s*>\s/m, // 引用 >
+    /\[.+\]\(.+\)/, // 链接 [text](url)
   ];
 
   let matchCount = 0;

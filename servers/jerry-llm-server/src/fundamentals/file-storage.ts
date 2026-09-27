@@ -17,19 +17,32 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
 // 允许的文件类型白名单
 const ALLOWED_FILE_TYPES = new Set([
-  'pdf', 'docx', 'txt', 'md', 'csv',
-  'doc', 'xlsx', 'xls', 'pptx', 'ppt',
-  'json', 'html', 'htm', 'xml',
+  'pdf',
+  'docx',
+  'txt',
+  'md',
+  'csv',
+  'doc',
+  'xlsx',
+  'xls',
+  'pptx',
+  'ppt',
+  'json',
+  'html',
+  'htm',
+  'xml',
 ]);
 
 // MIME 类型到扩展名的映射
 const MIME_TO_EXT: Record<string, string> = {
   'application/pdf': 'pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    'docx',
   'application/msword': 'doc',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/vnd.ms-excel': 'xls',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation':
+    'pptx',
   'application/vnd.ms-powerpoint': 'ppt',
   'text/plain': 'txt',
   'text/markdown': 'md',
@@ -51,9 +64,16 @@ function ensureBaseDir(): void {
  * 获取文档版本的存储目录
  * 格式：uploads/documents/{documentId}/v{versionNumber}/
  */
-export function getVersionDir(documentId: number, versionNumber: number): string {
+export function getVersionDir(
+  documentId: number,
+  versionNumber: number,
+): string {
   ensureBaseDir();
-  const dir = path.join(BASE_UPLOAD_DIR, String(documentId), `v${versionNumber}`);
+  const dir = path.join(
+    BASE_UPLOAD_DIR,
+    String(documentId),
+    `v${versionNumber}`,
+  );
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
@@ -83,7 +103,13 @@ export function saveVersionFile(
   // 相对路径：documents/{documentId}/v{versionNumber}/document.{ext}
   const fileUrl = `documents/${documentId}/v${versionNumber}/${safeName}`;
 
-  logger.info('版本文件已保存', { module: 'FileStorageService', documentId, versionNumber, fileSize, checksum });
+  logger.info('版本文件已保存', {
+    module: 'FileStorageService',
+    documentId,
+    versionNumber,
+    fileSize,
+    checksum,
+  });
 
   return { fileUrl, fileSize, fileType: ext, checksum };
 }
@@ -105,7 +131,9 @@ export function calculateChecksum(buffer: Buffer): string {
  *
  * 返回 null 表示文本为空（空内容不参与去重比对）
  */
-export function computeContentHash(text: string | null | undefined): string | null {
+export function computeContentHash(
+  text: string | null | undefined,
+): string | null {
   if (!text || text.trim().length === 0) return null;
   // 去除全部空白（空格/换行/制表符等），消除排版差异，只比较实际字符序列
   const normalized = text.replace(/\s+/g, '');
@@ -116,9 +144,15 @@ export function computeContentHash(text: string | null | undefined): string | nu
 /**
  * 校验文件大小
  */
-export function validateFileSize(fileSize: number): { valid: boolean; message?: string } {
+export function validateFileSize(fileSize: number): {
+  valid: boolean;
+  message?: string;
+} {
   if (fileSize > MAX_FILE_SIZE) {
-    return { valid: false, message: `文件过大，最大支持 ${MAX_FILE_SIZE / 1024 / 1024}MB` };
+    return {
+      valid: false,
+      message: `文件过大，最大支持 ${MAX_FILE_SIZE / 1024 / 1024}MB`,
+    };
   }
   return { valid: true };
 }
@@ -126,10 +160,16 @@ export function validateFileSize(fileSize: number): { valid: boolean; message?: 
 /**
  * 校验文件类型
  */
-export function validateFileType(fileName: string): { valid: boolean; message?: string } {
+export function validateFileType(fileName: string): {
+  valid: boolean;
+  message?: string;
+} {
   const ext = path.extname(fileName).toLowerCase().replace('.', '');
   if (!ALLOWED_FILE_TYPES.has(ext)) {
-    return { valid: false, message: `不支持的文件类型: .${ext}，允许的类型: ${Array.from(ALLOWED_FILE_TYPES).join(', ')}` };
+    return {
+      valid: false,
+      message: `不支持的文件类型: .${ext}，允许的类型: ${Array.from(ALLOWED_FILE_TYPES).join(', ')}`,
+    };
   }
   return { valid: true };
 }
@@ -166,7 +206,11 @@ export function deleteVersionFile(fileUrl: string): boolean {
     }
     return false;
   } catch (error: any) {
-    logger.error('删除版本文件失败', { module: 'FileStorageService', fileUrl, error: error.message });
+    logger.error('删除版本文件失败', {
+      module: 'FileStorageService',
+      fileUrl,
+      error: error.message,
+    });
     return false;
   }
 }
@@ -179,12 +223,19 @@ export function deleteDocumentFiles(documentId: number): boolean {
     const docDir = path.join(BASE_UPLOAD_DIR, String(documentId));
     if (fs.existsSync(docDir)) {
       fs.rmSync(docDir, { recursive: true, force: true });
-      logger.info('文档所有版本文件已删除', { module: 'FileStorageService', documentId });
+      logger.info('文档所有版本文件已删除', {
+        module: 'FileStorageService',
+        documentId,
+      });
       return true;
     }
     return false;
   } catch (error: any) {
-    logger.error('删除文档文件失败', { module: 'FileStorageService', documentId, error: error.message });
+    logger.error('删除文档文件失败', {
+      module: 'FileStorageService',
+      documentId,
+      error: error.message,
+    });
     return false;
   }
 }
@@ -235,7 +286,11 @@ export function readVersionFile(fileUrl: string): Buffer | null {
     }
     return null;
   } catch (error: any) {
-    logger.error('读取版本文件失败', { module: 'FileStorageService', fileUrl, error: error.message });
+    logger.error('读取版本文件失败', {
+      module: 'FileStorageService',
+      fileUrl,
+      error: error.message,
+    });
     return null;
   }
 }
@@ -244,17 +299,33 @@ export function readVersionFile(fileUrl: string): Buffer | null {
  * 清理 archived 超过指定天数的版本文件
  * @returns 清理的文件数量
  */
-export function cleanArchivedFiles(documentId: number, versionNumber: number): boolean {
+export function cleanArchivedFiles(
+  documentId: number,
+  versionNumber: number,
+): boolean {
   try {
-    const versionDir = path.join(BASE_UPLOAD_DIR, String(documentId), `v${versionNumber}`);
+    const versionDir = path.join(
+      BASE_UPLOAD_DIR,
+      String(documentId),
+      `v${versionNumber}`,
+    );
     if (fs.existsSync(versionDir)) {
       fs.rmSync(versionDir, { recursive: true, force: true });
-      logger.info('已清理 archived 版本文件', { module: 'FileStorageService', documentId, versionNumber });
+      logger.info('已清理 archived 版本文件', {
+        module: 'FileStorageService',
+        documentId,
+        versionNumber,
+      });
       return true;
     }
     return false;
   } catch (error: any) {
-    logger.error('清理 archived 文件失败', { module: 'FileStorageService', documentId, versionNumber, error: error.message });
+    logger.error('清理 archived 文件失败', {
+      module: 'FileStorageService',
+      documentId,
+      versionNumber,
+      error: error.message,
+    });
     return false;
   }
 }

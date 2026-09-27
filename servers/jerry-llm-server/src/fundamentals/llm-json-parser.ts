@@ -171,7 +171,11 @@ export function parseToolResultJson<T>(
       issues,
       preview: rawJson.substring(0, 300),
     });
-    return { success: false, reason: `schema-mismatch: ${issues}`, rawText: rawJson };
+    return {
+      success: false,
+      reason: `schema-mismatch: ${issues}`,
+      rawText: rawJson,
+    };
   }
 
   return { success: true, data: result.data };

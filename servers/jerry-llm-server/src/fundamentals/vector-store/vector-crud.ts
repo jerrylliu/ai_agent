@@ -77,10 +77,14 @@ export async function deduplicateTextChunks(
   if (!collection || chunks.length === 0) return;
 
   // 按 (versionId, source) 分组收集 hash，减少 ChromaDB 查询次数
-  const groups = new Map<string, { versionId?: string; source: string; hashes: Set<string> }>();
+  const groups = new Map<
+    string,
+    { versionId?: string; source: string; hashes: Set<string> }
+  >();
   for (const chunk of chunks) {
     const meta = metadata[chunk.metaIndex] || {};
-    const versionId = meta.versionId !== undefined ? String(meta.versionId) : undefined;
+    const versionId =
+      meta.versionId !== undefined ? String(meta.versionId) : undefined;
     const source = meta.source || 'unknown';
     const key = `${versionId ?? ''}__${source}`;
     let group = groups.get(key);
@@ -650,7 +654,9 @@ export async function getAllDocuments(): Promise<
       host: config.chromaHost,
       port: config.chromaPort,
     });
-    const collection = await client.getCollection({ name: getActiveCollectionName() });
+    const collection = await client.getCollection({
+      name: getActiveCollectionName(),
+    });
     const results = await collection.get();
 
     const documents = results.documents.map((doc, i) => ({

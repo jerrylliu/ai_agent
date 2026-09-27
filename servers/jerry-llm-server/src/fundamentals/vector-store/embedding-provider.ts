@@ -100,8 +100,14 @@ export const EMBEDDING_PROVIDER_PRESETS = {
     // 硅基流动 embeddings 单次批量上限实测为 64，取 32 保守值
     batchSize: 32,
     models: [
-      { value: 'BAAI/bge-m3', label: 'BAAI/bge-m3（推荐 · 1024 维 · 8192 上下文）' },
-      { value: 'Qwen/Qwen3-Embedding-8B', label: 'Qwen/Qwen3-Embedding-8B（32768 上下文）' },
+      {
+        value: 'BAAI/bge-m3',
+        label: 'BAAI/bge-m3（推荐 · 1024 维 · 8192 上下文）',
+      },
+      {
+        value: 'Qwen/Qwen3-Embedding-8B',
+        label: 'Qwen/Qwen3-Embedding-8B（32768 上下文）',
+      },
     ],
   },
   custom: {
@@ -122,7 +128,9 @@ export type PresetCloudProvider = keyof typeof EMBEDDING_PROVIDER_PRESETS;
  *
  * 供集合指纹等只需要模型名的轻量场景使用，避免无谓的解密开销与失败面。
  */
-export function resolveCloudModel(cloud: EmbeddingRuntimeConfig['cloud']): string {
+export function resolveCloudModel(
+  cloud: EmbeddingRuntimeConfig['cloud'],
+): string {
   const preset = EMBEDDING_PROVIDER_PRESETS[cloud.provider];
   return cloud.model.trim() || preset?.defaultModel || '';
 }
@@ -224,7 +232,11 @@ export async function testEmbedding(
       EMBEDDING_TEST_TIMEOUT_MS,
       `嵌入测试超时（超过 ${EMBEDDING_TEST_TIMEOUT_MS / 1000} 秒）`,
     );
-    return { ok: true, dimensions: vector.length, latencyMs: Date.now() - start };
+    return {
+      ok: true,
+      dimensions: vector.length,
+      latencyMs: Date.now() - start,
+    };
   } catch (error: any) {
     logger.warn('嵌入测试失败', {
       module: 'EmbeddingProvider',

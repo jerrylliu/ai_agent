@@ -11,7 +11,12 @@
  * Mock 基础模块
  * ==================================================================*/
 jest.mock('../logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 // config 需要可控：工厂按 config.bm25Engine 选型

@@ -25,7 +25,7 @@ export class AppService {
   async prompt(
     message?: string,
     images?: string[],
-    history?: Array<{ role: string, content: string, images?: string[] }>,
+    history?: Array<{ role: string; content: string; images?: string[] }>,
     res?: Response,
     sessionId?: string,
     isCancelled?: () => boolean,
@@ -50,34 +50,55 @@ export class AppService {
     // 获取用户记忆（如果记忆功能已启用且允许注入）
     let memoryTexts: string[] = [];
     if (memoryEnabled !== false && injectMemory !== false) {
-      const { memoryTexts: texts } = await this.memoryService.getMemoriesForInjection(userId, 20);
+      const { memoryTexts: texts } =
+        await this.memoryService.getMemoriesForInjection(userId, 20);
       memoryTexts = texts;
     }
 
     await promptInvoke(
-      message, images, history, res, sessionSummary, memoryTexts,
-      isCancelled, abortController, userId, sessionId,
+      message,
+      images,
+      history,
+      res,
+      sessionSummary,
+      memoryTexts,
+      isCancelled,
+      abortController,
+      userId,
+      sessionId,
       (usage: UsageData) => {
         this.usageService.saveLlmUsage(usage).catch((err) => {
-          logger.error('保存 LLM 用量失败', { module: 'AppService', error: String(err) });
+          logger.error('保存 LLM 用量失败', {
+            module: 'AppService',
+            error: String(err),
+          });
         });
         // 自动评估：异步执行，不阻塞主流程
         if (usage.assistantMessage) {
-          this.evaluationService.autoEvaluate({
-            userId: usage.userId,
-            sessionId: usage.sessionId || '',
-            userMessage: usage.userMessage,
-            assistantMessage: usage.assistantMessage,
-            modelId: usage.modelId,
-            usedKnowledgeBase: usage.usedKnowledgeBase,
-            responseTimeMs: usage.responseTimeMs,
-          }).catch((err) => {
-            logger.error('自动评估失败', { module: 'AppService', error: String(err) });
-          });
+          this.evaluationService
+            .autoEvaluate({
+              userId: usage.userId,
+              sessionId: usage.sessionId || '',
+              userMessage: usage.userMessage,
+              assistantMessage: usage.assistantMessage,
+              modelId: usage.modelId,
+              usedKnowledgeBase: usage.usedKnowledgeBase,
+              responseTimeMs: usage.responseTimeMs,
+            })
+            .catch((err) => {
+              logger.error('自动评估失败', {
+                module: 'AppService',
+                error: String(err),
+              });
+            });
         }
         // 服务端自动落库：流结束时把完整助手回复上抛给 Controller 保存
         // （onUsageComplete 在全部 4 条完成路径都会触发：FC 正常/强制回答、RAG 流式、非流式）
-        if (onAssistantReply && usage.sessionId && usage.assistantMessage?.trim()) {
+        if (
+          onAssistantReply &&
+          usage.sessionId &&
+          usage.assistantMessage?.trim()
+        ) {
           onAssistantReply(usage.assistantMessage);
         }
       },

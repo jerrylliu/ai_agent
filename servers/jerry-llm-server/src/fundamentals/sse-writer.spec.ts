@@ -74,7 +74,10 @@ describe('sse-writer', () => {
 
     it('应合并 extra 字段', () => {
       const res = createMockResponse();
-      sendToolStatus(res as any, 'search_web', 'done', { iteration: 2, error: true });
+      sendToolStatus(res as any, 'search_web', 'done', {
+        iteration: 2,
+        error: true,
+      });
 
       const output = res.write.mock.calls[0][0];
       const data = JSON.parse(parseSSEFrame(output)[0].eventData);
@@ -83,7 +86,9 @@ describe('sse-writer', () => {
     });
 
     it('res 为 undefined 时不应写入', () => {
-      expect(() => sendToolStatus(undefined, 'search_web', 'calling')).not.toThrow();
+      expect(() =>
+        sendToolStatus(undefined, 'search_web', 'calling'),
+      ).not.toThrow();
     });
 
     it('res.writableEnded 为 true 时不应写入', () => {
@@ -113,7 +118,10 @@ describe('sse-writer', () => {
 
     it('应正确处理嵌套对象', () => {
       const res = createMockResponse();
-      const metadata = { usedKnowledgeBase: false, toolCalls: ['search_web', 'get_weather'] };
+      const metadata = {
+        usedKnowledgeBase: false,
+        toolCalls: ['search_web', 'get_weather'],
+      };
 
       sendMetadata(res as any, metadata);
 
@@ -123,7 +131,9 @@ describe('sse-writer', () => {
     });
 
     it('res 为 undefined 时不应写入', () => {
-      expect(() => sendMetadata(undefined, { usedKnowledgeBase: true })).not.toThrow();
+      expect(() =>
+        sendMetadata(undefined, { usedKnowledgeBase: true }),
+      ).not.toThrow();
     });
 
     it('res.writableEnded 为 true 时不应写入', () => {
@@ -137,7 +147,10 @@ describe('sse-writer', () => {
   describe('sendSessionAction', () => {
     it('应发送标准 SSE session_action 帧', () => {
       const res = createMockResponse();
-      const action = { type: 'switch_session', payload: { sessionId: 'abc123' } };
+      const action = {
+        type: 'switch_session',
+        payload: { sessionId: 'abc123' },
+      };
 
       sendSessionAction(res as any, action);
 
@@ -152,7 +165,9 @@ describe('sse-writer', () => {
     });
 
     it('res 为 undefined 时不应写入', () => {
-      expect(() => sendSessionAction(undefined, { type: 'switch_session' })).not.toThrow();
+      expect(() =>
+        sendSessionAction(undefined, { type: 'switch_session' }),
+      ).not.toThrow();
     });
 
     it('res.writableEnded 为 true 时不应写入', () => {
@@ -220,7 +235,10 @@ describe('sse-writer', () => {
 
     it('应正确处理含旧标记文本的内容（不会被误解析）', () => {
       const res = createMockResponse();
-      sendContent(res as any, '[RAG_METADATA:{"usedKnowledgeBase":true}]这是AI的回复');
+      sendContent(
+        res as any,
+        '[RAG_METADATA:{"usedKnowledgeBase":true}]这是AI的回复',
+      );
 
       const output = res.write.mock.calls[0][0];
       const frames = parseSSEFrame(output);
@@ -228,7 +246,9 @@ describe('sse-writer', () => {
       expect(frames).toHaveLength(1);
       expect(frames[0].eventType).toBe('content');
       const text = JSON.parse(frames[0].eventData);
-      expect(text).toBe('[RAG_METADATA:{"usedKnowledgeBase":true}]这是AI的回复');
+      expect(text).toBe(
+        '[RAG_METADATA:{"usedKnowledgeBase":true}]这是AI的回复',
+      );
     });
 
     it('res 为 undefined 时不应写入', () => {

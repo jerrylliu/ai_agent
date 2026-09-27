@@ -105,7 +105,9 @@ export async function generateSummary(
   const apiKey = getDeepseekApiKey();
 
   if (!apiKey || apiKey.trim() === '') {
-    logger.warn('未配置 DeepSeek API Key，使用本地摘要（质量较低）', { module: 'Summarizer' });
+    logger.warn('未配置 DeepSeek API Key，使用本地摘要（质量较低）', {
+      module: 'Summarizer',
+    });
     return generateLocalSummary(messages, existingSummary);
   }
 
@@ -113,11 +115,16 @@ export async function generateSummary(
     // 验证 API Key 和 baseURL 不包含非 ASCII 字符（会导致 ByteString 错误）
     const nonAsciiMatch = apiKey.match(/[^\x00-\x7F]/g);
     if (nonAsciiMatch) {
-      logger.error('DeepSeek API Key 包含非 ASCII 字符，可能导致 ByteString 错误', {
-        module: 'Summarizer',
-        nonAsciiChars: nonAsciiMatch.map(c => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`),
-        apiKeyLength: apiKey.length,
-      });
+      logger.error(
+        'DeepSeek API Key 包含非 ASCII 字符，可能导致 ByteString 错误',
+        {
+          module: 'Summarizer',
+          nonAsciiChars: nonAsciiMatch.map(
+            (c) => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`,
+          ),
+          apiKeyLength: apiKey.length,
+        },
+      );
       return generateLocalSummary(messages, existingSummary);
     }
 
@@ -126,7 +133,9 @@ export async function generateSummary(
       logger.error('DeepSeek Base URL 包含非 ASCII 字符', {
         module: 'Summarizer',
         baseUrl: DEEPSEEK_BASE_URL,
-        nonAsciiChars: baseUrlNonAscii.map(c => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`),
+        nonAsciiChars: baseUrlNonAscii.map(
+          (c) => `${c}(U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`,
+        ),
       });
       return generateLocalSummary(messages, existingSummary);
     }
@@ -164,37 +173,51 @@ export async function generateSummary(
     if (existingSummary) {
       // 增量更新模式：旧摘要 + 新增消息
       const newMessages = messages
-        .map((msg) => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}`)
+        .map(
+          (msg) => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}`,
+        )
         .join('\n');
 
       userContent = `以下是之前的对话摘要：\n${existingSummary}\n\n以下是新增的对话内容：\n${newMessages}\n\n请将旧摘要与新对话合并，生成更新后的完整摘要。`;
     } else {
       // 首次生成模式：全部消息
       const conversationText = messages
-        .map((msg) => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}`)
+        .map(
+          (msg) => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}`,
+        )
         .join('\n');
 
       userContent = `请为以下对话生成摘要：\n${conversationText}`;
     }
 
-    logger.info('摘要生成', { module: 'Summarizer', type: existingSummary ? '增量更新' : '首次生成', messageCount: messages.length });
+    logger.info('摘要生成', {
+      module: 'Summarizer',
+      type: existingSummary ? '增量更新' : '首次生成',
+      messageCount: messages.length,
+    });
 
     const result = await llm.invoke([
       new SystemMessage(SUMMARIZER_SYSTEM_PROMPT),
       new HumanMessage(userContent),
     ]);
 
-    const summary = typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content);
+    const summary =
+      typeof result.content === 'string'
+        ? result.content
+        : JSON.stringify(result.content);
 
-    logger.info('摘要生成完成', { module: 'Summarizer', summaryLength: summary.length });
+    logger.info('摘要生成完成', {
+      module: 'Summarizer',
+      summaryLength: summary.length,
+    });
 
     return summary;
   } catch (error: any) {
     // 详细诊断 ByteString 错误
     if (error.message?.includes('ByteString')) {
-      const apiKeyPreview = apiKey ? `${apiKey.substring(0, 3)}...${apiKey.substring(apiKey.length - 3)}` : '(empty)';
+      const apiKeyPreview = apiKey
+        ? `${apiKey.substring(0, 3)}...${apiKey.substring(apiKey.length - 3)}`
+        : '(empty)';
       const apiKeyHasNonAscii = apiKey ? /[^\x00-\x7F]/.test(apiKey) : false;
       const baseUrlValue = DEEPSEEK_BASE_URL;
       const baseUrlHasNonAscii = /[^\x00-\x7F]/.test(baseUrlValue);
@@ -209,7 +232,10 @@ export async function generateSummary(
         baseUrlHasNonAscii,
       });
     } else {
-      logger.error('DeepSeek 摘要生成失败，降级为本地摘要', { module: 'Summarizer', error: error.message });
+      logger.error('DeepSeek 摘要生成失败，降级为本地摘要', {
+        module: 'Summarizer',
+        error: error.message,
+      });
     }
     return generateLocalSummary(messages, existingSummary);
   }
@@ -228,7 +254,10 @@ function generateLocalSummary(
 
   const conversationText = messages
     .slice(-20) // 只取最近20条
-    .map((msg) => `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content.substring(0, 100)}`)
+    .map(
+      (msg) =>
+        `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content.substring(0, 100)}`,
+    )
     .join('\n');
 
   let summary = '';

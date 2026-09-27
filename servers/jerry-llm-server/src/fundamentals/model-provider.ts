@@ -259,7 +259,10 @@ const ZHIPU_KEY_REDIS = `${APIKEY_REDIS_PREFIX}zhipu`;
 const CURRENT_MODEL_REDIS = 'model-settings:current';
 
 /** 持久化加密后的 API Key 到 Redis（fire-and-forget） */
-async function persistApiKey(redisKey: string, encryptedKey: string): Promise<void> {
+async function persistApiKey(
+  redisKey: string,
+  encryptedKey: string,
+): Promise<void> {
   if (!isRedisReady()) return;
   try {
     const redis = getRedis();
@@ -281,7 +284,9 @@ async function persistApiKey(redisKey: string, encryptedKey: string): Promise<vo
  */
 export async function loadApiKeysFromStorage(): Promise<void> {
   if (!isRedisReady()) {
-    logger.info('Redis 未就绪，API Key 跳过恢复（需手动输入）', { module: 'ModelProvider' });
+    logger.info('Redis 未就绪，API Key 跳过恢复（需手动输入）', {
+      module: 'ModelProvider',
+    });
     return;
   }
   try {
@@ -295,7 +300,9 @@ export async function loadApiKeysFromStorage(): Promise<void> {
 
     if (deepseekStored && isEncrypted(deepseekStored)) {
       deepseekApiKey = deepseekStored;
-      logger.info('DeepSeek API Key 已从 Redis 恢复', { module: 'ModelProvider' });
+      logger.info('DeepSeek API Key 已从 Redis 恢复', {
+        module: 'ModelProvider',
+      });
     }
     if (zhipuStored && isEncrypted(zhipuStored)) {
       zhipuApiKey = zhipuStored;

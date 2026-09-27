@@ -82,7 +82,10 @@ export class EvaluationService {
     if (params.assistantMessage && params.assistantMessage.length > 50) {
       score += 0.1;
       reasons.push('回答内容充实');
-    } else if (!params.assistantMessage || params.assistantMessage.length < 10) {
+    } else if (
+      !params.assistantMessage ||
+      params.assistantMessage.length < 10
+    ) {
       score -= 0.2;
       reasons.push('回答过短');
     }
@@ -140,10 +143,15 @@ export class EvaluationService {
       order: { createdAt: 'DESC' },
     });
 
-    const positiveCount = feedbacks.filter(f => f.rating === 'positive').length;
-    const negativeCount = feedbacks.filter(f => f.rating === 'negative').length;
+    const positiveCount = feedbacks.filter(
+      (f) => f.rating === 'positive',
+    ).length;
+    const negativeCount = feedbacks.filter(
+      (f) => f.rating === 'negative',
+    ).length;
     const totalFeedbacks = positiveCount + negativeCount;
-    const satisfactionRate = totalFeedbacks > 0 ? positiveCount / totalFeedbacks : 0;
+    const satisfactionRate =
+      totalFeedbacks > 0 ? positiveCount / totalFeedbacks : 0;
 
     // 自动评估统计
     const autoEvals = await this.autoEvaluationRepository.find({
@@ -151,15 +159,20 @@ export class EvaluationService {
       order: { createdAt: 'DESC' },
     });
 
-    const avgAutoScore = autoEvals.length > 0
-      ? autoEvals.reduce((sum, e) => sum + e.score, 0) / autoEvals.length
-      : 0;
+    const avgAutoScore =
+      autoEvals.length > 0
+        ? autoEvals.reduce((sum, e) => sum + e.score, 0) / autoEvals.length
+        : 0;
 
     // 按天聚合
-    const dailyFeedback: Record<string, { positive: number; negative: number }> = {};
+    const dailyFeedback: Record<
+      string,
+      { positive: number; negative: number }
+    > = {};
     for (const f of feedbacks) {
       const day = new Date(f.createdAt).toISOString().slice(0, 10);
-      if (!dailyFeedback[day]) dailyFeedback[day] = { positive: 0, negative: 0 };
+      if (!dailyFeedback[day])
+        dailyFeedback[day] = { positive: 0, negative: 0 };
       if (f.rating === 'positive') dailyFeedback[day].positive++;
       else dailyFeedback[day].negative++;
     }
@@ -262,21 +275,29 @@ export class EvaluationService {
 
     const total = feedbacks.length;
     // 负向信号 = regenerate + negative + abandon
-    const negativeSignals = actionCounts.regenerate + actionCounts.negative + actionCounts.abandon;
+    const negativeSignals =
+      actionCounts.regenerate + actionCounts.negative + actionCounts.abandon;
     // 正向信号 = followup + positive
     const positiveSignals = actionCounts.followup + actionCounts.positive;
 
     // 满意度 = 正向 / (正向 + 负向)，仅在有信号时计算
-    const satisfactionRate = positiveSignals + negativeSignals > 0
-      ? positiveSignals / (positiveSignals + negativeSignals)
-      : 0;
+    const satisfactionRate =
+      positiveSignals + negativeSignals > 0
+        ? positiveSignals / (positiveSignals + negativeSignals)
+        : 0;
 
     // 按天聚合
     const dailyStats: Record<string, Record<string, number>> = {};
     for (const f of feedbacks) {
       const day = new Date(f.createdAt).toISOString().slice(0, 10);
       if (!dailyStats[day]) {
-        dailyStats[day] = { regenerate: 0, followup: 0, abandon: 0, positive: 0, negative: 0 };
+        dailyStats[day] = {
+          regenerate: 0,
+          followup: 0,
+          abandon: 0,
+          positive: 0,
+          negative: 0,
+        };
       }
       if (dailyStats[day][f.action] !== undefined) {
         dailyStats[day][f.action]++;
@@ -319,14 +340,17 @@ export class EvaluationService {
     });
 
     // 按查询文本分组
-    const queryGroups: Map<string, {
-      query: string;
-      total: number;
-      negative: number;
-      positive: number;
-      actions: Record<string, number>;
-      sampleRetrievedDocIds: string[];
-    }> = new Map();
+    const queryGroups: Map<
+      string,
+      {
+        query: string;
+        total: number;
+        negative: number;
+        positive: number;
+        actions: Record<string, number>;
+        sampleRetrievedDocIds: string[];
+      }
+    > = new Map();
 
     for (const f of feedbacks) {
       // 归一化查询：去空格、转小写，让相似查询合并
@@ -338,7 +362,13 @@ export class EvaluationService {
           total: 0,
           negative: 0,
           positive: 0,
-          actions: { regenerate: 0, followup: 0, abandon: 0, positive: 0, negative: 0 },
+          actions: {
+            regenerate: 0,
+            followup: 0,
+            abandon: 0,
+            positive: 0,
+            negative: 0,
+          },
           sampleRetrievedDocIds: [],
         });
       }
@@ -350,7 +380,11 @@ export class EvaluationService {
       }
 
       // 负向信号
-      if (f.action === 'regenerate' || f.action === 'negative' || f.action === 'abandon') {
+      if (
+        f.action === 'regenerate' ||
+        f.action === 'negative' ||
+        f.action === 'abandon'
+      ) {
         group.negative++;
       }
       // 正向信号

@@ -227,7 +227,9 @@ export function evaluateQuery(
   const metrics: Record<string, number> = {};
 
   for (const k of kValues) {
-    metrics[`Recall@${k}`] = round(recallAtK(retrievedDocIds, expectedDocIds, k));
+    metrics[`Recall@${k}`] = round(
+      recallAtK(retrievedDocIds, expectedDocIds, k),
+    );
     metrics[`Precision@${k}`] = round(
       precisionAtK(retrievedDocIds, expectedDocIds, k),
     );
@@ -261,8 +263,14 @@ export function aggregateResults(
   const errorCount = perQuery.length - validResults.length;
 
   const aggregate = averageMetrics(validResults);
-  const byCategory = groupAndAverage(validResults, (r) => r.category || 'unknown');
-  const byDifficulty = groupAndAverage(validResults, (r) => r.difficulty || 'unknown');
+  const byCategory = groupAndAverage(
+    validResults,
+    (r) => r.category || 'unknown',
+  );
+  const byDifficulty = groupAndAverage(
+    validResults,
+    (r) => r.difficulty || 'unknown',
+  );
 
   return {
     totalSamples: perQuery.length,

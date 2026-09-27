@@ -64,7 +64,19 @@ async function handleResponse<T>(response: Response): Promise<T> {
     const msg = Array.isArray(errorData.message)
       ? errorData.message.join("; ")
       : errorData.message || `请求失败: ${response.status}`;
-    const error = new Error(msg) as Error & { status: number };
+    // 后端 ZodValidationPipe 的 400 响应体带 errors 数组（字段级失败原因），
+    // 拼进 message 用户才能看到「具体哪个字段不合法」，而不是笼统的「校验失败」
+    const details = Array.isArray(errorData.errors)
+      ? errorData.errors
+          .map((e: { path?: string; message?: string }) =>
+            e?.path ? `${e.path}: ${e.message ?? ""}` : (e?.message ?? ""),
+          )
+          .filter(Boolean)
+          .join("; ")
+      : "";
+    const error = new Error(
+      details ? `${msg}（${details}）` : msg,
+    ) as Error & { status: number };
     error.status = response.status;
     throw error;
   }
@@ -2200,21 +2212,72 @@ export interface CacheConfig {
   maxEntries: number;
   maxItemSizeKB: number;
   defaultTTLMinutes: number;
+  /**
+   * 缓存总字节预算（MB）
+   * 与 maxEntries 构成双约束：条数上限只约束「条数」，真实占用是条数 × 单条大小的乘积，
+   * 只调条数无法给内存上硬顶（1000 条 × 50KB = 50MB，这个乘积在 UI 上完全看不出来）。
+   */
+  maxTotalSizeMB: number;
 }
 
+/**
+ * 缓存统计（与后端 fundamentals/cache.ts 的 CacheStats 一一对应）
+ */
 export interface CacheStats {
+  /** L1（内存）命中次数 */
   hits: number;
+  /** L2（Redis）命中次数；Redis 未启用时恒为 0 */
+  l2Hits: number;
   misses: number;
+  /** 综合命中率 = (hits + l2Hits) / (hits + l2Hits + misses) */
   hitRate: number;
   size: number;
   maxSize: number;
-  memoryUsageKB: number;
+  /**
+   * 当前条目的加权体积（KB）= 各条目 JSON 字节数之和。
+   * 不是进程真实驻留内存（RSS），真实占用通常还要再乘 1.5~3。
+   */
+  weightedSizeKB: number;
+  /** 字节预算上限（KB） */
+  maxTotalSizeKB: number;
+  /** 当前条目的平均大小（KB） */
+  avgEntrySizeKB: number;
+  /** 当前条目大小的 95 分位（KB）；均值会被大量小结果拉低，掩盖少数巨型条目 */
+  p95EntrySizeKB: number;
+  /** 因超过单条大小上限而被拒绝写入的次数 */
+  rejectedOversize: number;
+  /** 因单条体积就撑爆整个字节预算而被拒绝写入的次数 */
+  rejectedBudget: number;
+  /** 累计淘汰条目数 */
+  evictedTotal: number;
+  /** 因条目数达到上限而淘汰的次数 */
+  evictedBySize: number;
+  /** 因字节预算超限而淘汰的次数 */
+  evictedByBudget: number;
+  /** 因 TTL 过期在读取时被回收的次数 */
+  evictedByTTL: number;
+  /** 因配置变更（容量/预算调小）而淘汰的次数 */
+  evictedByConfig: number;
+  /** 被单飞合并掉的并发回源次数，数值越高说明击穿压力越大 */
+  coalescedRequests: number;
+  /**
+   * 单飞回源超时次数，非 0 说明 Embedding / 向量库出现过挂死。
+   * 比 l2Errors 更早的劣化预警信号。
+   */
+  dedupeTimeouts: number;
+  /** L2（Redis）读写异常次数 */
+  l2Errors: number;
+  /** L2 是否已就绪 */
+  l2Enabled: boolean;
 }
 
 export interface RateLimiterConfig {
   fastPoolMax: number;
   streamingPoolMax: number;
+  /** 等待 provider RPM 令牌的超时（毫秒） */
   tokenWaitTimeout: number;
+  /** 等待并发槽位的排队超时（毫秒） */
+  queueWaitTimeout: number;
 }
 
 export interface RateLimiterStatus {

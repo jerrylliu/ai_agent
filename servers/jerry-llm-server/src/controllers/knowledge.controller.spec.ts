@@ -12,7 +12,12 @@
  * Mock 所有 DocumentService/KSS 的依赖链
  * ==================================================================*/
 jest.mock('../fundamentals/logger', () => ({
-  logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+  logger: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  },
 }));
 
 jest.mock('../services/document.service', () => ({
@@ -54,7 +59,10 @@ describe('KnowledgeController', () => {
       controllers: [KnowledgeController],
       providers: [
         { provide: DocumentService, useValue: new (DocumentService as any)() },
-        { provide: KnowledgeSourceService, useValue: new (KnowledgeSourceService as any)() },
+        {
+          provide: KnowledgeSourceService,
+          useValue: new (KnowledgeSourceService as any)(),
+        },
       ],
     }).compile();
 
@@ -97,7 +105,12 @@ describe('KnowledgeController', () => {
       const r = await controller.uploadToKnowledgeBase(file);
       expect(r.success).toBe(true);
       expect(documentService.uploadDocument).toHaveBeenCalledWith(
-        { buffer: file.buffer, originalname: file.originalname, size: file.size, mimetype: file.mimetype },
+        {
+          buffer: file.buffer,
+          originalname: file.originalname,
+          size: file.size,
+          mimetype: file.mimetype,
+        },
         { title: 'test', operator: 'anonymous' },
       );
     });

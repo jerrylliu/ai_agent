@@ -12,7 +12,8 @@
  * 兼容飞书/部分模型把 url 包在反引号或空格里的情况：![alt](`url`) / ![alt]( url )。
  * 单一来源，供提取和剥离共用，避免多处正则漂移。
  */
-const MARKDOWN_IMAGE_REGEX = /!\[[^\]]*\]\(\s*`?([^)`\s]+)`?(?:\s+"[^"]*")?\s*\)/g;
+const MARKDOWN_IMAGE_REGEX =
+  /!\[[^\]]*\]\(\s*`?([^)`\s]+)`?(?:\s+"[^"]*")?\s*\)/g;
 
 /** 从 Markdown 文本中提取图片 URL，并返回去掉图片后的纯文本 */
 export function splitMarkdownImages(content: string): {
@@ -37,4 +38,3 @@ export function splitMarkdownImages(content: string): {
 export function stripMarkdownImages(content: string): string {
   return content.replace(MARKDOWN_IMAGE_REGEX, '');
 }
-

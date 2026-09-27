@@ -25,16 +25,22 @@ let searchWebAvailable = false;
 
 export function validateSearchWebConfig(): boolean {
   if (!SEARCH_API_URL || SEARCH_API_URL.startsWith('TODO')) {
-    logger.warn('search_web 工具未配置：SEARCH_API_URL 未设置或仍为占位符，联网搜索功能不可用', {
-      module: 'Tool:SearchWeb',
-    });
+    logger.warn(
+      'search_web 工具未配置：SEARCH_API_URL 未设置或仍为占位符，联网搜索功能不可用',
+      {
+        module: 'Tool:SearchWeb',
+      },
+    );
     searchWebAvailable = false;
     return false;
   }
   if (!SEARCH_API_KEY || SEARCH_API_KEY.startsWith('TODO')) {
-    logger.warn('search_web 工具未配置：SEARCH_API_KEY 未设置或仍为占位符，联网搜索功能不可用', {
-      module: 'Tool:SearchWeb',
-    });
+    logger.warn(
+      'search_web 工具未配置：SEARCH_API_KEY 未设置或仍为占位符，联网搜索功能不可用',
+      {
+        module: 'Tool:SearchWeb',
+      },
+    );
     searchWebAvailable = false;
     return false;
   }
@@ -124,7 +130,10 @@ export type SearchWebResult = z.infer<typeof searchWebResultSchema>;
  * 保留 url（方便用户点击），去掉 engine/total（对回答无用）
  * snippet 保持完整不截断，只保留 Top-K 条
  */
-export function formatSearchResultAsSummary(result: SearchWebResult, maxResults: number): string {
+export function formatSearchResultAsSummary(
+  result: SearchWebResult,
+  maxResults: number,
+): string {
   if (result.error) {
     return `搜索"${result.query}"失败：${result.error}`;
   }
@@ -134,7 +143,9 @@ export function formatSearchResultAsSummary(result: SearchWebResult, maxResults:
   }
 
   const kept = result.results.slice(0, maxResults);
-  const lines: string[] = [`搜索"${result.query}"找到${result.results.length}条结果${kept.length < result.results.length ? `，展示前${kept.length}条` : ''}：`];
+  const lines: string[] = [
+    `搜索"${result.query}"找到${result.results.length}条结果${kept.length < result.results.length ? `，展示前${kept.length}条` : ''}：`,
+  ];
 
   for (let i = 0; i < kept.length; i++) {
     const r = kept[i];
@@ -153,11 +164,18 @@ export function formatSearchResultAsSummary(result: SearchWebResult, maxResults:
   return lines.join('\n');
 }
 
-function extractResultsFromResponse(responseData: any, maxResults: number, engine: string): SearchWebResult['results'] {
+function extractResultsFromResponse(
+  responseData: any,
+  maxResults: number,
+  engine: string,
+): SearchWebResult['results'] {
   const results: SearchWebResult['results'] = [];
   let items: any[] | null = null;
 
-  if (responseData?.search_result && Array.isArray(responseData.search_result)) {
+  if (
+    responseData?.search_result &&
+    Array.isArray(responseData.search_result)
+  ) {
     items = responseData.search_result;
   } else if (Array.isArray(responseData)) {
     items = responseData;
@@ -202,7 +220,8 @@ export async function executeSearchWeb(
       total: 0,
       query: (rawParams as { query?: string })?.query || '',
       engine: (rawParams as { engine?: string })?.engine || 'search_std',
-      error: '联网搜索功能未配置，请检查 SEARCH_API_URL 和 SEARCH_API_KEY 环境变量',
+      error:
+        '联网搜索功能未配置，请检查 SEARCH_API_URL 和 SEARCH_API_KEY 环境变量',
     };
   }
 
@@ -237,7 +256,10 @@ export async function executeSearchWeb(
   });
 
   const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), SEARCH_API_TIMEOUT_MS);
+  const timeoutId = setTimeout(
+    () => abortController.abort(),
+    SEARCH_API_TIMEOUT_MS,
+  );
 
   try {
     const requestBody: Record<string, any> = {
@@ -265,7 +287,7 @@ export async function executeSearchWeb(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SEARCH_API_KEY}`,
+        Authorization: `Bearer ${SEARCH_API_KEY}`,
       },
       body: JSON.stringify(requestBody),
       signal: abortController.signal,
@@ -349,7 +371,11 @@ export async function executeSearchWeb(
       resultPublishDates,
     });
 
-    const results = extractResultsFromResponse(responseData, maxResults, engine);
+    const results = extractResultsFromResponse(
+      responseData,
+      maxResults,
+      engine,
+    );
 
     const finalResult: SearchWebResult = {
       results,
@@ -364,7 +390,7 @@ export async function executeSearchWeb(
       engine,
       totalResults: finalResult.total,
       duration,
-      resultTitles: results.map(r => r.title.substring(0, 50)),
+      resultTitles: results.map((r) => r.title.substring(0, 50)),
     });
 
     return finalResult;
