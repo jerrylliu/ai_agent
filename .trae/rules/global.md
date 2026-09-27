@@ -186,3 +186,4 @@ API Client（`src/lib/api.ts`，HTTP 请求封装）
 - **文档版本管理** → `servers/jerry-llm-server/docs/document-version-management-plan.md`
 - **项目编码规范** → `CODING_WIKI.md`
 - **测试报告** → `servers/jerry-llm-server/TEST_REPORT.md`
+- **打包与发布（桌面 exe / 安卓 APK / 版本号 / 签名 / 官网与下载清单更新）** → `DEPLOYMENT_INFO.md`。凡涉及客户端打包（tauri build / android build）、版本变更、产物分发、latest.json / version.json / 官网下载链接更新，必须先阅读该文件并严格按其中的命令与流程执行（含 punycode 域名注入、签名密钥、产物路径、官网三处版本同步等既定约定），不得凭记忆或惯例操作。
