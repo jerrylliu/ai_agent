@@ -306,6 +306,14 @@ export class ChatController {
 
     const unsubscribe = subscribeChatHistoryEvents(ownerUserId, (event) => {
       if (res.writableEnded) return;
+      // HITL 多端广播：确认请求/解决结果以独立 SSE 事件名推给该用户所有在线端，
+      // 让非触发流（如移动端空闲时）也能弹确认框；payload 结构与流内事件一致
+      if (event.kind === 'hitl') {
+        res.write(
+          `event: ${event.payload.type}\ndata: ${JSON.stringify(event.payload)}\n\n`,
+        );
+        return;
+      }
       res.write(`event: chat_history\ndata: ${JSON.stringify(event)}\n\n`);
     });
 

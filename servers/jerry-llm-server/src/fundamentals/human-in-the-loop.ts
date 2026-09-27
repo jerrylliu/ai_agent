@@ -25,6 +25,7 @@ import {
   updateCard,
 } from './feishu-notify.service';
 import { sendConfirmationResolved } from './sse-writer';
+import { publishHITLEvent } from './chat-event-bus';
 import { metrics } from './metrics';
 import type { Response } from 'express';
 
@@ -38,6 +39,8 @@ interface PendingConfirmation {
   message: string;
   resolve: (confirmed: boolean) => void;
   createdAt: Date;
+  /** 数据归属用户：HITL 广播按它分发到该用户的所有端（桌面/移动/未登录 default） */
+  ownerUserId: string;
   /** 飞书消息 ID（如果同步推送了飞书卡片）。用于审批后更新卡片状态 */
   feishuMessageId?: string;
   /** Web 端 SSE Response，用于飞书侧审批后反向通知 Web 关闭弹窗 */
@@ -148,10 +151,14 @@ function generateConfirmationId(): string {
  * 请求用户确认
  * 返回 Promise（含确认ID），用户确认后 resolve(true)，拒绝后 resolve(false)
  * 超时后 resolve(false)
+ *
+ * @param ownerUserId 数据归属用户：决定多端广播（/chat/events）分发给谁，
+ *                    未传视为 'default'（未登录场景）
  */
 export function requestConfirmation(
   toolName: string,
   params: any,
+  ownerUserId = 'default',
 ): Promise<boolean> & { confirmationId: string } {
   const config = CONFIRMATION_CONFIG[toolName];
 
@@ -173,6 +180,7 @@ export function requestConfirmation(
       message: config.message,
       resolve,
       createdAt: new Date(),
+      ownerUserId,
     };
 
     pendingConfirmations.set(id, pending);
@@ -183,6 +191,23 @@ export function requestConfirmation(
       toolName,
       riskLevel: config.riskLevel,
       paramsSummary,
+    });
+
+    // 多端广播：把确认请求推给该用户的所有在线端（桌面 + 移动）。
+    // 流内的 sendConfirmationRequest 仍由调用方负责（那条流本身就在收），
+    // 前端按 confirmation id 幂等去重，双投递不会弹两个框。
+    publishHITLEvent({
+      kind: 'hitl',
+      ownerUserId,
+      at: Date.now(),
+      payload: {
+        type: 'confirmation_request',
+        id,
+        toolName,
+        paramsSummary,
+        riskLevel: config.riskLevel,
+        message: config.message,
+      },
     });
 
     // 飞书双通道：如果配置了 HITL 接收人，并行推送飞书卡片
@@ -207,6 +232,18 @@ export function requestConfirmation(
         pendingConfirmations.delete(id);
         entry.resolve(false);
         metrics.hitlResolved.inc({ action: 'timeout', source: 'web' });
+        // 超时也要广播：其他端（移动/桌面）弹窗还挂着，收到后关闭
+        publishHITLEvent({
+          kind: 'hitl',
+          ownerUserId: entry.ownerUserId,
+          at: Date.now(),
+          payload: {
+            type: 'confirmation_resolved',
+            id,
+            confirmed: false,
+            source: 'timeout',
+          },
+        });
         logger.info('人工确认：确认请求超时，自动拒绝', {
           module: 'HumanInTheLoop',
           confirmationId: id,
@@ -268,6 +305,19 @@ export function handleConfirmationResponse(
   metrics.hitlResolved.inc({
     action: confirmed ? 'confirm' : 'reject',
     source,
+  });
+
+  // 多端广播：无论哪个端解决（web/feishu），都让该用户所有在线端关闭对应弹窗
+  publishHITLEvent({
+    kind: 'hitl',
+    ownerUserId: pending.ownerUserId,
+    at: Date.now(),
+    payload: {
+      type: 'confirmation_resolved',
+      id: confirmationId,
+      confirmed,
+      source,
+    },
   });
 
   logger.info('人工确认：用户响应', {
