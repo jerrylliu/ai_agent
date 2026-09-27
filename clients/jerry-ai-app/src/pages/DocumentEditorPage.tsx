@@ -490,7 +490,10 @@ export default function DocumentEditorPage({
   }, [saving, dirty, savedAt]);
 
   return (
-    <div className="flex flex-col h-full w-full bg-background text-foreground cyberpunk-editor-page">
+    // 底部避让：移动端软键盘弹出时，安卓原生 insets 桥把键盘高度注入 --safe-keyboard，
+    // 根容器预留等高 padding 让编辑区收缩到键盘上方（与 ChatAgent 同一套避让体系），
+    // 否则键盘会盖住正在编辑的底部文字；桌面端这些变量恒为 0，无任何影响
+    <div className="flex flex-col h-full w-full bg-background text-foreground cyberpunk-editor-page pb-[calc(var(--safe-bottom)+var(--safe-keyboard))]">
       {/* 顶部栏 */}
       <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-background/80 backdrop-blur cyberpunk-editor-header">
         <div className="flex items-center gap-2 min-w-0">

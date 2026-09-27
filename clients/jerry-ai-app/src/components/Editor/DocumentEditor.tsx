@@ -13,16 +13,24 @@
  *   - 不在此处写持久化逻辑，保持组件纯展示
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useEditor, EditorContent, type Editor, type JSONContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
-import { GhostSuggestion, setEnabled as setGhostEnabled } from './extensions/GhostSuggestion';
+import {
+  GhostSuggestion,
+  setEnabled as setGhostEnabled,
+  getGhostState,
+  acceptGhostSuggestion,
+  clearGhostSuggestion,
+} from './extensions/GhostSuggestion';
 import { CalloutExtension } from './extensions/CalloutExtension';
 import { AnchorHighlight } from './extensions/AnchorHighlight';
 import { useSettingsStore } from '@/stores/settings-store';
+import { useIsMobile } from '@/hooks/useMediaQuery';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/utils/index';
 
 export interface DocumentEditorProps {
@@ -58,6 +66,13 @@ export function DocumentEditor({
 }: DocumentEditorProps) {
   // 读取自动补全开关设置（响应式：设置变化时自动同步到编辑器）
   const autoCompleteEnabled = useSettingsStore((s) => s.autoCompleteEnabled);
+  const isMobile = useIsMobile();
+
+  // 移动端幽灵补全可接受状态：软键盘没有 Tab/Esc，需要渲染"接受/取消"浮动按钮。
+  // 通过 transaction 事件跟踪插件状态（补全文本出现/清除/光标移开都会派发事务），
+  // 只在可见性变化时 setState，避免高频事务反复重渲染
+  const [ghostVisible, setGhostVisible] = useState(false);
+  const [ghostText, setGhostText] = useState('');
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -121,34 +136,93 @@ export function DocumentEditor({
     if (editor && onReady) onReady(editor);
   }, [editor, onReady]);
 
+  // 幽灵补全状态跟踪（editor 就绪后）：见上方 ghostVisible/ghostText 说明
+  useEffect(() => {
+    if (!editor) return;
+    const syncGhost = () => {
+      const st = getGhostState(editor.view);
+      const visible =
+        !!st?.suggestion && editor.state.selection.from === st.from;
+      setGhostVisible((prev) => (prev === visible ? prev : visible));
+      setGhostText((prev) =>
+        prev === (st?.suggestion ?? '') ? prev : (st?.suggestion ?? ''),
+      );
+    };
+    syncGhost();
+    editor.on('transaction', syncGhost);
+    return () => {
+      editor.off('transaction', syncGhost);
+    };
+  }, [editor]);
+
   return (
-    <div
-      className={cn(
-        'tiptap-editor-container w-full h-full overflow-y-auto',
-        'px-6 py-4 cyberpunk-editor-container',
-        className,
-      )}
-    >
-      <EditorContent
-        editor={editor}
+    <>
+      <div
         className={cn(
-          // Tailwind Typography 让默认 markdown-like 样式得当
-          'prose prose-sm md:prose-base max-w-none',
-          'dark:prose-invert',
-          // 赛博朋克模式标识，用于 CSS 覆盖 prose 样式
-          'cyberpunk-editor-content',
-          // 聚焦时去掉默认描边
-          '[&_.ProseMirror]:outline-none',
-          '[&_.ProseMirror]:min-h-[60vh]',
-          // 占位符样式
-          '[&_.ProseMirror_.is-editor-empty:first-child]:before:content-[attr(data-placeholder)]',
-          '[&_.ProseMirror_.is-editor-empty:first-child]:before:text-gray-400',
-          '[&_.ProseMirror_.is-editor-empty:first-child]:before:float-left',
-          '[&_.ProseMirror_.is-editor-empty:first-child]:before:pointer-events-none',
-          '[&_.ProseMirror_.is-editor-empty:first-child]:before:h-0',
+          'tiptap-editor-container w-full h-full overflow-y-auto',
+          'px-6 py-4 cyberpunk-editor-container',
+          className,
         )}
-      />
-    </div>
+      >
+        <EditorContent
+          editor={editor}
+          className={cn(
+            // Tailwind Typography 让默认 markdown-like 样式得当
+            'prose prose-sm md:prose-base max-w-none',
+            'dark:prose-invert',
+            // 赛博朋克模式标识，用于 CSS 覆盖 prose 样式
+            'cyberpunk-editor-content',
+            // 聚焦时去掉默认描边
+            '[&_.ProseMirror]:outline-none',
+            '[&_.ProseMirror]:min-h-[60vh]',
+            // 占位符样式
+            '[&_.ProseMirror_.is-editor-empty:first-child]:before:content-[attr(data-placeholder)]',
+            '[&_.ProseMirror_.is-editor-empty:first-child]:before:text-gray-400',
+            '[&_.ProseMirror_.is-editor-empty:first-child]:before:float-left',
+            '[&_.ProseMirror_.is-editor-empty:first-child]:before:pointer-events-none',
+            '[&_.ProseMirror_.is-editor-empty:first-child]:before:h-0',
+          )}
+        />
+      </div>
+
+      {/* 移动端幽灵补全操作条：软键盘没有 Tab/Esc，提供"接受/取消"按钮。
+          固定定位在键盘上方（--safe-keyboard 由安卓原生 insets 桥注入）；
+          onMouseDown preventDefault 防止点击按钮时编辑器失焦、软键盘收起 */}
+      {isMobile && !readOnly && editor && ghostVisible && (
+        <div
+          className="fixed left-1/2 -translate-x-1/2 z-50 flex max-w-[92vw] items-center gap-2 rounded-full border border-border bg-popover text-popover-foreground shadow-lg px-3 py-1.5 bottom-[calc(var(--safe-bottom)+var(--safe-keyboard)+16px)]"
+          data-testid="ghost-accept-bar"
+        >
+          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+            {ghostText}
+          </span>
+          <Button
+            size="sm"
+            className="h-7 shrink-0 px-3"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              if (editor && acceptGhostSuggestion(editor.view)) {
+                setGhostVisible(false);
+              }
+            }}
+          >
+            接受
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 shrink-0 px-2"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              if (editor) clearGhostSuggestion(editor.view);
+              setGhostVisible(false);
+            }}
+          >
+            取消
+          </Button>
+        </div>
+      )}
+    </>
   );
 }
 

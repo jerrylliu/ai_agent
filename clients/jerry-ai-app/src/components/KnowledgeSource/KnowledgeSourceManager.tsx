@@ -3,7 +3,7 @@ import {
   Globe, MessageSquare, Plus, RefreshCw, Trash2, Play,
   X, AlertCircle, Clock, Loader2,
   RotateCcw, Layers, Bell, BellOff, FileEdit, FilePlus, FileMinus,
-  ClipboardPaste, Check, Pencil,
+  ClipboardPaste, Check, Pencil, ArrowLeft,
 } from 'lucide-react';
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Button } from '../ui/button';
@@ -11,6 +11,8 @@ import { Badge } from '../ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Input } from '../ui/input';
 import { Switch } from '../ui/switch';
+import { useIsMobile } from '../../hooks/useMediaQuery';
+import { cn } from '../../utils';
 import {
   getKnowledgeSources,
   createKnowledgeSource,
@@ -56,6 +58,16 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
   });
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+
+  // 移动端单栏切换：手机屏幕放不下"列表 + 详情"双栏，
+  // 点列表项进入详情全屏，返回按钮回到列表（桌面端保持双栏不变）
+  const isMobile = useIsMobile();
+  const [mobileView, setMobileView] = useState<'list' | 'detail'>('list');
+  // 选中项变化时（含删除后置空）自动回到列表视图，避免停留在空详情页
+  useEffect(() => {
+    if (!isMobile) return;
+    setMobileView(selectedId ? 'detail' : 'list');
+  }, [selectedId, isMobile]);
 
   const showFeedback = useCallback((success: boolean, message: string) => {
     setFeedback({ show: true, success, message });
@@ -212,12 +224,24 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-slate-600">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
+      {/* 头部：flex-wrap 让按钮组在窄屏换行到第二行，标题 whitespace-nowrap 防止被挤压成竖排 */}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 p-4 border-b border-gray-200 dark:border-slate-600">
+        <h2 className="text-lg font-semibold flex items-center gap-2 whitespace-nowrap shrink-0">
           <Layers className="h-5 w-5" />
           知识源管理
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* 移动端详情视图返回列表 */}
+          {isMobile && mobileView === 'detail' && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMobileView('list')}
+            >
+              <ArrowLeft className="h-4 w-4 mr-1" />
+              列表
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={() => loadData()} disabled={loading}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           </Button>
@@ -244,7 +268,11 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
       )}
 
       {stats && (
-        <div className="grid grid-cols-5 gap-2 p-4 border-b border-gray-200 dark:border-slate-600">
+        <div className={cn(
+          'grid grid-cols-5 gap-2 p-4 border-b border-gray-200 dark:border-slate-600',
+          // 移动端详情视图下隐藏统计条，给详情内容让出空间
+          isMobile && mobileView === 'detail' && 'hidden',
+        )}>
           <StatCard label="总计" value={stats.total} />
           <StatCard label="已启用" value={stats.enabled} color="text-blue-500" />
           <StatCard label="同步中" value={stats.syncing} color="text-amber-500" />
@@ -254,7 +282,15 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
       )}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="w-80 border-r border-gray-200 dark:border-slate-600 overflow-y-auto">
+        <div className={cn(
+          'border-r border-gray-200 dark:border-slate-600 overflow-y-auto',
+          // 移动端：列表/详情单栏切换（hidden 互斥），桌面端保持固定宽度双栏
+          isMobile
+            ? mobileView === 'list'
+              ? 'flex-1'
+              : 'hidden'
+            : 'w-80',
+        )}>
           <div className="p-3">
             {sources.length === 0 && !loading && (
               <div className="text-center py-8 text-muted-foreground text-sm">
@@ -275,7 +311,11 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
                       ? 'bg-primary/10 border border-primary/30'
                       : 'hover:bg-muted border border-transparent'
                   }`}
-                  onClick={() => setSelectedId(source.id)}
+                  onClick={() => {
+                    setSelectedId(source.id);
+                    // 移动端点击列表项进入详情视图（同一项重复点击也要能进入）
+                    if (isMobile) setMobileView('detail');
+                  }}
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex items-start gap-2 flex-1 min-w-0">
@@ -331,7 +371,11 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className={cn(
+          'flex-1 overflow-y-auto',
+          // 移动端列表视图下隐藏详情，单栏互斥
+          isMobile && mobileView === 'list' && 'hidden',
+        )}>
           {!selectedId ? (
             <div className="flex items-center justify-center h-full text-muted-foreground">
               <div className="text-center">

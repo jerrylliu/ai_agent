@@ -157,7 +157,7 @@ export function useChat(
   onConfirmationResolved?: (event: {
     id: string;
     confirmed: boolean;
-    source: "web" | "feishu";
+    source: "web" | "feishu" | "timeout";
   }) => void,
 ) {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -417,8 +417,13 @@ export function useChat(
     const controller = new AbortController();
     messageLoadAbortRef.current = controller;
 
-    setMessages([]);
-    setIsMessagesLoading(true);
+    // 强制刷新（force=true，仅用于当前会话的数据同步）时不清空旧消息：
+    // 清空会让虚拟列表 totalSize 归零、scrollTop 被浏览器钳到 0，
+    // 表现为"生成结束后滚动条自动跳到最上面"；改为新数据到达后原位替换
+    if (!options?.force) {
+      setMessages([]);
+      setIsMessagesLoading(true);
+    }
 
     try {
       const messagesData = await getSessionMessages(sessionId);
@@ -540,6 +545,15 @@ export function useChat(
   }, [authLoading, isTyping]);
 
   // 实时同步：订阅后端 chat_history 事件，任意来源写库后立即刷新（轮询保留为兜底）
+  // 同时接收 HITL 多端广播（confirmation_request/resolved）：工具确认请求原本
+  // 只走触发它的那条聊天流，换设备（如手机端空闲）收不到提示；后端现在会广播
+  // 到该用户的所有 /chat/events 连接，任何在线端都能弹确认框。回调走 ref 避免
+  // effect 依赖变化导致反复断连重连
+  const onConfirmationRequestRef = useRef(onConfirmationRequest);
+  onConfirmationRequestRef.current = onConfirmationRequest;
+  const onConfirmationResolvedRef = useRef(onConfirmationResolved);
+  onConfirmationResolvedRef.current = onConfirmationResolved;
+
   useEffect(() => {
     if (authLoading) return;
 
@@ -560,6 +574,12 @@ export function useChat(
       },
       (connected) => {
         sseConnectedRef.current = connected;
+      },
+      {
+        onConfirmationRequest: (event) =>
+          onConfirmationRequestRef.current?.(event),
+        onConfirmationResolved: (event) =>
+          onConfirmationResolvedRef.current?.(event),
       },
     );
 

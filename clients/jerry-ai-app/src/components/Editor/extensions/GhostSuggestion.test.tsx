@@ -11,13 +11,20 @@
  *   7. Escape 清除补全
  *   8. seq 校验：过期响应被丢弃
  *   9. 新请求发送时才中断旧请求
+ *  10. 移动端公开 API：getGhostState / acceptGhostSuggestion / clearGhostSuggestion
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import { GhostSuggestion, setContinuing } from './GhostSuggestion';
+import {
+  GhostSuggestion,
+  setContinuing,
+  getGhostState as getPluginGhostState,
+  acceptGhostSuggestion,
+  clearGhostSuggestion,
+} from './GhostSuggestion';
 
 // ==================== Mock requestCompletion ====================
 
@@ -291,5 +298,113 @@ describe('GhostSuggestion 防抖逻辑（非流式）', () => {
     vi.advanceTimersByTime(800);
     expect(mockedRequestCompletion).toHaveBeenCalledTimes(2);
     expect(firstSignal.aborted).toBe(true);
+  });
+});
+
+describe('移动端公开 API（getGhostState / acceptGhostSuggestion / clearGhostSuggestion）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    mockedRequestCompletion.mockClear();
+    pendingResolve = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  it('getGhostState 读取插件状态：无补全时空文本，响应后返回补全与位置', async () => {
+    let editorRef: NonNullable<ReturnType<typeof useEditor>> | null = null;
+    render(<TestEditor onReady={(e) => { editorRef = e; }} />);
+
+    const editor = editorRef!;
+    // 初始无补全：suggestion 为空字符串
+    expect(getPluginGhostState(editor.view)?.suggestion).toBe('');
+
+    editor.commands.insertContent('这是一段测试文本');
+    vi.advanceTimersByTime(800);
+    pendingResolve!('，这是补全内容');
+    await Promise.resolve();
+
+    const st = getPluginGhostState(editor.view);
+    expect(st?.suggestion).toBe('，这是补全内容');
+    // from 记录补全起始位置（发起请求时的光标位置）
+    expect(st?.from).toBeGreaterThan(0);
+  });
+
+  it('acceptGhostSuggestion 等价 Tab：插入文本并返回 true', async () => {
+    let editorRef: NonNullable<ReturnType<typeof useEditor>> | null = null;
+    render(<TestEditor onReady={(e) => { editorRef = e; }} />);
+
+    const editor = editorRef!;
+    editor.commands.insertContent('这是一段测试文本');
+    vi.advanceTimersByTime(800);
+
+    pendingResolve!('，这是补全内容');
+    await Promise.resolve();
+    expect(getPluginGhostState(editor.view)?.suggestion).toBe('，这是补全内容');
+
+    expect(acceptGhostSuggestion(editor.view)).toBe(true);
+
+    const docText = editor.state.doc.textBetween(
+      0,
+      editor.state.doc.content.size,
+      '\n',
+    );
+    expect(docText).toContain('这是补全内容');
+    expect(getPluginGhostState(editor.view)?.suggestion).toBe('');
+  });
+
+  it('无补全时 acceptGhostSuggestion 返回 false 且不改动文档', () => {
+    let editorRef: NonNullable<ReturnType<typeof useEditor>> | null = null;
+    render(<TestEditor onReady={(e) => { editorRef = e; }} />);
+
+    const editor = editorRef!;
+    const sizeBefore = editor.state.doc.content.size;
+    expect(acceptGhostSuggestion(editor.view)).toBe(false);
+    expect(editor.state.doc.content.size).toBe(sizeBefore);
+  });
+
+  it('clearGhostSuggestion 清除已显示的幽灵文字', async () => {
+    let editorRef: NonNullable<ReturnType<typeof useEditor>> | null = null;
+    render(<TestEditor onReady={(e) => { editorRef = e; }} />);
+
+    const editor = editorRef!;
+    editor.commands.insertContent('这是一段测试文本');
+    vi.advanceTimersByTime(800);
+
+    pendingResolve!('，这是补全内容');
+    await Promise.resolve();
+    expect(getPluginGhostState(editor.view)?.suggestion).toBe('，这是补全内容');
+
+    clearGhostSuggestion(editor.view);
+
+    expect(getPluginGhostState(editor.view)?.suggestion).toBe('');
+    // 文档内容不受影响（只清除显示，不改动文本）
+    const docText = editor.state.doc.textBetween(
+      0,
+      editor.state.doc.content.size,
+      '\n',
+    );
+    expect(docText).not.toContain('这是补全内容');
+  });
+
+  it('clearGhostSuggestion 中断进行中的补全请求', () => {
+    let editorRef: NonNullable<ReturnType<typeof useEditor>> | null = null;
+    render(<TestEditor onReady={(e) => { editorRef = e; }} />);
+
+    const editor = editorRef!;
+    editor.commands.insertContent('这是一段测试文本');
+    vi.advanceTimersByTime(800);
+
+    const signal = mockedRequestCompletion.mock.calls[0][1] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+
+    clearGhostSuggestion(editor.view);
+
+    // 请求被中断
+    expect(signal.aborted).toBe(true);
+    // 幽灵文字保持为空
+    expect(getPluginGhostState(editor.view)?.suggestion).toBe('');
   });
 });

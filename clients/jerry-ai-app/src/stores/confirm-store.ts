@@ -54,7 +54,18 @@ export const useConfirmStore = create<ConfirmState>()((set, get) => ({
     set({ alertOpen: false, alertMessage: '' }),
 
   showToolConfirmation: (confirmation) =>
-    set((state) => ({ toolConfirmationQueue: [...state.toolConfirmationQueue, confirmation] })),
+    set((state) =>
+      // 幂等去重：同一确认请求会收到两次推送（触发流内 SSE + 多端广播），
+      // 按 id 去重避免弹两个框；飞书侧先解决时 removeToolConfirmationById 也按 id 清理
+      state.toolConfirmationQueue.some((c) => c.id === confirmation.id)
+        ? state
+        : {
+            toolConfirmationQueue: [
+              ...state.toolConfirmationQueue,
+              confirmation,
+            ],
+          },
+    ),
   closeToolConfirmation: () =>
     set((state) => ({ toolConfirmationQueue: state.toolConfirmationQueue.slice(1) })),
   removeToolConfirmationById: (id) =>

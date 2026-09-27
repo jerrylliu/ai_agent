@@ -227,9 +227,9 @@ export function VersionTimeline({
                       ? 'border-primary bg-primary/5'
                       : 'border-border hover:border-primary/30'
                   }`}>
-                    {/* 版本头部 */}
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
+                    {/* 版本头部：flex-wrap 让时间戳在窄屏换行进卡片，shrink-0 防止时间被挤出边框 */}
+                    <div className="flex flex-wrap items-center justify-between gap-y-1 mb-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-medium text-sm">v{version.versionNumber}</span>
                         <Badge className={`text-[10px] ${statusBadge(version.status)}`}>
                           {version.status}
@@ -245,7 +245,7 @@ export function VersionTimeline({
                           </Badge>
                         )}
                       </div>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-xs text-muted-foreground shrink-0">
                         {new Date(version.createdAt).toLocaleString()}
                       </span>
                     </div>

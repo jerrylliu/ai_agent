@@ -119,12 +119,24 @@ export interface ChatHistoryRealtimeEvent {
  * 用于双端实时同步：飞书入站回复 / Web→飞书回流等任意来源写库后，
  * Web 端立即收到信号并刷新，无需依赖 5 秒轮询。
  *
+ * 同时监听 HITL 多端广播事件（confirmation_request / confirmation_resolved）：
+ * 工具确认请求原先只走"触发它的那条聊天流"，换设备（如手机端空闲）收不到提示；
+ * 后端现在会广播到该用户的所有 /chat/events 连接，任何在线端都能弹确认框。
+ *
  * EventSource 无法自定义请求头，token 通过 query 传入（与后端 /chat/events 约定一致）。
  * 返回关闭函数，组件卸载时调用以释放连接。
  */
 export function subscribeChatEvents(
   onEvent: (event: ChatHistoryRealtimeEvent) => void,
   onStatusChange?: (connected: boolean) => void,
+  options?: {
+    onConfirmationRequest?: (event: ConfirmationRequestEvent) => void;
+    onConfirmationResolved?: (event: {
+      id: string;
+      confirmed: boolean;
+      source: "web" | "feishu" | "timeout";
+    }) => void;
+  },
 ): () => void {
   const token = localStorage.getItem(TOKEN_KEY);
   const url = `${API_ENDPOINTS.BASE_URL}/chat/events${token ? `?token=${encodeURIComponent(token)}` : ""}`;
@@ -137,6 +149,20 @@ export function subscribeChatEvents(
       onEvent(JSON.parse((e as MessageEvent).data));
     } catch {
       /* 单条事件解析失败忽略，等待下一条 */
+    }
+  });
+  source.addEventListener("confirmation_request", (e) => {
+    try {
+      options?.onConfirmationRequest?.(JSON.parse((e as MessageEvent).data));
+    } catch {
+      /* 单条事件解析失败忽略 */
+    }
+  });
+  source.addEventListener("confirmation_resolved", (e) => {
+    try {
+      options?.onConfirmationResolved?.(JSON.parse((e as MessageEvent).data));
+    } catch {
+      /* 单条事件解析失败忽略 */
     }
   });
   source.addEventListener("error", () => {
