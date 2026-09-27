@@ -65,20 +65,41 @@ const MessageList: React.FC<MessageListProps> = ({
       return 1400;
     },
     overscan: 15,
+    // 按消息 id 建立测量缓存：生成结束后消息数组会被服务端数据原位替换
+    // （临时 id → 落库 id），默认按 index 缓存会把旧尺寸套在新消息上，
+    // 造成总高度计算漂移；按 key 缓存则新 id 触发重新测量，位置保持稳定
+    getItemKey: (index) => messages[index]?.id ?? `idx-${index}`,
   });
 
-  // 新消息时自动滚动到底部
+  // 自动滚动：
+  //   1) 新消息加入时滚到底部（保持原有行为）
+  //   2) 流式生成时最新消息内容增长也跟随滚动（仅当用户停留在底部附近），
+  //      否则长回答会一直长在视口外，用户必须手动下翻才能看到新内容
   const prevMessageCountRef = useRef(messages.length);
+  const prevLastContentLenRef = useRef(
+    messages[messages.length - 1]?.content?.length ?? 0,
+  );
   useEffect(() => {
-    if (messages.length > 0 && messages.length > prevMessageCountRef.current) {
-      if (isAtBottomRef.current) {
-        requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(messages.length - 1, { align: 'end', behavior: 'smooth' });
+    const countIncreased =
+      messages.length > 0 && messages.length > prevMessageCountRef.current;
+    const lastContentLen =
+      messages[messages.length - 1]?.content?.length ?? 0;
+    const contentGrew =
+      !countIncreased && lastContentLen > prevLastContentLenRef.current;
+
+    if ((countIncreased || contentGrew) && isAtBottomRef.current) {
+      requestAnimationFrame(() => {
+        // 新消息用 smooth 提示有新内容；流式增长用 instant，避免平滑动画
+        // 被高频内容更新反复打断反而跟不上底部
+        virtualizer.scrollToIndex(messages.length - 1, {
+          align: 'end',
+          behavior: countIncreased ? 'smooth' : 'instant',
         });
-      }
+      });
     }
     prevMessageCountRef.current = messages.length;
-  }, [messages.length]);
+    prevLastContentLenRef.current = lastContentLen;
+  }, [messages, virtualizer]);
 
   // 会话切换时滚动到底部
   useEffect(() => {

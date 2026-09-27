@@ -225,6 +225,37 @@ function acceptSuggestion(view: EditorView): void {
   }
 }
 
+// ==================== 供 UI 层调用的公开 API ====================
+// 移动端软键盘没有 Tab/Esc 键，幽灵文本需要在 UI 上渲染"接受/取消"按钮，
+// 这里把插件内部状态与操作以只读方式暴露给 React 组件。
+
+/**
+ * 读取当前幽灵补全状态（含补全文本与起始位置）。
+ * 注意：光标已从补全起点移开时 decorations 不渲染幽灵文字，
+ * UI 判断"是否可见"应同时检查 selection.from === state.from。
+ */
+export function getGhostState(view: EditorView): GhostState | null {
+  return ghostPluginKey.getState(view.state) ?? null;
+}
+
+/**
+ * 接受当前幽灵补全（等价于按 Tab）。
+ * 有可接受的补全时插入文本并返回 true，否则返回 false。
+ */
+export function acceptGhostSuggestion(view: EditorView): boolean {
+  const pluginState = ghostPluginKey.getState(view.state);
+  if (!pluginState?.suggestion) return false;
+  acceptSuggestion(view);
+  return true;
+}
+
+/**
+ * 取消当前幽灵补全（等价于按 Escape）：清除显示并中断进行中的补全请求
+ */
+export function clearGhostSuggestion(view: EditorView): void {
+  clearSuggestion(view);
+}
+
 export interface GhostSuggestionOptions {
   /** 防抖延迟（毫秒） */
   debounceMs: number;

@@ -16,6 +16,8 @@ import { logger } from './logger.js';
 
 /** chat_history 写入事件 */
 export interface ChatHistoryEvent {
+  /** 事件种类标记：chat_history 总线复用（HITL 广播用 'hitl'，缺省视为 chat_history） */
+  kind?: 'chat_history';
   /** 数据归属用户（与 session.userId 一致；未登录为 'default'） */
   ownerUserId: string;
   /** 受影响的会话 */
@@ -39,6 +41,41 @@ const emitter = new EventEmitter();
 emitter.setMaxListeners(0);
 
 const CHANNEL = 'chat-history';
+
+/**
+ * HITL（人工确认）多端广播事件
+ *
+ * 为什么复用 chat 事件总线：确认请求原先只通过"触发它的那条聊天 SSE 流"推送，
+ * 换设备（如手机端空闲、未在流式接收）时收不到任何提示，而飞书卡片是服务端
+ * 主动推送所以能收到。把确认请求/解决结果广播到该用户的所有 /chat/events
+ * 长连接后，桌面端与移动端都能弹窗，与飞书双通道对齐。
+ */
+export interface HITLBusEvent {
+  kind: 'hitl';
+  /** 数据归属用户 */
+  ownerUserId: string;
+  /** 事件时间戳（毫秒） */
+  at: number;
+  /** SSE data 帧内容（与流内 confirmation_request / confirmation_resolved 事件结构一致） */
+  payload:
+    | {
+        type: 'confirmation_request';
+        id: string;
+        toolName: string;
+        paramsSummary: string;
+        riskLevel: 'low' | 'medium' | 'high';
+        message: string;
+      }
+    | {
+        type: 'confirmation_resolved';
+        id: string;
+        confirmed: boolean;
+        source: 'web' | 'feishu' | 'timeout';
+      };
+}
+
+/** 总线上的事件联合类型：订阅方按 kind 分流 */
+export type ChatBusEvent = ChatHistoryEvent | HITLBusEvent;
 
 /**
  * 发布一条 chat_history 写入事件。
@@ -75,14 +112,29 @@ export function publishSessionDeletedEvent(args: {
 }
 
 /**
- * 订阅指定用户的 chat_history 事件。
+ * 发布一条 HITL 确认广播事件（确认请求创建 / 被解决）。
+ * 失败只 warn，绝不影响主链路（HITL 主流程是流内 SSE + 飞书卡片，广播只是多端同步增强）。
+ */
+export function publishHITLEvent(event: HITLBusEvent): void {
+  try {
+    emitter.emit(CHANNEL, event);
+  } catch (e: any) {
+    logger.warn('发布 HITL 广播事件失败（忽略）', {
+      module: 'ChatEventBus',
+      err: (e?.message || String(e)).slice(0, 200),
+    });
+  }
+}
+
+/**
+ * 订阅指定用户的 chat_history / HITL 广播事件（按 kind 分流）。
  * 返回取消订阅函数，SSE 连接关闭时必须调用，避免监听器泄漏。
  */
 export function subscribeChatHistoryEvents(
   ownerUserId: string,
-  listener: (event: ChatHistoryEvent) => void,
+  listener: (event: ChatBusEvent) => void,
 ): () => void {
-  const handler = (event: ChatHistoryEvent) => {
+  const handler = (event: ChatBusEvent) => {
     if (event.ownerUserId !== ownerUserId) return;
     listener(event);
   };

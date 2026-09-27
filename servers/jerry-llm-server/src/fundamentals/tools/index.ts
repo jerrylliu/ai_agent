@@ -927,7 +927,7 @@ export async function executeTool(
       toolName: name,
     });
 
-    const confirmedPromise = requestConfirmation(name, params);
+    const confirmedPromise = requestConfirmation(name, params, context?.userId);
 
     // 推送确认请求到前端
     const pendingInfo = getPendingConfirmationInfo(
