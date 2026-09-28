@@ -148,7 +148,8 @@ const EvaluationPanel: React.FC<EvaluationPanelProps> = ({ open, onClose }) => {
               </div>
 
               {/* AI 质量判分（在线 judge：忠实度=幻觉检测，切题度=答非所问检测） */}
-              {stats.autoEvaluation.judge.judgedCount > 0 && (
+              {/* ?. 防护：后端未部署新版时响应无 judge 字段，直接取属性会崩掉整个面板 */}
+              {(stats.autoEvaluation.judge?.judgedCount ?? 0) > 0 && (
                 <div className="space-y-2">
                   <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
                     <Sparkles className="h-4 w-4" /> AI 质量判分
