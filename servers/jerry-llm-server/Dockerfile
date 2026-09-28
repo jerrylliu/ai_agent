@@ -21,6 +21,9 @@ COPY servers/jerry-llm-server/package.json servers/jerry-llm-server/
 # 只安装 server 子包的依赖（含 devDeps，编译需要）；跳过 puppeteer 的 Chromium 下载
 # （服务器上联网搜索工具会在无浏览器时自动跳过注册，如需容器内爬虫另行加装 chromium）
 ENV PUPPETEER_SKIP_DOWNLOAD=true
+# 国内服务器直连 registry.npmjs.org 会爬行（实测 3 分钟仅 1s CPU 进展），
+# 腾讯云内网 npm 镜像与下方 apk 镜像同思路；非腾讯云环境可换 https://registry.npmmirror.com
+ENV npm_config_registry=https://mirrors.cloud.tencent.com/npm/
 RUN pnpm --filter jerry-llm-server install --frozen-lockfile
 
 # ---------- 阶段 2：编译 TypeScript ----------
@@ -36,6 +39,7 @@ COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY clients/jerry-ai-app/package.json clients/jerry-ai-app/
 COPY servers/jerry-llm-server/package.json servers/jerry-llm-server/
 ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV npm_config_registry=https://mirrors.cloud.tencent.com/npm/
 RUN pnpm --filter jerry-llm-server install --frozen-lockfile --prod
 
 # ---------- 阶段 4：运行镜像 ----------
