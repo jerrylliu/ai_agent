@@ -38,6 +38,27 @@ function truncateMiddle(text: string, maxLen: number): string {
   return text.slice(0, head) + TRUNCATION_ELLIPSIS + text.slice(-tail);
 }
 
+/**
+ * 安全解析 unfaithfulClaims JSON 列（与 session.service 的 safeParseJsonArray 同款降级语义：
+ * null/空串/非法 JSON/非数组 → 空数组 + warn，绝不让脏数据把统计接口打 500）。
+ * 不直接复用 safeParseJsonArray：它住在 session.service，会拖入 Summary/Memory 一整串重依赖。
+ */
+function parseUnfaithfulClaims(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((c): c is string => typeof c === 'string');
+  } catch (error: unknown) {
+    logger.warn('unfaithfulClaims 反序列化失败，已忽略该字段', {
+      module: 'EvaluationService',
+      rawLength: raw.length,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return [];
+  }
+}
+
 @Injectable()
 export class EvaluationService {
   constructor(
@@ -338,6 +359,24 @@ export class EvaluationService {
         ? autoEvals.reduce((sum, e) => sum + e.score, 0) / autoEvals.length
         : 0;
 
+    // ==================== 在线 judge 三维统计 ====================
+    // judgeFaithful=null 表示未判分（未启用/无检索上下文/判分失败），不计入分母
+    const judged = autoEvals.filter((e) => e.judgeFaithful !== null);
+    const faithfulCount = judged.filter((e) => e.judgeFaithful === true).length;
+    const relevantCount = judged.filter((e) => e.judgeRelevant === true).length;
+    // 幻觉明细：faithful=false 的题摘出编造原句（JSON 列安全解析，脏数据降级为空列表）
+    const unfaithfulDetails = judged
+      .filter((e) => e.judgeFaithful === false)
+      .slice(0, 10)
+      .map((e) => ({
+        id: e.id,
+        question: e.userMessage.slice(0, 120),
+        claims: parseUnfaithfulClaims(e.unfaithfulClaims),
+        judgeReason: e.judgeReason ?? '',
+        createdAt: e.createdAt,
+        judgeModel: e.judgeModel ?? '',
+      }));
+
     // 按天聚合
     const dailyFeedback: Record<
       string,
@@ -363,6 +402,20 @@ export class EvaluationService {
         totalEvaluations: autoEvals.length,
         avgScore: Math.round(avgAutoScore * 100) / 100,
         recentEvaluations: autoEvals.slice(0, 20),
+        judge: {
+          judgedCount: judged.length,
+          faithfulCount,
+          relevantCount,
+          faithfulnessRate:
+            judged.length > 0
+              ? Math.round((faithfulCount / judged.length) * 100) / 100
+              : 0,
+          relevanceRate:
+            judged.length > 0
+              ? Math.round((relevantCount / judged.length) * 100) / 100
+              : 0,
+          unfaithfulDetails,
+        },
       },
       dailyFeedback,
     };

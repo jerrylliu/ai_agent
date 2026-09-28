@@ -2094,15 +2094,16 @@ export async function submitFeedback(params: {
   comment?: string;
   modelId?: string;
   usedKnowledgeBase?: boolean;
-}): Promise<{ action: "created" | "removed"; rating?: string }> {
+}): Promise<{ action: "created" | "updated" | "removed"; rating?: string }> {
   const response = await fetch(`${API_ENDPOINTS.BASE_URL}/chat/feedback`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
-  return handleResponse<{ action: "created" | "removed"; rating?: string }>(
-    response,
-  );
+  return handleResponse<{
+    action: "created" | "updated" | "removed";
+    rating?: string;
+  }>(response);
 }
 
 export interface EvaluationStats {
@@ -2141,6 +2142,23 @@ export interface EvaluationStats {
       responseTimeMs: number;
       createdAt: string;
     }>;
+    /** 在线 judge 三维判分统计（judgeFaithful=null 的行不计入分母；judgedCount=0 表示还没有判分数据） */
+    judge: {
+      judgedCount: number;
+      faithfulCount: number;
+      relevantCount: number;
+      faithfulnessRate: number;
+      relevanceRate: number;
+      /** 幻觉明细：faithful=false 的回答，摘出 judge 判定的编造原句 */
+      unfaithfulDetails: Array<{
+        id: number;
+        question: string;
+        claims: string[];
+        judgeReason: string;
+        createdAt: string;
+        judgeModel: string;
+      }>;
+    };
   };
   dailyFeedback: Record<string, { positive: number; negative: number }>;
 }
