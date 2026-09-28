@@ -84,6 +84,8 @@ export class AppService {
               modelId: usage.modelId,
               usedKnowledgeBase: usage.usedKnowledgeBase,
               responseTimeMs: usage.responseTimeMs,
+              // 检索上下文：在线 judge faithfulness 判分的依据来源（4 条完成路径均上报）
+              retrievedContexts: usage.retrievedContexts,
             })
             .catch((err) => {
               logger.error('自动评估失败', {

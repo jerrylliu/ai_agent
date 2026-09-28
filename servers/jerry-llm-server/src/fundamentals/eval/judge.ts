@@ -114,11 +114,14 @@ const INFO_NOT_FOUND_SUFFIX = `
  *
  * @param llm 判分用模型（调用方注入，纯函数无 provider 耦合）
  * @param input 题目 + 答案 + gold + contexts
+ * @param options 可选项：signal 传入 AbortSignal.timeout(ms) 做真取消
+ *        （在线路径必须带，防止 judge 挂起拖垮评估链路；benchmark 可省）
  * @returns 判分结果；解析失败返回 null（调用方计入 judgeError，不静默当对/错）
  */
 export async function judgeOne(
   llm: BaseChatModel,
   input: JudgeInput,
+  options?: { signal?: AbortSignal },
 ): Promise<JudgeVerdict | null> {
   const contextBlock =
     input.contexts.length > 0
@@ -139,10 +142,10 @@ export async function judgeOne(
   const userText = `【问题】\n${input.question}\n\n【检索上下文】\n${contextBlock}\n\n【gold 参考】\n${goldBlock || '（无 gold）'}\n\n【待评答案】\n${input.answer}${input.questionType === 'info_not_found' ? INFO_NOT_FOUND_SUFFIX : ''}`;
 
   try {
-    const response = await llm.invoke([
-      new SystemMessage(JUDGE_SYSTEM_PROMPT),
-      new HumanMessage(userText),
-    ]);
+    const response = await llm.invoke(
+      [new SystemMessage(JUDGE_SYSTEM_PROMPT), new HumanMessage(userText)],
+      { signal: options?.signal },
+    );
     const raw =
       typeof response.content === 'string'
         ? response.content

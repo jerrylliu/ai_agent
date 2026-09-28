@@ -5,6 +5,18 @@ import { MessageFeedback } from '../entities/message-feedback.entity';
 import { AutoEvaluation } from '../entities/auto-evaluation.entity';
 import { SearchFeedback } from '../entities/search-feedback.entity';
 import { logger } from '../fundamentals/logger';
+import { config } from '../fundamentals/config.js';
+import { buildModelConfig, createLLM } from '../fundamentals/model-provider.js';
+import { judgeOne, type JudgeVerdict } from '../fundamentals/eval/judge.js';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+
+// ==================== 在线 judge 配置 ====================
+
+/** 单次在线 judge 的超时上限（AbortSignal.timeout 真取消，防挂起拖垮评估链路） */
+const ONLINE_JUDGE_TIMEOUT_MS = 30000;
+/** 送给 judge 的 contexts 保护性截断：条数与单条长度上限，防跨工具轮次聚合过大撑爆上下文 */
+const ONLINE_JUDGE_MAX_CONTEXTS = 12;
+const ONLINE_JUDGE_MAX_CONTEXT_CHARS = 2400;
 
 @Injectable()
 export class EvaluationService {
@@ -66,6 +78,10 @@ export class EvaluationService {
 
   /**
    * 自动评估回答质量（基于规则的轻量评估）
+   *
+   * 规则分只量"长短/快慢/有无标注"，量不出对错；保存规则分后会异步追加
+   * 在线 judge（faithfulness/relevance 两维），判分结果回写同一行的 judge* 列。
+   * judge 全程不阻塞、失败静默降级为只保留规则分。
    */
   async autoEvaluate(params: {
     userId: string;
@@ -75,6 +91,8 @@ export class EvaluationService {
     modelId?: string;
     usedKnowledgeBase?: boolean;
     responseTimeMs?: number;
+    /** 本次回答实际参与生成的检索上下文（faithfulness 判分的依据来源；空 = 跳过 judge） */
+    retrievedContexts?: string[];
   }): Promise<AutoEvaluation> {
     let score = 0.5;
     const reasons: string[] = [];
@@ -127,7 +145,121 @@ export class EvaluationService {
       usedKnowledgeBase: params.usedKnowledgeBase || false,
       responseTimeMs: params.responseTimeMs || 0,
     });
-    return this.autoEvaluationRepository.save(evaluation);
+    const saved = await this.autoEvaluationRepository.save(evaluation);
+
+    // 异步追加在线 judge 判分（fire-and-forget：不阻塞返回，失败只丢判分不丢规则分）
+    void this.appendJudgeVerdict(saved.id, params).catch((err: unknown) => {
+      logger.warn('在线 judge 追加异常（规则分已保留）', {
+        module: 'EvaluationService',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    return saved;
+  }
+
+  // ==================== 在线 judge（faithfulness / relevance） ====================
+
+  /**
+   * judge 模型实例缓存。
+   * 用 buildModelConfig（纯函数）而非 switchModel——后者会改全局 currentModelId，
+   * 污染用户正在使用的对话模型（与 kg-extract.service 同款纪律）。
+   */
+  private judgeLlmInstance: BaseChatModel | null = null;
+  /** createLLM 失败（如 Key 未配置）的告警只发一次，避免每条消息刷屏 */
+  private judgeUnavailableWarned = false;
+
+  /**
+   * 获取 judge 模型实例（失败返回 null，调用方静默跳过判分）。
+   * Key 来源与对话模型一致：Redis 恢复（启动时 loadApiKeysFromStorage）→ .env 兜底。
+   */
+  private getJudgeLlm(): BaseChatModel | null {
+    if (this.judgeLlmInstance) return this.judgeLlmInstance;
+    try {
+      this.judgeLlmInstance = createLLM(
+        buildModelConfig(config.onlineJudgeModel),
+      );
+      this.judgeUnavailableWarned = false;
+      return this.judgeLlmInstance;
+    } catch (err: unknown) {
+      if (!this.judgeUnavailableWarned) {
+        this.judgeUnavailableWarned = true;
+        logger.warn('在线 judge 模型不可用，判分跳过（规则分不受影响）', {
+          module: 'EvaluationService',
+          judgeModel: config.onlineJudgeModel,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return null;
+    }
+  }
+
+  /**
+   * 对已保存的规则评估行追加 judge 判分结果（faithfulness / relevance 两维）。
+   *
+   * 线上没有 gold 标准答案，correctness 无法可靠评估，故只评两维：
+   *   - faithfulness：答案论断是否都有检索上下文依据（幻觉检测，核心价值）
+   *   - relevance：是否答非所问
+   * 判分失败（模型异常/输出解析失败/超时）不写 judge 列，行保留规则分。
+   */
+  private async appendJudgeVerdict(
+    evaluationId: number,
+    params: {
+      userMessage: string;
+      assistantMessage: string;
+      retrievedContexts?: string[];
+    },
+  ): Promise<void> {
+    if (!config.onlineJudgeEnabled) return;
+
+    const contexts = (params.retrievedContexts ?? [])
+      .filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
+      .slice(0, ONLINE_JUDGE_MAX_CONTEXTS)
+      .map((c) => c.slice(0, ONLINE_JUDGE_MAX_CONTEXT_CHARS));
+    // 没有检索上下文就没有 faithfulness 的核对依据（如纯对话/纯工具回答），跳过
+    if (contexts.length === 0) return;
+
+    const llm = this.getJudgeLlm();
+    if (!llm) return;
+
+    const verdict: JudgeVerdict | null = await judgeOne(
+      llm,
+      {
+        question: params.userMessage,
+        answer: params.assistantMessage,
+        goldAnswer: '',
+        answerFacts: [],
+        contexts,
+        questionType: 'online',
+      },
+      { signal: AbortSignal.timeout(ONLINE_JUDGE_TIMEOUT_MS) },
+    );
+    if (!verdict) {
+      logger.warn('在线 judge 判分失败（保留规则分）', {
+        module: 'EvaluationService',
+        evaluationId,
+      });
+      return;
+    }
+
+    await this.autoEvaluationRepository.update(evaluationId, {
+      judgeFaithful: verdict.faithful,
+      judgeRelevant: verdict.relevant,
+      unfaithfulClaims:
+        verdict.unfaithful_claims.length > 0
+          ? JSON.stringify(verdict.unfaithful_claims)
+          : null,
+      judgeReason: verdict.reason,
+      judgeModel: config.onlineJudgeModel,
+    });
+    logger.info('在线 judge 判分完成', {
+      module: 'EvaluationService',
+      evaluationId,
+      judgeModel: config.onlineJudgeModel,
+      faithful: verdict.faithful,
+      relevant: verdict.relevant,
+      unfaithfulClaimCount: verdict.unfaithful_claims.length,
+    });
   }
 
   /**
