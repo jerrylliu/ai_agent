@@ -17,6 +17,10 @@ const ONLINE_JUDGE_TIMEOUT_MS = 30000;
 /** 送给 judge 的 contexts 保护性截断：条数与单条长度上限，防跨工具轮次聚合过大撑爆上下文 */
 const ONLINE_JUDGE_MAX_CONTEXTS = 12;
 const ONLINE_JUDGE_MAX_CONTEXT_CHARS = 2400;
+/** 问题/答案保护性截断：只影响在线 judge 的输入（超长答案的尾部幻觉会漏检，
+ * 但相对"每条消息都可能发出巨型请求"的成本/失败风险，这是合理取舍；benchmark 不受影响） */
+const ONLINE_JUDGE_MAX_QUESTION_CHARS = 2000;
+const ONLINE_JUDGE_MAX_ANSWER_CHARS = 6000;
 
 @Injectable()
 export class EvaluationService {
@@ -225,8 +229,8 @@ export class EvaluationService {
     const verdict: JudgeVerdict | null = await judgeOne(
       llm,
       {
-        question: params.userMessage,
-        answer: params.assistantMessage,
+        question: params.userMessage.slice(0, ONLINE_JUDGE_MAX_QUESTION_CHARS),
+        answer: params.assistantMessage.slice(0, ONLINE_JUDGE_MAX_ANSWER_CHARS),
         goldAnswer: '',
         answerFacts: [],
         contexts,
