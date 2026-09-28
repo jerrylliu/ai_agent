@@ -728,7 +728,9 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                       rating: 'positive',
                       usedKnowledgeBase: message.fromKnowledgeBase,
                     });
-                    if (result.action === 'created') {
+                    // created=新记录，updated=从点踩切换为点赞——两种都是"已点赞"
+                    // （此前只认 created，切换时误显示"已取消点赞"且按钮不亮，与后端实际记录相反）
+                    if (result.action === 'created' || result.action === 'updated') {
                       onFeedbackStateChange({ ...feedbackState, [message.id]: 'positive' });
                       onFeedbackToast({ show: true, message: '已点赞', x: rect.left, y: rect.top - 8 });
                     } else {
@@ -760,7 +762,8 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
                       rating: 'negative',
                       usedKnowledgeBase: message.fromKnowledgeBase,
                     });
-                    if (result.action === 'created') {
+                    // created=新记录，updated=从点赞切换为点踩——两种都是"已点踩"（同上）
+                    if (result.action === 'created' || result.action === 'updated') {
                       onFeedbackStateChange({ ...feedbackState, [message.id]: 'negative' });
                       onFeedbackToast({ show: true, message: '已点踩', x: rect.left, y: rect.top - 8 });
                     } else {
