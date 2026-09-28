@@ -97,6 +97,25 @@ const JUDGE_SYSTEM_PROMPT = `你是一个严格的 RAG 问答质量评审员。�
 {"answer_correct": true/false, "faithful": true/false, "relevant": true/false, "unfaithful_claims": ["编造的原句", ...], "reason": "一句话中文理由"}`;
 
 /**
+ * 在线模式专用判分说明（拼在 system prompt 尾部，仅 contextScope='online' 时生效）。
+ *
+ * 为什么在线要放宽口径（benchmark 保持严格）：
+ *   在线 FC 主路径下，模型生成时可见的信息窗口大于本次检索 contexts——
+ *   检索工具返回的元信息（文档清单、片段统计、文档日期）会进入模型上下文，
+ *   但不会出现在 judge 拿到的 contexts 里。若按 benchmark 严格口径
+ *   （"contexts 无依据 = 编造"），这些真实信息会被系统性误判为幻觉
+ *   （典型：回答里描述"知识库共 N 个文档"被标编造，但知识库里确实有）。
+ *   在线口径改为"可证伪才判编造"：只有与 contexts 矛盾、或对问题核心
+ *   事实凭空捏造才判 false；知识库元结构/背景补充类描述不强制要求依据。
+ */
+const ONLINE_FAITHFULNESS_SUFFIX = `
+
+【在线判分口径补充】你看到的 contexts 只是本次检索命中的片段，不是模型生成时的全部信息来源——模型还可能看到检索工具返回的元信息（文档清单、片段数量统计、文档整理日期等）。因此忠实度判定按以下规则放宽：
+- 关于知识库/检索过程本身的元描述（文档构成、片段数、文档清单、整理时间等）：只要与 contexts 中出现的内容不矛盾，就不算编造，不放入 unfaithful_claims。
+- 背景补充、常识性解释：无直接反证不算编造。
+- 仍判编造（faithful=false）的情形：答案与 contexts 内容明确矛盾；或对问题核心事实凭空捏造（给出了具体数字/名称/结论，contexts 中毫无对应，且该信息是回答问题所必需）。`;
+
+/**
  * info_not_found 专用判分说明（拼在 user 消息尾部，覆盖 correctness 口径）。
  * 这类题 gold_answer 为空、期望模型拒答，不能拿 facts 对照。
  */
@@ -109,19 +128,24 @@ const INFO_NOT_FOUND_SUFFIX = `
 
 // ==================== 单题判分 ====================
 
+/** 判分可见窗口口径：benchmark=严格（contexts 即全部信息源）；online=豁免元信息（模型可见窗口大于 contexts） */
+export type JudgeContextScope = 'benchmark' | 'online';
+
 /**
  * 对单题执行三维判分。
  *
  * @param llm 判分用模型（调用方注入，纯函数无 provider 耦合）
  * @param input 题目 + 答案 + gold + contexts
- * @param options 可选项：signal 传入 AbortSignal.timeout(ms) 做真取消
- *        （在线路径必须带，防止 judge 挂起拖垮评估链路；benchmark 可省）
+ * @param options 可选项：
+ *        - signal 传入 AbortSignal.timeout(ms) 做真取消（在线路径必须带，防挂起；benchmark 可省）
+ *        - contextScope 判分口径（默认 'benchmark' 严格口径；在线评估传 'online' 启用元信息豁免，
+ *          否则检索工具返回的文档清单/统计等真实元信息会被系统性误判为编造）
  * @returns 判分结果；解析失败返回 null（调用方计入 judgeError，不静默当对/错）
  */
 export async function judgeOne(
   llm: BaseChatModel,
   input: JudgeInput,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; contextScope?: JudgeContextScope },
 ): Promise<JudgeVerdict | null> {
   const contextBlock =
     input.contexts.length > 0
@@ -141,9 +165,14 @@ export async function judgeOne(
 
   const userText = `【问题】\n${input.question}\n\n【检索上下文】\n${contextBlock}\n\n【gold 参考】\n${goldBlock || '（无 gold）'}\n\n【待评答案】\n${input.answer}${input.questionType === 'info_not_found' ? INFO_NOT_FOUND_SUFFIX : ''}`;
 
+  const systemText =
+    options?.contextScope === 'online'
+      ? JUDGE_SYSTEM_PROMPT + ONLINE_FAITHFULNESS_SUFFIX
+      : JUDGE_SYSTEM_PROMPT;
+
   try {
     const response = await llm.invoke(
-      [new SystemMessage(JUDGE_SYSTEM_PROMPT), new HumanMessage(userText)],
+      [new SystemMessage(systemText), new HumanMessage(userText)],
       { signal: options?.signal },
     );
     const raw =
