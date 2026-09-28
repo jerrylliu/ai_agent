@@ -1,11 +1,11 @@
 {
-  "version": "0.1.10",
-  "pub_date": "2026-09-27T10:47:37Z",
-  "notes": "1. 移动端支持人工确认弹框：桌面端触发需要确认的操作时，手机端同步弹出确认框；任一端处理或超时后，其他端弹窗自动关闭\n2. 修复聊天窗口滚动问题：AI 回答生成结束后不再自动跳回顶部，流式输出时自动跟随滚动到底部\n3. 移动端布局适配：知识源管理、文档版本管理改为列表⇄详情单栏切换，解决左栏过宽遮挡详情的问题\n4. AI 编辑器移动端优化：软键盘不再遮挡底部内容；AI 幽灵补全新增\"接受/取消\"浮动按钮，无需外接键盘即可采纳补全",
+  "version": "0.1.11",
+  "pub_date": "2026-09-28T13:45:06Z",
+  "notes": "1. 回答准确率评估新增 AI 质量判分：忠实率（幻觉检测）与切题率统计，含疑似编造内容明细\n2. 修复点赞/点踩切换时误显示\"已取消\"且按钮不亮的问题",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZVA5RmxOaGFudE1ZNVZid0t3eEVYcWE4VTU1U2pKdlAwYlJrTjVoVkZZWTk1alhoRTI4OHRpOEhNWk5XcUZFQ3ovVGlkdjJ3cG1kcnl1MHlXWnBlOGdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNTA4NDgzCWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xMF94NjQtc2V0dXAuZXhlCjg4TXV4UGh4K2d5Y2hpcUdtS1VJNlNnNE9QVnJpY2tvbThsOXRibm1GakNUTTByMzJyL0ZTMEoyYm1oaHZYYlVoamlTb0lidlBNZERRWHNjZmk1Q0RBPT0K",
-      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.10_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUVDNW05N0g2amdEVEZ4VWtPZDdiU2RGNnBIMUNrLzJEWkNoUVFqUVFmcy82a0xjbVhVVjdoT0p2TFhHTUtyWXRFUlhHd090aFJ3cE01RkR5Rk9GaFE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNjAzMTA2CWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xMV94NjQtc2V0dXAuZXhlCnc2eVlLb3FhVFNJZWdYQnN1NDZ4b1RRQlNNdmU2RGhwRkdpVlJwZlFuQnZES0ZQUUNFQjZYaHZHV05UOU9kRTNJeHVQRkxpbzF2SmFpMEE0QVhWVURBPT0K",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.11_x64-setup.exe"
     }
   }
 }
