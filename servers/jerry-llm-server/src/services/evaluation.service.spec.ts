@@ -50,6 +50,15 @@ import { judgeOne } from '../fundamentals/eval/judge.js';
 import type { Repository } from 'typeorm';
 import type { JudgeVerdict } from '../fundamentals/eval/judge.js';
 
+/**
+ * config 导出带 as const（全只读），测试需要改开关——取可变视图绕过 readonly。
+ * 与 jest.mock 的 config 工厂是同一个对象，运行时行为一致，仅类型层面解锁写入。
+ */
+const mutableConfig = config as {
+  onlineJudgeEnabled: boolean;
+  onlineJudgeModel: string;
+};
+
 // ==================== 测试工具 ====================
 
 type AutoEvalRepoMock = {
@@ -101,8 +110,8 @@ function buildService(autoEvalRepo: AutoEvalRepoMock): EvaluationService {
 beforeEach(() => {
   jest.clearAllMocks();
   // 恢复 mock config 默认值（个别测试会改开关）
-  config.onlineJudgeEnabled = true;
-  config.onlineJudgeModel = 'zhipu:glm-4.7';
+  mutableConfig.onlineJudgeEnabled = true;
+  mutableConfig.onlineJudgeModel = 'zhipu:glm-4.7';
 });
 
 // ==================== 在线 judge 集成 ====================
@@ -182,7 +191,7 @@ describe('autoEvaluate 在线 judge 集成', () => {
   });
 
   it('onlineJudgeEnabled=false → 跳过 judge', async () => {
-    config.onlineJudgeEnabled = false;
+    mutableConfig.onlineJudgeEnabled = false;
     const repo = makeAutoEvalRepo();
     const service = buildService(repo);
 
