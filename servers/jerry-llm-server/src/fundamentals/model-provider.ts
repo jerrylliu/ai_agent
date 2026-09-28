@@ -393,7 +393,12 @@ export function setZhipuApiKey(apiKey: string): void {
 }
 
 export function getZhipuApiKey(): string {
-  if (!zhipuApiKey) return '';
+  // 与 getDeepseekApiKey 对称：模块变量为空时降级读 .env（脚本场景或 Redis 不可用时）
+  if (!zhipuApiKey) {
+    const envKey = process.env.ZHIPU_API_KEY;
+    if (envKey) return envKey;
+    return '';
+  }
   if (!isEncrypted(zhipuApiKey)) return zhipuApiKey;
   return decrypt(zhipuApiKey);
 }
@@ -405,10 +410,12 @@ export function switchModel(modelId: string): ModelConfig {
   }
 
   if (available.requiresApiKey) {
-    if (available.provider === 'deepseek' && !deepseekApiKey) {
+    // Key 校验走 getter 而非模块变量：getter 带 .env 兜底，与 buildModelConfig
+    // 实际取 Key 的口径一致——否则 .env 配了 Key 的脚本场景会被误判"缺少 API Key"
+    if (available.provider === 'deepseek' && !getDeepseekApiKey()) {
       throw new Error(`模型 ${available.name} 需要 API Key，请先配置`);
     }
-    if (available.provider === 'zhipu' && !zhipuApiKey) {
+    if (available.provider === 'zhipu' && !getZhipuApiKey()) {
       throw new Error(`模型 ${available.name} 需要 API Key，请先配置`);
     }
   }
