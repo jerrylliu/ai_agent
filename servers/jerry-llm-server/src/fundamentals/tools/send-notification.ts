@@ -233,7 +233,8 @@ export const sendNotificationParamsSchema = z.object({
       '附件列表，**全部三个通道（feishu/email/webhook）均生效**。\n' +
         '- email 通道：图片自动内嵌正文，PDF/Word/Markdown 等作为邮件附件。\n' +
         '- feishu 通道：图片上传飞书素材库后作为「图片消息」单独发出，可点击放大；PDF/Word/Excel 作为「文件消息」发出，群里可在线预览。\n' +
-        '- 重要：用户要求"把图发飞书""把 PDF 发飞书""三个东西都发飞书"等场景，**必须**把 generate_chart / create_mindmap / generate_image / generate_document 返回的 url（含 fc:// 协议）填入此字段，不能只在 content 里描述文字。少传 attachments 等于没发附件。',
+        '- 重要：用户要求"把图发飞书""把 PDF 发飞书""三个东西都发飞书"等场景，**必须**把 generate_chart / create_mindmap / generate_image / generate_document 返回的 url（含 fc:// 协议）填入此字段，不能只在 content 里描述文字。少传 attachments 等于没发附件。\n' +
+        '- ⚠️ 严禁编造 URL：url 必须是上述工具**在本次对话中原样返回**的完整地址（fc://document/ 后跟系统生成的随机 key）。**禁止**用标题、日期、文件名自行拼凑 fc:// 链接（如 fc://document/2026月饼销量盘点 是非法的），编造的地址无法解析、附件会发送失败。',
     ),
 });
 
@@ -258,6 +259,16 @@ export interface SendNotificationResult {
   errors?: string[];
   /** 服务端返回的消息 ID（飞书）/ messageId（邮件）等便于追溯的标识 */
   refIds?: string[];
+  /**
+   * 被跳过的附件清单（方案 C：附件失败不静默）。
+   * 附件内容获取失败（URL 编造/文档过期/下载失败等）时记录在此并回传给 LLM，
+   * 模型看到后会主动向用户说明或用真实 URL 重试，而不是收到 success:true 误以为附件已发出。
+   */
+  skippedAttachments?: Array<{
+    filename: string;
+    url?: string;
+    reason: string;
+  }>;
   /**
    * 结构化错误反馈：当工具失败时给 LLM 的修正建议。
    * LLM 看到 suggestion.hint 后会自动调整参数重试，无需用户介入。
@@ -451,6 +462,10 @@ async function sendFeishuMessage(
     sizeKB: number;
   }> = [];
   const attachmentErrors: string[] = [];
+  // 方案 C：附件失败不静默——结构化记录被跳过的附件，最终回传给 LLM 触发重试/告知用户
+  const skippedAttachments: NonNullable<
+    SendNotificationResult['skippedAttachments']
+  > = [];
 
   if (params.attachments && params.attachments.length > 0) {
     for (let i = 0; i < params.attachments.length; i++) {
@@ -485,7 +500,15 @@ async function sendFeishuMessage(
       }
 
       if (!buffer) {
+        const reason = '附件内容获取失败（URL 无法解析或文件已过期/不存在）';
         attachmentErrors.push(`附件 ${filename} 内容获取失败`);
+        skippedAttachments.push({ filename, url: att.url, reason });
+        logger.warn('飞书附件：跳过无法获取内容的附件', {
+          module: 'SendNotification',
+          filename,
+          hasUrl: !!att.url,
+          hasContent: !!att.content,
+        });
         continue;
       }
 
@@ -505,7 +528,9 @@ async function sendFeishuMessage(
                 : undefined,
           });
         } else {
+          const reason = `图片上传失败: ${r.error}`;
           attachmentErrors.push(`图片 ${filename} 上传失败: ${r.error}`);
+          skippedAttachments.push({ filename, url: att.url, reason });
           logger.warn('飞书附件：图片上传失败', {
             module: 'SendNotification',
             filename,
@@ -522,7 +547,9 @@ async function sendFeishuMessage(
             sizeKB: Math.round(buffer.length / 1024),
           });
         } else {
+          const reason = `文件上传失败: ${r.error}`;
           attachmentErrors.push(`文件 ${filename} 上传失败: ${r.error}`);
+          skippedAttachments.push({ filename, url: att.url, reason });
           logger.warn('飞书附件：文件上传失败', {
             module: 'SendNotification',
             filename,
@@ -674,13 +701,24 @@ async function sendFeishuMessage(
     delivered++;
   }
 
-  return {
+  const result: SendNotificationResult = {
     success: delivered > 0,
     channel: 'feishu',
     delivered,
     errors: errors.length ? errors : undefined,
     refIds: refIds.length ? refIds : undefined,
   };
+  // 方案 C：有附件被跳过时，即使主消息发送成功也要显式回传，
+  // 让 LLM 知道附件没发出去（向用户说明或用真实 URL 重试），而非收到干净的 success
+  if (skippedAttachments.length > 0) {
+    result.skippedAttachments = skippedAttachments;
+    result.suggestion = {
+      action: 'fix_params',
+      reason: `主消息已发送，但 ${skippedAttachments.length} 个附件未能发出（如：文档过期、URL 无效）`,
+      hint: '请检查 skippedAttachments 中的 url 是否为 generate_document / generate_chart 等工具原样返回的地址。若 URL 是编造的或文档已过期，请先重新生成文件获取新的 url，再用正确 url 重发一次（可只发缺失的附件）。',
+    };
+  }
+  return result;
 }
 
 // ==================== 邮件通道 ====================
@@ -1003,6 +1041,10 @@ async function sendEmail(
     contentType: string;
     contentDisposition?: 'inline' | 'attachment';
   }> = [];
+  // 方案 C：附件失败不静默——结构化记录被跳过的附件，最终回传给 LLM 触发重试/告知用户
+  const skippedAttachments: NonNullable<
+    SendNotificationResult['skippedAttachments']
+  > = [];
 
   if (params.attachments && params.attachments.length > 0) {
     for (let i = 0; i < params.attachments.length; i++) {
@@ -1039,6 +1081,8 @@ async function sendEmail(
       }
 
       if (!base64) {
+        const reason = '附件内容获取失败（URL 无法解析或文件已过期/不存在）';
+        skippedAttachments.push({ filename: attFilename, url: att.url, reason });
         logger.warn('邮件附件：跳过无法获取内容的附件', {
           module: 'SendNotification',
           filename: attFilename,
@@ -1106,18 +1150,32 @@ async function sendEmail(
       attachments:
         nodemailerAttachments.length > 0 ? nodemailerAttachments : undefined,
     });
-    return {
+    const result: SendNotificationResult = {
       success: true,
       channel: 'email',
       delivered: validRecipients.length,
       refIds: info.messageId ? [info.messageId] : undefined,
     };
+    // 方案 C：有附件被跳过时显式回传，防止 LLM 收到干净的 success 误以为附件已发出
+    if (skippedAttachments.length > 0) {
+      result.skippedAttachments = skippedAttachments;
+      result.suggestion = {
+        action: 'fix_params',
+        reason: `邮件已发送，但 ${skippedAttachments.length} 个附件未能附上（如：文档过期、URL 无效）`,
+        hint: '请检查 skippedAttachments 中的 url 是否为 generate_document / generate_chart 等工具原样返回的地址。若 URL 是编造的或文档已过期，请先重新生成文件获取新的 url，再重发一次（可只发缺失的附件）。',
+      };
+    }
+    return result;
   } catch (e: any) {
     return {
       success: false,
       channel: 'email',
       delivered: 0,
       errors: [e.message || String(e)],
+      // 发送整体失败时同样回传已知的跳过附件，帮助 LLM 判断是否值得重试
+      skippedAttachments: skippedAttachments.length
+        ? skippedAttachments
+        : undefined,
     };
   }
 }
@@ -1210,7 +1268,26 @@ async function sendWebhook(
         errors: [`HTTP ${resp.status}: ${text.slice(0, 200)}`],
       };
     }
-    return { success: true, channel: 'webhook', delivered: 1 };
+    const result: SendNotificationResult = {
+      success: true,
+      channel: 'webhook',
+      delivered: 1,
+    };
+    // 边界：webhook 通道仅支持纯文本消息（钉钉/企微机器人 text 格式），
+    // 传入的 attachments 不会发送——显式回传而不是静默丢弃，让 LLM 知道需要换通道补发
+    if (params.attachments && params.attachments.length > 0) {
+      result.skippedAttachments = params.attachments.map((a) => ({
+        filename: a.filename,
+        url: a.url,
+        reason: 'webhook 通道仅支持文本消息，附件未发送',
+      }));
+      result.suggestion = {
+        action: 'fix_params',
+        reason: 'webhook（钉钉/企微群机器人）不支持附件',
+        hint: '如需发送附件，请改用 channel="feishu"（支持图片/文件消息）或 channel="email"（支持邮件附件）重发。',
+      };
+    }
+    return result;
   } catch (e: any) {
     return {
       success: false,
@@ -1308,6 +1385,9 @@ export async function executeSendNotification(
     success: result.success,
     delivered: result.delivered,
     errors: result.errors,
+    // 方案 C：跳过附件数与明细一并落日志，便于排查"发送成功但附件缺失"类问题
+    skippedCount: result.skippedAttachments?.length || 0,
+    skipped: result.skippedAttachments,
   });
   return result;
 }
