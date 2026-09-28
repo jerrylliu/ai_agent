@@ -282,6 +282,10 @@ const ChatAgent: React.FC = () => {
   // 工具调用确认处理函数
   // pendingToolConfirmIdRef 已在上方声明（onConfirmationResolved 闭包需要）
 
+  // 标记是否由按钮触发的确认，防止 onOpenChange 重复调用
+  // （声明在队列同步逻辑之前，避免下方渲染期引用触发 TDZ）
+  const toolConfirmTriggeredRef = useRef(false);
+
   // 当队列头部变化时，同步更新 ref
   const currentConfirmation = confirm.currentToolConfirmation();
   if (
@@ -289,6 +293,10 @@ const ChatAgent: React.FC = () => {
     pendingToolConfirmIdRef.current !== currentConfirmation.id
   ) {
     pendingToolConfirmIdRef.current = currentConfirmation.id;
+    // 队列头部切换到新确认时复位"已通过按钮触发"标记：
+    // 确认第 1 个后弹窗保持打开（第 2 个顶上），onOpenChange(false) 不会触发，
+    // 标记若不复位，第 2 个弹窗点"拒绝"会被误判为按钮触发而静默失效（需点两次）
+    toolConfirmTriggeredRef.current = false;
   }
 
   const handleToolConfirmation = async (confirmed: boolean) => {
@@ -305,9 +313,6 @@ const ChatAgent: React.FC = () => {
       confirm.showAlert("确认响应失败: " + (error.message || "网络错误"));
     }
   };
-
-  // 标记是否由按钮触发的确认，防止 onOpenChange 重复调用
-  const toolConfirmTriggeredRef = useRef(false);
 
   // 统一恢复层负责启动、focus、visible、online 时刷新页面核心数据。
 
@@ -854,8 +859,11 @@ const ChatAgent: React.FC = () => {
         onConfirm={() => confirm.closeAlert()}
       />
 
-      {/* 工具调用确认弹窗（队列模式：逐个显示，处理完一个自动显示下一个） */}
+      {/* 工具调用确认弹窗（队列模式：逐个显示，处理完一个自动显示下一个）。
+          key 绑定当前确认 id：每个确认强制重挂载弹窗，避免 React 复用同一个按钮 DOM
+          导致移动端 WebView 上点击后的 active/focus 样式残留到下一个弹窗（用户误以为没点上） */}
       <ConfirmDialog
+        key={currentConfirmation?.id ?? "none"}
         open={confirm.toolConfirmationQueue.length > 0}
         onOpenChange={(open) => {
           if (!open && !toolConfirmTriggeredRef.current) {
@@ -863,7 +871,11 @@ const ChatAgent: React.FC = () => {
           }
           toolConfirmTriggeredRef.current = false;
         }}
-        title="工具调用确认"
+        title={
+          confirm.toolConfirmationQueue.length > 1
+            ? `工具调用确认（还有 ${confirm.toolConfirmationQueue.length} 个待确认）`
+            : "工具调用确认"
+        }
         description={
           currentConfirmation
             ? `${currentConfirmation.message}\n\n工具：${currentConfirmation.toolName}\n操作：${currentConfirmation.paramsSummary}\n风险等级：${currentConfirmation.riskLevel === "high" ? "高" : currentConfirmation.riskLevel === "medium" ? "中" : "低"}`
