@@ -211,12 +211,23 @@ export class ChatController {
         // 改为服务端内网落库后，数据完整性不再依赖客户端网络。
         // 幂等性：SessionService.saveChatHistory 对同角色同内容的重复保存会去重，
         // 旧版客户端的 /chat/history 保存与此处不会产生双写重复。
-        (reply: string) => {
+        (reply: string, citations?: unknown[]) => {
           if (!body.sessionId) return;
           const sessionId = body.sessionId;
           const uid = req.userId;
+          // citations 作为第 8 参透传：服务端落库行从源头携带引用，
+          // 落库后广播触发的会话刷新才能直接渲染角标与参考来源（否则首渲丢失）
           this.sessionService
-            .saveChatHistory(sessionId, 'assistant', reply, uid)
+            .saveChatHistory(
+              sessionId,
+              'assistant',
+              reply,
+              uid,
+              undefined,
+              undefined,
+              undefined,
+              citations,
+            )
             .then((saved) => {
               logger.info('服务端已自动落库助手回复', {
                 module: 'ChatController',
