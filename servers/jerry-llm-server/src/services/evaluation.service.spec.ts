@@ -251,6 +251,28 @@ describe('autoEvaluate 在线 judge 集成', () => {
     expect(input.contexts.length).toBe(12);
     expect(input.contexts[0].length).toBe(2400);
   });
+
+  it('答案/问题超长 → 截断到保护上限后送给 judge', async () => {
+    const repo = makeAutoEvalRepo();
+    const service = buildService(repo);
+    (judgeOne as jest.Mock).mockResolvedValue(FAITHFUL_FALSE_VERDICT);
+
+    await service.autoEvaluate({
+      ...BASE_PARAMS,
+      userMessage: '问'.repeat(3000),
+      assistantMessage: '答'.repeat(8000),
+      retrievedContexts: ['ctx-1'],
+    });
+    await flushAsync();
+
+    // judgeOne(llm, input, options)：input 在第二个参数
+    const input = (judgeOne as jest.Mock).mock.calls[0][1] as {
+      question: string;
+      answer: string;
+    };
+    expect(input.question.length).toBe(2000);
+    expect(input.answer.length).toBe(6000);
+  });
 });
 
 // ==================== 规则分回归保护 ====================
