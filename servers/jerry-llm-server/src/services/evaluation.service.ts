@@ -17,10 +17,26 @@ const ONLINE_JUDGE_TIMEOUT_MS = 30000;
 /** 送给 judge 的 contexts 保护性截断：条数与单条长度上限，防跨工具轮次聚合过大撑爆上下文 */
 const ONLINE_JUDGE_MAX_CONTEXTS = 12;
 const ONLINE_JUDGE_MAX_CONTEXT_CHARS = 2400;
-/** 问题/答案保护性截断：只影响在线 judge 的输入（超长答案的尾部幻觉会漏检，
- * 但相对"每条消息都可能发出巨型请求"的成本/失败风险，这是合理取舍；benchmark 不受影响） */
+/** 问题/答案保护性截断（只影响在线 judge 输入；benchmark 不受影响）：
+ * 触发频率极低（聊天消息 95%+ 远低于此阈值），目的是防巨型请求稀释 judge 注意力与成本失控 */
 const ONLINE_JUDGE_MAX_QUESTION_CHARS = 2000;
 const ONLINE_JUDGE_MAX_ANSWER_CHARS = 6000;
+
+/** 省略标记：显式告知 judge 有内容被省略，避免头尾直接拼接产生误读 */
+const TRUNCATION_ELLIPSIS = '\n…【中间内容因超长已省略】…\n';
+
+/**
+ * 头尾保留截断（middle truncation，业界 judge 系统的标准做法）：
+ * 掐中间、保两端——开头定主题，结尾往往是用户的核心诉求/答案的最新结论。
+ * 80/20 分配：头部信息密度通常更高，但尾部诉求不可丢失。
+ */
+function truncateMiddle(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const keep = maxLen - TRUNCATION_ELLIPSIS.length;
+  const head = Math.ceil(keep * 0.8);
+  const tail = keep - head;
+  return text.slice(0, head) + TRUNCATION_ELLIPSIS + text.slice(-tail);
+}
 
 @Injectable()
 export class EvaluationService {
@@ -226,11 +242,33 @@ export class EvaluationService {
     const llm = this.getJudgeLlm();
     if (!llm) return;
 
+    // 头尾保留截断（掐中间保两端，见 truncateMiddle 注释）
+    const truncatedQuestion = truncateMiddle(
+      params.userMessage,
+      ONLINE_JUDGE_MAX_QUESTION_CHARS,
+    );
+    const truncatedAnswer = truncateMiddle(
+      params.assistantMessage,
+      ONLINE_JUDGE_MAX_ANSWER_CHARS,
+    );
+    // 截断率可观测：正常情况不触发不刷屏；若日志频繁出现说明阈值需要调整
+    if (
+      truncatedQuestion !== params.userMessage ||
+      truncatedAnswer !== params.assistantMessage
+    ) {
+      logger.warn('judge 输入超长已头尾保留截断（若频繁出现请调整阈值）', {
+        module: 'EvaluationService',
+        evaluationId,
+        questionLen: params.userMessage.length,
+        answerLen: params.assistantMessage.length,
+      });
+    }
+
     const verdict: JudgeVerdict | null = await judgeOne(
       llm,
       {
-        question: params.userMessage.slice(0, ONLINE_JUDGE_MAX_QUESTION_CHARS),
-        answer: params.assistantMessage.slice(0, ONLINE_JUDGE_MAX_ANSWER_CHARS),
+        question: truncatedQuestion,
+        answer: truncatedAnswer,
         goldAnswer: '',
         answerFacts: [],
         contexts,

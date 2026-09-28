@@ -44,6 +44,7 @@ import { AutoEvaluation } from '../entities/auto-evaluation.entity';
 import { MessageFeedback } from '../entities/message-feedback.entity';
 import { SearchFeedback } from '../entities/search-feedback.entity';
 import { config } from '../fundamentals/config.js';
+import { logger } from '../fundamentals/logger';
 import { createLLM } from '../fundamentals/model-provider.js';
 import { judgeOne } from '../fundamentals/eval/judge.js';
 import type { Repository } from 'typeorm';
@@ -252,15 +253,19 @@ describe('autoEvaluate 在线 judge 集成', () => {
     expect(input.contexts[0].length).toBe(2400);
   });
 
-  it('答案/问题超长 → 截断到保护上限后送给 judge', async () => {
+  it('答案/问题超长 → 头尾保留截断（保两端掐中间+省略标记），截断时打 warn', async () => {
     const repo = makeAutoEvalRepo();
     const service = buildService(repo);
     (judgeOne as jest.Mock).mockResolvedValue(FAITHFUL_FALSE_VERDICT);
 
+    // 头部定主题、尾部放核心结论（用户习惯先贴资料后提问，尾部信息密度高）；
+    // 尾块足够长（>tail 保留量）以验证中段真正被掐掉
+    const question = `${'Q'.repeat(1600)}${'M'.repeat(1300)}核心诉求TAIL`;
+    const answer = `${'A'.repeat(5000)}${'M'.repeat(500)}结尾${'T'.repeat(1300)}`;
     await service.autoEvaluate({
       ...BASE_PARAMS,
-      userMessage: '问'.repeat(3000),
-      assistantMessage: '答'.repeat(8000),
+      userMessage: question,
+      assistantMessage: answer,
       retrievedContexts: ['ctx-1'],
     });
     await flushAsync();
@@ -270,8 +275,52 @@ describe('autoEvaluate 在线 judge 集成', () => {
       question: string;
       answer: string;
     };
+    // 总长收敛到上限（含省略标记）
     expect(input.question.length).toBe(2000);
     expect(input.answer.length).toBe(6000);
+    // 显式告知 judge 有省略，防头尾拼接误读
+    expect(input.question).toContain('【中间内容因超长已省略】');
+    expect(input.answer).toContain('【中间内容因超长已省略】');
+    // 头部与尾部均保留（尾部核心诉求不丢；断言用安全余量，不与 80/20 比例硬耦合）
+    expect(input.question.startsWith(question.slice(0, 1000))).toBe(true);
+    expect(input.question.endsWith('核心诉求TAIL')).toBe(true);
+    expect(input.answer.startsWith(answer.slice(0, 4000))).toBe(true);
+    expect(input.answer.endsWith(answer.slice(-1000))).toBe(true);
+    // 中段确被掐掉
+    expect(input.question.includes('M'.repeat(500))).toBe(false);
+    expect(input.answer.includes('M'.repeat(500))).toBe(false);
+    // 截断率可观测：warn 恰好一次
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('头尾保留截断'),
+      expect.objectContaining({
+        module: 'EvaluationService',
+        questionLen: question.length,
+        answerLen: answer.length,
+      }),
+    );
+  });
+
+  it('未超长的消息 → 原样送给 judge，不打截断 warn', async () => {
+    const repo = makeAutoEvalRepo();
+    const service = buildService(repo);
+    (judgeOne as jest.Mock).mockResolvedValue(FAITHFUL_FALSE_VERDICT);
+
+    await service.autoEvaluate({
+      ...BASE_PARAMS,
+      retrievedContexts: ['ctx-1'],
+    });
+    await flushAsync();
+
+    const input = (judgeOne as jest.Mock).mock.calls[0][1] as {
+      question: string;
+      answer: string;
+    };
+    expect(input.question).toBe(BASE_PARAMS.userMessage);
+    expect(input.answer).toBe(BASE_PARAMS.assistantMessage);
+    const truncWarn = (logger.warn as jest.Mock).mock.calls.filter((call) =>
+      String(call[0]).includes('头尾保留截断'),
+    );
+    expect(truncWarn).toHaveLength(0);
   });
 });
 
