@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, ThumbsUp, ThumbsDown, BarChart3, RefreshCw, Star } from 'lucide-react';
+import { X, ThumbsUp, ThumbsDown, BarChart3, RefreshCw, Star, Sparkles, AlertTriangle } from 'lucide-react';
 import { Button } from '../ui/button';
 import { getEvaluationStats, type EvaluationStats } from '../../lib/api';
 
@@ -146,6 +146,69 @@ const EvaluationPanel: React.FC<EvaluationPanelProps> = ({ open, onClose }) => {
                   </div>
                 )}
               </div>
+
+              {/* AI 质量判分（在线 judge：忠实度=幻觉检测，切题度=答非所问检测） */}
+              {stats.autoEvaluation.judge.judgedCount > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium text-foreground flex items-center gap-1.5">
+                    <Sparkles className="h-4 w-4" /> AI 质量判分
+                    <span className="text-xs font-normal text-muted-foreground">
+                      （{stats.autoEvaluation.judge.judgedCount} 条已判）
+                    </span>
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-muted/50 rounded-lg p-3 space-y-1">
+                      <div className="text-xs text-muted-foreground">忠实率</div>
+                      <div
+                        className={`text-xl font-bold ${
+                          stats.autoEvaluation.judge.faithfulnessRate >= 0.9 ? 'text-green-500' :
+                          stats.autoEvaluation.judge.faithfulnessRate >= 0.7 ? 'text-yellow-500' : 'text-red-500'
+                        }`}
+                      >
+                        {(stats.autoEvaluation.judge.faithfulnessRate * 100).toFixed(0)}%
+                      </div>
+                      <div className="text-xs text-muted-foreground">回答有检索依据（无编造）</div>
+                    </div>
+                    <div className="bg-muted/50 rounded-lg p-3 space-y-1">
+                      <div className="text-xs text-muted-foreground">切题率</div>
+                      <div
+                        className={`text-xl font-bold ${
+                          stats.autoEvaluation.judge.relevanceRate >= 0.9 ? 'text-green-500' :
+                          stats.autoEvaluation.judge.relevanceRate >= 0.7 ? 'text-yellow-500' : 'text-red-500'
+                        }`}
+                      >
+                        {(stats.autoEvaluation.judge.relevanceRate * 100).toFixed(0)}%
+                      </div>
+                      <div className="text-xs text-muted-foreground">回答针对问题本身</div>
+                    </div>
+                  </div>
+                  {/* 幻觉明细：忠实度不达标的回答 + judge 摘出的编造原句 */}
+                  {stats.autoEvaluation.judge.unfaithfulDetails.length > 0 && (
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-medium text-red-500 flex items-center gap-1">
+                        <AlertTriangle className="h-3 w-3" />
+                        疑似编造内容（{stats.autoEvaluation.judge.unfaithfulDetails.length} 条）
+                      </div>
+                      <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                        {stats.autoEvaluation.judge.unfaithfulDetails.map((d) => (
+                          <div key={d.id} className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/50 rounded-lg p-2.5 text-xs space-y-1">
+                            <div className="flex justify-between gap-2">
+                              <span className="font-medium text-foreground truncate">{d.question}</span>
+                              <span className="text-muted-foreground shrink-0">{new Date(d.createdAt).toLocaleDateString('zh-CN')}</span>
+                            </div>
+                            {d.claims.map((claim, i) => (
+                              <div key={i} className="text-red-600 dark:text-red-400">编造：{claim}</div>
+                            ))}
+                            {d.judgeReason && (
+                              <div className="text-muted-foreground">{d.judgeReason}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* 每日反馈趋势 */}
               {Object.keys(stats.dailyFeedback).length > 0 && (

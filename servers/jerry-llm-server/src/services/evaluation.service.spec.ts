@@ -65,6 +65,7 @@ type AutoEvalRepoMock = {
   create: jest.Mock;
   save: jest.Mock;
   update: jest.Mock;
+  find: jest.Mock;
 };
 
 function makeAutoEvalRepo(): AutoEvalRepoMock {
@@ -75,6 +76,7 @@ function makeAutoEvalRepo(): AutoEvalRepoMock {
       ...data,
     })),
     update: jest.fn(async () => undefined),
+    find: jest.fn(async () => []),
   };
 }
 
@@ -354,5 +356,119 @@ describe('autoEvaluate 规则分（回归保护）', () => {
     // 0.5 + 内容充实 0.1 + 知识库 0.15 + 标注来源 0.1 = 0.85
     expect(saved.score).toBeCloseTo(0.85, 5);
     expect(repo.save).toHaveBeenCalled();
+  });
+});
+
+// ==================== getEvaluationStats judge 聚合 ====================
+
+describe('getEvaluationStats judge 聚合', () => {
+  /** messageFeedbackRepository 在 buildService 里是 {} 透传，getEvaluationStats 会调它的 find，需单独 mock */
+  function buildServiceWithFeedback(
+    autoEvalRepo: AutoEvalRepoMock,
+    feedbackRows: Array<Record<string, unknown>> = [],
+  ): EvaluationService {
+    const feedbackRepo = {
+      find: jest.fn(async () => feedbackRows),
+    };
+    return new EvaluationService(
+      feedbackRepo as unknown as Repository<MessageFeedback>,
+      autoEvalRepo as unknown as Repository<AutoEvaluation>,
+      {} as unknown as Repository<SearchFeedback>,
+    );
+  }
+
+  it('混合行：未判分不计分母，幻觉行解析出编造原句', async () => {
+    const repo = makeAutoEvalRepo();
+    repo.find.mockResolvedValue([
+      {
+        id: 1,
+        userMessage: '问题A',
+        judgeFaithful: true,
+        judgeRelevant: true,
+        unfaithfulClaims: null,
+        judgeReason: '有依据',
+        judgeModel: 'zhipu:glm-4.7',
+        createdAt: new Date('2026-09-28'),
+      },
+      {
+        id: 2,
+        userMessage: '问题B',
+        judgeFaithful: false,
+        judgeRelevant: true,
+        unfaithfulClaims: JSON.stringify(['编造句1', 123]),
+        judgeReason: '有编造',
+        judgeModel: 'zhipu:glm-4.7',
+        createdAt: new Date('2026-09-27'),
+      },
+      {
+        id: 3,
+        userMessage: '问题C',
+        judgeFaithful: null,
+        judgeRelevant: null,
+        unfaithfulClaims: null,
+        judgeReason: null,
+        judgeModel: null,
+        createdAt: new Date('2026-09-26'),
+      },
+      {
+        id: 4,
+        userMessage: '问题D',
+        judgeFaithful: false,
+        judgeRelevant: false,
+        unfaithfulClaims: '{broken json',
+        judgeReason: '脏JSON',
+        judgeModel: 'zhipu:glm-4.7',
+        createdAt: new Date('2026-09-25'),
+      },
+    ]);
+    const service = buildServiceWithFeedback(repo);
+
+    const stats = await service.getEvaluationStats('default', 7);
+
+    expect(stats.autoEvaluation.judge.judgedCount).toBe(3); // id=3 未判分不计入
+    expect(stats.autoEvaluation.judge.faithfulCount).toBe(1);
+    expect(stats.autoEvaluation.judge.relevantCount).toBe(2);
+    // 比率四舍五入到两位小数（与 satisfactionRate/avgScore 同款口径）
+    expect(stats.autoEvaluation.judge.faithfulnessRate).toBe(0.33);
+    expect(stats.autoEvaluation.judge.relevanceRate).toBe(0.67);
+    // 幻觉明细：id=2 编造句过滤非字符串元素；id=4 脏 JSON 降级为空列表不抛错
+    expect(stats.autoEvaluation.judge.unfaithfulDetails).toHaveLength(2);
+    expect(stats.autoEvaluation.judge.unfaithfulDetails[0]).toMatchObject({
+      id: 2,
+      claims: ['编造句1'],
+      judgeReason: '有编造',
+    });
+    expect(stats.autoEvaluation.judge.unfaithfulDetails[1]).toMatchObject({
+      id: 4,
+      claims: [],
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('unfaithfulClaims 反序列化失败'),
+      expect.objectContaining({ module: 'EvaluationService' }),
+    );
+  });
+
+  it('全部未判分（judge 未启用/无数据）→ judgedCount=0、比率 0、无幻觉明细', async () => {
+    const repo = makeAutoEvalRepo();
+    repo.find.mockResolvedValue([
+      {
+        id: 1,
+        userMessage: '问题A',
+        judgeFaithful: null,
+        judgeRelevant: null,
+        unfaithfulClaims: null,
+        judgeReason: null,
+        judgeModel: null,
+        createdAt: new Date('2026-09-28'),
+      },
+    ]);
+    const service = buildServiceWithFeedback(repo);
+
+    const stats = await service.getEvaluationStats('default', 7);
+
+    expect(stats.autoEvaluation.judge.judgedCount).toBe(0);
+    expect(stats.autoEvaluation.judge.faithfulnessRate).toBe(0);
+    expect(stats.autoEvaluation.judge.relevanceRate).toBe(0);
+    expect(stats.autoEvaluation.judge.unfaithfulDetails).toHaveLength(0);
   });
 });
