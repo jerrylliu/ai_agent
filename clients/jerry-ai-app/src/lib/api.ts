@@ -255,6 +255,13 @@ export async function getAIResponse(
       | null;
     onFileCard?: ((event: FileCardEvent) => void) | null;
     onCitations?: ((event: { citations: CitationItem[] }) => void) | null;
+    /** metadata SSE 事件实时回调：该事件在流式内容前到达，等流返回后再读返回值会恒为 false/0 */
+    onMetadata?:
+      | ((metadata: {
+          usedKnowledgeBase: boolean;
+          contextCount: number;
+        }) => void)
+      | null;
   },
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
@@ -277,6 +284,7 @@ export async function getAIResponse(
   const confirmationResolvedCallback = options?.onConfirmationResolved ?? null;
   const fileCardCallback = options?.onFileCard ?? null;
   const citationsCallback = options?.onCitations ?? null;
+  const metadataCallback = options?.onMetadata ?? null;
   const fileCards: FileCardEvent[] = [];
   const citations: CitationItem[] = [];
 
@@ -299,6 +307,7 @@ export async function getAIResponse(
             onMetadata: (metadata) => {
               usedKnowledgeBase = metadata.usedKnowledgeBase || false;
               contextCount = metadata.contextCount || 0;
+              if (metadataCallback) metadataCallback(metadata);
             },
             onSessionAction: (action) => {
               sessionAction = action;
