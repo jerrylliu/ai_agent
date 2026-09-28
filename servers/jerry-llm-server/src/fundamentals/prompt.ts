@@ -1187,6 +1187,18 @@ export interface UsageData {
   retrievedDocumentIds?: string[];
   /** 本题检索命中并参与生成的知识库上下文文本（benchmark 评测用，与上面一一对应但独立去重） */
   retrievedContexts?: string[];
+  /**
+   * 本轮回答的引用列表（可验证生成）。
+   * 随 onUsageComplete 上抛 → Controller 服务端自动落库时一并写入 chat_history.citations。
+   * 为什么必须在落库链路上：落库行若无引用，生成结束后 chat_history 广播触发的
+   * 前端全量重拉会用无引用的行覆盖内存里刚挂上的引用（角标首渲消失，手动刷新才出现）。
+   */
+  citations?: Array<{
+    ref: number;
+    documentId: string;
+    title: string;
+    snippet: string;
+  }>;
 }
 
 /**
@@ -3267,6 +3279,12 @@ async function promptWithFunctionCalling(
           // ==================== 引用解析（可验证生成，FC 主路径） ====================
           // 与 RAG 注入路径同构：从完整回答提取（【文档 X】）→ 映射 fcDocSources → 一次性推送。
           // 必须在 res.end() 之前：res.writableEnded 后 sendCitations 会静默丢弃
+          let fcCitations: Array<{
+            ref: number;
+            documentId: string;
+            title: string;
+            snippet: string;
+          }> = [];
           if (fcDocSources.length > 0) {
             const resolvedCitations = resolveCitations(
               fcFullResponse,
@@ -3282,7 +3300,8 @@ async function promptWithFunctionCalling(
               );
             }
             if (resolvedCitations.citations.length > 0) {
-              sendCitations(res, resolvedCitations.citations);
+              fcCitations = resolvedCitations.citations;
+              sendCitations(res, fcCitations);
             }
           }
           res.end();
@@ -3303,6 +3322,7 @@ async function promptWithFunctionCalling(
               assistantMessage: fcFullResponse,
               retrievedDocumentIds: [...fcRetrievedDocIds],
               retrievedContexts: fcRetrievedContexts,
+              citations: fcCitations,
             });
           }
         } catch (streamError: any) {
@@ -3499,10 +3519,17 @@ async function promptWithFunctionCalling(
       });
 
       // 强制回答路径同样推送引用（口径与主流式路径一致）
+      let forcedCitations: Array<{
+        ref: number;
+        documentId: string;
+        title: string;
+        snippet: string;
+      }> = [];
       if (fcDocSources.length > 0) {
         const resolvedCitations = resolveCitations(fullResponse, fcDocSources);
         if (resolvedCitations.citations.length > 0) {
-          sendCitations(res, resolvedCitations.citations);
+          forcedCitations = resolvedCitations.citations;
+          sendCitations(res, forcedCitations);
         }
       }
       res.end();
@@ -3523,6 +3550,7 @@ async function promptWithFunctionCalling(
           assistantMessage: fullResponse,
           retrievedDocumentIds: [...fcRetrievedDocIds],
           retrievedContexts: fcRetrievedContexts,
+          citations: forcedCitations,
         });
       }
     } catch (streamError: any) {
@@ -4089,6 +4117,12 @@ ${docList}
       // ==================== 引用解析（可验证生成） ====================
       // 从完整回答中提取（【文档 X】）标注 → 映射为可定位引用 → 一次性推送前端。
       // 必须在 res.end() 之前：res.writableEnded 后 sendCitations 会静默丢弃。
+      let ragCitations: Array<{
+        ref: number;
+        documentId: string;
+        title: string;
+        snippet: string;
+      }> = [];
       if (hasRetrievedContent && docSources.length > 0) {
         const resolved = resolveCitations(fullResponse, docSources);
         if (resolved.invalidRefs.length > 0) {
@@ -4099,7 +4133,8 @@ ${docList}
           });
         }
         if (resolved.citations.length > 0) {
-          sendCitations(res, resolved.citations);
+          ragCitations = resolved.citations;
+          sendCitations(res, ragCitations);
         }
       }
 
@@ -4121,6 +4156,7 @@ ${docList}
           assistantMessage: fullResponse,
           retrievedDocumentIds: collectRetrievedDocumentIds(),
           retrievedContexts: retrievalResults.map((r) => r.content.trim()),
+          citations: ragCitations,
         });
       }
     } catch (streamError: any) {

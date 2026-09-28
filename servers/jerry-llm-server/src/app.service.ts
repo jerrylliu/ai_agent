@@ -36,7 +36,7 @@ export class AppService {
     abortController?: AbortController,
     imageModel?: string,
     /** 流式结束后的助手完整回复回调（供 Controller 做服务端自动落库，数据完整性不依赖客户端网络） */
-    onAssistantReply?: (reply: string) => void,
+    onAssistantReply?: (reply: string, citations?: unknown[]) => void,
   ) {
     // 获取会话摘要（如果摘要功能已启用）
     let sessionSummary: string | undefined;
@@ -101,7 +101,9 @@ export class AppService {
           usage.sessionId &&
           usage.assistantMessage?.trim()
         ) {
-          onAssistantReply(usage.assistantMessage);
+          // citations：3 条流式完成路径从 prompt.ts 解析点贯通而来，
+          // 使服务端落库行从源头携带引用，避免前端富化保存不广播导致首渲丢失
+          onAssistantReply(usage.assistantMessage, usage.citations);
         }
       },
       imageModel,
