@@ -146,6 +146,30 @@ describe('judgeOne', () => {
     >;
     expect(invokeArgs[1]?.signal).toBeUndefined();
   });
+
+  it("contextScope='online' → system prompt 附加元信息豁免段落（修复知识库元描述被误判编造）", async () => {
+    const mock = makeMockLLM(VALID_JSON);
+    await judgeOne(mock, makeInput(), { contextScope: 'online' });
+    const messages = (mock.invoke as jest.Mock).mock.calls[0][0] as Array<{
+      content: string;
+    }>;
+    const systemMsg = messages[0]?.content ?? '';
+    expect(systemMsg).toContain('在线判分口径补充');
+    expect(systemMsg).toContain('知识库/检索过程本身的元描述');
+  });
+
+  it("contextScope='benchmark' 与省略 → system prompt 不含豁免段落（离线 ERB 基线口径不受影响）", async () => {
+    const mockBenchmark = makeMockLLM(VALID_JSON);
+    await judgeOne(mockBenchmark, makeInput(), { contextScope: 'benchmark' });
+    const mockOmitted = makeMockLLM(VALID_JSON);
+    await judgeOne(mockOmitted, makeInput());
+    for (const mock of [mockBenchmark, mockOmitted]) {
+      const messages = (mock.invoke as jest.Mock).mock.calls[0][0] as Array<{
+        content: string;
+      }>;
+      expect(messages[0]?.content ?? '').not.toContain('在线判分口径补充');
+    }
+  });
 });
 
 // ==================== aggregateVerdicts ====================

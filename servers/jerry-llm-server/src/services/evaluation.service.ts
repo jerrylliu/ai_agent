@@ -295,7 +295,12 @@ export class EvaluationService {
         contexts,
         questionType: 'online',
       },
-      { signal: AbortSignal.timeout(ONLINE_JUDGE_TIMEOUT_MS) },
+      {
+        signal: AbortSignal.timeout(ONLINE_JUDGE_TIMEOUT_MS),
+        // 在线口径：模型可见窗口大于 judge 拿到的 contexts（工具元信息不进 contexts），
+        // 严格口径会把"知识库文档清单/统计"这类真实元信息误判为编造
+        contextScope: 'online',
+      },
     );
     if (!verdict) {
       logger.warn('在线 judge 判分失败（保留规则分）', {
