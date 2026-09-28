@@ -129,6 +129,23 @@ describe('judgeOne', () => {
     expect(userMsg).toContain('ctx-b');
     expect(userMsg).toContain('ctx-c');
   });
+
+  it('传入 options.signal → 透传给 llm.invoke 第二参数（在线超时真取消依赖此行为）', async () => {
+    const mock = makeMockLLM(VALID_JSON);
+    const controller = new AbortController();
+    await judgeOne(mock, makeInput(), { signal: controller.signal });
+    const invokeArgs = (mock.invoke as jest.Mock).mock.calls[0] as unknown[];
+    expect(invokeArgs[1]).toEqual({ signal: controller.signal });
+  });
+
+  it('省略 options → invoke 第二参数 signal 为 undefined（benchmark 调用方式不受影响）', async () => {
+    const mock = makeMockLLM(VALID_JSON);
+    await judgeOne(mock, makeInput());
+    const invokeArgs = (mock.invoke as jest.Mock).mock.calls[0] as Array<
+      Record<string, unknown> | undefined
+    >;
+    expect(invokeArgs[1]?.signal).toBeUndefined();
+  });
 });
 
 // ==================== aggregateVerdicts ====================

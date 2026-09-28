@@ -339,6 +339,16 @@ const RootSchema = z.object({
    */
   chromaPersistDir: z.string().min(1).optional(),
   serverBaseUrl: z.string().min(1).default('http://localhost:3000'),
+
+  /**
+   * 在线回答质量 judge：每条"使用了知识库"的回答完成后异步调用一次 LLM
+   * 做忠实度/切题度判分（写 auto_evaluation 的 judge* 列），不阻塞聊天主流程。
+   * 判分失败静默降级为只保留规则分，不影响任何业务功能
+   */
+  onlineJudgeEnabled: zBoolFromString(true),
+  /** 在线 judge 模型 id（model-provider AVAILABLE_MODELS 中的 id；与被评模型错开厂商可减少同源偏置） */
+  onlineJudgeModel: z.string().min(1).default('zhipu:glm-4.7'),
+
   deepseekBaseUrl: z.string().min(1).default('https://api.deepseek.com'),
   zhipuBaseUrl: z
     .string()
@@ -400,6 +410,10 @@ function buildRawConfig() {
     chromaUrl: env.CHROMA_URL,
     chromaPersistDir: env.CHROMA_PERSIST_DIR,
     serverBaseUrl: env.SERVER_BASE_URL,
+
+    onlineJudgeEnabled: env.ONLINE_JUDGE_ENABLED,
+    onlineJudgeModel: env.ONLINE_JUDGE_MODEL,
+
     deepseekBaseUrl: env.DEEPSEEK_BASE_URL,
     zhipuBaseUrl: env.ZHIPU_BASE_URL,
     dashscopeBaseUrl: env.DASHSCOPE_BASE_URL,
@@ -621,6 +635,10 @@ export const config = {
   },
 
   serverBaseUrl: parsed.serverBaseUrl,
+
+  onlineJudgeEnabled: parsed.onlineJudgeEnabled,
+  onlineJudgeModel: parsed.onlineJudgeModel,
+
   deepseekBaseUrl: parsed.deepseekBaseUrl,
   zhipuBaseUrl: parsed.zhipuBaseUrl,
   dashscopeBaseUrl: parsed.dashscopeBaseUrl,

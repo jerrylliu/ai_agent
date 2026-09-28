@@ -36,6 +36,16 @@ export class UsageService {
       imageCount: usage.imageCount,
       responseTimeMs: usage.responseTimeMs,
       userMessage: usage.userMessage?.substring(0, 500),
+      // 检索上下文存档（数组 → JSON 字符串；空/缺省 → null）
+      // 回答生成完内存即释放，不在这里落库则 faithfulness 评估永远无米下锅
+      retrievedDocumentIds:
+        usage.retrievedDocumentIds && usage.retrievedDocumentIds.length > 0
+          ? JSON.stringify(usage.retrievedDocumentIds)
+          : null,
+      retrievedContexts:
+        usage.retrievedContexts && usage.retrievedContexts.length > 0
+          ? JSON.stringify(usage.retrievedContexts)
+          : null,
     });
     return this.llmUsageRepository.save(record);
   }
