@@ -858,19 +858,22 @@ export function useChat(
               ),
             );
           },
+          onMetadata: (metadata) => {
+            // 实时挂载知识库来源标记：metadata SSE 事件在流式内容前到达，
+            // 若等 getAIResponse 返回后再读其返回值，会因返回时机早于事件处理而恒为 false/0
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantMessageId
+                  ? {
+                      ...msg,
+                      fromKnowledgeBase: metadata.usedKnowledgeBase,
+                      contextCount: metadata.contextCount,
+                    }
+                  : msg,
+              ),
+            );
+          },
         },
-      );
-
-      // 设置知识库来源标记
-      const usedKnowledgeBase = aiResponse.usedKnowledgeBase;
-      const contextCount = aiResponse.contextCount;
-
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? { ...msg, fromKnowledgeBase: usedKnowledgeBase, contextCount }
-            : msg,
-        ),
       );
 
       const reader = aiResponse.stream.getReader();
