@@ -85,6 +85,47 @@ const CONFIRMATION_CONFIG: Record<
     ],
   },
 
+  // ---------------- 文档管理域工具：按"增删改一律确认"规则 ----------------
+  // 设计文档 ai-operate-all-interfaces-design.md：凡写操作（增/删/改）必须人工确认，
+  // 只读工具（list_documents / list_document_versions）不入本表即免确认。
+  // 三端（Web/手机/飞书）确认由 executeTool 中央拦截 + HITL 广播自动完成。
+  create_document: {
+    riskLevel: 'medium',
+    message: '即将在知识库中创建新文档',
+    paramSummary: (params) =>
+      `标题：${(params.title || '').slice(0, 60)}，内容 ${String(params.content || '').length} 字`,
+  },
+  update_document: {
+    riskLevel: 'medium',
+    message: '即将更新文档内容（产生新版本，历史保留）',
+    paramSummary: (params) =>
+      `文档ID：${params.documentId}，新内容 ${String(params.content || '').length} 字`,
+  },
+  update_document_meta: {
+    riskLevel: 'medium',
+    message: '即将修改文档元信息（标签/标题/描述，不改动正文）',
+    paramSummary: (params) => {
+      const parts: string[] = [`文档ID：${params.documentId}`];
+      if (params.title !== undefined) parts.push(`标题→${params.title}`);
+      if (params.description !== undefined) parts.push('描述');
+      if (params.tags !== undefined)
+        parts.push(`标签→[${(params.tags as string[]).join('、') || '清空'}]`);
+      return parts.join('，');
+    },
+  },
+  delete_document: {
+    riskLevel: 'high',
+    message: '即将删除文档（含全部版本与向量数据，不可恢复）',
+    paramSummary: (params) =>
+      `文档ID：${params.documentId}${params.title ? `，标题：${params.title}` : ''}`,
+  },
+  restore_document_version: {
+    riskLevel: 'high',
+    message: '即将把文档恢复到历史版本（以旧内容生成新版本，历史保留）',
+    paramSummary: (params) =>
+      `版本ID：${params.versionId}${params.documentTitle ? `，文档：${params.documentTitle}` : ''}`,
+  },
+
   // ---------------- 三大外部 API 工具：均需要用户确认 ----------------
   // send_notification 会向第三方/用户发送消息，存在打扰风险，标记为 medium
   send_notification: {

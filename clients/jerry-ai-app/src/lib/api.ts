@@ -134,7 +134,14 @@ export function subscribeChatEvents(
     onConfirmationResolved?: (event: {
       id: string;
       confirmed: boolean;
-      source: "web" | "feishu" | "timeout";
+      source: 'web' | 'feishu' | 'timeout';
+    }) => void;
+    /** 文档域变更事件（AI 工具或任意端改动文档后广播，文档面板据此刷新） */
+    onDocumentChanged?: (event: {
+      action: 'created' | 'updated' | 'deleted';
+      documentId: number;
+      title?: string;
+      at: number;
     }) => void;
   },
 ): () => void {
@@ -161,6 +168,13 @@ export function subscribeChatEvents(
   source.addEventListener("confirmation_resolved", (e) => {
     try {
       options?.onConfirmationResolved?.(JSON.parse((e as MessageEvent).data));
+    } catch {
+      /* 单条事件解析失败忽略 */
+    }
+  });
+  source.addEventListener('document_changed', (e) => {
+    try {
+      options?.onDocumentChanged?.(JSON.parse((e as MessageEvent).data));
     } catch {
       /* 单条事件解析失败忽略 */
     }

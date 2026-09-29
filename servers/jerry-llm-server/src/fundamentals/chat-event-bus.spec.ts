@@ -3,6 +3,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 
 import {
   publishChatHistoryEvent,
+  publishDocumentChangedEvent,
   subscribeChatHistoryEvents,
   __resetChatEventBusForTest,
   type ChatHistoryEvent,
@@ -67,5 +68,50 @@ describe('chat-event-bus', () => {
 
     publishChatHistoryEvent(baseEvent({ ownerUserId: 'default' }));
     expect(def).toHaveBeenCalledTimes(1);
+  });
+
+  // ==================== document_changed（全局广播） ====================
+
+  it('document_changed 广播给所有在线端（不按用户隔离，文档是全局数据）', () => {
+    const u1 = jest.fn();
+    const u2 = jest.fn();
+    const def = jest.fn();
+    subscribeChatHistoryEvents('u1', u1);
+    subscribeChatHistoryEvents('u2', u2);
+    subscribeChatHistoryEvents('default', def);
+
+    publishDocumentChangedEvent({
+      action: 'updated',
+      documentId: 7,
+      title: '某文档',
+    });
+
+    expect(u1).toHaveBeenCalledTimes(1);
+    expect(u2).toHaveBeenCalledTimes(1);
+    expect(def).toHaveBeenCalledTimes(1);
+    expect(u1).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'document_changed',
+        action: 'updated',
+        documentId: 7,
+        title: '某文档',
+      }),
+    );
+  });
+
+  it('document_changed 携带 at 时间戳与缺省 title', () => {
+    const listener = jest.fn();
+    subscribeChatHistoryEvents('u1', listener);
+
+    publishDocumentChangedEvent({ action: 'deleted', documentId: 8 });
+
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'document_changed',
+        action: 'deleted',
+        documentId: 8,
+        at: expect.any(Number),
+      }),
+    );
   });
 });
