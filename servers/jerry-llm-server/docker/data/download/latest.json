@@ -1,11 +1,11 @@
 {
-  "version": "0.1.13",
-  "pub_date": "2026-09-29T13:45:00Z",
-  "notes": "1. AI 可代管知识源：增删爬取源、触发同步、全量重建索引（高危操作弹框确认）\n2. AI 可切换对话模型、开关记忆/摘要等全局功能、查询评估统计与收藏\n3. 记忆/摘要开关升级为服务端全局默认：未手动改过的设备自动跟随，改过的保持本地\n4. 知识源管理界面自动刷新：AI 增删/同步后无需手动刷新\n5. 设置面板显示「跟随全局默认/本设备已自定义」标记",
+  "version": "0.1.14",
+  "pub_date": "2026-09-29T16:00:00Z",
+  "notes": "1. AI 输出自检：回答以草稿态显示（校验中），审核通过后转正；发现硬伤自动重写修正并热替换\n2. AI 可代管知识源：增删爬取源、触发同步、全量重建索引（高危操作弹框确认）\n3. AI 可切换对话模型、开关记忆/摘要等全局功能、查询评估统计与收藏\n4. 记忆/摘要开关升级为服务端全局默认：未手动改过的设备自动跟随\n5. 知识源管理界面自动刷新 + 设置面板显示「跟随全局默认/本设备已自定义」标记",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUdRY3p4NG9OK2k5NFVyZVN4TUZ4UFpOYWhuN2ZBdWVlb2I3SkNzU2hIQXNlL3MwTVVlUGZrUVdWUFFpY3hEalNtRkswb0NoR05BenZMdWVlYU4zdVE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNjg4NzU5CWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xM194NjQtc2V0dXAuZXhlCnRneFZ2UFdVc1F3cEpZcE1aeWsrUFhCMUpKQXBFRUlPcUgzbEhUMzEwYVBHdHpVUXFHYkE1KzMwcFpxazZCV2lKREhyZWpvY2Y2YXhYMmhBMlhNb0N3PT0K",
-      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.13_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUpNWmdFTEgzU1ZtZE51VTloR3l2ejlXNXhpUUNQcGpLSFNNL25wR3N1T1J3anYwZ3F2L3lvOVlyam9sZzFwK0VQQnFhR2JDVk9SN04yZUdBa0VTdkEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNjk3NTAxCWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xNF94NjQtc2V0dXAuZXhlCjF5L3ZSUTRMaDNhdmN5T3pybGZ1b0lkQWYzTlNDZnpCZGdSbVhBbWgxZTkva3B2bm5raUpjcHhacXlZd2ZBYStOeXJwcXNtbUtiMUVHSEtXNXIvQUFnPT0K",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.14_x64-setup.exe"
     }
   }
 }
