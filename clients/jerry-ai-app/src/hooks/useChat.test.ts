@@ -452,6 +452,88 @@ describe('useChat', () => {
 
       expect(result.current.messages.some((msg) => msg.role === 'assistant' && msg.content === '生成好了')).toBe(true);
     });
+
+    it('review_result=passed 应将草稿态转正', async () => {
+      vi.mocked(api.getModelInfo).mockResolvedValue(mockModelInfo);
+      vi.mocked(api.getSessions).mockResolvedValue([]);
+      vi.mocked(api.saveChatHistory).mockResolvedValue({ id: 1 });
+      vi.mocked(api.updateSessionTitle).mockResolvedValue(undefined);
+
+      vi.mocked(api.getAIResponse).mockImplementation(async (_m, _i, _h, _s, _sig, options) => {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue('回答正文');
+            // 模拟服务端在流结束前推送自检结果
+            options?.onReviewResult?.({ status: 'passed' });
+            controller.close();
+          },
+        });
+        return {
+          stream,
+          usedKnowledgeBase: false,
+          contextCount: 0,
+          sessionAction: null,
+          onToolStatus: null,
+          fileCards: [],
+          citations: [],
+        } as any;
+      });
+
+      const { result } = renderHook(() => useChat(false));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        await result.current.sendMessage('问题');
+      });
+
+      const aiMsg = result.current.messages.find((msg) => msg.role === 'assistant');
+      expect(aiMsg?.content).toBe('回答正文');
+      // 转正后不再被流结束的 draft 清理逻辑抹掉（清理只针对仍为 draft 的消息）
+      expect(aiMsg?.reviewStatus).toBe('passed');
+    });
+
+    it('自检重写应热替换内容且 reviewStatus 走 revising→revised', async () => {
+      vi.mocked(api.getModelInfo).mockResolvedValue(mockModelInfo);
+      vi.mocked(api.getSessions).mockResolvedValue([]);
+      vi.mocked(api.saveChatHistory).mockResolvedValue({ id: 1 });
+      vi.mocked(api.updateSessionTitle).mockResolvedValue(undefined);
+
+      vi.mocked(api.getAIResponse).mockImplementation(async (_m, _i, _h, _s, _sig, options) => {
+        const stream = new ReadableStream({
+          async start(controller) {
+            controller.enqueue('旧回答');
+            // 等 hook 读走第一个 chunk 后触发重写热替换（真实时序：审核不通过→清空→重写）
+            await new Promise((r) => setTimeout(r, 20));
+            options?.onReviewResult?.({ status: 'revising' });
+            options?.onContentReset?.();
+            controller.enqueue('新回答');
+            options?.onReviewResult?.({ status: 'revised', reviewPassed: true });
+            controller.close();
+          },
+        });
+        return {
+          stream,
+          usedKnowledgeBase: false,
+          contextCount: 0,
+          sessionAction: null,
+          onToolStatus: null,
+          fileCards: [],
+          citations: [],
+        } as any;
+      });
+
+      const { result } = renderHook(() => useChat(false));
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+      await act(async () => {
+        await result.current.sendMessage('问题');
+      });
+
+      const aiMsg = result.current.messages.find((msg) => msg.role === 'assistant');
+      // 旧文本被清空，只剩重写文本（热替换，不是拼接）
+      expect(aiMsg?.content).toBe('新回答');
+      expect(aiMsg?.reviewStatus).toBe('revised');
+    });
   });
 
   /* ====================================================================

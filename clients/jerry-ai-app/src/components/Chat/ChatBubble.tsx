@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { Button } from "../ui/button";
-import { Database, ThumbsUp, ThumbsDown, Pencil, FileText, Download, FileCode, FileType, ExternalLink } from "lucide-react";
+import { Database, ThumbsUp, ThumbsDown, Pencil, FileText, Download, FileCode, FileType, ExternalLink, Loader2, CheckCheck, RefreshCw, AlertTriangle } from "lucide-react";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { FileCard } from "./FileCard";
 import { PopupMenu, type PopupMenuItem } from "../ui/popup-menu";
@@ -562,7 +562,17 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
           >
             {/* AI消息：使用Markdown渲染 */}
             {message.role === "assistant" ? (
-              <div className="min-w-0" style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+              <div
+                className={`min-w-0 ${message.reviewStatus === "draft" ? "opacity-60 transition-opacity" : ""}`}
+                style={{ maxWidth: '100%', wordBreak: 'break-word', overflowWrap: 'break-word' }}
+              >
+                {/* 草稿态标记：审核期间内容半透明，顶部显示"校验中"（审核结果到达后消失） */}
+                {message.reviewStatus === "draft" && (
+                  <div className="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 mb-1">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    校验中
+                  </div>
+                )}
                 <MarkdownRenderer citations={message.citations}>{message.content}</MarkdownRenderer>
                 {/* 参考来源卡片（RAG 引用定位，与正文角标 [X] 编号对应） */}
                 {message.citations && message.citations.length > 0 && (
@@ -781,8 +791,29 @@ const ChatBubble: React.FC<ChatBubbleProps> = ({
             </div>
           )}
         </div>
-        {/* 消息元信息栏：知识库来源标记 + 时间戳 + 已读标记 */}
+        {/* 消息元信息栏：AI 输出自检状态 + 知识库来源标记 + 时间戳 + 已读标记 */}
         <div className="flex items-center mt-1">
+          {/* 自检状态徽章（仅 AI 消息）：passed=极小 ✓；revised=已自动修正；warning=仅供参考 */}
+          {message.reviewStatus === "passed" && (
+            <span
+              className="flex items-center text-green-600 dark:text-green-400 mr-2"
+              title="已通过 AI 自检"
+            >
+              <CheckCheck className="h-3 w-3" />
+            </span>
+          )}
+          {message.reviewStatus === "revised" && (
+            <span className="text-xs px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded mr-2 flex items-center">
+              <RefreshCw className="h-3 w-3 mr-0.5" />
+              已自动修正
+            </span>
+          )}
+          {message.reviewStatus === "warning" && (
+            <span className="text-xs px-1.5 py-0.5 bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded mr-2 flex items-center">
+              <AlertTriangle className="h-3 w-3 mr-0.5" />
+              自检未通过，仅供参考
+            </span>
+          )}
           {message.fromKnowledgeBase && (
             <span className="text-xs px-1.5 py-0.5 bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded mr-2 flex items-center">
               <Database className="h-3 w-3 mr-0.5" />
