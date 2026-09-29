@@ -216,6 +216,24 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
     loadPendingReviewCount();
   }, [handleRefresh, loadPendingReviewCount]);
 
+  // 监听文档域变更广播（AI 工具或其他端改动文档后由 useChat 转发的 window 事件）
+  // 500ms 防抖：AI 批量操作 N 篇文档只触发一次重拉，避免连续刷新闪动
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onDocumentChanged = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void handleRefresh();
+      }, 500);
+    };
+    window.addEventListener('jerryai:document-changed', onDocumentChanged);
+    return () => {
+      window.removeEventListener('jerryai:document-changed', onDocumentChanged);
+      if (timer) clearTimeout(timer);
+    };
+  }, [handleRefresh]);
+
   useEffect(() => {
     if (selectedDocId) {
       loadVersions(selectedDocId);

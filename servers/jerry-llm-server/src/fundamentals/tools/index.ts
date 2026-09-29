@@ -80,6 +80,16 @@ import {
   executeCompareDocuments,
   type CompareDocumentsParams,
   type CompareDocumentsResult,
+  listDocumentsSchema,
+  executeListDocuments,
+  updateDocumentMetaSchema,
+  executeUpdateDocumentMeta,
+  deleteDocumentSchema,
+  executeDeleteDocument,
+  listDocumentVersionsSchema,
+  executeListDocumentVersions,
+  restoreDocumentVersionSchema,
+  executeRestoreDocumentVersion,
   initDocumentTools,
 } from './document-ops';
 import {
@@ -274,6 +284,26 @@ function buildToolsMap(): Record<string, ToolDefinition> {
       schema: compareDocumentsSchema,
       executor: executeCompareDocuments as (params: any) => Promise<any>,
     },
+    list_documents: {
+      schema: listDocumentsSchema,
+      executor: executeListDocuments as (params: any) => Promise<any>,
+    },
+    update_document_meta: {
+      schema: updateDocumentMetaSchema,
+      executor: executeUpdateDocumentMeta as (params: any) => Promise<any>,
+    },
+    delete_document: {
+      schema: deleteDocumentSchema,
+      executor: executeDeleteDocument as (params: any) => Promise<any>,
+    },
+    list_document_versions: {
+      schema: listDocumentVersionsSchema,
+      executor: executeListDocumentVersions as (params: any) => Promise<any>,
+    },
+    restore_document_version: {
+      schema: restoreDocumentVersionSchema,
+      executor: executeRestoreDocumentVersion as (params: any) => Promise<any>,
+    },
     generate_chart: {
       schema: generateChartSchema,
       executor: executeGenerateChart as (params: any) => Promise<any>,
@@ -436,6 +466,11 @@ const TOOL_COMPACT_DESCRIPTIONS: Record<string, string> = {
   update_document: '更新已有文档内容，上传新版本保留历史',
   summarize_document: '对指定文档生成摘要，快速了解文档核心内容',
   compare_documents: '对比两个文档差异，查看新增删除内容',
+  list_documents: '列出文档清单可筛无标签文档，整理文档或找文档ID时使用',
+  update_document_meta: '只改文档标签标题描述不改正文，打标签时优先用',
+  delete_document: '删除文档含全部版本，不可恢复，删除前需确认',
+  list_document_versions: '列出文档历史版本，查看版本或准备恢复时使用',
+  restore_document_version: '恢复文档到历史版本生成新版本，回退内容时使用',
   generate_chart: '生成图表，折线柱状饼图等，数据可视化时使用',
   generate_image: '文生图，根据文字描述生成图片，需要图片时使用',
   create_mindmap: '生成思维导图，整理知识结构梳理逻辑时使用',
@@ -496,6 +531,19 @@ const TOOL_COMPACT_PARAM_DESCRIPTIONS: Record<
   compare_documents: {
     documentId1: '第一个文档ID',
     documentId2: '第二个文档ID',
+  },
+  list_documents: {},
+  update_document_meta: {
+    documentId: '文档ID',
+  },
+  delete_document: {
+    documentId: '文档ID',
+  },
+  list_document_versions: {
+    documentId: '文档ID',
+  },
+  restore_document_version: {
+    versionId: '版本ID',
   },
   generate_chart: {
     chartType: '图表类型',
@@ -792,6 +840,11 @@ const TOOL_SEMANTIC_DESCRIPTIONS: Record<string, string> = {
   update_document: '!!更新文档 !!修改文档 更新 修改 编辑 文档 版本 变更',
   summarize_document: '!!生成摘要 !!总结文档 摘要 总结 概括 文档 核心 要点',
   compare_documents: '!!对比文档 !!比较文档 对比 比较 差异 不同 文档 区别',
+  list_documents: '!!列文档 !!文档清单 文档列表 无标签 标签筛选 找文档 文档ID',
+  update_document_meta: '!!改标签 !!打标签 加标签 标签 改标题 文档描述',
+  delete_document: '!!删除文档 删文档 删除 移除 文档',
+  list_document_versions: '!!版本列表 !!历史版本 版本 历史',
+  restore_document_version: '!!恢复版本 !!回退版本 恢复 回退 还原',
   generate_chart:
     '!!画图 !!生成图表 !!可视化 图表 折线图 柱状图 饼图 数据可视化 绘图',
   generate_image: '!!画图 !!生成图片 !!文生图 图片 画图 生成图 图像 绘画',

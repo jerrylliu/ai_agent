@@ -32,6 +32,7 @@ import {
 } from '../entities/pending-vector-op.entity.js';
 import { ImageDescription } from '../entities/image-description.entity.js';
 import { logger } from '../fundamentals/logger';
+import { publishDocumentChangedEvent } from '../fundamentals/chat-event-bus';
 import {
   saveVersionFile,
   validateFileSize,
@@ -1226,7 +1227,16 @@ export class DocumentService implements OnApplicationBootstrap {
     if (data.title !== undefined) doc.title = data.title;
     if (data.description !== undefined) doc.description = data.description;
     if (data.tags !== undefined) doc.tags = data.tags;
-    return this.documentRepo.save(doc);
+    const saved = await this.documentRepo.save(doc);
+
+    // 广播文档变更（元信息修改不产生新版本，也需让在线端刷新列表）
+    publishDocumentChangedEvent({
+      action: 'updated',
+      documentId: saved.id,
+      title: saved.title,
+    });
+
+    return saved;
   }
 
   /**
@@ -1327,6 +1337,13 @@ export class DocumentService implements OnApplicationBootstrap {
       documentId: id,
       title: doc.title,
       operator,
+    });
+
+    // 广播文档变更：所有在线端的文档面板防抖重拉（AI 工具删除与手动删除均覆盖）
+    publishDocumentChangedEvent({
+      action: 'deleted',
+      documentId: id,
+      title: doc.title,
     });
   }
 
@@ -1593,6 +1610,13 @@ export class DocumentService implements OnApplicationBootstrap {
         });
       }
     }
+
+    // 广播文档变更：区分新建与新增版本（AI 工具、Web 上传、编辑器保存统一覆盖）
+    publishDocumentChangedEvent({
+      action: options.documentId ? 'updated' : 'created',
+      documentId: result.document.id,
+      title: result.document.title,
+    });
 
     return {
       document: result.document,
@@ -1994,6 +2018,56 @@ export class DocumentService implements OnApplicationBootstrap {
     });
     if (!version) throw new NotFoundException(`版本 ${versionId} 不存在`);
     return version;
+  }
+
+  /**
+   * 恢复历史版本：把目标版本的原始文件作为"新版本"重新上传
+   *
+   * 为什么是"追加新版本"而非"指针回拨"：现有版本链是只追加设计（审计与向量
+   * 增量都依赖版本单调递增），回拨指针会破坏 active 语义与审计链。以旧内容
+   * 传新版本即达到"内容回到过去"的效果，且历史完整保留、可再次回退。
+   *
+   * 幂等安全性：同文档重新上传历史内容是 uploadDocument 的既有合法路径
+   * （跨文档 checksum 查重会放行同文档条目，见 uploadDocument 内注释）。
+   */
+  async restoreVersion(
+    versionId: number,
+    operator: string = 'anonymous',
+  ): Promise<{ document: Document; version: DocumentVersion }> {
+    const version = await this.getVersion(versionId);
+    if (version.parsingStatus !== ParsingStatus.SUCCESS) {
+      throw new BadRequestException(
+        `版本 ${version.versionNumber} 未成功解析（当前状态 ${version.parsingStatus}），无法恢复`,
+      );
+    }
+    const doc = await this.getDocument(version.documentId);
+    const buffer = readVersionFile(version.fileUrl);
+    if (!buffer) {
+      throw new NotFoundException(`版本文件不存在或已损坏：${version.fileUrl}`);
+    }
+
+    logger.info('恢复历史版本为新版本', {
+      module: 'DocumentService',
+      documentId: doc.id,
+      title: doc.title,
+      targetVersionNumber: version.versionNumber,
+      operator,
+    });
+
+    return this.uploadDocument(
+      {
+        buffer,
+        originalname:
+          path.basename(version.fileUrl) || `${doc.title}.${version.fileType}`,
+        size: buffer.length,
+        mimetype: version.fileType,
+      },
+      {
+        documentId: doc.id,
+        title: doc.title,
+        operator: `${operator}:restore-v${version.versionNumber}`,
+      },
+    );
   }
 
   /**

@@ -317,6 +317,13 @@ export class ChatController {
 
     const unsubscribe = subscribeChatHistoryEvents(ownerUserId, (event) => {
       if (res.writableEnded) return;
+      // 文档域变更：全局广播事件，文档面板防抖重拉列表
+      if (event.kind === 'document_changed') {
+        res.write(
+          `event: document_changed\ndata: ${JSON.stringify(event)}\n\n`,
+        );
+        return;
+      }
       // HITL 多端广播：确认请求/解决结果以独立 SSE 事件名推给该用户所有在线端，
       // 让非触发流（如移动端空闲时）也能弹确认框；payload 结构与流内事件一致
       if (event.kind === 'hitl') {

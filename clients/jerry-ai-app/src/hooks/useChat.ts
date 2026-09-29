@@ -234,6 +234,8 @@ export function useChat(
   const isTypingRef = useRef(false);
   const activeGeneratingSessionIdRef = useRef<string | null>(null);
   const knowledgeRetryTimerRef = useRef<number | null>(null);
+  // 文档变更事件挂起标记：流式生成期间到达的 document_changed 延后到生成结束补发
+  const pendingDocRefreshRef = useRef(false);
 
   // 辅助: 标记会话有内容 + 持久化
   const markSessionHasContent = (sessionId: string) => {
@@ -256,6 +258,18 @@ export function useChat(
       return next;
     });
   };
+
+  // 流式生成结束后补发挂起的文档刷新（见 onDocumentChanged 中的挂起逻辑）
+  useEffect(() => {
+    if (!isTyping && pendingDocRefreshRef.current) {
+      pendingDocRefreshRef.current = false;
+      window.dispatchEvent(
+        new CustomEvent('jerryai:document-changed', {
+          detail: { action: 'updated', at: Date.now() },
+        }),
+      );
+    }
+  }, [isTyping]);
 
   useEffect(() => {
     void loadModelInfo().catch(() => {});
@@ -580,6 +594,17 @@ export function useChat(
           onConfirmationRequestRef.current?.(event),
         onConfirmationResolved: (event) =>
           onConfirmationResolvedRef.current?.(event),
+        onDocumentChanged: (event) => {
+          // 文档域变更 → 通知文档面板刷新。正在生成回复时先挂起，
+          // 生成结束的 effect 里补发，避免流式期间界面闪动（设计文档"不打断对话"）
+          if (isTypingRef.current) {
+            pendingDocRefreshRef.current = true;
+            return;
+          }
+          window.dispatchEvent(
+            new CustomEvent('jerryai:document-changed', { detail: event }),
+          );
+        },
       },
     );
 

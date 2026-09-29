@@ -74,8 +74,30 @@ export interface HITLBusEvent {
       };
 }
 
+/**
+ * 文档域变更事件（document_changed）
+ *
+ * 为什么广播给所有用户：文档域当前没有按用户隔离（listDocuments 返回全部文档），
+ * 与聊天"按 ownerUserId 分发"不同，文档变更属于全局数据变更，
+ * 任何在线端的文档面板都应刷新。前端收到后防抖重拉列表。
+ */
+export interface DocumentChangedEvent {
+  kind: 'document_changed';
+  /** 动作类型：created=新建文档 / updated=新增版本或改元信息 / deleted=删除文档 */
+  action: 'created' | 'updated' | 'deleted';
+  /** 受影响的文档 ID */
+  documentId: number;
+  /** 文档标题（便于前端提示与排障，不必反查） */
+  title?: string;
+  /** 事件时间戳（毫秒） */
+  at: number;
+}
+
 /** 总线上的事件联合类型：订阅方按 kind 分流 */
-export type ChatBusEvent = ChatHistoryEvent | HITLBusEvent;
+export type ChatBusEvent =
+  | ChatHistoryEvent
+  | HITLBusEvent
+  | DocumentChangedEvent;
 
 /**
  * 发布一条 chat_history 写入事件。
@@ -127,6 +149,29 @@ export function publishHITLEvent(event: HITLBusEvent): void {
 }
 
 /**
+ * 发布一条文档域变更事件（广播给所有在线端，见 DocumentChangedEvent 注释）。
+ * 失败只 warn，绝不影响主链路（落库已经成功）。
+ */
+export function publishDocumentChangedEvent(event: {
+  action: 'created' | 'updated' | 'deleted';
+  documentId: number;
+  title?: string;
+}): void {
+  try {
+    emitter.emit(CHANNEL, {
+      kind: 'document_changed',
+      at: Date.now(),
+      ...event,
+    });
+  } catch (e: any) {
+    logger.warn('发布文档变更事件失败（忽略）', {
+      module: 'ChatEventBus',
+      err: (e?.message || String(e)).slice(0, 200),
+    });
+  }
+}
+
+/**
  * 订阅指定用户的 chat_history / HITL 广播事件（按 kind 分流）。
  * 返回取消订阅函数，SSE 连接关闭时必须调用，避免监听器泄漏。
  */
@@ -135,7 +180,9 @@ export function subscribeChatHistoryEvents(
   listener: (event: ChatBusEvent) => void,
 ): () => void {
   const handler = (event: ChatBusEvent) => {
-    if (event.ownerUserId !== ownerUserId) return;
+    // document_changed 是全局数据变更，广播给所有连接；其余按用户隔离
+    if (event.kind !== 'document_changed' && event.ownerUserId !== ownerUserId)
+      return;
     listener(event);
   };
   emitter.on(CHANNEL, handler);
