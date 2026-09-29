@@ -183,7 +183,18 @@ export function subscribeChatHistoryEvents(
     // document_changed 是全局数据变更，广播给所有连接；其余按用户隔离
     if (event.kind !== 'document_changed' && event.ownerUserId !== ownerUserId)
       return;
-    listener(event);
+    // 按订阅者隔离异常：某个连接写入失败（如刚断开的 SSE socket）不能中断
+    // EventEmitter 的遍历，否则排在其后的订阅者会丢事件（document_changed 全局广播时影响面最大）
+    try {
+      listener(event);
+    } catch (e: any) {
+      logger.warn('chat 事件订阅者处理失败（已隔离，不影响其他订阅者）', {
+        module: 'ChatEventBus',
+        ownerUserId,
+        kind: event.kind,
+        err: (e?.message || String(e)).slice(0, 200),
+      });
+    }
   };
   emitter.on(CHANNEL, handler);
   return () => {
