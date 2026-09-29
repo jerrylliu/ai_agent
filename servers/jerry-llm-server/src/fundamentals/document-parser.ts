@@ -15,6 +15,7 @@ import mammoth from 'mammoth';
 import * as XLSX from 'xlsx';
 import { config } from './config';
 import { logger } from './logger';
+import { getMineruEffectiveConfig } from './runtime-config';
 import type { ParsedDocument } from './image-extractor';
 import { extractImagesFromMineru } from './image-extractor/pdf-mineru';
 import { extractImagesFromPdfjs } from './image-extractor/pdf-pdfjs';
@@ -290,10 +291,14 @@ async function parsePdfFile(filePath: string): Promise<ParsedDocument> {
 /**
  * 检查 MinerU 是否可用（开关已开启 + Token 已配置）
  * 注意：文件上传方式不需要公网 URL，本地文件直接上传给 MinerU
+ *
+ * 配置来源：运行时配置（前端设置面板）优先，.env 兜底——
+ * 用户在前端填 Token/切开关后立即生效，无需改 .env + 重建容器
  */
 function isMineruAvailable(): boolean {
-  if (!config.mineru.enabled) return false;
-  if (!config.mineru.apiToken) return false;
+  const mineruCfg = getMineruEffectiveConfig();
+  if (!mineruCfg.enabled) return false;
+  if (!mineruCfg.apiToken) return false;
   return true;
 }
 
@@ -306,20 +311,23 @@ async function parsePdfWithMineru(filePath: string): Promise<ParsedDocument> {
   const { MinerU } = await import('mineru-open-sdk');
   const fileName = path.basename(filePath);
 
+  // Token / 模型版本走运行时配置（.env 兜底）；超时暂不支持前端调整，保持 .env
+  const mineruCfg = getMineruEffectiveConfig();
+
   // SDK 超时参数是秒，配置里是毫秒
   const timeoutSec = Math.floor(config.mineru.timeoutMs / 1000);
 
-  const client = new MinerU(config.mineru.apiToken);
+  const client = new MinerU(mineruCfg.apiToken);
 
   logger.info('使用 MinerU SDK 解析 PDF', {
     module: 'DocumentParser',
     fileName,
-    model: config.mineru.modelVersion,
+    model: mineruCfg.modelVersion,
     timeoutSec,
   });
 
   const result = await client.extract(filePath, {
-    model: config.mineru.modelVersion,
+    model: mineruCfg.modelVersion,
     timeout: timeoutSec,
   });
 

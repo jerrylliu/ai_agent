@@ -21,6 +21,8 @@ import {
   toggleLocalEmbedding,
   rebuildEmbeddingIndex,
   getRebuildProgress,
+  getMineruConfig,
+  updateMineruConfig,
 } from '../../lib/api';
 import type {
   CacheConfig,
@@ -32,6 +34,7 @@ import type {
   CloudEmbeddingProvider,
   SaveEmbeddingConfigPayload,
   ReindexProgress,
+  MineruConfigResponse,
 } from '../../lib/api';
 
 interface SettingsDialogProps {
@@ -162,6 +165,14 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
     apiKey: '',
   });
 
+  // MinerU PDF 解析配置状态（Token 运行时可配，改配置无需改服务器 .env）
+  const [mineruCfg, setMineruCfg] = useState<MineruConfigResponse | null>(null);
+  // Token 输入框明文（后端不回显已存 Token，留空 = 保持不变）
+  const [mineruToken, setMineruToken] = useState('');
+  const [mineruModelVersion, setMineruModelVersion] = useState('vlm');
+  const [mineruSaving, setMineruSaving] = useState(false);
+  const [mineruNotice, setMineruNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
   // 加载缓存和限流配置
   const loadConfig = useCallback(async () => {
     // 缓存与限流分开加载：一方失败不影响另一方，且失败必须显式告知用户。
@@ -215,6 +226,22 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
       setEmbeddingStatus(null);
     } catch {
       // 后端未启动或接口异常时保持空态
+    }
+
+    // MinerU 配置独立加载：失败只影响该区块，不阻塞其他设置项
+    try {
+      const mc = await getMineruConfig();
+      setMineruCfg(mc);
+      setMineruModelVersion(mc.modelVersion || 'vlm');
+      // Token 不回显（后端不返回明文），输入框留空表示保持现有 Token
+      setMineruToken('');
+      setMineruNotice(null);
+    } catch (err) {
+      setMineruCfg(null);
+      setMineruNotice({
+        ok: false,
+        text: `MinerU 配置加载失败：${(err as Error).message}`,
+      });
     }
   }, []);
 
@@ -398,6 +425,75 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
       baseUrl: preset?.baseUrl ?? prev.baseUrl,
       model: preset?.defaultModel ?? prev.model,
     }));
+  };
+
+  // ==================== MinerU PDF 解析配置 ====================
+
+  // 启用开关：显式 true/false 覆盖服务器 .env 的 MINERU_ENABLED，立即生效
+  const handleToggleMineru = async (checked: boolean) => {
+    if (!mineruCfg || mineruSaving) return;
+    setMineruSaving(true);
+    setMineruNotice(null);
+    try {
+      const result = await updateMineruConfig({ enabled: checked });
+      setMineruCfg(result);
+      setMineruNotice({
+        ok: true,
+        text: checked
+          ? 'MinerU 已启用，配置 Token 后 PDF 将走智能解析'
+          : 'MinerU 已关闭，PDF 将走本地解析（仅纯文本）',
+      });
+    } catch (err) {
+      setMineruNotice({ ok: false, text: `切换失败：${(err as Error).message}` });
+    } finally {
+      setMineruSaving(false);
+    }
+  };
+
+  // 保存：仅提交 Token（非空时）与模型版本。
+  // 注意不能把空 Token 一起提交——apiToken 传空串是「清除」语义，会误清已存 Token
+  const handleSaveMineru = async () => {
+    if (!mineruCfg || mineruSaving) return;
+    setMineruSaving(true);
+    setMineruNotice(null);
+    try {
+      const token = mineruToken.trim();
+      const payload: { apiToken?: string; modelVersion?: string } = {
+        modelVersion: mineruModelVersion.trim(),
+      };
+      if (token) payload.apiToken = token;
+      const result = await updateMineruConfig(payload);
+      setMineruCfg(result);
+      setMineruToken('');
+      setMineruNotice({
+        ok: true,
+        text:
+          result.enabled && result.hasToken
+            ? 'MinerU 配置已保存并生效'
+            : '已保存（未启用或未配置 Token 时，PDF 走本地解析）',
+      });
+    } catch (err) {
+      setMineruNotice({ ok: false, text: `保存失败：${(err as Error).message}` });
+    } finally {
+      setMineruSaving(false);
+    }
+  };
+
+  // 清除运行时 Token：回退服务器 .env 配置（仅当前端设置过 Token 时可见）
+  const handleClearMineruToken = async () => {
+    if (!mineruCfg || mineruSaving || mineruCfg.source !== 'runtime') return;
+    setMineruSaving(true);
+    setMineruNotice(null);
+    try {
+      const result = await updateMineruConfig({ apiToken: '' });
+      setMineruCfg(result);
+      setMineruToken('');
+      setMineruNotice({ ok: true, text: '已清除运行时 Token，回退服务器 .env 配置' });
+    } catch (err) {
+      setMineruNotice({ ok: false, text: `清除失败：${(err as Error).message}` });
+    } finally {
+      setMineruSaving(false);
+    }
   };
 
   // 连接测试：真实生成一次向量验证指定路径（ollama / cloud），不保存
@@ -868,6 +964,97 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                   })()}
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* 分隔线 */}
+          <div className="border-t border-border" />
+
+          {/* PDF 智能解析（MinerU）：Token 运行时可配，改配置无需改服务器 .env + 重建容器 */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <div>
+                  <h3 className="text-sm font-medium text-foreground cyberpunk-ms-text">PDF 智能解析（MinerU）</h3>
+                  <p className="text-xs text-muted-foreground cyberpunk-ms-subtext">
+                    {mineruCfg
+                      ? `Token：${
+                          mineruCfg.source === 'runtime'
+                            ? '已配置（本设置）'
+                            : mineruCfg.source === 'env'
+                              ? '已配置（服务器 .env）'
+                              : '未配置'
+                        } · 模型：${mineruCfg.modelVersion || '默认'}`
+                      : '加载中...'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">启用</span>
+                <Switch
+                  checked={mineruCfg?.enabled ?? false}
+                  disabled={!mineruCfg || mineruSaving}
+                  onCheckedChange={handleToggleMineru}
+                />
+              </div>
+            </div>
+
+            {/* 局部提示条：加载失败 / 保存结果都在这里显式反馈 */}
+            {mineruNotice && (
+              <p
+                className={`text-xs ${mineruNotice.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}
+              >
+                {mineruNotice.text}
+              </p>
+            )}
+
+            <div className="space-y-2">
+              <Input
+                type="password"
+                placeholder={
+                  mineruCfg?.hasToken
+                    ? '已配置 Token（输入新值可覆盖，留空保持不变）'
+                    : '粘贴 MinerU API Token（mineru.net 开放平台获取）'
+                }
+                className="h-8 text-sm"
+                value={mineruToken}
+                onChange={(e) => setMineruToken(e.target.value)}
+              />
+              <div className="flex items-center gap-2">
+                <select
+                  className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  value={mineruModelVersion}
+                  onChange={(e) => setMineruModelVersion(e.target.value)}
+                >
+                  <option value="vlm">vlm（推荐：图片/表格/公式识别更好）</option>
+                  <option value="pipeline">pipeline（更快，复杂版面稍弱）</option>
+                </select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSaveMineru}
+                  disabled={mineruSaving || !mineruCfg}
+                  className="h-8 px-3"
+                >
+                  {mineruSaving ? '保存中...' : '保存'}
+                </Button>
+                {mineruCfg?.source === 'runtime' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearMineruToken}
+                    disabled={mineruSaving}
+                    className="h-8 px-2 text-destructive hover:text-destructive"
+                    title="清除本设置中保存的 Token，回退服务器 .env 配置"
+                  >
+                    清除
+                  </Button>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                未开启或未配置 Token 时，PDF 自动降级为本地解析（仅提取纯文本，不提取图片）。修改立即生效，无需重启。
+              </p>
             </div>
           </div>
 

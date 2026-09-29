@@ -21,6 +21,7 @@ export const API_ENDPOINTS = {
   AUTH_RESET_PASSWORD: `${API_BASE_URL}/auth/reset-password`,
   AUTH_AVATAR: `${API_BASE_URL}/auth/avatar`,
   DOCUMENTS: `${API_BASE_URL}/documents`,
+  MINERU_CONFIG: `${API_BASE_URL}/documents/mineru-config`,
   KNOWLEDGE_SOURCES: `${API_BASE_URL}/knowledge-sources`,
   CACHE_STATS: `${API_BASE_URL}/cache/stats`,
   CACHE_CONFIG: `${API_BASE_URL}/cache/config`,

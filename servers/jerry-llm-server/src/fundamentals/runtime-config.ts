@@ -10,6 +10,7 @@ import { join } from 'path';
 import { z } from 'zod';
 import { logger } from './logger.js';
 import { config } from './config.js';
+import { decrypt, isEncrypted } from './crypto.js';
 
 // ==================== 配置结构 ====================
 
@@ -71,6 +72,14 @@ const RuntimeConfigEmbeddingSchema = z
   // loose：历史版本写入的 mode 等废弃字段必须被忽略而不是让整个配置校验失败，
   // 否则 loadRuntimeConfig 会整体回退默认值，导致已保存的云端 API Key 密文丢失
   .loose();
+
+// MinerU PDF 解析配置（运行时可配，避免改 .env 后还要重建容器）
+// apiTokenEncrypted 为 crypto.ts 加密密文；enabled 为 undefined 表示用户未显式设置
+const RuntimeConfigMineruSchema = z.object({
+  enabled: z.boolean().optional(),
+  apiTokenEncrypted: z.string().optional(),
+  modelVersion: z.string().optional(),
+});
 
 /**
  * 逐区块校验：失败时记录告警并返回 undefined（调用方用默认值补齐）
@@ -136,11 +145,19 @@ export const RateLimiterConfigUpdateSchema = z.object({
   queueWaitTimeout: z.number().int().positive().max(3600000).optional(),
 });
 
+export const MineruConfigUpdateSchema = z.object({
+  enabled: z.boolean().optional(),
+  // Controller 侧加密后的密文；空字符串表示清除运行时 Token（回退 .env）
+  apiTokenEncrypted: z.string().max(1000).optional(),
+  modelVersion: z.string().max(50).optional(),
+});
+
 export const RuntimeConfigUpdateSchema = z
   .object({
     cache: CacheConfigUpdateSchema.optional(),
     rateLimiter: RateLimiterConfigUpdateSchema.optional(),
     embedding: RuntimeConfigEmbeddingSchema.optional(),
+    mineru: MineruConfigUpdateSchema.optional(),
   })
   .loose();
 
@@ -192,6 +209,21 @@ export interface EmbeddingRuntimeConfig {
   };
 }
 
+// 用 type 而非 interface：mergeDefined 泛型约束为 Record<string, unknown>，
+// 对象字面量类型有隐式索引签名而 interface 没有
+export type MineruRuntimeConfig = {
+  /**
+   * 启用开关
+   * undefined 表示用户未在前端显式设置过（回退 .env 的 MINERU_ENABLED）；
+   * 显式 true/false 一律覆盖 .env
+   */
+  enabled?: boolean;
+  /** API Token（crypto.ts 加密密文；空 = 未配置，回退 .env 的 MINERU_API_TOKEN） */
+  apiTokenEncrypted: string;
+  /** 模型版本（空 = 回退 .env 的 MINERU_MODEL_VERSION） */
+  modelVersion: string;
+};
+
 export interface RuntimeConfig {
   cache: {
     maxEntries: number;
@@ -215,6 +247,7 @@ export interface RuntimeConfig {
     queueWaitTimeout: number;
   };
   embedding: EmbeddingRuntimeConfig;
+  mineru: MineruRuntimeConfig;
 }
 
 // ==================== 默认配置 ====================
@@ -255,6 +288,13 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
       model: '',
     },
   },
+  mineru: {
+    // enabled 不设默认值：undefined = 用户未显式设置，生效值回退 .env 的 MINERU_ENABLED。
+    // 若默认 false，纯 .env 用户（未用过前端设置）会被静默禁用 MinerU
+    enabled: undefined,
+    apiTokenEncrypted: '',
+    modelVersion: '',
+  },
 };
 
 // ==================== 持久化 ====================
@@ -276,6 +316,10 @@ function sanitizeConfigForLog(cfg: RuntimeConfig): RuntimeConfig {
           ? '<encrypted>'
           : '',
       },
+    },
+    mineru: {
+      ...cfg.mineru,
+      apiTokenEncrypted: cfg.mineru.apiTokenEncrypted ? '<encrypted>' : '',
     },
   };
 }
@@ -329,6 +373,11 @@ export function loadRuntimeConfig(): RuntimeConfig {
       savedObj.embedding,
       'embedding',
     );
+    const savedMineru = parseSection(
+      RuntimeConfigMineruSchema,
+      savedObj.mineru,
+      'mineru',
+    );
 
     // 深度合并：默认值 + 文件中的值
     const config: RuntimeConfig = {
@@ -349,6 +398,13 @@ export function loadRuntimeConfig(): RuntimeConfig {
           ...DEFAULT_RUNTIME_CONFIG.embedding.cloud,
           ...savedEmbedding?.cloud,
         },
+      },
+      mineru: {
+        // enabled 用 ?? 逐字段合并：文件里没写 enabled 时保持 undefined，
+        // 即「用户未显式设置 → 生效值回退 .env 的 MINERU_ENABLED」
+        enabled: savedMineru?.enabled ?? DEFAULT_RUNTIME_CONFIG.mineru.enabled,
+        apiTokenEncrypted: savedMineru?.apiTokenEncrypted ?? '',
+        modelVersion: savedMineru?.modelVersion ?? '',
       },
     };
 
@@ -423,6 +479,11 @@ export function updateRuntimeConfig(partial: {
     ollama?: Partial<EmbeddingRuntimeConfig['ollama']>;
     cloud?: Partial<EmbeddingRuntimeConfig['cloud']>;
   };
+  mineru?: {
+    enabled?: boolean;
+    apiTokenEncrypted?: string;
+    modelVersion?: string;
+  };
 }): RuntimeConfig {
   // 写入前严格校验：非法值一律抛错，绝不落盘。
   //
@@ -465,6 +526,72 @@ export function updateRuntimeConfig(partial: {
       ),
     };
   }
+  if (partial.mineru) {
+    currentConfig.mineru = mergeDefined(currentConfig.mineru, partial.mineru);
+  }
   saveRuntimeConfig(currentConfig);
   return currentConfig;
+}
+
+// ==================== MinerU 生效配置与状态 ====================
+
+export interface MineruEffectiveConfig {
+  /** 生效开关（运行时显式值优先，否则回退 .env 的 MINERU_ENABLED） */
+  enabled: boolean;
+  /** 生效 Token（运行时优先，否则回退 .env 的 MINERU_API_TOKEN） */
+  apiToken: string;
+  /** 生效模型版本（运行时优先，否则回退 .env 的 MINERU_MODEL_VERSION） */
+  modelVersion: string;
+}
+
+/**
+ * 解析 MinerU 当前生效配置（运行时配置优先，.env 兜底）
+ *
+ * 为什么放这里：document-parser 只关心「现在该用什么」，不应感知
+ * 运行时/环境变量两层来源的合并规则；统一入口也方便测试与后续扩展字段。
+ */
+export function getMineruEffectiveConfig(): MineruEffectiveConfig {
+  const mineru = currentConfig.mineru;
+  // 兼容历史明文：早期手工编辑 runtime-config.json 可能直接写了明文 Token
+  const runtimeToken = mineru.apiTokenEncrypted
+    ? isEncrypted(mineru.apiTokenEncrypted)
+      ? decrypt(mineru.apiTokenEncrypted)
+      : mineru.apiTokenEncrypted
+    : '';
+  return {
+    enabled: mineru.enabled ?? config.mineru.enabled,
+    apiToken: runtimeToken || config.mineru.apiToken,
+    modelVersion: mineru.modelVersion || config.mineru.modelVersion,
+  };
+}
+
+export type MineruTokenSource = 'runtime' | 'env' | 'none';
+
+export interface MineruConfigStatus {
+  /** 生效开关 */
+  enabled: boolean;
+  /** 生效模型版本 */
+  modelVersion: string;
+  /** Token 来源：前端设置（runtime）/ 服务器 .env（env）/ 均未配置（none） */
+  source: MineruTokenSource;
+  /** 是否已配置生效 Token */
+  hasToken: boolean;
+}
+
+/**
+ * 面向设置面板的 MinerU 配置状态（Token 永不回传明文）
+ */
+export function getMineruConfigStatus(): MineruConfigStatus {
+  const effective = getMineruEffectiveConfig();
+  const source: MineruTokenSource = currentConfig.mineru.apiTokenEncrypted
+    ? 'runtime'
+    : config.mineru.apiToken
+      ? 'env'
+      : 'none';
+  return {
+    enabled: effective.enabled,
+    modelVersion: effective.modelVersion,
+    source,
+    hasToken: Boolean(effective.apiToken),
+  };
 }

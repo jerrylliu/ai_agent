@@ -33,6 +33,14 @@ import {
 } from '../entities/document-version.entity';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { logger } from '../fundamentals/logger';
+import { z } from 'zod';
+import { ZodValidationPipe } from '../fundamentals/zod-validation.pipe';
+import { encrypt } from '../fundamentals/crypto';
+import {
+  getMineruConfigStatus,
+  updateRuntimeConfig,
+  RuntimeConfigValidationError,
+} from '../fundamentals/runtime-config';
 
 function serializeVersion(v: DocumentVersion) {
   return { ...v, fileSize: Number(v.fileSize) };
@@ -51,6 +59,23 @@ function serializeVersions(versions: DocumentVersion[]) {
 
 /** 写操作限流：10 次/分钟（上传/发布/删除/复核/定时任务手动触发等重操作防刷） */
 const WRITE_THROTTLE = { default: { ttl: 60000, limit: 10 } };
+
+// ==================== MinerU 解析配置（运行时可配） ====================
+
+/**
+ * MinerU 配置更新入参
+ *
+ * apiToken 传明文（服务端加密后存储）：
+ * - 非空 → 保存为运行时 Token
+ * - 空串 → 清除运行时 Token（回退 .env）
+ * - 不传（undefined）→ 保持现有 Token 不变
+ */
+const UpdateMineruConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  apiToken: z.string().max(500).optional(),
+  modelVersion: z.string().max(50).optional(),
+});
+type UpdateMineruConfigDto = z.infer<typeof UpdateMineruConfigSchema>;
 
 @Controller('documents')
 // 类级读限流：60 次/分钟，覆盖列表查询 + 版本状态轮询场景
@@ -394,6 +419,68 @@ export class DocumentController {
         error: error.message,
       });
       throw new HttpException(error.message, 500);
+    }
+  }
+
+  /**
+   * GET /documents/mineru-config
+   * 查询 MinerU PDF 解析的运行时配置状态
+   *
+   * Token 永不回传明文，只回传是否已配置（hasToken）与来源（前端设置 / 服务器 .env）
+   */
+  @Get('mineru-config')
+  getMineruConfig() {
+    return { success: true, ...getMineruConfigStatus() };
+  }
+
+  /**
+   * PUT /documents/mineru-config
+   * 更新 MinerU 运行时配置：立即生效 + 持久化到 runtime-config.json（重启不丢）
+   *
+   * 字段语义见 UpdateMineruConfigSchema 注释；全部字段可选，未传字段保持不变
+   */
+  @Put('mineru-config')
+  @Throttle(WRITE_THROTTLE)
+  updateMineruConfig(
+    @Body(
+      new ZodValidationPipe(UpdateMineruConfigSchema, {
+        label: 'UpdateMineruConfig',
+      }),
+    )
+    body: UpdateMineruConfigDto,
+  ) {
+    try {
+      const patch: {
+        enabled?: boolean;
+        apiTokenEncrypted?: string;
+        modelVersion?: string;
+      } = {};
+      if (body.enabled !== undefined) patch.enabled = body.enabled;
+      if (body.modelVersion !== undefined) {
+        patch.modelVersion = body.modelVersion.trim();
+      }
+      if (body.apiToken !== undefined) {
+        const trimmed = body.apiToken.trim();
+        patch.apiTokenEncrypted = trimmed ? encrypt(trimmed) : '';
+      }
+      if (Object.keys(patch).length > 0) {
+        updateRuntimeConfig({ mineru: patch });
+      }
+      logger.info('MinerU 运行时配置已更新', {
+        module: 'DocumentController',
+        enabledChanged: body.enabled !== undefined,
+        modelVersionChanged: body.modelVersion !== undefined,
+        tokenChanged: body.apiToken !== undefined,
+      });
+      return { success: true, ...getMineruConfigStatus() };
+    } catch (error: any) {
+      logger.error('保存 MinerU 配置失败', {
+        module: 'DocumentController',
+        error: error.message,
+      });
+      // 配置写入校验失败属用户输入问题转 400，其余按服务端错误处理
+      const status = error instanceof RuntimeConfigValidationError ? 400 : 500;
+      throw new HttpException(error.message, status);
     }
   }
 

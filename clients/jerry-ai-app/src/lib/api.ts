@@ -2581,6 +2581,51 @@ export interface EmbeddingProviderPreset {
   models: EmbeddingModelOption[];
 }
 
+// ==================== MinerU PDF 解析配置（运行时可配） ====================
+
+export type MineruTokenSource = "runtime" | "env" | "none";
+
+export interface MineruConfigResponse {
+  success: boolean;
+  /** 生效开关（前端设置优先，未设置时回退服务器 .env 的 MINERU_ENABLED） */
+  enabled: boolean;
+  /** 生效模型版本（如 pipeline / vlm） */
+  modelVersion: string;
+  /** Token 来源：前端设置（runtime）/ 服务器 .env（env）/ 均未配置（none） */
+  source: MineruTokenSource;
+  /** 是否已配置生效 Token（永不回传明文） */
+  hasToken: boolean;
+}
+
+/**
+ * 查询 MinerU 配置状态
+ */
+export async function getMineruConfig(): Promise<MineruConfigResponse> {
+  const response = await fetch(API_ENDPOINTS.MINERU_CONFIG, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<MineruConfigResponse>(response);
+}
+
+/**
+ * 更新 MinerU 运行时配置（立即生效，持久化到 runtime-config.json，重启不丢）
+ *
+ * apiToken 语义：非空 → 保存新 Token；空串 → 清除（回退 .env）；undefined → 保持不变
+ */
+export async function updateMineruConfig(payload: {
+  enabled?: boolean;
+  apiToken?: string;
+  modelVersion?: string;
+}): Promise<MineruConfigResponse> {
+  const response = await fetch(API_ENDPOINTS.MINERU_CONFIG, {
+    method: "PUT",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<MineruConfigResponse>(response);
+}
+
 /** 当前嵌入配置快照（apiKey 只暴露 hasApiKey，后端不返回密文） */
 export interface EmbeddingConfigResponse {
   success: boolean;
