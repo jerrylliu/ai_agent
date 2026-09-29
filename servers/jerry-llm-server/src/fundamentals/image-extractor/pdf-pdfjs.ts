@@ -441,7 +441,8 @@ async function getPdfjsOps(
   try {
     // 通过第一页的 getOperatorList 获取一个空操作列表
     // 然后从 pdfjs 模块获取 OPS 常量
-    const pdfjs = await import('pdfjs-dist');
+    // 与 document-parser 保持一致使用 legacy 构建，避免进程内同时加载两份构建
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const OPS = (pdfjs as unknown as { OPS?: Record<string, number> }).OPS;
     if (!OPS) return null;
 
