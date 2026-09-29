@@ -10,6 +10,7 @@ import { EmbeddingController } from './controllers/embedding.controller.js';
 import { UploadController } from './controllers/upload.controller.js';
 import { DocumentController } from './controllers/document.controller.js';
 import { KnowledgeSourceController } from './controllers/knowledge-source.controller.js';
+import { SettingsController } from './controllers/settings.controller.js';
 import { RedisDashboardController } from './controllers/redis-dashboard.controller.js';
 import { SpeechController } from './controllers/speech.controller.js';
 import { AiWritingController } from './controllers/ai-writing.controller.js';
@@ -67,6 +68,9 @@ import {
   initMcpProxy,
 } from './fundamentals/tools/index.js';
 import { initDocumentTools } from './fundamentals/tools/document-ops.js';
+import { initKnowledgeSourceTools } from './fundamentals/tools/knowledge-source-ops.js';
+import { initEvaluationOps } from './fundamentals/tools/evaluation-ops.js';
+import { initFavoriteOps } from './fundamentals/tools/favorite-ops.js';
 import { initGenerateDocumentTool } from './fundamentals/tools/generate-document.js';
 import { config } from './fundamentals/config.js';
 import { logger } from './fundamentals/logger.js';
@@ -159,6 +163,7 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     UploadController,
     DocumentController,
     KnowledgeSourceController,
+    SettingsController,
     RedisDashboardController,
     SpeechController,
     AiWritingController,
@@ -195,6 +200,8 @@ export class AppModule implements OnModuleInit {
     private readonly sessionService: SessionService,
     private readonly toolUsageService: ToolUsageService,
     private readonly documentService: DocumentService,
+    private readonly knowledgeSourceService: KnowledgeSourceService,
+    private readonly evaluationService: EvaluationService,
     private readonly generatedDocumentService: GeneratedDocumentService,
     private readonly appService: AppService,
     @InjectRepository(FeishuChatSession)
@@ -209,6 +216,13 @@ export class AppModule implements OnModuleInit {
     setToolUsageCallback((data) => this.toolUsageService.saveToolUsage(data));
     // 注入 DocumentService 到文档操作工具
     initDocumentTools(this.documentService);
+    // 注入知识源/评估/收藏服务到对应工具（第 2/3 批）
+    initKnowledgeSourceTools({
+      knowledgeSourceService: this.knowledgeSourceService,
+      documentService: this.documentService,
+    });
+    initEvaluationOps(this.evaluationService);
+    initFavoriteOps(this.generatedDocumentService);
     // 注入 GeneratedDocumentService 到 generate_document 工具
     initGenerateDocumentTool({
       save: async (params) => {

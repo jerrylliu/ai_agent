@@ -23,6 +23,8 @@ export const API_ENDPOINTS = {
   DOCUMENTS: `${API_BASE_URL}/documents`,
   MINERU_CONFIG: `${API_BASE_URL}/documents/mineru-config`,
   KNOWLEDGE_SOURCES: `${API_BASE_URL}/knowledge-sources`,
+  // 功能开关全局默认（服务端 runtime-config，AI 工具可改，未自定义设备跟随）
+  SETTINGS_FEATURES: `${API_BASE_URL}/settings/features`,
   CACHE_STATS: `${API_BASE_URL}/cache/stats`,
   CACHE_CONFIG: `${API_BASE_URL}/cache/config`,
   CACHE_CLEAR: `${API_BASE_URL}/cache/clear`,

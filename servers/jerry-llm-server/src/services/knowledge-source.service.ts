@@ -25,6 +25,7 @@ import {
   type FeishuPage,
 } from '../fundamentals/feishu-connector';
 import { addDocuments, deleteDocuments } from '../fundamentals/vector-store';
+import { publishKnowledgeSourceChangedEvent } from '../fundamentals/chat-event-bus';
 import { logger } from '../fundamentals/logger';
 import { DocumentScanService } from './document-scan.service.js';
 
@@ -96,6 +97,12 @@ export class KnowledgeSourceService {
       name: saved.name,
       type: saved.type,
     });
+    // 广播知识源变更：所有在线端的知识源面板防抖重拉（AI 工具、Web、其他端统一覆盖）
+    publishKnowledgeSourceChangedEvent({
+      action: 'created',
+      sourceId: saved.id,
+      name: saved.name,
+    });
     return saved;
   }
 
@@ -132,6 +139,11 @@ export class KnowledgeSourceService {
       module: 'KnowledgeSourceService',
       sourceId: id,
     });
+    publishKnowledgeSourceChangedEvent({
+      action: 'updated',
+      sourceId: id,
+      name: saved.name,
+    });
     return saved;
   }
 
@@ -157,6 +169,11 @@ export class KnowledgeSourceService {
     await this.sourceRepo.remove(source);
     logger.info('知识源删除成功', {
       module: 'KnowledgeSourceService',
+      sourceId: id,
+      name: source.name,
+    });
+    publishKnowledgeSourceChangedEvent({
+      action: 'deleted',
       sourceId: id,
       name: source.name,
     });
@@ -244,6 +261,13 @@ export class KnowledgeSourceService {
     source.lastSyncStatus = SyncStatus.SYNCING;
     source.lastSyncError = null;
     await this.sourceRepo.save(source);
+
+    // 广播"开始同步"：知识源面板立即感知状态变化（同步是长任务，前端靠轮询看进度）
+    publishKnowledgeSourceChangedEvent({
+      action: 'syncing',
+      sourceId: source.id,
+      name: source.name,
+    });
 
     const syncLog = this.syncLogRepo.create({
       sourceId: source.id,

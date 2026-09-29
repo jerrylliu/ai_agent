@@ -126,6 +126,53 @@ const CONFIRMATION_CONFIG: Record<
       `版本ID：${params.versionId}${params.documentTitle ? `，文档：${params.documentTitle}` : ''}`,
   },
 
+  // ---------------- 知识源/知识库维护工具（第 2 批） ----------------
+  // 按"增删改一律确认"规则：add/delete/sync/rebuild 需确认，
+  // 只读工具（list_knowledge_sources / get_knowledge_status）不入本表即免确认。
+  add_knowledge_source: {
+    riskLevel: 'medium',
+    message: '即将添加 Web 爬取知识源（会发起网络爬取并把内容写入知识库）',
+    paramSummary: (params) =>
+      `名称：${(params.name || '').slice(0, 50)}，URL：${String(params.url || '').slice(0, 80)}`,
+  },
+  delete_knowledge_source: {
+    riskLevel: 'high',
+    message: '即将删除知识源（其下已爬取的页面与向量数据一并删除，不可恢复）',
+    paramSummary: (params) =>
+      `知识源ID：${params.sourceId}${params.name ? `，名称：${params.name}` : ''}`,
+  },
+  sync_knowledge_source: {
+    riskLevel: 'medium',
+    message: '即将触发知识源同步（爬取新内容入库，长任务）',
+    paramSummary: (params) =>
+      `知识源ID：${Array.isArray(params.sourceIds) ? params.sourceIds.join('、') : params.sourceIds}`,
+  },
+  rebuild_knowledge_index: {
+    riskLevel: 'high',
+    message: '即将全量重建向量索引（所有文档重新嵌入，耗时较长）',
+    paramSummary: () => '全量重建知识库向量索引',
+  },
+
+  // ---------------- 设置域/收藏工具（第 3 批） ----------------
+  // get_system_status / query_evaluation_stats / list_favorite_documents 为只读，免确认。
+  switch_model: {
+    riskLevel: 'medium',
+    message: '即将切换全局对话模型（所有端同步生效）',
+    paramSummary: (params) => `目标模型：${params.modelId}`,
+  },
+  toggle_feature: {
+    riskLevel: 'medium',
+    message: '即将切换功能开关全局默认（未自定义过该开关的设备自动跟随）',
+    paramSummary: (params) =>
+      `功能：${params.feature}，目标状态：${params.enabled ? '开启' : '关闭'}`,
+  },
+  toggle_document_favorite: {
+    riskLevel: 'low',
+    message: '即将收藏/取消收藏 AI 生成文档',
+    paramSummary: (params) =>
+      `${params.favorited ? '收藏' : '取消收藏'}：${params.title ? `《${String(params.title).slice(0, 50)}》` : params.key}`,
+  },
+
   // ---------------- 三大外部 API 工具：均需要用户确认 ----------------
   // send_notification 会向第三方/用户发送消息，存在打扰风险，标记为 medium
   send_notification: {

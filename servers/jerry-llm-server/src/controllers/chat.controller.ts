@@ -317,10 +317,15 @@ export class ChatController {
 
     const unsubscribe = subscribeChatHistoryEvents(ownerUserId, (event) => {
       if (res.writableEnded) return;
-      // 文档域变更：全局广播事件，文档面板防抖重拉列表
-      if (event.kind === 'document_changed') {
+      // 全局数据变更事件（文档/知识源/设置）：以独立 SSE 事件名推给所有在线端，
+      // 对应面板防抖重拉或重新拉取全局默认
+      if (
+        event.kind === 'document_changed' ||
+        event.kind === 'knowledge_source_changed' ||
+        event.kind === 'settings_changed'
+      ) {
         res.write(
-          `event: document_changed\ndata: ${JSON.stringify(event)}\n\n`,
+          `event: ${event.kind}\ndata: ${JSON.stringify(event)}\n\n`,
         );
         return;
       }
