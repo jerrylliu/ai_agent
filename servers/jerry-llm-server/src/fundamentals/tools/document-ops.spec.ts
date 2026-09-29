@@ -115,5 +115,70 @@ describe('document-ops 工具', () => {
       expect(r.success).toBe(false);
       expect(r.message).toContain('未初始化');
     });
+
+    it('提供 tags 时应调用 updateDocument 更新标签元信息', async () => {
+      jest.resetModules();
+      const fresh = require('./document-ops');
+      const mockService = {
+        uploadDocument: jest.fn().mockResolvedValue({
+          document: { id: 7 },
+          version: { versionNumber: 2 },
+        }),
+        updateDocument: jest.fn().mockResolvedValue({ id: 7 }),
+      };
+      fresh.initDocumentTools(mockService);
+
+      const r = await fresh.executeUpdateDocument({
+        documentId: 7,
+        content: 'updated',
+        tags: ['a', 'b'],
+      });
+      expect(r.success).toBe(true);
+      expect(mockService.uploadDocument).toHaveBeenCalled();
+      expect(mockService.updateDocument).toHaveBeenCalledWith(7, {
+        tags: ['a', 'b'],
+      });
+    });
+
+    it('tags 为空数组时应生效（清空语义，不能被 truthy 判断吞掉）', async () => {
+      jest.resetModules();
+      const fresh = require('./document-ops');
+      const mockService = {
+        uploadDocument: jest.fn().mockResolvedValue({
+          document: { id: 7 },
+          version: { versionNumber: 2 },
+        }),
+        updateDocument: jest.fn().mockResolvedValue({ id: 7 }),
+      };
+      fresh.initDocumentTools(mockService);
+
+      const r = await fresh.executeUpdateDocument({
+        documentId: 7,
+        content: 'updated',
+        tags: [],
+      });
+      expect(r.success).toBe(true);
+      expect(mockService.updateDocument).toHaveBeenCalledWith(7, { tags: [] });
+    });
+
+    it('不传 tags 且不传 title 时不应调用 updateDocument', async () => {
+      jest.resetModules();
+      const fresh = require('./document-ops');
+      const mockService = {
+        uploadDocument: jest.fn().mockResolvedValue({
+          document: { id: 7 },
+          version: { versionNumber: 3 },
+        }),
+        updateDocument: jest.fn(),
+      };
+      fresh.initDocumentTools(mockService);
+
+      const r = await fresh.executeUpdateDocument({
+        documentId: 7,
+        content: 'updated',
+      });
+      expect(r.success).toBe(true);
+      expect(mockService.updateDocument).not.toHaveBeenCalled();
+    });
   });
 });

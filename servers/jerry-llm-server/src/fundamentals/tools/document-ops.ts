@@ -131,13 +131,19 @@ export const updateDocumentParamsSchema = z.object({
   documentId: z.number().int().positive().describe('要更新的文档ID'),
   content: z.string().min(1).describe('新的文档内容（纯文本或 Markdown 格式）'),
   title: z.string().optional().describe('新标题（可选，不传则保持原标题）'),
+  tags: z
+    .array(z.string())
+    .optional()
+    .describe(
+      '文档标签列表（可选）。传入时整体替换现有标签，空数组表示清空全部标签；不传则保持不变',
+    ),
 });
 
 export type UpdateDocumentParams = z.infer<typeof updateDocumentParamsSchema>;
 
 export const updateDocumentSchema = buildToolJsonSchema(
   'update_document',
-  '更新知识库中已有文档的内容。通过上传新版本更新文档，保留历史版本。',
+  '更新知识库中已有文档的内容。通过上传新版本更新文档，保留历史版本。可同时更新标题与标签（仅改标签时正文也需原样传入）。',
   updateDocumentParamsSchema,
 );
 
@@ -191,11 +197,14 @@ export async function executeUpdateDocument(
       },
     );
 
-    // 如果提供了新标题，额外更新文档元信息
-    if (params.title) {
-      await documentService.updateDocument(params.documentId, {
-        title: params.title,
-      });
+    // 标题/标签为元信息修改（不产生新版本）：仅在提供时额外调用 updateDocument。
+    // 注意 tags 与 title 判断方式不同——空数组是有效值（清空全部标签），
+    // 必须用 !== undefined 判断，用 truthy 判断会漏掉空数组
+    const metaPatch: { title?: string; tags?: string[] } = {};
+    if (params.title) metaPatch.title = params.title;
+    if (params.tags !== undefined) metaPatch.tags = params.tags;
+    if (Object.keys(metaPatch).length > 0) {
+      await documentService.updateDocument(params.documentId, metaPatch);
     }
 
     logger.info('FC工具 [update_document] 更新文档成功', {

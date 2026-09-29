@@ -75,6 +75,22 @@ describe('updateDocumentSchema', () => {
     expect(params.required.sort()).toEqual(['content', 'documentId']);
   });
 
+  it('tags 可选且为 array<string>（整体替换语义，含空数组清空）', () => {
+    const params = updateDocumentSchema.function.parameters as any;
+    expect(params.required).not.toContain('tags');
+    expect(params.properties.tags.type).toBe('array');
+    expect(params.properties.tags.items.type).toBe('string');
+  });
+
+  it('tags 空数组应通过（合法的清空操作）', () => {
+    const r = updateDocumentParamsSchema.safeParse({
+      documentId: 1,
+      content: 'x',
+      tags: [],
+    });
+    expect(r.success).toBe(true);
+  });
+
   it('documentId=0 应被拦截（必须 positive）', () => {
     const r = updateDocumentParamsSchema.safeParse({
       documentId: 0,

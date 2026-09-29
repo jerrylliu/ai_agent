@@ -3,7 +3,7 @@
  * 功能：文档列表、版本时间线、上传、删除、回滚、版本对比、单篇知识图谱提取
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   FileText, Upload, Trash2,
   Clock, RefreshCw, X, AlertTriangle, Play, XCircle,
@@ -12,6 +12,7 @@ import {
 import { ConfirmDialog } from '../ui/confirm-dialog';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
+import { Input } from '../ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { useIsMobile } from '../../hooks/useMediaQuery';
@@ -32,6 +33,7 @@ import {
   retryAllFailedOps,
   getScanPendingReviews,
   triggerKgExtractDocument,
+  updateDocumentMeta,
   type DocumentItem,
   type DocumentVersionItem,
   type DocumentAuditLogItem,
@@ -68,6 +70,58 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
   const [reviewQueueOpen, setReviewQueueOpen] = useState(false);
   // KG 单篇提取：抽取已从自动调度改为人工触发，记录正在入队的文档 id 做按钮 loading
   const [kgExtractingId, setKgExtractingId] = useState<number | null>(null);
+
+  // ==================== 标签编辑（详情页） ====================
+  // 当前选中文档对象（含 tags / title），documents 刷新后自动跟随
+  const selectedDoc = useMemo(
+    () => documents.find(d => d.id === selectedDocId) ?? null,
+    [documents, selectedDocId],
+  );
+  // 标签草稿：编辑期间与列表数据隔离，点「保存」才提交，避免误触写回
+  const [tagDraft, setTagDraft] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [tagSaving, setTagSaving] = useState(false);
+
+  // 切换选中文档时重置草稿。
+  // 依赖只有 selectedDocId：documents 后台刷新（如保存标签后的 handleRefresh）不应
+  // 打断正在进行的编辑（清空输入框/丢弃未保存的增删）
+  useEffect(() => {
+    const doc = documents.find(d => d.id === selectedDocId);
+    setTagDraft(doc?.tags ? [...doc.tags] : []);
+    setTagInput('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDocId]);
+
+  // 草稿与已保存标签是否有差异（顺序敏感，与保存提交的数组一致）
+  const tagsDirty =
+    JSON.stringify(tagDraft) !== JSON.stringify(selectedDoc?.tags ?? []);
+
+  // 添加标签：去重 + 去空白；回车等效点「添加」
+  const handleAddTag = () => {
+    const t = tagInput.trim();
+    if (!t) return;
+    setTagDraft(prev => (prev.includes(t) ? prev : [...prev, t]));
+    setTagInput('');
+  };
+
+  const handleRemoveTag = (tag: string) => {
+    setTagDraft(prev => prev.filter(x => x !== tag));
+  };
+
+  // 保存标签：PUT /documents/:id（空数组=清空全部标签）→ 刷新列表与详情数据
+  const handleSaveTags = async () => {
+    if (!selectedDocId || tagSaving || !tagsDirty) return;
+    setTagSaving(true);
+    try {
+      await updateDocumentMeta(selectedDocId, { tags: tagDraft });
+      await handleRefresh();
+      showFeedback(true, '标签已保存');
+    } catch (err: any) {
+      showFeedback(false, err.message || '标签保存失败');
+    } finally {
+      setTagSaving(false);
+    }
+  };
 
   // 移动端单栏切换：手机屏幕放不下"文档列表 + 版本详情"双栏，
   // 点文档进入详情全屏，返回按钮回到列表（桌面端保持双栏不变）
@@ -556,7 +610,8 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
                   </Button>
                 </div>
                 {doc.tags && doc.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1.5">
+                  // title 悬停展示完整标签列表：列表项最多渲染 3 个，其余折叠为 +N
+                  <div className="flex flex-wrap gap-1 mt-1.5" title={doc.tags.join('、')}>
                     {doc.tags.slice(0, 3).map((tag, i) => (
                       <Badge key={i} variant="secondary" className="text-[10px] px-1.5 py-0">{tag}</Badge>
                     ))}
@@ -585,6 +640,78 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
             </div>
           ) : (
             <div className="p-4">
+              {/* 文档信息卡：标题 + 标签编辑（此前标签只能在 AI 建档时产生，无手动入口） */}
+              {selectedDoc && (
+                <Card className="mb-4">
+                  <CardContent className="pt-4 space-y-2">
+                    <div
+                      className="text-sm font-medium truncate"
+                      title={selectedDoc.title}
+                    >
+                      {selectedDoc.title}
+                    </div>
+                    {tagDraft.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {tagDraft.map(tag => (
+                          <Badge
+                            key={tag}
+                            variant="secondary"
+                            className="text-xs gap-1 pr-1"
+                          >
+                            {tag}
+                            <button
+                              type="button"
+                              title="移除该标签"
+                              disabled={tagSaving}
+                              onClick={() => handleRemoveTag(tag)}
+                              className="rounded-full p-0.5 hover:bg-destructive/10 hover:text-destructive"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        value={tagInput}
+                        onChange={e => setTagInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleAddTag();
+                          }
+                        }}
+                        placeholder={
+                          tagDraft.length
+                            ? '输入标签，回车添加'
+                            : '暂无标签，输入后回车添加'
+                        }
+                        className="h-7 flex-1 text-xs"
+                        disabled={tagSaving}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={handleAddTag}
+                        disabled={tagSaving || !tagInput.trim()}
+                      >
+                        添加
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-7 px-2 text-xs"
+                        onClick={handleSaveTags}
+                        disabled={tagSaving || !tagsDirty}
+                      >
+                        {tagSaving ? '保存中...' : '保存标签'}
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList>
                   <TabsTrigger value="versions">版本时间线</TabsTrigger>
