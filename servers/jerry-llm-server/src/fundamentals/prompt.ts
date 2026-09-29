@@ -1031,6 +1031,10 @@ async function runOutputReviewPipeline(params: {
   let rewriteCancelled = false;
   // 重写轮 token 用量：从 chunk.usage_metadata 读取后 logger 留痕即可（不为此重构 UsageService）
   let rewriteUsage: unknown;
+  // 重写流硬超时：content_reset 已把前端草稿清空，若重写模型 stall 永久挂起，
+  // 用户会停在空内容且落库/[DONE] 都不会发生——到点中断走下方 catch 恢复原答案。
+  // 取值远大于正常重写耗时（秒级），只兜"模型挂死"的极端场景
+  const REWRITE_TIMEOUT_MS = 120_000;
 
   // 重写 delta 输出：与主路径 emitSafeText 同款逻辑——
   // 抑制器产出安全文本 →（可选）图片 Markdown 缓冲剥离 → SSE 发送 + 累加到重写文本
@@ -1057,8 +1061,14 @@ async function runOutputReviewPipeline(params: {
   };
 
   try {
-    // 重写流同样绑定 abort 信号 + DSML 抑制器（不打断现有防护链）
-    const stream = await llm.stream(rewriteMessages, { signal: abortSignal });
+    // 重写流绑定：客户端取消信号 + 硬超时（AbortSignal.any 聚合，任一触发即中断）
+    const rewriteSignals: AbortSignal[] = [
+      AbortSignal.timeout(REWRITE_TIMEOUT_MS),
+    ];
+    if (abortSignal) rewriteSignals.push(abortSignal);
+    const stream = await llm.stream(rewriteMessages, {
+      signal: AbortSignal.any(rewriteSignals),
+    });
     for await (const chunk of stream) {
       if (isCancelled && isCancelled()) {
         rewriteCancelled = true;
@@ -1124,13 +1134,21 @@ async function runOutputReviewPipeline(params: {
     });
     try {
       if (!res.writableEnded) {
-        sendContent(res, answer);
-        sendReviewResult(res, { status: 'revised', reviewPassed: false });
+        if (revised.trim()) {
+          // 已有部分重写内容流出：不重发原答案（避免"半截修正+全文旧答案"拼接重复），
+          // 如实标记修正未通过（前端亮"仅供参考"徽章），保留已输出的部分修正文本
+          sendReviewResult(res, { status: 'revised', reviewPassed: false });
+        } else {
+          // 尚无任何重写内容流出：完整恢复原答案，用户始终有内容
+          sendContent(res, answer);
+          sendReviewResult(res, { status: 'revised', reviewPassed: false });
+        }
       }
     } catch {
       // res 已不可写（客户端断开导致的写失败），忽略——最终文本仍返回原答案
     }
-    return { finalText: answer };
+    // 部分修正文本优于带硬伤的原答案（重写本就是为了修硬伤），二者取其一时优先修正稿
+    return { finalText: revised.trim() || answer };
   }
 }
 
