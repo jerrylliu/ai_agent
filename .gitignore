@@ -38,3 +38,6 @@ servers/jerry-llm-server/docker/data/download/*.mp4
 # 子仓库
 # 本地密钥与签名（勿提交）
 .secrets/
+
+# Rust/Gradle 构建临时目录（cargo 写 TEMP 产生的杂音文件，整目录忽略）
+.rust-temp/
