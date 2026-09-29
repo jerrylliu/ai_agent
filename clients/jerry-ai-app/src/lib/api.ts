@@ -1415,6 +1415,23 @@ export async function getDocuments(): Promise<DocumentItem[]> {
   return data.documents ?? [];
 }
 
+/**
+ * 修改文档元信息（标题/描述/标签）
+ *
+ * 仅更新传入的字段，未传字段保持不变；tags 传空数组表示清空全部标签
+ */
+export async function updateDocumentMeta(
+  id: number,
+  meta: { title?: string; description?: string; tags?: string[] },
+): Promise<void> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}`, {
+    method: "PUT",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(meta),
+  });
+  await handleResponse<{ success: boolean }>(response);
+}
+
 /** 获取单个文档详情 */
 export async function getDocument(id: number): Promise<DocumentItem> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/${id}`, {
