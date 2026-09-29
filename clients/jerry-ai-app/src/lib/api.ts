@@ -295,6 +295,19 @@ export interface AIStreamResponse {
 }
 
 /**
+ * 输出自检结果事件（后端 sendReviewResult 推送，流结束前到达）
+ * status：passed=审核通过；revising=不通过正在重写（随后跟 content_reset + 重写流）；
+ * revised=重写完成（reviewPassed 标记二审是否通过）；review_error=审核流程自身失败（fail-open 放行）
+ */
+export interface ReviewResultEvent {
+  status: "passed" | "revising" | "revised" | "review_error";
+  /** 不通过原因（revising 时携带） */
+  reason?: string;
+  /** revised 时的二审结果：true=重写后通过，false=重写后仍未通过 */
+  reviewPassed?: boolean;
+}
+
+/**
  * 获取 AI 响应流
  * @param message 用户消息
  * @param images 用户消息中的图片URL数组
@@ -332,6 +345,10 @@ export async function getAIResponse(
           contextCount: number;
         }) => void)
       | null;
+    /** 输出自检结果回调（review_result SSE 事件，流结束前到达） */
+    onReviewResult?: ((event: ReviewResultEvent) => void) | null;
+    /** 重写热替换回调（content_reset SSE 事件）：服务端判不通过让原模型重写时，清空已流出的旧文本 */
+    onContentReset?: (() => void) | null;
   },
 ): Promise<AIStreamResponse> {
   const response = await fetch(`${API_ENDPOINTS.PROMPT}`, {
@@ -355,8 +372,14 @@ export async function getAIResponse(
   const fileCardCallback = options?.onFileCard ?? null;
   const citationsCallback = options?.onCitations ?? null;
   const metadataCallback = options?.onMetadata ?? null;
+  const reviewResultCallback = options?.onReviewResult ?? null;
+  const contentResetCallback = options?.onContentReset ?? null;
   const fileCards: FileCardEvent[] = [];
   const citations: CitationItem[] = [];
+  // 重写热替换缓冲：同一网络 chunk 内可能连续到达 [content, content_reset, content]，
+  // 若 content 立即 enqueue，reset 无法撤回已入队文本，旧尾巴会拼在重写文本前。
+  // 先攒后发：每个网络 chunk 的事件全部处理完再统一 enqueue，reset 天然丢弃缓冲旧文本
+  let pendingText = "";
 
   const modifiedStream = new ReadableStream<string>({
     async start(controller) {
@@ -415,9 +438,27 @@ export async function getAIResponse(
               }
             },
             onContent: (text) => {
-              controller.enqueue(text);
+              // 先攒入缓冲，本 chunk 事件处理完统一 enqueue（见 pendingText 注释）
+              pendingText += text;
+            },
+            onContentReset: () => {
+              // 丢弃缓冲中的旧文本，并通知上层清空已累计的流式内容（跨 chunk 场景）
+              pendingText = "";
+              if (contentResetCallback) {
+                contentResetCallback();
+              }
+            },
+            onReviewResult: (event) => {
+              if (reviewResultCallback) {
+                reviewResultCallback(event);
+              }
             },
           });
+          // 本网络 chunk 处理完毕，缓冲文本统一入队（reset 后缓冲已清空）
+          if (pendingText) {
+            controller.enqueue(pendingText);
+            pendingText = "";
+          }
         }
         controller.close();
       } catch (e) {

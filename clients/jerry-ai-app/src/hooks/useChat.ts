@@ -860,8 +860,14 @@ export function useChat(
         timestamp: new Date(),
         fromKnowledgeBase: false,
         attachments: [],
+        // AI 输出自检：流式输出期间以草稿态展示（半透明+"校验中"），审核结果到达后转正/修正
+        reviewStatus: "draft" as const,
       };
       setMessages((prev) => [...prev, tempAssistantMessage]);
+
+      // 累计流式文本。必须声明在 getAIResponse 之前：onContentReset 回调要在
+      // content_reset 事件到达时清空它（重写热替换），避免旧文本拼在重写文本前
+      let fullResponse = "";
 
       // 处理流式响应（传入图片和 signal）
       const aiResponse = await getAIResponse(
@@ -953,11 +959,43 @@ export function useChat(
               ),
             );
           },
+          onContentReset: () => {
+            // 重写热替换（AI 输出自检不通过）：清空已累计的旧文本，
+            // 重写文本从零开始累计（同 chunk 场景由 api.ts pendingText 缓冲兜底）
+            fullResponse = "";
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantMessageId ? { ...msg, content: "" } : msg,
+              ),
+            );
+          },
+          onReviewResult: (event) => {
+            // 输出自检状态映射：revising 保持草稿态（重写文本稍后经 content_reset 热替换）；
+            // review_error = 审核流程自身失败（服务端 fail-open 放行），按通过处理转正；
+            // revised 时按二审结果区分"已自动修正"与"自检未通过仅供参考"
+            const nextReviewStatus =
+              event.status === "passed"
+                ? "passed"
+                : event.status === "revised"
+                  ? event.reviewPassed === false
+                    ? "warning"
+                    : "revised"
+                  : event.status === "review_error"
+                    ? "passed"
+                    : "draft";
+            if (nextReviewStatus === "draft") return; // revising：草稿态不变，等待重写
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantMessageId
+                  ? { ...msg, reviewStatus: nextReviewStatus }
+                  : msg,
+              ),
+            );
+          },
         },
       );
 
       const reader = aiResponse.stream.getReader();
-      let fullResponse = "";
 
       while (true) {
         const { done, value } = await reader.read();
@@ -988,6 +1026,18 @@ export function useChat(
       // 流式响应完成，清除工具状态与工作流进度
       setToolStatuses([]);
       setWorkflowStatus(null);
+
+      // 流结束仍是草稿态 = 审核流程未执行（开关关闭/审核被跳过等，review_result 事件未到达），
+      // 清除草稿态避免消息永久停留在"校验中"
+      setMessages((prev) => {
+        const next = prev.map((msg) =>
+          msg.id === assistantMessageId && msg.reviewStatus === "draft"
+            ? { ...msg, reviewStatus: undefined }
+            : msg,
+        );
+        messagesCacheRef.current.set(currentSessionId, next);
+        return next;
+      });
 
       // 挂引用来源：citations 事件在流关闭前已全部到达（服务端在 res.end() 前发送），
       // getAIResponse 收集完毕，这里直接取用；空值防护兼容异常路径下的 undefined

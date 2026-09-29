@@ -233,6 +233,18 @@ const DocScanSchema = z.object({
   suspiciousAction: z.enum(['review', 'block']).default('review'),
 });
 
+// AI 输出自检（方案 C：草稿态显示）配置
+// 流结束后用快速模型把最终回答审一遍：通过 → 前端草稿转正；不通过 → 原对话模型重写热替换。
+// fail-open：无 Key/超时/解析失败一律放行，绝不阻塞用户（见 fundamentals/output-review.ts）
+const OutputReviewSchema = z.object({
+  // 总开关：false 时审核链路完全透传，行为与未引入该功能前一致
+  enabled: zBoolFromString(true),
+  // 审核用模型 id（model-provider AVAILABLE_MODELS 中的 id，'provider:model' 格式）
+  model: z.string().min(1).default('deepseek:deepseek-v4-flash'),
+  // 单次审核调用超时（毫秒），AbortSignal.timeout 真取消
+  timeoutMs: z.coerce.number().int().positive().default(15000),
+});
+
 // 知识图谱（KG）实体链接与图补充位配置
 // 总开关默认关闭（灰度）：关闭时离线抽取管道不消费、在线链路完全透传基线检索结果。
 // 数值默认值 = 30 题门闩验证（kg-link-spike v2）使用的同一组口径，
@@ -387,6 +399,7 @@ const RootSchema = z.object({
   scannedPdf: ScannedPdfSchema,
   docScan: DocScanSchema,
   kg: KgSchema,
+  outputReview: OutputReviewSchema,
 });
 
 // ==================== 解析 process.env ====================
@@ -413,6 +426,12 @@ function buildRawConfig() {
 
     onlineJudgeEnabled: env.ONLINE_JUDGE_ENABLED,
     onlineJudgeModel: env.ONLINE_JUDGE_MODEL,
+
+    outputReview: {
+      enabled: env.OUTPUT_REVIEW_ENABLED,
+      model: env.OUTPUT_REVIEW_MODEL,
+      timeoutMs: env.OUTPUT_REVIEW_TIMEOUT_MS,
+    },
 
     deepseekBaseUrl: env.DEEPSEEK_BASE_URL,
     zhipuBaseUrl: env.ZHIPU_BASE_URL,
@@ -638,6 +657,9 @@ export const config = {
 
   onlineJudgeEnabled: parsed.onlineJudgeEnabled,
   onlineJudgeModel: parsed.onlineJudgeModel,
+
+  /** AI 输出自检（方案 C：草稿态显示）：enabled/model/timeoutMs，见 fundamentals/output-review.ts */
+  outputReview: parsed.outputReview,
 
   deepseekBaseUrl: parsed.deepseekBaseUrl,
   zhipuBaseUrl: parsed.zhipuBaseUrl,

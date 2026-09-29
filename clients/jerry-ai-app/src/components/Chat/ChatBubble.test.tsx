@@ -27,6 +27,10 @@ vi.mock('lucide-react', () => ({
   Database: () => <span data-testid="icon-db" />,
   ThumbsUp: () => <span data-testid="icon-up" />,
   ThumbsDown: () => <span data-testid="icon-down" />,
+  Loader2: () => <span data-testid="icon-loading" />,
+  CheckCheck: () => <span data-testid="icon-check" />,
+  RefreshCw: () => <span data-testid="icon-refresh" />,
+  AlertTriangle: () => <span data-testid="icon-warning" />,
 }));
 
 /* =====================================================================
@@ -148,6 +152,55 @@ describe('ChatBubble', () => {
 
   /* ====================================================================
    * 知识库来源标记
+   * ==================================================================*/
+  /* ====================================================================
+   * AI 输出自检状态（方案 C：草稿态显示）
+   * ==================================================================*/
+  describe('AI 输出自检状态', () => {
+    const reviewBase = {
+      ...defaultProps,
+      message: {
+        ...defaultProps.message,
+        role: 'assistant' as const,
+        content: '自检测试回答',
+      },
+    };
+
+    it('draft 时应显示"校验中"标记', () => {
+      const props = { ...reviewBase, message: { ...reviewBase.message, reviewStatus: 'draft' as const } };
+      render(<ChatBubble {...props} />);
+      expect(screen.getByText('校验中')).toBeInTheDocument();
+    });
+
+    it('passed 时应显示自检通过徽章（title 提示）', () => {
+      const props = { ...reviewBase, message: { ...reviewBase.message, reviewStatus: 'passed' as const } };
+      render(<ChatBubble {...props} />);
+      expect(screen.getByTitle('已通过 AI 自检')).toBeInTheDocument();
+    });
+
+    it('revised 时应显示"已自动修正"徽章', () => {
+      const props = { ...reviewBase, message: { ...reviewBase.message, reviewStatus: 'revised' as const } };
+      render(<ChatBubble {...props} />);
+      expect(screen.getByText('已自动修正')).toBeInTheDocument();
+    });
+
+    it('warning 时应显示"自检未通过，仅供参考"徽章', () => {
+      const props = { ...reviewBase, message: { ...reviewBase.message, reviewStatus: 'warning' as const } };
+      render(<ChatBubble {...props} />);
+      expect(screen.getByText('自检未通过，仅供参考')).toBeInTheDocument();
+    });
+
+    it('无 reviewStatus 时不应显示任何自检标记', () => {
+      render(<ChatBubble {...reviewBase} />);
+      expect(screen.queryByText('校验中')).not.toBeInTheDocument();
+      expect(screen.queryByTitle('已通过 AI 自检')).not.toBeInTheDocument();
+      expect(screen.queryByText('已自动修正')).not.toBeInTheDocument();
+      expect(screen.queryByText('自检未通过，仅供参考')).not.toBeInTheDocument();
+    });
+  });
+
+  /* ====================================================================
+   * 知识库来源
    * ==================================================================*/
   describe('知识库来源', () => {
     it('fromKnowledgeBase=true 时应显示知识库标签', () => {

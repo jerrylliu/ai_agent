@@ -65,6 +65,13 @@ export interface Message {
   /** AI 消息携带的引用来源（可验证生成：答案中（【文档 X】）标注的解析结果） */
   citations?: CitationItem[];
   /**
+   * AI 输出自检状态（方案 C：草稿态显示）：
+   *   draft=流式草稿（半透明+"校验中"）；passed=自检通过（✓ 徽章）；
+   *   revised=自检不通过已自动重写；warning=重写后仍未通过（仅供参考）。
+   * 流结束仍是 draft 说明审核流程未执行（开关关闭等），由 useChat 清除
+   */
+  reviewStatus?: 'draft' | 'passed' | 'revised' | 'warning';
+  /**
    * @deprecated 请使用 documentCards
    * 历史字段：单一文档的 contentJson，保留兼容
    */

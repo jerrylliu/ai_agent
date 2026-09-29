@@ -366,6 +366,37 @@ describe('sse-parser', () => {
       expect(onCitations).not.toHaveBeenCalled();
     });
 
+    it('应调用 onContentReset 回调（重写热替换）', () => {
+      const onContentReset = vi.fn();
+      const events = [{ eventType: 'content_reset', eventData: '{}' }];
+
+      handleSSEEvents(events, { onContentReset });
+
+      expect(onContentReset).toHaveBeenCalledTimes(1);
+    });
+
+    it('应调用 onReviewResult 回调（review_result）', () => {
+      const onReviewResult = vi.fn();
+      const data = JSON.stringify({ status: 'revised', reason: '残留标记', reviewPassed: true });
+      const events = [{ eventType: 'review_result', eventData: data }];
+
+      handleSSEEvents(events, { onReviewResult });
+
+      expect(onReviewResult).toHaveBeenCalledWith({
+        status: 'revised',
+        reason: '残留标记',
+        reviewPassed: true,
+      });
+    });
+
+    it('review_result JSON 解析失败时不应崩溃', () => {
+      const onReviewResult = vi.fn();
+      const events = [{ eventType: 'review_result', eventData: '{invalid' }];
+
+      expect(() => handleSSEEvents(events, { onReviewResult })).not.toThrow();
+      expect(onReviewResult).not.toHaveBeenCalled();
+    });
+
     it('未知事件类型应被忽略', () => {
       const onContent = vi.fn();
       const events = [{ eventType: 'unknown_event', eventData: '"test"' }];

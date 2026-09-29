@@ -31,7 +31,11 @@ import {
 
 // 【type-only 导入】`import type` 只拉取类型，不会出现在运行时产物中（被 TS 编译期擦除）。
 // Response 是 Express 的响应对象类型，仅用于 SSE 流式响应的参数标注。
+// BaseMessage 是 LangChain 消息的公共基类类型（输出自检重写上下文的参数类型）。
+// BaseChatModel 用于自检重写流的模型参数类型。
 import type { Response } from 'express';
+import type { BaseMessage } from '@langchain/core/messages';
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 
 // 【命名空间导入】`import * as X from 'pkg'` 将整个模块作为对象导入，访问 X.method() 形式。
 // 这里全部为 Node 内置模块（不需要安装）。
@@ -52,7 +56,14 @@ import {
   sendContent,
   sendFileCard,
   sendCitations,
+  sendContentReset,
+  sendReviewResult,
 } from './sse-writer';
+
+// 【AI 输出自检】（方案 C：草稿态显示）流结束后的最终回答审核 + fail-open 放行。
+// reviewFinalAnswer：用快速模型审最终回答（fail-open，任何异常放行）；
+// buildRewriteInstruction：审核不通过时给原对话模型的重写指令纯函数。
+import { reviewFinalAnswer, buildRewriteInstruction } from './output-review';
 
 // prompt-message-cleaner 提供"达到最大轮数强制总结"时的消息清理纯函数。
 // 单独提取成文件是为了可测试性（避免测试时加载整个 prompt.ts 的重依赖）。
@@ -936,7 +947,191 @@ function filterThinkTags(
     }
   }
 
-  return { text: result, inThinkBlock: inThink };
+  return { text: result, inThinkBlock: inThinkBlock };
+}
+
+/**
+ * ============================================================================
+ * 【AI 输出自检管线】（方案 C：草稿态显示）
+ * 流结束后的最终答案审核 + 不通过时让原对话模型重写热替换。
+ *
+ * 为什么抽成模块级函数：FC 流式 / FC 流式 fallback / FC 强制回答 / RAG 流式
+ * 四条面向用户的交互路径都要接入审核，各路径作用域变量（llm / messages /
+ * fullResponse 等）不同，参数化后统一走本函数，避免四处复制粘贴审核与重写逻辑。
+ * headless/bench 路径（无 res，benchmark 评测）不会调用本函数，评测基线不受影响。
+ *
+ * fail-open 契约：开关关闭 / 客户端已取消 → 跳过审核且不发 review_result；
+ * 重写流异常 → 恢复原答案全文 + revised(reviewPassed=false)，绝不给用户空白页。
+ * ============================================================================
+ */
+async function runOutputReviewPipeline(params: {
+  /** 原对话模型（重写用，与主回答同一模型保证口径一致） */
+  llm: BaseChatModel;
+  /** 主回答的消息序列（重写时在其上追加原回答 + 重写指令） */
+  messages: BaseMessage[];
+  res: Response;
+  /** 用户原始问题（审核与重写的判定锚点） */
+  question: string;
+  /** 抑制后的最终回答文本（审核对象永远是抑制后的文本） */
+  answer: string;
+  /** 检索上下文（各路径作用域内现成变量，无则不传——不为此新加收集逻辑） */
+  contexts?: string[];
+  isCancelled?: () => boolean;
+  abortSignal?: AbortSignal;
+  /** 重写流是否剥离 LLM 重复输出的图片 Markdown（服务端注入过图片时与主路径 emitSafeText 同口径） */
+  stripImages?: boolean;
+}): Promise<{ finalText: string }> {
+  const {
+    llm,
+    messages,
+    res,
+    question,
+    answer,
+    contexts,
+    isCancelled,
+    abortSignal,
+    stripImages,
+  } = params;
+
+  // 守卫：开关关闭或客户端已取消 → 跳过审核且不发 review_result
+  // （前端流结束时对仍处草稿态的消息会清掉标记，等价于放行）
+  if (!config.outputReview.enabled || (isCancelled && isCancelled())) {
+    return { finalText: answer };
+  }
+
+  // 第一次审核：审核对象是抑制后的最终文本
+  const review = await reviewFinalAnswer({ question, answer, contexts });
+  if (review.pass) {
+    // 通过（含 fail-open reviewed=false）→ 通知前端草稿转正
+    sendReviewResult(res, { status: 'passed' });
+    return { finalText: answer };
+  }
+
+  logger.warn('输出自检：回答未通过，触发原对话模型重写', {
+    module: 'PromptService',
+    reason: review.reason,
+    answerLength: answer.length,
+  });
+  sendReviewResult(res, { status: 'revising', reason: review.reason });
+  // 先清空前端草稿正文，再流式重写（前端热替换，避免新旧内容拼接）
+  sendContentReset(res);
+
+  // 重写上下文：原对话消息 + 占位 AIMessage（保持消息序列合法）+ 重写指令。
+  // 用新数组而非修改外层 messages：避免污染调用方后续的 inputTokens 估算口径
+  const rewriteMessages: BaseMessage[] = [
+    ...messages,
+    new AIMessage(answer),
+    new HumanMessage(buildRewriteInstruction(review.reason)),
+  ];
+
+  const suppressor = new StreamingDsmlSuppressor();
+  let revised = '';
+  let imageMarkdownBuffer = '';
+  let inThinkBlock = false;
+  let rewriteCancelled = false;
+  // 重写轮 token 用量：从 chunk.usage_metadata 读取后 logger 留痕即可（不为此重构 UsageService）
+  let rewriteUsage: unknown;
+
+  // 重写 delta 输出：与主路径 emitSafeText 同款逻辑——
+  // 抑制器产出安全文本 →（可选）图片 Markdown 缓冲剥离 → SSE 发送 + 累加到重写文本
+  const emitRewriteDelta = (text: string): void => {
+    if (!stripImages) {
+      revised += text;
+      sendContent(res, text);
+      process.stdout.write(text);
+      return;
+    }
+    // 图片 Markdown 可能跨 chunk，遇到未闭合的 `![` 时先缓冲，等闭合再剥离
+    imageMarkdownBuffer += text;
+    const lastOpen = imageMarkdownBuffer.lastIndexOf('![');
+    const hasUnclosedImage =
+      lastOpen !== -1 && imageMarkdownBuffer.indexOf(')', lastOpen) === -1;
+    if (hasUnclosedImage && imageMarkdownBuffer.length < 2000) return;
+    const cleaned = stripMarkdownImages(imageMarkdownBuffer);
+    imageMarkdownBuffer = '';
+    if (cleaned) {
+      revised += cleaned;
+      sendContent(res, cleaned);
+      process.stdout.write(cleaned);
+    }
+  };
+
+  try {
+    // 重写流同样绑定 abort 信号 + DSML 抑制器（不打断现有防护链）
+    const stream = await llm.stream(rewriteMessages, { signal: abortSignal });
+    for await (const chunk of stream) {
+      if (isCancelled && isCancelled()) {
+        rewriteCancelled = true;
+        break;
+      }
+      if (chunk.usage_metadata) {
+        rewriteUsage = chunk.usage_metadata;
+      }
+      const filtered = filterThinkTags(
+        chunk.content?.toString() || '',
+        inThinkBlock,
+      );
+      inThinkBlock = filtered.inThinkBlock;
+      if (!filtered.text) continue;
+      const safeText = suppressor.push(filtered.text);
+      if (safeText) emitRewriteDelta(safeText);
+    }
+    const tailSafe = suppressor.flush();
+    if (tailSafe && !rewriteCancelled) emitRewriteDelta(tailSafe);
+    // 残留处理：图片缓冲里未闭合的尾巴（与主路径同口径）
+    if (stripImages && imageMarkdownBuffer && !rewriteCancelled) {
+      const cleaned = stripMarkdownImages(imageMarkdownBuffer);
+      imageMarkdownBuffer = '';
+      if (cleaned) emitRewriteDelta(cleaned);
+    }
+
+    logger.info('输出自检：重写流结束', {
+      module: 'PromptService',
+      rewriteCancelled,
+      revisedLength: revised.length,
+      rewriteUsage,
+    });
+
+    // 客户端断开：放弃重写，保留原答案直接收尾（连接已断，无需恢复推送）
+    if (rewriteCancelled) {
+      return { finalText: answer };
+    }
+
+    // 重写输出为空（模型抽风）：绝不给用户空白页，恢复原答案全文
+    if (!revised.trim()) {
+      logger.warn('输出自检：重写输出为空，恢复原答案', {
+        module: 'PromptService',
+      });
+      sendContent(res, answer);
+      sendReviewResult(res, { status: 'revised', reviewPassed: false });
+      return { finalText: answer };
+    }
+
+    // 二次审核：不通过也照发内容（绝不空白），仅把结果如实告知前端
+    const second = await reviewFinalAnswer({
+      question,
+      answer: revised,
+      contexts,
+    });
+    sendReviewResult(res, { status: 'revised', reviewPassed: second.pass });
+    return { finalText: revised };
+  } catch (e) {
+    // 重写流异常（含客户端断开触发的 abort）：恢复原答案全文，保证用户始终有完整内容
+    logger.error('输出自检：重写流程异常，恢复原答案', {
+      module: 'PromptService',
+      error: (e as Error).message,
+      stack: (e as Error).stack,
+    });
+    try {
+      if (!res.writableEnded) {
+        sendContent(res, answer);
+        sendReviewResult(res, { status: 'revised', reviewPassed: false });
+      }
+    } catch {
+      // res 已不可写（客户端断开导致的写失败），忽略——最终文本仍返回原答案
+    }
+    return { finalText: answer };
+  }
 }
 
 /**
@@ -3276,6 +3471,23 @@ async function promptWithFunctionCalling(
             estimatedOutputTokens: estimateTokens(fcFullResponse),
           });
 
+          // ==================== AI 输出自检（方案 C：草稿态显示） ====================
+          // 延迟文档落盘后、引用解析/落库/[DONE] 之前执行：重写替换 fcFullResponse 后，
+          // 引用解析、用量记录（assistantMessage 即落库文本）均基于最终文本。
+          const reviewOutcome = await runOutputReviewPipeline({
+            llm,
+            messages,
+            res,
+            question: promptText || '',
+            answer: fcFullResponse,
+            contexts:
+              fcRetrievedContexts.length > 0 ? fcRetrievedContexts : undefined,
+            isCancelled,
+            abortSignal: abortController?.signal,
+            stripImages: collectedImages.length > 0,
+          });
+          fcFullResponse = reviewOutcome.finalText;
+
           // ==================== 引用解析（可验证生成，FC 主路径） ====================
           // 与 RAG 注入路径同构：从完整回答提取（【文档 X】）→ 映射 fcDocSources → 一次性推送。
           // 必须在 res.end() 之前：res.writableEnded 后 sendCitations 会静默丢弃
@@ -3362,6 +3574,23 @@ async function promptWithFunctionCalling(
               }
               sendContent(res, fallbackContent);
               process.stdout.write(fallbackContent);
+              // AI 输出自检：fallback 一次性输出同样审核，不通过时重写热替换
+              // （sendContentReset 会清掉上方已发的原文，再流式推送修正文本）
+              const fallbackReview = await runOutputReviewPipeline({
+                llm,
+                messages,
+                res,
+                question: promptText || '',
+                answer: fallbackContent,
+                contexts:
+                  fcRetrievedContexts.length > 0
+                    ? fcRetrievedContexts
+                    : undefined,
+                isCancelled,
+                abortSignal: abortController?.signal,
+                stripImages: collectedImages.length > 0,
+              });
+              fallbackContent = fallbackReview.finalText;
               // fallback 一次性输出路径同样推送引用（与主流式路径口径一致）
               if (fcDocSources.length > 0) {
                 const resolvedCitations = resolveCitations(
@@ -3517,6 +3746,21 @@ async function promptWithFunctionCalling(
         chunkCount,
         fullResponseLength: fullResponse.length,
       });
+
+      // ==================== AI 输出自检（方案 C：草稿态显示） ====================
+      // 强制回答是面向用户的最终输出，同样审核；重写替换后引用解析/落库基于最终文本
+      const forcedReview = await runOutputReviewPipeline({
+        llm,
+        messages: cleanedMessages,
+        res,
+        question: promptText || '',
+        answer: fullResponse,
+        contexts:
+          fcRetrievedContexts.length > 0 ? fcRetrievedContexts : undefined,
+        isCancelled,
+        abortSignal: abortController?.signal,
+      });
+      fullResponse = forcedReview.finalText;
 
       // 强制回答路径同样推送引用（口径与主流式路径一致）
       let forcedCitations: Array<{
@@ -4113,6 +4357,23 @@ ${docList}
         fullResponseLength: fullResponse.length,
         estimatedOutputTokens: estimateTokens(fullResponse),
       });
+
+      // ==================== AI 输出自检（方案 C：草稿态显示） ====================
+      // RAG 注入路径的最终回答同样审核；重写替换后引用解析/落库基于最终文本
+      const ragReview = await runOutputReviewPipeline({
+        llm,
+        messages: conversions,
+        res,
+        question: promptText || '',
+        answer: fullResponse,
+        contexts:
+          retrievalResults.length > 0
+            ? retrievalResults.map((r) => r.content.trim())
+            : undefined,
+        isCancelled,
+        abortSignal: abortController?.signal,
+      });
+      fullResponse = ragReview.finalText;
 
       // ==================== 引用解析（可验证生成） ====================
       // 从完整回答中提取（【文档 X】）标注 → 映射为可定位引用 → 一次性推送前端。

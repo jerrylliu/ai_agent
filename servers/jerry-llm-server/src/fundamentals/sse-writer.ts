@@ -226,6 +226,42 @@ export function sendWorkflowEvent(
 }
 
 /**
+ * 发送 content_reset 事件（清空当前 AI 消息正文）
+ *
+ * 使用场景：AI 输出自检不通过触发重写时，先清空前端已渲染的草稿正文，
+ * 再流式推送修正后的回答（前端据此热替换，避免新旧内容拼接）。
+ */
+export function sendContentReset(res: Response | undefined) {
+  if (!res || res.writableEnded) return;
+  res.write(`event: content_reset\ndata: {}\n\n`);
+}
+
+/** review_result 事件载荷：AI 输出自检结果 */
+export interface ReviewResultPayload {
+  /** passed=自检通过；revising=不通过正在重写；revised=重写完成；review_error=审核器故障 */
+  status: 'passed' | 'revising' | 'revised' | 'review_error';
+  /** 不通过的原因（审核 reason，仅 revising 时携带） */
+  reason?: string;
+  /** 重写后的二次审核结果（仅 revised 时携带；false=二次仍不通过但内容照发） */
+  reviewPassed?: boolean;
+}
+
+/**
+ * 发送 review_result 事件（AI 输出自检结果）
+ *
+ * 前端据此把 AI 消息从"草稿态"转为最终态：
+ * passed → ✓ 徽章；revised+reviewPassed → "已自动修正"徽章；
+ * revised+!reviewPassed → "自检未通过，仅供参考"警示徽章；review_error → 视为放行。
+ */
+export function sendReviewResult(
+  res: Response | undefined,
+  payload: ReviewResultPayload,
+) {
+  if (!res || res.writableEnded) return;
+  res.write(`event: review_result\ndata: ${JSON.stringify(payload)}\n\n`);
+}
+
+/**
  * 解析 SSE 帧文本，提取 event 和 data 字段
  * 用于客户端测试
  */

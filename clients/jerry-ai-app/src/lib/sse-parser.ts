@@ -17,9 +17,11 @@
  *   - heartbeat:             保活心跳
  *   - content:               AI 回复文本
  *   - citations:             RAG 引用列表（流结束后一次性发送）
+ *   - content_reset:         重写热替换（AI 输出自检不通过，丢弃已流出文本后重写）
+ *   - review_result:         AI 输出自检结果（通过/重写中/已修正/审核失败）
  */
 
-import type { ToolStatusEvent, SessionAction } from './api';
+import type { ToolStatusEvent, SessionAction, ReviewResultEvent } from './api';
 import type { CitationItem } from '@/types/session';
 
 export interface SSEEvent {
@@ -151,6 +153,10 @@ export function handleSSEEvents(
     onCitations?: (event: { citations: CitationItem[] }) => void;
     onContent?: (text: string) => void;
     onHeartbeat?: () => void;
+    /** 重写热替换（AI 输出自检不通过）：调用方清空已累计的流式文本 */
+    onContentReset?: () => void;
+    /** 输出自检结果（通过/重写中/已修正/审核失败） */
+    onReviewResult?: (event: ReviewResultEvent) => void;
   },
 ) {
   for (const event of events) {
@@ -245,6 +251,20 @@ export function handleSSEEvents(
         } catch (e) {
           // JSON 解析失败时直接使用原始 data
           callbacks.onContent?.(event.eventData);
+        }
+        break;
+      }
+      case 'content_reset': {
+        // 无 data 载荷（data: {}），直接通知调用方清空旧文本
+        callbacks.onContentReset?.();
+        break;
+      }
+      case 'review_result': {
+        try {
+          const reviewEvent = JSON.parse(event.eventData) as ReviewResultEvent;
+          callbacks.onReviewResult?.(reviewEvent);
+        } catch (e) {
+          console.warn('解析 review_result 事件失败:', e);
         }
         break;
       }
