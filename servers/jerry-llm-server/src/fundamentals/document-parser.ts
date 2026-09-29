@@ -29,10 +29,11 @@ import {
 // --- pdfjs-dist 资源路径 ---
 // 注意：pdfjs 要求 cMapUrl / standardFontDataUrl 必须以斜杠结尾，
 // Windows 下 path.sep 是反斜杠，必须统一用正斜杠。
-const PDFJS_BUILD_PATH = path.dirname(
-  require.resolve('pdfjs-dist/build/pdf.mjs'),
+// 用 package.json 定位包根：legacy 构建位于 <包根>/legacy/build/ 子目录，
+// 若从构建文件向上推会停在 legacy/ 层级，导致 cmaps / standard_fonts 找不到。
+const PDFJS_ROOT_PATH = path.dirname(
+  require.resolve('pdfjs-dist/package.json'),
 );
-const PDFJS_ROOT_PATH = path.dirname(PDFJS_BUILD_PATH);
 const PDFJS_CMAP_URL =
   path.join(PDFJS_ROOT_PATH, 'cmaps').replace(/\\/g, '/') + '/';
 const PDFJS_STANDARD_FONT_URL =
@@ -147,7 +148,12 @@ async function getPdfjs(): Promise<PdfjsModule> {
     };
   }
 
-  pdfjsLib = await import('pdfjs-dist');
+  // 必须使用 legacy 构建：v6 现代构建运行时用了 Promise.try 等 ES2025 API，
+  // Node.js 22 生产镜像上抛 "Promise.try is not a function" 且为未捕获异常，
+  // 会直接击穿上传请求（甚至崩掉进程）。pdf.js 官方要求 Node.js 环境使用 legacy 构建，
+  // 两者的模块导出面一致，仅编译目标语法不同。
+  pdfjsLib =
+    (await import('pdfjs-dist/legacy/build/pdf.mjs')) as unknown as PdfjsModule;
   // 不使用 worker — Node.js 环境下 worker 线程缺少浏览器 API polyfill，
   // pdf.js 会自动降级为主线程 fake worker 模式，文本提取性能足够
   return pdfjsLib;
