@@ -6,6 +6,7 @@ import { Input } from '../ui/input';
 import type { ThemeMode } from '../../hooks/useTheme';
 
 import type { AppSettings } from '../../stores/settings-store';
+import { useSettingsStore } from '../../stores/settings-store';
 import type { UseUpdateCheckResult } from '../../hooks/useUpdateCheck';
 import {
   getCacheConfig,
@@ -23,6 +24,7 @@ import {
   getRebuildProgress,
   getMineruConfig,
   updateMineruConfig,
+  fetchFeatureDefaults,
 } from '../../lib/api';
 import type {
   CacheConfig,
@@ -35,6 +37,7 @@ import type {
   SaveEmbeddingConfigPayload,
   ReindexProgress,
   MineruConfigResponse,
+  FeatureDefaults,
 } from '../../lib/api';
 
 interface SettingsDialogProps {
@@ -172,6 +175,11 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [mineruModelVersion, setMineruModelVersion] = useState('vlm');
   const [mineruSaving, setMineruSaving] = useState(false);
   const [mineruNotice, setMineruNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // 功能开关全局默认（服务端 runtime-config）：用于给未自定义的开关显示"跟随全局默认"
+  const [globalDefaults, setGlobalDefaults] = useState<FeatureDefaults | null>(null);
+  // 本设备手动改过的功能键（自定义过的开关保持本地值，不显示跟随标记）
+  const customizedFeatures = useSettingsStore((s) => s.customizedFeatures);
 
   // 加载缓存和限流配置
   const loadConfig = useCallback(async () => {
@@ -315,10 +323,55 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
     };
   }, [open, startReindexPolling, stopReindexPolling]);
 
+  // 功能开关全局默认：面板打开时拉取一次；面板开着时若 AI/其他端改了全局默认
+  // （SSE settings_changed 由 useChat 转发为 window 事件），重新拉取刷新跟随标记
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void fetchFeatureDefaults().then((defaults) => {
+      if (!cancelled) setGlobalDefaults(defaults);
+    });
+    const onSettingsChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ section: 'model' | 'features' }>).detail;
+      if (detail?.section === 'features') {
+        void fetchFeatureDefaults().then((defaults) => {
+          if (!cancelled) setGlobalDefaults(defaults);
+        });
+      }
+    };
+    window.addEventListener('jerryai:settings-changed', onSettingsChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('jerryai:settings-changed', onSettingsChanged);
+    };
+  }, [open]);
+
   if (!open) return null;
 
   const handleSettingChange = (key: keyof AppSettings, value: boolean) => {
     onSettingsChange({ ...settings, [key]: value });
+  };
+
+  // 功能开关行的跟随标记：未自定义的开关显示当前全局默认值（AI/其他端改动后实时刷新）；
+  // 自定义过的开关显示"保持本地值"。globalDefaults 未拉到时（后端未启动）不显示
+  const renderFollowTag = (
+    key: 'memoryEnabled' | 'summaryEnabled' | 'injectMemoryOnNewSession',
+  ) => {
+    if (customizedFeatures.includes(key)) {
+      return (
+        <p className="text-xs text-muted-foreground cyberpunk-ms-subtext">
+          本设备已自定义，保持当前值
+        </p>
+      );
+    }
+    if (globalDefaults) {
+      return (
+        <p className="text-xs text-muted-foreground cyberpunk-ms-subtext">
+          跟随全局默认（{globalDefaults[key] ? '开' : '关'}）
+        </p>
+      );
+    }
+    return null;
   };
 
   // 保存缓存配置
@@ -663,6 +716,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 <div>
                   <p className="text-sm text-foreground cyberpunk-ms-text">启用记忆功能</p>
                   <p className="text-xs text-muted-foreground cyberpunk-ms-subtext">AI 会从对话中提取关键信息存入记忆库</p>
+                  {renderFollowTag('memoryEnabled')}
                 </div>
               </div>
               <Switch
@@ -677,6 +731,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 <div>
                   <p className="text-sm text-foreground cyberpunk-ms-text">启用摘要功能</p>
                   <p className="text-xs text-muted-foreground cyberpunk-ms-subtext">AI 会自动为对话生成摘要总结</p>
+                  {renderFollowTag('summaryEnabled')}
                 </div>
               </div>
               <Switch
@@ -691,6 +746,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 <div>
                   <p className="text-sm text-foreground cyberpunk-ms-text">新会话注入记忆</p>
                   <p className="text-xs text-muted-foreground cyberpunk-ms-subtext">新建会话时自动将记忆库内容注入对话上下文</p>
+                  {renderFollowTag('injectMemoryOnNewSession')}
                 </div>
               </div>
               <Switch

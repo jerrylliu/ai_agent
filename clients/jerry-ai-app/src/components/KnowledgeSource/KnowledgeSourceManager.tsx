@@ -143,6 +143,24 @@ export function KnowledgeSourceManager({ onClose, onContentChange }: KnowledgeSo
     return () => clearInterval(timer);
   }, [sources, loadData, selectedId, loadSyncLogs]);
 
+  // 监听知识源变更广播（AI 工具或其他端增删/同步知识源后由 useChat 转发的 window 事件）
+  // 500ms 防抖：AI 批量操作 N 个源只触发一次重拉；silent=true 避免刷新抖动
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onKnowledgeSourceChanged = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void loadData(true);
+      }, 500);
+    };
+    window.addEventListener('jerryai:knowledge-source-changed', onKnowledgeSourceChanged);
+    return () => {
+      window.removeEventListener('jerryai:knowledge-source-changed', onKnowledgeSourceChanged);
+      if (timer) clearTimeout(timer);
+    };
+  }, [loadData]);
+
   const handleSync = async (id: number) => {
     setSyncingIds(prev => new Set(prev).add(id));
     try {

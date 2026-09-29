@@ -21,6 +21,7 @@ import {
   setModelApiKey,
   probeModelCapabilities as probeModelCapabilitiesApi,
   subscribeChatEvents,
+  fetchFeatureDefaults,
 } from "../lib/api";
 import type {
   AvailableModel,
@@ -29,6 +30,7 @@ import type {
   WorkflowEvent,
 } from "../lib/api";
 import type { AppSettings } from "../stores/settings-store";
+import { useSettingsStore } from "../stores/settings-store";
 import { generateId, generateSessionId } from "../lib/utils";
 import { ERROR_MESSAGE } from "../lib/constants";
 import { Session, Message, HistoryItem, WorkflowProgress } from "../types/session";
@@ -236,6 +238,8 @@ export function useChat(
   const knowledgeRetryTimerRef = useRef<number | null>(null);
   // 文档变更事件挂起标记：流式生成期间到达的 document_changed 延后到生成结束补发
   const pendingDocRefreshRef = useRef(false);
+  // 知识源变更事件挂起标记：同上，生成结束后补发，避免流式期间界面闪动
+  const pendingKsRefreshRef = useRef(false);
 
   // 辅助: 标记会话有内容 + 持久化
   const markSessionHasContent = (sessionId: string) => {
@@ -259,17 +263,40 @@ export function useChat(
     });
   };
 
-  // 流式生成结束后补发挂起的文档刷新（见 onDocumentChanged 中的挂起逻辑）
+  // 流式生成结束后补发挂起的面板刷新（文档/知识源，见 SSE 回调中的挂起逻辑）
   useEffect(() => {
-    if (!isTyping && pendingDocRefreshRef.current) {
-      pendingDocRefreshRef.current = false;
-      window.dispatchEvent(
-        new CustomEvent('jerryai:document-changed', {
-          detail: { action: 'updated', at: Date.now() },
-        }),
-      );
+    if (!isTyping) {
+      if (pendingDocRefreshRef.current) {
+        pendingDocRefreshRef.current = false;
+        window.dispatchEvent(
+          new CustomEvent('jerryai:document-changed', {
+            detail: { action: 'updated', at: Date.now() },
+          }),
+        );
+      }
+      if (pendingKsRefreshRef.current) {
+        pendingKsRefreshRef.current = false;
+        window.dispatchEvent(
+          new CustomEvent('jerryai:knowledge-source-changed', {
+            detail: { action: 'updated', at: Date.now() },
+          }),
+        );
+      }
     }
   }, [isTyping]);
+
+  // 同步功能开关全局默认：拉取服务端默认值，覆盖本设备未自定义的开关。
+  // 失败静默（后端未启动/网络异常时维持本地值）。挂 ref 供 SSE 回调复用
+  const syncFeatureDefaults = async () => {
+    try {
+      const defaults = await fetchFeatureDefaults();
+      if (defaults) useSettingsStore.getState().applyServerDefaults(defaults);
+    } catch {
+      /* 拿不到就维持本地值 */
+    }
+  };
+  const syncFeatureDefaultsRef = useRef(syncFeatureDefaults);
+  syncFeatureDefaultsRef.current = syncFeatureDefaults;
 
   useEffect(() => {
     void loadModelInfo().catch(() => {});
@@ -605,8 +632,36 @@ export function useChat(
             new CustomEvent('jerryai:document-changed', { detail: event }),
           );
         },
+        onKnowledgeSourceChanged: (event) => {
+          // 知识源变更（AI 增删/同步知识源）→ 通知知识源面板刷新，挂起策略同上
+          if (isTypingRef.current) {
+            pendingKsRefreshRef.current = true;
+            return;
+          }
+          window.dispatchEvent(
+            new CustomEvent('jerryai:knowledge-source-changed', {
+              detail: event,
+            }),
+          );
+        },
+        onSettingsChanged: (event) => {
+          if (event.section === 'model') {
+            // AI 在任意端切换了全局模型 → 刷新本端模型显示
+            void loadModelInfo().catch(() => {});
+          } else if (event.section === 'features') {
+            // 功能开关全局默认变更 → 重新拉取并覆盖未自定义的本地开关
+            void syncFeatureDefaultsRef.current();
+          }
+          // 转发给其他组件（如设置面板的"跟随全局默认"标记）
+          window.dispatchEvent(
+            new CustomEvent('jerryai:settings-changed', { detail: event }),
+          );
+        },
       },
     );
+
+    // 连接建立后同步一次全局默认（设备刚上线时对齐服务端状态）
+    void syncFeatureDefaultsRef.current();
 
     return () => {
       sseConnectedRef.current = false;

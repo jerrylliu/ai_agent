@@ -143,6 +143,18 @@ export function subscribeChatEvents(
       title?: string;
       at: number;
     }) => void;
+    /** 知识源变更事件（AI 或任意端增删/同步知识源后广播，知识源面板据此刷新） */
+    onKnowledgeSourceChanged?: (event: {
+      action: 'created' | 'updated' | 'deleted' | 'syncing';
+      sourceId: number;
+      name?: string;
+      at: number;
+    }) => void;
+    /** 设置变更事件（模型切换 / 功能开关全局默认变更后广播，多端同步显示） */
+    onSettingsChanged?: (event: {
+      section: 'model' | 'features';
+      at: number;
+    }) => void;
   },
 ): () => void {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -179,6 +191,20 @@ export function subscribeChatEvents(
       /* 单条事件解析失败忽略 */
     }
   });
+  source.addEventListener('knowledge_source_changed', (e) => {
+    try {
+      options?.onKnowledgeSourceChanged?.(JSON.parse((e as MessageEvent).data));
+    } catch {
+      /* 单条事件解析失败忽略 */
+    }
+  });
+  source.addEventListener('settings_changed', (e) => {
+    try {
+      options?.onSettingsChanged?.(JSON.parse((e as MessageEvent).data));
+    } catch {
+      /* 单条事件解析失败忽略 */
+    }
+  });
   source.addEventListener("error", () => {
     // EventSource 会自动重连；这里只同步状态，交给轮询兜底
     onStatusChange?.(false);
@@ -188,6 +214,36 @@ export function subscribeChatEvents(
     source.close();
     onStatusChange?.(false);
   };
+}
+
+// ==================== 功能开关全局默认（settings/features） ====================
+
+/** 服务端可广播全局默认的三个功能开关（与后端 FeaturesConfigUpdateSchema 对应） */
+export interface FeatureDefaults {
+  memoryEnabled: boolean;
+  summaryEnabled: boolean;
+  injectMemoryOnNewSession: boolean;
+}
+
+/**
+ * 获取功能开关当前生效的全局默认值。
+ * 拉取失败（后端未启动/网络异常）返回 null，调用方维持本地值即可。
+ */
+export async function fetchFeatureDefaults(): Promise<FeatureDefaults | null> {
+  try {
+    const response = await fetch(API_ENDPOINTS.SETTINGS_FEATURES, {
+      method: "GET",
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as {
+      success: boolean;
+      data?: { defaults?: FeatureDefaults };
+    };
+    return data?.data?.defaults ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

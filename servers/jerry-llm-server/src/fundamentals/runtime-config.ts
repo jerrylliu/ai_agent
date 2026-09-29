@@ -152,12 +152,22 @@ export const MineruConfigUpdateSchema = z.object({
   modelVersion: z.string().max(50).optional(),
 });
 
+// 功能开关全局默认（记忆/摘要/新会话注入记忆）
+// 字段为 undefined 表示服务端未显式设置，前端设备按各自本地默认生效；
+// 一旦显式设置（前端保存或 AI toggle_feature），所有未自定义的设备跟随此全局默认
+export const FeaturesConfigUpdateSchema = z.object({
+  memoryEnabled: z.boolean().optional(),
+  summaryEnabled: z.boolean().optional(),
+  injectMemoryOnNewSession: z.boolean().optional(),
+});
+
 export const RuntimeConfigUpdateSchema = z
   .object({
     cache: CacheConfigUpdateSchema.optional(),
     rateLimiter: RateLimiterConfigUpdateSchema.optional(),
     embedding: RuntimeConfigEmbeddingSchema.optional(),
     mineru: MineruConfigUpdateSchema.optional(),
+    features: FeaturesConfigUpdateSchema.optional(),
   })
   .loose();
 
@@ -224,6 +234,17 @@ export type MineruRuntimeConfig = {
   modelVersion: string;
 };
 
+// 用 type 而非 interface：mergeDefined 泛型约束为 Record<string, unknown>，
+// 对象字面量类型有隐式索引签名而 interface 没有
+export type FeatureDefaultsConfig = {
+  /** 用户记忆提取开关（undefined = 服务端未显式设置，跟随前端设备本地默认） */
+  memoryEnabled?: boolean;
+  /** 会话摘要开关（undefined 语义同上） */
+  summaryEnabled?: boolean;
+  /** 新会话注入历史记忆开关（undefined 语义同上） */
+  injectMemoryOnNewSession?: boolean;
+};
+
 export interface RuntimeConfig {
   cache: {
     maxEntries: number;
@@ -248,6 +269,8 @@ export interface RuntimeConfig {
   };
   embedding: EmbeddingRuntimeConfig;
   mineru: MineruRuntimeConfig;
+  /** 功能开关全局默认（记忆/摘要/新会话注入记忆） */
+  features: FeatureDefaultsConfig;
 }
 
 // ==================== 默认配置 ====================
@@ -294,6 +317,13 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
     enabled: undefined,
     apiTokenEncrypted: '',
     modelVersion: '',
+  },
+  features: {
+    // 三个开关均不设默认值：undefined = 服务端未显式设置，
+    // 各前端设备按本地默认（true）生效；显式设置后未自定义的设备跟随全局默认
+    memoryEnabled: undefined,
+    summaryEnabled: undefined,
+    injectMemoryOnNewSession: undefined,
   },
 };
 
@@ -378,6 +408,11 @@ export function loadRuntimeConfig(): RuntimeConfig {
       savedObj.mineru,
       'mineru',
     );
+    const savedFeatures = parseSection(
+      FeaturesConfigUpdateSchema,
+      savedObj.features,
+      'features',
+    );
 
     // 深度合并：默认值 + 文件中的值
     const config: RuntimeConfig = {
@@ -405,6 +440,18 @@ export function loadRuntimeConfig(): RuntimeConfig {
         enabled: savedMineru?.enabled ?? DEFAULT_RUNTIME_CONFIG.mineru.enabled,
         apiTokenEncrypted: savedMineru?.apiTokenEncrypted ?? '',
         modelVersion: savedMineru?.modelVersion ?? '',
+      },
+      features: {
+        // 逐字段 ?? 合并：文件里没写的字段保持 undefined（未显式设置语义）
+        memoryEnabled:
+          savedFeatures?.memoryEnabled ??
+          DEFAULT_RUNTIME_CONFIG.features.memoryEnabled,
+        summaryEnabled:
+          savedFeatures?.summaryEnabled ??
+          DEFAULT_RUNTIME_CONFIG.features.summaryEnabled,
+        injectMemoryOnNewSession:
+          savedFeatures?.injectMemoryOnNewSession ??
+          DEFAULT_RUNTIME_CONFIG.features.injectMemoryOnNewSession,
       },
     };
 
@@ -451,6 +498,39 @@ export function getRuntimeConfig(): RuntimeConfig {
   return currentConfig;
 }
 
+// 功能开关的前端本地默认值（settings-store.ts 初始值同源）：
+// 服务端未显式设置时，生效值回落到这里，与升级前行为完全一致
+const FRONTEND_FEATURE_DEFAULTS = {
+  memoryEnabled: true,
+  summaryEnabled: true,
+  injectMemoryOnNewSession: true,
+} as const;
+
+/**
+ * 解析功能开关当前生效的全局默认值（显式设置优先，未设置回退前端本地默认）
+ *
+ * 语义约定：
+ * - runtime-config.features.xxx = undefined → 该开关未在服务端设置过，
+ *   生效值 = 前端本地默认（true），与升级前行为一致
+ * - 显式 true/false（前端保存或 AI toggle_feature）→ 所有未自定义的设备跟随
+ */
+export function getFeatureDefaults(): {
+  memoryEnabled: boolean;
+  summaryEnabled: boolean;
+  injectMemoryOnNewSession: boolean;
+} {
+  const features = currentConfig.features;
+  return {
+    memoryEnabled:
+      features.memoryEnabled ?? FRONTEND_FEATURE_DEFAULTS.memoryEnabled,
+    summaryEnabled:
+      features.summaryEnabled ?? FRONTEND_FEATURE_DEFAULTS.summaryEnabled,
+    injectMemoryOnNewSession:
+      features.injectMemoryOnNewSession ??
+      FRONTEND_FEATURE_DEFAULTS.injectMemoryOnNewSession,
+  };
+}
+
 /**
  * 浅合并且忽略 patch 中值为 undefined 的键。
  * 部分更新场景下，未提供的字段必须以"不覆盖"语义处理；
@@ -483,6 +563,11 @@ export function updateRuntimeConfig(partial: {
     enabled?: boolean;
     apiTokenEncrypted?: string;
     modelVersion?: string;
+  };
+  features?: {
+    memoryEnabled?: boolean;
+    summaryEnabled?: boolean;
+    injectMemoryOnNewSession?: boolean;
   };
 }): RuntimeConfig {
   // 写入前严格校验：非法值一律抛错，绝不落盘。
@@ -528,6 +613,12 @@ export function updateRuntimeConfig(partial: {
   }
   if (partial.mineru) {
     currentConfig.mineru = mergeDefined(currentConfig.mineru, partial.mineru);
+  }
+  if (partial.features) {
+    currentConfig.features = mergeDefined(
+      currentConfig.features,
+      partial.features,
+    );
   }
   saveRuntimeConfig(currentConfig);
   return currentConfig;

@@ -4,6 +4,8 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 import {
   publishChatHistoryEvent,
   publishDocumentChangedEvent,
+  publishKnowledgeSourceChangedEvent,
+  publishSettingsChangedEvent,
   subscribeChatHistoryEvents,
   __resetChatEventBusForTest,
   type ChatHistoryEvent,
@@ -130,5 +132,66 @@ describe('chat-event-bus', () => {
 
     expect(bad).toHaveBeenCalledTimes(1);
     expect(good).toHaveBeenCalledTimes(1);
+  });
+
+  // ==================== knowledge_source_changed（全局广播） ====================
+
+  it('knowledge_source_changed 广播给所有在线端（不按用户隔离，知识源是全局数据）', () => {
+    const u1 = jest.fn();
+    const u2 = jest.fn();
+    const def = jest.fn();
+    subscribeChatHistoryEvents('u1', u1);
+    subscribeChatHistoryEvents('u2', u2);
+    subscribeChatHistoryEvents('default', def);
+
+    publishKnowledgeSourceChangedEvent({
+      action: 'syncing',
+      sourceId: 3,
+      name: '官网文档',
+    });
+
+    expect(u1).toHaveBeenCalledTimes(1);
+    expect(u2).toHaveBeenCalledTimes(1);
+    expect(def).toHaveBeenCalledTimes(1);
+    expect(u1).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'knowledge_source_changed',
+        action: 'syncing',
+        sourceId: 3,
+        name: '官网文档',
+        at: expect.any(Number),
+      }),
+    );
+  });
+
+  // ==================== settings_changed（全局广播） ====================
+
+  it('settings_changed 广播给所有在线端且携带 section 与时间戳', () => {
+    const u1 = jest.fn();
+    const def = jest.fn();
+    subscribeChatHistoryEvents('u1', u1);
+    subscribeChatHistoryEvents('default', def);
+
+    publishSettingsChangedEvent({ section: 'model' });
+    publishSettingsChangedEvent({ section: 'features' });
+
+    expect(u1).toHaveBeenCalledTimes(2);
+    expect(def).toHaveBeenCalledTimes(2);
+    expect(u1).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ kind: 'settings_changed', section: 'model' }),
+    );
+    expect(u1).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ kind: 'settings_changed', section: 'features' }),
+    );
+  });
+
+  it('普通聊天事件仍按 ownerUserId 隔离（不被全局广播放宽影响）', () => {
+    const def = jest.fn();
+    subscribeChatHistoryEvents('default', def);
+
+    publishChatHistoryEvent(baseEvent({ ownerUserId: '15' }));
+    expect(def).not.toHaveBeenCalled();
   });
 });

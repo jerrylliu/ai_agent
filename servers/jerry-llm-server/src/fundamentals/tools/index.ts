@@ -93,6 +93,38 @@ import {
   initDocumentTools,
 } from './document-ops';
 import {
+  listKnowledgeSourcesSchema,
+  executeListKnowledgeSources,
+  addKnowledgeSourceSchema,
+  executeAddKnowledgeSource,
+  deleteKnowledgeSourceSchema,
+  executeDeleteKnowledgeSource,
+  syncKnowledgeSourceSchema,
+  executeSyncKnowledgeSource,
+  getKnowledgeStatusSchema,
+  executeGetKnowledgeStatus,
+  rebuildKnowledgeIndexSchema,
+  executeRebuildKnowledgeIndex,
+} from './knowledge-source-ops';
+import {
+  getSystemStatusSchema,
+  executeGetSystemStatus,
+  switchModelSchema,
+  executeSwitchModel,
+  toggleFeatureSchema,
+  executeToggleFeature,
+} from './settings-ops';
+import {
+  queryEvaluationStatsSchema,
+  executeQueryEvaluationStats,
+} from './evaluation-ops';
+import {
+  listFavoriteDocumentsSchema,
+  executeListFavoriteDocuments,
+  toggleDocumentFavoriteSchema,
+  executeToggleDocumentFavorite,
+} from './favorite-ops';
+import {
   generateChartSchema,
   executeGenerateChart,
   type GenerateChartParams,
@@ -304,6 +336,66 @@ function buildToolsMap(): Record<string, ToolDefinition> {
       schema: restoreDocumentVersionSchema,
       executor: executeRestoreDocumentVersion as (params: any) => Promise<any>,
     },
+    // ---------------- 知识源管理域（第 2 批） ----------------
+    list_knowledge_sources: {
+      schema: listKnowledgeSourcesSchema,
+      executor: executeListKnowledgeSources as (params: any) => Promise<any>,
+    },
+    add_knowledge_source: {
+      schema: addKnowledgeSourceSchema,
+      executor: executeAddKnowledgeSource as (params: any) => Promise<any>,
+    },
+    delete_knowledge_source: {
+      schema: deleteKnowledgeSourceSchema,
+      executor: executeDeleteKnowledgeSource as (params: any) => Promise<any>,
+    },
+    sync_knowledge_source: {
+      schema: syncKnowledgeSourceSchema,
+      executor: executeSyncKnowledgeSource as (params: any) => Promise<any>,
+    },
+    get_knowledge_status: {
+      schema: getKnowledgeStatusSchema,
+      executor: executeGetKnowledgeStatus as (params: any) => Promise<any>,
+    },
+    rebuild_knowledge_index: {
+      schema: rebuildKnowledgeIndexSchema,
+      executor: executeRebuildKnowledgeIndex as (params: any) => Promise<any>,
+    },
+    // ---------------- 设置域 / 评估 / 收藏（第 3 批） ----------------
+    get_system_status: {
+      schema: getSystemStatusSchema,
+      executor: executeGetSystemStatus as (params: any) => Promise<any>,
+    },
+    switch_model: {
+      schema: switchModelSchema,
+      executor: executeSwitchModel as (params: any) => Promise<any>,
+    },
+    toggle_feature: {
+      schema: toggleFeatureSchema,
+      executor: executeToggleFeature as (params: any) => Promise<any>,
+    },
+    // 以下三个工具按当前用户隔离，executor 需要 ToolContext.userId
+    query_evaluation_stats: {
+      schema: queryEvaluationStatsSchema,
+      executor: executeQueryEvaluationStats as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
+    },
+    list_favorite_documents: {
+      schema: listFavoriteDocumentsSchema,
+      executor: executeListFavoriteDocuments as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
+    },
+    toggle_document_favorite: {
+      schema: toggleDocumentFavoriteSchema,
+      executor: executeToggleDocumentFavorite as (
+        params: any,
+        context?: ToolContext,
+      ) => Promise<any>,
+    },
     generate_chart: {
       schema: generateChartSchema,
       executor: executeGenerateChart as (params: any) => Promise<any>,
@@ -471,6 +563,18 @@ const TOOL_COMPACT_DESCRIPTIONS: Record<string, string> = {
   delete_document: '删除文档含全部版本，不可恢复，删除前需确认',
   list_document_versions: '列出文档历史版本，查看版本或准备恢复时使用',
   restore_document_version: '恢复文档到历史版本生成新版本，回退内容时使用',
+  list_knowledge_sources: '列出知识源爬取源清单含同步状态，管理爬取源或找ID时使用',
+  add_knowledge_source: '添加Web爬取知识源并入库，用户要订阅网站内容时使用，飞书源不支持',
+  delete_knowledge_source: '删除知识源含已爬页面与向量数据，不可恢复',
+  sync_knowledge_source: '触发知识源同步爬取入库，长任务启动后查状态',
+  get_knowledge_status: '查看知识库统计向量库状态与索引重建进度',
+  rebuild_knowledge_index: '全量重建向量索引的重活，检索质量异常时才用',
+  get_system_status: '查看系统设置当前模型Key是否配置功能开关状态',
+  switch_model: '切换全局对话模型所有端生效，Key未配置会失败',
+  toggle_feature: '开关记忆摘要等功能的全局默认，未自定义设备自动跟随',
+  query_evaluation_stats: '查询回答质量评估统计点赞点踩与AI判分编造明细',
+  list_favorite_documents: '列出用户收藏的AI生成文档清单',
+  toggle_document_favorite: '收藏或取消收藏AI生成文档防自动清理',
   generate_chart: '生成图表，折线柱状饼图等，数据可视化时使用',
   generate_image: '文生图，根据文字描述生成图片，需要图片时使用',
   create_mindmap: '生成思维导图，整理知识结构梳理逻辑时使用',
@@ -544,6 +648,35 @@ const TOOL_COMPACT_PARAM_DESCRIPTIONS: Record<
   },
   restore_document_version: {
     versionId: '版本ID',
+  },
+  list_knowledge_sources: {},
+  add_knowledge_source: {
+    name: '知识源名称',
+    url: '爬取起始URL',
+  },
+  delete_knowledge_source: {
+    sourceId: '知识源ID',
+  },
+  sync_knowledge_source: {
+    sourceIds: '知识源ID列表',
+  },
+  get_knowledge_status: {},
+  rebuild_knowledge_index: {
+    confirm: '是否确认执行',
+  },
+  get_system_status: {},
+  switch_model: {
+    modelId: '目标模型ID',
+  },
+  toggle_feature: {
+    feature: '功能开关名',
+    enabled: '目标状态',
+  },
+  query_evaluation_stats: {},
+  list_favorite_documents: {},
+  toggle_document_favorite: {
+    key: '文档key',
+    favorited: '目标状态',
   },
   generate_chart: {
     chartType: '图表类型',
@@ -845,6 +978,31 @@ const TOOL_SEMANTIC_DESCRIPTIONS: Record<string, string> = {
   delete_document: '!!删除文档 删文档 删除 移除 文档',
   list_document_versions: '!!版本列表 !!历史版本 版本 历史',
   restore_document_version: '!!恢复版本 !!回退版本 恢复 回退 还原',
+  // ---------------- 知识源管理工具（第 2 批） ----------------
+  list_knowledge_sources:
+    '!!知识源 !!爬取源 !!网站源 知识源 爬取源 同步状态 清单 列表 订阅源',
+  add_knowledge_source:
+    '!!添加知识源 !!添加爬取源 !!订阅网站 !!新增知识源 添加 新增 知识源 爬取 网站 订阅',
+  delete_knowledge_source: '!!删除知识源 !!删爬取源 删除 移除 知识源 爬取源',
+  sync_knowledge_source:
+    '!!同步知识源 !!同步 !!重新爬取 同步 更新 知识源 爬取 抓取 刷新',
+  get_knowledge_status:
+    '!!知识库状态 知识库 统计 健康状况 向量库 索引进度 多少文档 片段数',
+  rebuild_knowledge_index:
+    '!!重建索引 !!重建向量 !!全量重建 重建 索引 向量 全量 重嵌入 修复检索',
+  // ---------------- 设置域 / 评估 / 收藏工具（第 3 批） ----------------
+  get_system_status:
+    '!!系统状态 !!当前模型 !!什么模型 设置 状态 Key配置 功能开关 开着吗 用哪个模型',
+  switch_model:
+    '!!切换模型 !!换模型 !!换个模型 切换 换 模型 改用 换个大模型 用某某模型',
+  toggle_feature:
+    '!!打开记忆 !!关闭记忆 !!打开摘要 !!关闭摘要 !!开关功能 记忆 摘要 开启 关闭 功能开关 MinerU 解析',
+  query_evaluation_stats:
+    '!!评估统计 !!回答质量 质量 评估 点赞 点踩 满意度 编造 判分 忠实率 相关率',
+  list_favorite_documents:
+    '!!收藏夹 !!看收藏 收藏 清单 列表 生成文档 收藏的文档',
+  toggle_document_favorite:
+    '!!收藏 !!取消收藏 收藏 取消收藏 收藏夹 生成文档',
   generate_chart:
     '!!画图 !!生成图表 !!可视化 图表 折线图 柱状图 饼图 数据可视化 绘图',
   generate_image: '!!画图 !!生成图片 !!文生图 图片 画图 生成图 图像 绘画',
