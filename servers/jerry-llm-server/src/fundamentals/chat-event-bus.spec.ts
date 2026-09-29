@@ -114,4 +114,21 @@ describe('chat-event-bus', () => {
       }),
     );
   });
+
+  it('某个订阅者抛错时被隔离，后续订阅者仍能收到事件', () => {
+    const bad = jest.fn(() => {
+      throw new Error('socket 已销毁');
+    });
+    const good = jest.fn();
+    // bad 先注册：若不隔离，good 将收不到事件
+    subscribeChatHistoryEvents('u1', bad);
+    subscribeChatHistoryEvents('u2', good);
+
+    expect(() =>
+      publishDocumentChangedEvent({ action: 'updated', documentId: 9 }),
+    ).not.toThrow();
+
+    expect(bad).toHaveBeenCalledTimes(1);
+    expect(good).toHaveBeenCalledTimes(1);
+  });
 });
