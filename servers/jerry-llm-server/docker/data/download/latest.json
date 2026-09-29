@@ -1,11 +1,11 @@
 {
-  "version": "0.1.11",
-  "pub_date": "2026-09-28T13:45:06Z",
-  "notes": "1. 回答准确率评估新增 AI 质量判分：忠实率（幻觉检测）与切题率统计，含疑似编造内容明细\n2. 修复点赞/点踩切换时误显示\"已取消\"且按钮不亮的问题",
+  "version": "0.1.12",
+  "pub_date": "2026-09-29T09:55:00Z",
+  "notes": "1. 修复 AI 回复的引用角标与参考来源首次不显示、需刷新才出现的问题\n2. 气泡「来自知识库」标记改为实时显示，不再首次不亮\n3. 文档管理：标签悬停可看全部、详情页支持手动增删标签\n4. 设置面板新增「PDF 智能解析（MinerU）」：Token 界面配置即生效，无需改服务器\n5. 修复 PDF 解析降级路径在服务器上崩溃的问题",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUVDNW05N0g2amdEVEZ4VWtPZDdiU2RGNnBIMUNrLzJEWkNoUVFqUVFmcy82a0xjbVhVVjdoT0p2TFhHTUtyWXRFUlhHd090aFJ3cE01RkR5Rk9GaFE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNjAzMTA2CWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xMV94NjQtc2V0dXAuZXhlCnc2eVlLb3FhVFNJZWdYQnN1NDZ4b1RRQlNNdmU2RGhwRkdpVlJwZlFuQnZES0ZQUUNFQjZYaHZHV05UOU9kRTNJeHVQRkxpbzF2SmFpMEE0QVhWVURBPT0K",
-      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.11_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUloaFhWd0pFV0RDRFprcDdqVG1YZkQwVFNHbmcwa1Z0a0pMU1VTdmEvOVFhYnMxaEhpdDZZdTRieWVIWkpXcGg1cU1Yc1FQSC9KdG9lVEhIRENUSFFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwNjc0NzU4CWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xMl94NjQtc2V0dXAuZXhlCjZlTldWcHpOWDdRd2JNRmliTVVLYmlhRk9Qd29JZG95ZlJUU1dZMW9JdGtVMjJhOUR5d09RRW9ZSlZnVG4rTVcrcmRMR0h1U2xMUGxIQVF3L1V5TUR3PT0K",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.12_x64-setup.exe"
     }
   }
 }
