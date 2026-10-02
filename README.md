@@ -6,25 +6,29 @@
 
 ## 项目简介
 
-Aether MC AI App 是一个基于大语言模型的智能桌面助手，提供流式对话、Agent 工具编排、RAG 知识库、文档版本管理、AI 写作编辑器、飞书集成、语音交互等能力。采用 pnpm Monorepo 架构，前后端分离。
+Aether MC AI App 是一个基于大语言模型的智能桌面助手，提供流式对话、Agent 工具编排、RAG 知识库、知识图谱、文档版本管理、AI 写作编辑器、飞书集成、语音交互等能力。采用 pnpm Monorepo 架构，前后端分离。
+
+> 当前版本：v0.1.14（2026-09 发布，支持应用内自动更新）
 
 ### 核心能力
 
 | 能力域 | 说明 |
 |--------|------|
-| **智能对话** | SSE 流式问答、多轮对话、Function Calling Agent、5 角色 Agent 路由（通用/搜索/分析/创作/文档）、Plan-Execute 计划执行、Human-in-the-Loop 工具确认、用户记忆与会话摘要 |
-| **RAG 知识库** | 多格式文档解析（MinerU / pdfjs / Word / Excel）、多模态图片入库（VLM 视觉翻译 + 降级链 + 定时重试）、混合检索（向量 + BM25 RRF 融合）、Query Rewriting、Multi-hop 多跳检索、Reranker 重排、语义缓存 |
-| **文档版本管理** | 版本时间线、回滚、Diff 对比、审计日志、注入扫描发布门禁（静态签名 + LLM 语义判定 + 人工复核）、向量化失败补偿机制、定时维护任务 |
+| **智能对话** | SSE 流式问答、多轮对话、Function Calling Agent、5 角色 Agent 路由（通用/搜索/分析/创作/文档）、Plan-Execute 计划执行、Human-in-the-Loop 工具确认、用户记忆与会话摘要、AI 输出自检（回答先以草稿态显示，审核通过后转正，发现硬伤自动重写并热替换） |
+| **AI 操作界面（Agent 代管）** | AI 可直接操作界面数据：文档增删改查/标签、知识源增删同步与索引重建、切换对话模型、开关记忆/摘要等全局功能、查询评估统计与收藏；写操作全量 HITL 确认（高危操作弹框）、`document_changed` 等全局广播事件驱动界面自动刷新、记忆/摘要服务端全局默认（未自定义的设备自动跟随） |
+| **RAG 知识库** | 多格式文档解析（MinerU 运行时可配 / pdfjs / Word / Excel）、多模态图片入库（VLM 视觉翻译 + 降级链 + 定时重试）、混合检索（向量 + BM25 RRF 融合）、Query Rewriting、Multi-hop 多跳检索、Reranker 重排、语义缓存、引用溯源（回答角标直达原文并高亮定位） |
+| **知识图谱（KG）** | 三元组抽取管道（实体 + 关系入库）、图谱可视化面板、人工触发抽取、抽取操作留痕 |
+| **文档版本管理** | 版本时间线、回滚、Diff 对比、审计日志、注入扫描发布门禁（静态签名 + LLM 语义判定 + 人工复核）、向量化失败补偿机制、定时维护任务、AI 工具读写标签/元数据 |
 | **AI 写作编辑器** | Tiptap 3 富文本编辑器、AI 幽灵补全（Tab 接受）、选区改写（润色/翻译/续写）、全文 AI 指令、知识库检索引用面板、Tauri 多窗口编辑、一键发布到知识库 |
-| **Agent 工具集** | 22 个工具（17 常驻 + 5 条件注册）：知识库搜索/清单、联网搜索、网页抓取、天气、计算、NL2SQL、会话管理、Plan-Execute、文档增删改查/摘要/对比、图表生成、文生图、思维导图、PDF/Word/HTML/MD 文档生成、飞书/邮件/Webhook 通知、工作流、MCP Proxy |
-| **工作流引擎** | 声明式顺序流水线、步骤间数据绑定、4 个预置模板（知识库搜索→图表、联网搜索→文档等） |
+| **Agent 工具集** | 39 个工具（34 常驻 + 5 条件注册）：知识库搜索/清单、知识源管理（增删/同步/重建索引）、联网搜索、网页抓取、天气、计算、NL2SQL、会话管理、Plan-Execute、文档增删改查/摘要/对比/版本、标签元数据、图表生成、文生图、思维导图、PDF/Word/HTML/MD 文档生成、飞书/邮件/Webhook 通知、系统状态/模型切换/功能开关、评估统计、收藏管理、工作流、MCP Proxy；工具数超阈值时按 query 动态选择 + Schema 压缩 |
+| **工作流引擎** | 声明式顺序流水线、步骤间数据绑定、4 个预置模板（知识库搜索→图表、联网搜索→文档等）、执行完成后声明式通知 |
 | **知识源同步** | Web 网页 / 飞书文档知识源接入，定时 + 手动同步、同步日志、更新确认、入库前注入扫描 |
 | **飞书集成** | 飞书机器人对话（WebSocket 长连接 / HTTP 回调）、桌面端与飞书会话实时双向同步、生成文档投递为飞书原生文件、HITL 审批卡片推送 |
 | **语音交互** | 火山引擎流式 ASR（WebSocket + AudioWorklet PCM 采集 + VAD）、长音频异步转写、浏览器原生 SpeechRecognition 兜底 |
 | **安全防护** | Prompt 注入三级检测（blocked / suspicious / safe）、不可信上下文隔离指令、NL2SQL 仅 SELECT + 表白名单、JWT + tokenVersion 批量失效、bcrypt 密码加密、用户限流 |
 | **多模型支持** | Ollama 本地模型、DeepSeek / 智谱 / DashScope API，运行时切换、模型能力探测与协商、API Key 加密存储 |
-| **可观测与评估** | Prometheus 指标（`/api/metrics`）、Winston + Loki 结构化日志、LLM 用量统计、人工反馈 + 自动评估、工具调用指标、搜索反馈与低满意度查询分析 |
-| **基础设施** | Redis 多级缓存（L1 内存 + L2 Redis，可降级）、语义缓存、分布式锁、滑动窗口限流、SSE 标准化协议、事件总线、优雅关闭 |
+| **可观测与评估** | Prometheus 指标（`/api/metrics`）、Winston + Loki 结构化日志、LLM 用量统计、人工反馈（点赞点踩）+ LLM Judge 自动评估（忠实率/切题率/准确率三维在线判分，检索上下文落库溯源）、工具调用指标、搜索反馈与低满意度查询分析 |
+| **基础设施** | Redis 多级缓存（L1 内存 + L2 Redis，可降级；single-flight 回源、总字节预算、故障隔离）、语义缓存、分布式锁、滑动窗口限流、SSE 标准化协议、事件总线、优雅关闭 |
 | **用户体系** | 注册/登录（邮箱或手机号）、密码重置、头像上传、资料管理 |
 
 ### 技术栈
@@ -45,9 +49,9 @@ miaoma-ai-app/
 │   └── src-tauri/                 # Rust 端（多窗口、文件对话框）
 ├── servers/jerry-llm-server/      # NestJS LLM 后端
 │   ├── src/auth/                  # 认证模块（JWT、守卫、限流）
-│   ├── src/controllers/           # HTTP 控制器（13+）
-│   ├── src/services/              # 业务服务（16+）
-│   ├── src/entities/              # TypeORM 实体（20 张表）
+│   ├── src/controllers/           # HTTP 控制器（16）
+│   ├── src/services/              # 业务服务（17）
+│   ├── src/entities/              # TypeORM 实体（23 张表）
 │   ├── src/fundamentals/          # 基础设施（Agent 路由 / 工具集 / 向量库 / 工作流 / 缓存 / 飞书 / 语音等）
 │   ├── src/migrations/            # TypeORM 迁移
 │   ├── scripts/                   # 运维与评估脚本（模型探测、RAG 评估、chunk 去重清理）
