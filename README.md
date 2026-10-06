@@ -1,14 +1,14 @@
 # Aether MC AI App（以太忆核）
 
-> AI 驱动的桌面助手应用 | Tauri 2 + React 19 + NestJS 11 + LangChain 1.x + Tiptap 3
+> AI 驱动的跨端智能助手（Windows 桌面 + Android）| Tauri 2 + React 19 + NestJS 11 + LangChain 1.x + Tiptap 3
 
 ---
 
 ## 项目简介
 
-Aether MC AI App 是一个基于大语言模型的智能桌面助手，提供流式对话、Agent 工具编排、RAG 知识库、知识图谱、文档版本管理、AI 写作编辑器、飞书集成、语音交互等能力。采用 pnpm Monorepo 架构，前后端分离。
+Aether MC AI App 是一个基于大语言模型的跨端智能助手（Windows 桌面 + Android 移动端），提供流式对话、Agent 工具编排、RAG 知识库、知识图谱、文档版本管理、AI 写作编辑器、飞书集成、语音交互等能力。采用 pnpm Monorepo 架构，前后端分离。
 
-> 当前版本：v0.1.14（2026-09 发布，支持应用内自动更新）
+> 当前版本：v0.1.14（2026-09 发布，支持应用内自动更新）｜ 官网与下载：[魂5的化身.online](https://xn--5-fs8a810ixgul5n.online)
 
 ### 核心能力
 
@@ -35,8 +35,9 @@ Aether MC AI App 是一个基于大语言模型的智能桌面助手，提供流
 
 | 模块 | 路径 | 技术栈 |
 |------|------|--------|
-| 桌面客户端 | `clients/jerry-ai-app/` | Tauri 2 + React 19 + TypeScript 5.9 + TailwindCSS 4 + shadcn/ui + Zustand 5 + Tiptap 3 |
+| 客户端（Windows / Android） | `clients/jerry-ai-app/` | Tauri 2（桌面 + Android）+ React 19 + TypeScript 5.9 + TailwindCSS 4 + shadcn/ui + Zustand 5 + Tiptap 3 |
 | LLM 后端服务 | `servers/jerry-llm-server/` | NestJS 11（ESM）+ TypeORM + MySQL 8 + LangChain 1.x + ChromaDB + Redis（可选）+ zod 4 |
+| 官网（下载落地页） | `frontend/miaoma-ai-app/` | 静态 HTML，8 种语言切换 + 手机端适配 + Bento 插画 |
 
 ---
 
@@ -44,9 +45,9 @@ Aether MC AI App 是一个基于大语言模型的智能桌面助手，提供流
 
 ```
 miaoma-ai-app/
-├── clients/jerry-ai-app/          # Tauri 桌面客户端（以太忆核）
+├── clients/jerry-ai-app/          # Tauri 跨端客户端（以太忆核：Windows 桌面 + Android）
 │   ├── src/                       # React 前端（pages / components / hooks / stores / lib / types）
-│   └── src-tauri/                 # Rust 端（多窗口、文件对话框）
+│   └── src-tauri/                 # Rust 端（多窗口、文件对话框；gen/android 为安卓打包工程）
 ├── servers/jerry-llm-server/      # NestJS LLM 后端
 │   ├── src/auth/                  # 认证模块（JWT、守卫、限流）
 │   ├── src/controllers/           # HTTP 控制器（16）
@@ -56,10 +57,24 @@ miaoma-ai-app/
 │   ├── src/migrations/            # TypeORM 迁移
 │   ├── scripts/                   # 运维与评估脚本（模型探测、RAG 评估、chunk 去重清理）
 │   └── docker/                    # 开发依赖编排 + Prometheus/Grafana/Loki 监控配置
+├── frontend/miaoma-ai-app/        # 官网静态页（下载入口 + 8 语言 + 手机适配）
 ├── .trae/rules/                   # AI 协作规范（全局 / 后端 / 前端）
 ├── interview/                     # 面试备战资料
 └── pnpm-workspace.yaml            # 工作区：clients/* 、servers/* 、frontend/*
 ```
+
+---
+
+## 下载与安装（普通用户）
+
+已发布安装包从官网获取：**[魂5的化身.online](https://xn--5-fs8a810ixgul5n.online)**（官网与 API 同域托管，应用开箱即连，无需自行部署后端）
+
+| 平台 | 安装包 | 更新方式 |
+|------|--------|----------|
+| Windows x64 | `以太忆核_<版本>_x64-setup.exe`（约 5MB） | 应用内自动更新：启动自动检测 + 设置页手动检查，静默下载安装后重启 |
+| Android arm64 | `以太忆核_<版本>_arm64.apk`（约 14MB） | 启动检测新版本后跳转浏览器下载 APK（系统限制无法静默自装） |
+
+> 下方的「快速开始」面向开发者：从源码自部署后端与客户端。
 
 ---
 
