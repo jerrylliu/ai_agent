@@ -274,5 +274,171 @@ describe('output-review 模块', () => {
       expect(instruction).toContain('<invoke');
       expect(instruction).toContain('完整修正后的回答正文');
     });
+
+    it('应告知模型可视化内容已由系统恢复、只需输出文字正文', () => {
+      const { mod } = setup();
+      const instruction = mod.buildRewriteInstruction('自相矛盾');
+      expect(instruction).toContain('已由系统单独恢复');
+      expect(instruction).toContain('```echarts');
+      expect(instruction).toContain('```mermaid');
+    });
+  });
+
+  /* ====================================================================
+   * extractPreservedAssetBlocks
+   * ==================================================================*/
+  describe('extractPreservedAssetBlocks', () => {
+    it('无资产时返回空字符串', () => {
+      const { mod } = setup();
+      expect(mod.extractPreservedAssetBlocks('纯文字回答，没有任何资产。')).toBe(
+        '',
+      );
+    });
+
+    it('应提取 echarts 围栏块并保留完整 JSON', () => {
+      const { mod } = setup();
+      const optionJson = '{"series":[{"data":[1,2,3]}]}';
+      const answer = `前置文字\n\n\`\`\`echarts\n${optionJson}\n\`\`\`\n\n后置文字`;
+      const out = mod.extractPreservedAssetBlocks(answer);
+      expect(out).toContain('```echarts');
+      expect(out).toContain(optionJson);
+      expect(out).not.toContain('前置文字');
+      expect(out).not.toContain('后置文字');
+    });
+
+    it('应提取 mermaid 围栏块', () => {
+      const { mod } = setup();
+      const answer = '文字\n\n```mermaid\ngraph TD; A-->B;\n```\n\n文字';
+      expect(mod.extractPreservedAssetBlocks(answer)).toContain(
+        'graph TD; A-->B;',
+      );
+    });
+
+    it('应按原文顺序提取多个资产块（echarts 在前、图片在后）', () => {
+      const { mod } = setup();
+      const chart = '```echarts\n{"a":1}\n```';
+      const img = '![图片](https://example.com/a.png)';
+      const answer = `${chart}\n\n中间文字\n\n${img}\n\n结尾`;
+      const out = mod.extractPreservedAssetBlocks(answer);
+      const chartIdx = out.indexOf('```echarts');
+      const imgIdx = out.indexOf('![');
+      expect(chartIdx).toBeGreaterThanOrEqual(0);
+      expect(imgIdx).toBeGreaterThan(chartIdx);
+      expect(out).not.toContain('中间文字');
+    });
+
+    it('落在代码围栏内部的图片字样不重复提取（以围栏块整体为准）', () => {
+      const { mod } = setup();
+      // echarts JSON 字符串里恰好出现图片 Markdown 字样的极端情况
+      const answer =
+        '```echarts\n{"mark":"![x](https://inner.example.com/y.png)"}\n```\n\n正文';
+      const out = mod.extractPreservedAssetBlocks(answer);
+      expect(out).toContain('```echarts');
+      // '![' 仅作为 JSON 字符串存在于围栏块内（出现 1 次），未再作为独立资产块重复提取
+      expect(out.split('![').length - 1).toBe(1);
+      expect(out).not.toContain('正文');
+    });
+
+    it('输出末尾带空行，便于与后续重写文字衔接', () => {
+      const { mod } = setup();
+      const out = mod.extractPreservedAssetBlocks(
+        '```mermaid\ngraph TD; A-->B;\n```',
+      );
+      expect(out.endsWith('\n\n')).toBe(true);
+    });
+
+    it('容忍 \\r\\n 行尾的围栏块', () => {
+      const { mod } = setup();
+      const out = mod.extractPreservedAssetBlocks(
+        '```echarts\r\n{"a":1}\r\n```\r\n正文',
+      );
+      expect(out).toContain('```echarts');
+      expect(out).toContain('{"a":1}');
+      expect(out).not.toContain('正文');
+    });
+  });
+
+  /* ====================================================================
+   * createVisualFenceSuppressor（重写流视觉围栏硬抑制）
+   * ==================================================================*/
+  describe('createVisualFenceSuppressor', () => {
+    function makeSup() {
+      const { mod } = setup();
+      return { mod, sup: mod.createVisualFenceSuppressor() };
+    }
+
+    it('普通代码块（```python 等）原样放行', () => {
+      const { sup } = makeSup();
+      const text = '前置\n\n```python\nprint(1)\n```\n\n后置';
+      expect(sup.push(text)).toBe(text);
+      expect(sup.flush()).toBe('');
+    });
+
+    it('无语言名的普通围栏原样放行（收尾 ``` 暂扣至 flush 归还）', () => {
+      const { sup } = makeSup();
+      // 收尾的 ``` 被暂扣（后续可能续成 ```echarts 开头），但绝不丢失
+      expect(sup.push('```\nplain\n```')).toBe('```\nplain\n');
+      expect(sup.flush()).toBe('```');
+    });
+
+    it('echarts 围栏整块丢弃，前后文字保留', () => {
+      const { sup } = makeSup();
+      const out = sup.push('文字A\n\n```echarts\n{"a":1}\n```\n\n文字B');
+      expect(out).toBe('文字A\n\n\n\n文字B');
+      expect(sup.flush()).toBe('');
+    });
+
+    it('mermaid 围栏同样丢弃', () => {
+      const { sup } = makeSup();
+      const out = sup.push('A\n```mermaid\ngraph TD; A-->B;\n```\nB');
+      expect(out).toBe('A\n\nB');
+    });
+
+    it('未闭合的视觉围栏到流尾：正文保留、块内残留丢弃', () => {
+      const { sup } = makeSup();
+      expect(sup.push('正文\n```mermaid\ngraph TD;')).toBe('正文\n');
+      expect(sup.flush()).toBe('');
+    });
+
+    it('围栏标记被 chunk 切散时仍正确判定并丢弃', () => {
+      const { sup } = makeSup();
+      const o1 = sup.push('x\n``');
+      const o2 = sup.push('`echarts\n{"a":1}\n``');
+      const o3 = sup.push('`\n收尾');
+      // chunk1 末尾 "``" 暂扣（可能是切散的围栏开头），flush 归还
+      expect(o1).toBe('x\n');
+      expect(o2).toBe('');
+      expect(o3).toBe('\n收尾');
+      expect(sup.flush()).toBe('');
+    });
+
+    it('非视觉围栏标记被切散时正常放行不丢字', () => {
+      const { sup } = makeSup();
+      // 暂扣的 "``" 与下一 chunk 的 "`python" 拼成完整围栏开头，正确放行
+      const o1 = sup.push('a ``');
+      const o2 = sup.push('`python\nhi\n```\nend');
+      expect(o1).toBe('a ');
+      expect(o2).toBe('```python\nhi\n```\nend');
+      expect(sup.flush()).toBe('');
+    });
+
+    it('echarts 语言带参数（如空格后缀）也能识别', () => {
+      const { sup } = makeSup();
+      const out = sup.push('```echarts \n{"a":1}\n```');
+      expect(out).toBe('');
+    });
+
+    it('flush 归还 normal 态暂扣的反引号（绝不丢字）', () => {
+      const { sup } = makeSup();
+      expect(sup.push('结尾一个反引号 `')).toBe('结尾一个反引号 ');
+      expect(sup.flush()).toBe('`');
+    });
+
+    it('语言行超长（非合法围栏）按普通文本放行', () => {
+      const { sup } = makeSup();
+      const longLine = 'x'.repeat(40);
+      const out = sup.push('```' + longLine + '\ncontent');
+      expect(out).toBe('```' + longLine + '\ncontent');
+    });
   });
 });

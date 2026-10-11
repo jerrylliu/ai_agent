@@ -63,7 +63,12 @@ import {
 // 【AI 输出自检】（方案 C：草稿态显示）流结束后的最终回答审核 + fail-open 放行。
 // reviewFinalAnswer：用快速模型审最终回答（fail-open，任何异常放行）；
 // buildRewriteInstruction：审核不通过时给原对话模型的重写指令纯函数。
-import { reviewFinalAnswer, buildRewriteInstruction } from './output-review';
+import {
+  reviewFinalAnswer,
+  buildRewriteInstruction,
+  extractPreservedAssetBlocks,
+  createVisualFenceSuppressor,
+} from './output-review';
 
 // prompt-message-cleaner 提供"达到最大轮数强制总结"时的消息清理纯函数。
 // 单独提取成文件是为了可测试性（避免测试时加载整个 prompt.ts 的重依赖）。
@@ -376,6 +381,41 @@ async function getSessionAssets(
   // 强化版提示词：短 + 直接 + 放在前面
   // LLM 看到"发邮件"等词时容易重新生成内容，必须强硬告知已有 URL 可直接用
   return `\n\n⚠️ 上一轮对话中已生成以下多媒体内容，URL 仍然有效：\n${parts.join('\n\n')}\n\n【重要】以上 URL 可以直接作为 send_notification 的 attachments[].url 参数。如果用户说"发到邮箱""把这些发给我""把刚才的文档发给我"等，只需调 send_notification，填入上面对应的 URL（图片用 url，文档用 fileUrl），绝对不要再调 generate_image / generate_chart / create_mindmap / generate_document 重新生成。`;
+}
+
+/**
+ * 把 FC 工具阶段收集的多媒体资产渲染为 markdown 块文本（图片/echarts/mermaid），
+ * 与 emitNewAssets 的注入格式完全一致（文件卡片走 sendFileCard 独立 SSE 事件、
+ * 不进正文，不在本函数范围内）。用于两处：
+ *   1) max 迭代/无进展强制回答路径的一次性资产注入（该路径原本不发资产，
+ *      已生成的图表会静默丢失）；
+ *   2) 流式失败 fallback 路径的审核重写资产保全（emitNewAssets 已把资产发给
+ *      前端，但 fallback 文本来自循环内最后一次 aiMessage、不含资产块，
+ *      content_reset 后需作为 extraPreservedAssets 原样重发）。
+ */
+function renderCollectedAssetBlocks(params: {
+  images: Array<{ url: string; alt: string }>;
+  chartOptions: Array<{ option: unknown; chartType?: string }>;
+  mindmaps: Array<{ mermaidCode: string; title: string; imageUrl?: string }>;
+}): string {
+  const blocks: string[] = [];
+  if (params.images.length > 0) {
+    blocks.push(
+      params.images
+        .map(
+          (img, i) =>
+            `![${img.alt}${params.images.length > 1 ? ` ${i + 1}` : ''}](${img.url})`,
+        )
+        .join('\n'),
+    );
+  }
+  for (const ch of params.chartOptions) {
+    blocks.push('```echarts\n' + JSON.stringify(ch.option, null, 2) + '\n```');
+  }
+  for (const mm of params.mindmaps) {
+    blocks.push('```mermaid\n' + mm.mermaidCode + '\n```');
+  }
+  return blocks.length > 0 ? blocks.join('\n\n') + '\n\n' : '';
 }
 
 // ==================== FC 模式进度通知辅助函数 ====================
@@ -980,6 +1020,12 @@ async function runOutputReviewPipeline(params: {
   abortSignal?: AbortSignal;
   /** 重写流是否剥离 LLM 重复输出的图片 Markdown（服务端注入过图片时与主路径 emitSafeText 同口径） */
   stripImages?: boolean;
+  /**
+   * 额外保全的资产块（fallback 路径专用）：资产已通过 emitNewAssets 发给前端、
+   * 但不在 answer 文本内时，由收集数组重建传入。提供时优先于 answer 内提取
+   * （fallback 文本若含模型自行编写的围栏块属应抑制内容，不作为保全来源）。
+   */
+  extraPreservedAssets?: string;
 }): Promise<{ finalText: string }> {
   const {
     llm,
@@ -991,6 +1037,7 @@ async function runOutputReviewPipeline(params: {
     isCancelled,
     abortSignal,
     stripImages,
+    extraPreservedAssets,
   } = params;
 
   // 守卫：开关关闭或客户端已取消 → 跳过审核且不发 review_result
@@ -1025,7 +1072,31 @@ async function runOutputReviewPipeline(params: {
   ];
 
   const suppressor = new StreamingDsmlSuppressor();
+  // 视觉围栏抑制器：重写指令虽禁止模型输出 echarts/mermaid 块，但模型可能无视
+  // 指令复述原回答的图表 → "服务端恢复的资产 + 模型复述块"双份图表，此处硬抑制兜底
+  const visualSuppressor = createVisualFenceSuppressor();
   let revised = '';
+  // 资产保全：content_reset 会把前端已渲染的图表/思维导图/图片一并清掉，
+  // 而这些块是工具产出/服务端注入的真实数据（重写模型既不会原样复述大段 JSON，
+  // 也不允许它篡改数据），必须由服务端保全后原样重发。
+  // 来源二选一：主路径/强制回答路径的 answer 文本内含资产块（extract 提取）；
+  // fallback 路径资产不在 answer 内（extraPreservedAssets 传入，优先级更高）。
+  // 懒发送：首个有效重写文本到来时先发资产块再发文字——
+  //   1) 空重写走"恢复原答案全文"兜底时资产尚未重发，不会出现图表重复；
+  //   2) 保持与主路径"资产注入在文字之前"一致的排版顺序。
+  const preservedAssets =
+    extraPreservedAssets ?? extractPreservedAssetBlocks(answer);
+  let preservedAssetsEmitted = false;
+  // 最终修正文本 = 已重发的资产块 + 重写文字（二次审核与落库口径与首次审核含资产一致）
+  const composedRevised = (): string =>
+    preservedAssetsEmitted ? preservedAssets + revised : revised;
+  // 首个有效重写文本输出前，把保全的资产块原样重发给前端（只发一次）
+  const emitPreservedAssetsOnce = (): void => {
+    if (!preservedAssets || preservedAssetsEmitted) return;
+    preservedAssetsEmitted = true;
+    sendContent(res, preservedAssets);
+    process.stdout.write(preservedAssets);
+  };
   let imageMarkdownBuffer = '';
   let inThinkBlock = false;
   let rewriteCancelled = false;
@@ -1040,6 +1111,7 @@ async function runOutputReviewPipeline(params: {
   // 抑制器产出安全文本 →（可选）图片 Markdown 缓冲剥离 → SSE 发送 + 累加到重写文本
   const emitRewriteDelta = (text: string): void => {
     if (!stripImages) {
+      emitPreservedAssetsOnce();
       revised += text;
       sendContent(res, text);
       process.stdout.write(text);
@@ -1054,6 +1126,7 @@ async function runOutputReviewPipeline(params: {
     const cleaned = stripMarkdownImages(imageMarkdownBuffer);
     imageMarkdownBuffer = '';
     if (cleaned) {
+      emitPreservedAssetsOnce();
       revised += cleaned;
       sendContent(res, cleaned);
       process.stdout.write(cleaned);
@@ -1084,10 +1157,20 @@ async function runOutputReviewPipeline(params: {
       inThinkBlock = filtered.inThinkBlock;
       if (!filtered.text) continue;
       const safeText = suppressor.push(filtered.text);
-      if (safeText) emitRewriteDelta(safeText);
+      if (!safeText) continue;
+      // DSML 抑制后再过视觉围栏抑制（DSML 捕获块内可能嵌 echarts 调用参数，
+      // 已被 DSML 层吞掉；此层只管模型复述的独立视觉围栏块）
+      const visualSafe = visualSuppressor.push(safeText);
+      if (visualSafe) emitRewriteDelta(visualSafe);
     }
     const tailSafe = suppressor.flush();
-    if (tailSafe && !rewriteCancelled) emitRewriteDelta(tailSafe);
+    if (tailSafe && !rewriteCancelled) {
+      // DSML 层 flush 的残留同样要过视觉围栏抑制（块开头可能恰在尾部）
+      const visualFiltered = visualSuppressor.push(tailSafe);
+      if (visualFiltered) emitRewriteDelta(visualFiltered);
+    }
+    const visualTail = visualSuppressor.flush();
+    if (visualTail && !rewriteCancelled) emitRewriteDelta(visualTail);
     // 残留处理：图片缓冲里未闭合的尾巴（与主路径同口径）
     if (stripImages && imageMarkdownBuffer && !rewriteCancelled) {
       const cleaned = stripMarkdownImages(imageMarkdownBuffer);
@@ -1099,12 +1182,15 @@ async function runOutputReviewPipeline(params: {
       module: 'PromptService',
       rewriteCancelled,
       revisedLength: revised.length,
+      preservedAssetChars: preservedAssets.length,
       rewriteUsage,
     });
 
-    // 客户端断开：放弃重写，保留原答案直接收尾（连接已断，无需恢复推送）
+    // 客户端断开：放弃重写（连接已断，无需恢复推送）。落库口径与前端所见一致：
+    // 断开前已有部分重写文本流出（资产块必已随首段文本重发）→ 保存"资产+部分修正"；
+    // 一个字都没流出（content_reset 后前端为空）→ 保存原答案供历史回看完整内容
     if (rewriteCancelled) {
-      return { finalText: answer };
+      return { finalText: revised.trim() ? composedRevised() : answer };
     }
 
     // 重写输出为空（模型抽风）：绝不给用户空白页，恢复原答案全文
@@ -1118,13 +1204,14 @@ async function runOutputReviewPipeline(params: {
     }
 
     // 二次审核：不通过也照发内容（绝不空白），仅把结果如实告知前端
+    // （审核对象与首次审核同口径：含保全资产块的完整修正文本）
     const second = await reviewFinalAnswer({
       question,
-      answer: revised,
+      answer: composedRevised(),
       contexts,
     });
     sendReviewResult(res, { status: 'revised', reviewPassed: second.pass });
-    return { finalText: revised };
+    return { finalText: composedRevised() };
   } catch (e) {
     // 重写流异常（含客户端断开触发的 abort）：恢复原答案全文，保证用户始终有完整内容
     logger.error('输出自检：重写流程异常，恢复原答案', {
@@ -1148,7 +1235,8 @@ async function runOutputReviewPipeline(params: {
       // res 已不可写（客户端断开导致的写失败），忽略——最终文本仍返回原答案
     }
     // 部分修正文本优于带硬伤的原答案（重写本就是为了修硬伤），二者取其一时优先修正稿
-    return { finalText: revised.trim() || answer };
+    // （composedRevised：部分修正文本流出时资产块必已重发，最终文本需含资产块）
+    return { finalText: revised.trim() ? composedRevised() : answer };
   }
 }
 
@@ -3593,7 +3681,10 @@ async function promptWithFunctionCalling(
               sendContent(res, fallbackContent);
               process.stdout.write(fallbackContent);
               // AI 输出自检：fallback 一次性输出同样审核，不通过时重写热替换
-              // （sendContentReset 会清掉上方已发的原文，再流式推送修正文本）
+              // （sendContentReset 会清掉上方已发的原文，再流式推送修正文本）。
+              // 注意：流式阶段 emitNewAssets 已把资产发给前端，但 fallback 文本
+              // 来自循环内最后一次 aiMessage、不含资产块——content_reset 后必须
+              // 把收集数组重建的资产块经 extraPreservedAssets 原样重发
               const fallbackReview = await runOutputReviewPipeline({
                 llm,
                 messages,
@@ -3607,6 +3698,12 @@ async function promptWithFunctionCalling(
                 isCancelled,
                 abortSignal: abortController?.signal,
                 stripImages: collectedImages.length > 0,
+                extraPreservedAssets:
+                  renderCollectedAssetBlocks({
+                    images: collectedImages,
+                    chartOptions: collectedChartOptions,
+                    mindmaps: collectedMindmaps,
+                  }) || undefined,
               });
               fallbackContent = fallbackReview.finalText;
               // fallback 一次性输出路径同样推送引用（与主流式路径口径一致）
@@ -3717,11 +3814,29 @@ async function promptWithFunctionCalling(
         sendSessionAction(res, sessionAction);
       }
 
+      // 资产注入：max 迭代/无进展路径此前不发工具阶段收集的资产，用户只会看到
+      // 文字总结、已生成的图表/思维导图/图片全部静默丢失（与重写丢资产同一家族）。
+      // 与主路径同款"资产在文字前"一次性发出；文本计入 fullResponse，
+      // 审核重写时 extractPreservedAssetBlocks 据此原样保全
+      const forcedAssetText = renderCollectedAssetBlocks({
+        images: collectedImages,
+        chartOptions: collectedChartOptions,
+        mindmaps: collectedMindmaps,
+      });
+      if (forcedAssetText) {
+        sendContent(res, forcedAssetText);
+        process.stdout.write(forcedAssetText);
+      }
+      // 文件卡片走独立 SSE 事件（不进正文），与主路径 emitNewAssets 口径一致
+      for (const card of collectedFileCards) {
+        sendFileCard(res, card);
+      }
+
       const stream = await llm.stream(cleanedMessages, {
         signal: abortController?.signal,
       });
       let chunkCount = 0;
-      let fullResponse = '';
+      let fullResponse = forcedAssetText;
       let inThinkBlock = false;
       // 字符级整块抑制器：替代旧的启发式缓冲（标签被 chunk 切散时启发式必然泄漏）。
       // 强制回答是工具预算耗尽后的最终总结阶段，此处只抑制不解析执行。

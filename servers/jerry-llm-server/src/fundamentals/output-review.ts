@@ -109,8 +109,151 @@ export function buildRewriteInstruction(reason: string): string {
   return [
     `你上一条回答未通过质量自检，问题：${reason || '存在硬伤'}。`,
     '请重新审视并输出一份完整修正后的回答正文（覆盖原回答的全部要点，直接输出正文内容）。',
+    '注意：原回答中的图表（```echarts）、思维导图（```mermaid）与图片等可视化内容已由系统单独恢复，你只需要输出文字正文，不要输出这些代码块或图片 Markdown。',
     '注意：绝对不要输出任何工具调用/协议格式的文本（如 <｜｜DSML｜｜、<invoke、<tool_call> 等标记），只输出自然的回答正文。',
   ].join('\n');
+}
+
+// ==================== 重写轮资产保全 ====================
+
+/**
+ * 从原回答中提取需要跨重写轮保留的可视化资产块（纯函数，便于测试）。
+ *
+ * 为什么由服务端保全而不是指望重写模型复述：
+ *   图表（```echarts）/ 思维导图（```mermaid）/ 图片 Markdown 都是工具
+ *   （generate_chart / create_mindmap / generate_image）产出或服务端注入的
+ *   真实数据，重写模型既不会原样复述大段 JSON，也不允许它篡改数据——
+ *   而 content_reset 会把前端已渲染的资产一并清空，必须在重写前原样重发。
+ *
+ * @param answer 原最终回答文本
+ * @returns 按原文顺序拼接的资产块文本（块间空行分隔，末尾带空行），无资产时返回空字符串
+ */
+export function extractPreservedAssetBlocks(answer: string): string {
+  // 代码围栏块：```echarts / ```mermaid 开头，到最近的闭合 ```（非贪婪）；
+  // 闭合前换行可选（容忍空内容围栏与同行闭合的畸形块）
+  const fenceRe = /```(?:echarts|mermaid)\r?\n[\s\S]*?(?:\r?\n)?```/g;
+  // 图片 Markdown：![alt](url)，url 不跨行
+  const imageRe = /!\[[^\]\n]*\]\([^)\n]+\)/g;
+
+  const fences: Array<{ start: number; end: number; text: string }> = [];
+  for (const m of answer.matchAll(fenceRe)) {
+    const start = m.index ?? 0;
+    fences.push({ start, end: start + m[0].length, text: m[0] });
+  }
+  // 图片块按原文位置与围栏块合并排序；落在围栏内部的图片（如 JSON 字符串里
+  // 恰好出现 ![x](y) 字样）不重复提取，以围栏块整体保留为准
+  const entries: Array<{ start: number; end: number; text: string }> = [
+    ...fences,
+  ];
+  for (const m of answer.matchAll(imageRe)) {
+    const start = m.index ?? 0;
+    const insideFence = fences.some((f) => start >= f.start && start < f.end);
+    if (!insideFence) {
+      entries.push({ start, end: start + m[0].length, text: m[0] });
+    }
+  }
+  entries.sort((a, b) => a.start - b.start);
+  if (entries.length === 0) return '';
+  return entries.map((e) => e.text).join('\n\n') + '\n\n';
+}
+
+// ==================== 重写流视觉围栏抑制 ====================
+
+/** 视觉围栏抑制器（有状态，逐 push；供重写流逐 chunk 过滤） */
+export interface VisualFenceSuppressor {
+  /** 送入一段文本，返回可安全输出的部分（视觉围栏块被整块吞掉） */
+  push(text: string): string;
+  /** 流结束时取残留缓冲（视觉块内的残留直接丢弃，其余原样返回） */
+  flush(): string;
+}
+
+/**
+ * 创建重写流视觉围栏抑制器。
+ *
+ * 为什么需要：重写指令已明确禁止模型输出 echarts/mermaid 围栏与图片 Markdown，
+ * 但模型可能无视指令复述原回答的图表块 → 前端出现"服务端恢复的资产 +
+ * 模型复述块"双份图表。此处对重写流做硬抑制兜底：```echarts / ```mermaid
+ * 围栏整块丢弃（含未闭合时的尾部残留），其他代码块（```python 等）原样放行。
+ *
+ * 状态机三态：normal（正常输出）→ fenceOpen（已见 ``` 缓冲到行尾判语言）→
+ * inVisual（视觉块内，丢弃直到闭合 ```）。设计要点：
+ *   - fenceOpen 判定窗口有上限（语言行超长按普通文本放行），防缓冲无限膨胀；
+ *   - inVisual 丢弃型状态只保留尾部少量字符，防闭合标记被 chunk 切散后漏判；
+ *   - normal 态末尾 1~2 个反引号暂扣不发（可能是被切散的 ``` 开头），
+ *     flush 时归还，绝不丢字。
+ */
+export function createVisualFenceSuppressor(): VisualFenceSuppressor {
+  let mode: 'normal' | 'fenceOpen' | 'inVisual' = 'normal';
+  let buf = '';
+  // fenceOpen 判定窗口：``` 之后到行尾通常极短，超限视为普通文本
+  const FENCE_LANG_MAX = 32;
+  // inVisual 模式下无闭合标记时的尾部保留长度（防 ``` 跨 chunk）
+  const IN_VISUAL_TAIL = 16;
+
+  const isVisualLang = (s: string): boolean => /^(echarts|mermaid)(\s|$)/.test(s);
+
+  return {
+    push(text: string): string {
+      let out = '';
+      buf += text;
+      for (;;) {
+        if (mode === 'inVisual') {
+          const close = buf.indexOf('```');
+          if (close === -1) {
+            // 仍在视觉块内：整体丢弃，只留尾部防闭合标记切散漏判
+            if (buf.length > IN_VISUAL_TAIL) buf = buf.slice(-IN_VISUAL_TAIL);
+            return out;
+          }
+          buf = buf.slice(close + 3);
+          mode = 'normal';
+          continue;
+        }
+        if (mode === 'fenceOpen') {
+          const nl = buf.indexOf('\n');
+          if (nl === -1) {
+            if (buf.length > FENCE_LANG_MAX) {
+              // 语言行超长：不是合法围栏开头，原样放行
+              out += buf;
+              buf = '';
+              mode = 'normal';
+            }
+            return out; // 语言行未完整，等更多字符
+          }
+          const langLine = buf.slice(3, nl).trim(); // 此时 buf 必以 ``` 开头
+          buf = buf.slice(nl + 1);
+          mode = 'normal';
+          if (isVisualLang(langLine)) {
+            mode = 'inVisual';
+            continue;
+          }
+          // 非视觉围栏：开头行原样放行
+          out += '```' + langLine + '\n';
+          continue;
+        }
+        // normal：找下一个围栏起点
+        const open = buf.indexOf('```');
+        if (open === -1) {
+          // 末尾 1~2 个反引号可能是被切散的 ```，暂扣不发
+          const m = buf.match(/`{1,2}$/);
+          const keep = m ? m[0].length : 0;
+          out += buf.slice(0, buf.length - keep);
+          buf = keep > 0 ? buf.slice(buf.length - keep) : '';
+          return out;
+        }
+        out += buf.slice(0, open);
+        buf = buf.slice(open);
+        mode = 'fenceOpen';
+      }
+    },
+    flush(): string {
+      // fenceOpen 残留按普通文本放行（流中断的残围栏原样归还，绝不丢字）；
+      // inVisual 残留属于未闭合的视觉块，丢弃
+      const rest = mode === 'inVisual' ? '' : buf;
+      buf = '';
+      mode = 'normal';
+      return rest;
+    },
+  };
 }
 
 // ==================== 截断 ====================
