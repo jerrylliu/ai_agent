@@ -195,11 +195,16 @@ function parseControlTag(buffer: string): TagMatchResult {
     i += 1;
   }
 
+  // < 或 </ 之后允许空白（与 RAW_TOOL_CALL_DETECT_RE 的 <\s*/?\s* 容错对齐：
+  // 检测正则认得的形态，流式状态机必须同样认得，否则"检测说有、抑制器放行"）
+  while (i < buffer.length && /\s/.test(buffer[i])) i += 1;
+
   // ---------- 装饰前缀：竖线 + DSML + 竖线 ----------
   if (buffer[i] !== undefined && PIPE_RE.test(buffer[i])) {
     let p = i;
     while (p < buffer.length && PIPE_RE.test(buffer[p])) p += 1;
-    if (p >= buffer.length) return 'prefix'; // 只到竖线，DSML 还没到
+    // 竖线与 DSML 之间允许空白（[|｜]+\s*DSML）
+    while (p < buffer.length && /\s/.test(buffer[p])) p += 1;
     const keyword = 'DSML';
     for (let k = 0; k < keyword.length; k++) {
       const ch = buffer[p + k];
@@ -207,11 +212,16 @@ function parseControlTag(buffer: string): TagMatchResult {
       if (ch.toUpperCase() !== keyword[k]) return null; // 不是竖线装饰前缀
     }
     p += keyword.length;
+    // DSML 与收尾竖线之间允许空白（DSML\s*[|｜]+）
+    while (p < buffer.length && /\s/.test(buffer[p])) p += 1;
     let q = p;
     while (q < buffer.length && PIPE_RE.test(buffer[q])) q += 1;
     if (q >= buffer.length) return 'prefix'; // 收尾竖线还没到
     if (q === p) return null; // DSML 后面没有竖线 → 不合法
     i = q;
+    // 收尾竖线与标签名之间允许空白——线上泄漏案例 <｜｜DSML｜｜ calls>
+    // （装饰正则尾部的 \s* 认得这个空格，状态机此前不认得导致整段协议文本漏出）
+    while (i < buffer.length && /\s/.test(buffer[i])) i += 1;
   }
 
   // ---------- antml: 前缀（Anthropic 风格） ----------
@@ -223,6 +233,8 @@ function parseControlTag(buffer: string): TagMatchResult {
       if (ch.toLowerCase() !== antml[k]) return null;
     }
     i += antml.length;
+    // antml: 与标签名之间允许空白（antml\s*:\s*）
+    while (i < buffer.length && /\s/.test(buffer[i])) i += 1;
   }
 
   // ---------- 标签名 ----------

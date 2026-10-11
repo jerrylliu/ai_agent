@@ -769,3 +769,87 @@ describe('P0 方言容错：流式整块抑制', () => {
     ]);
   });
 });
+
+// ==================== P0：空白容错（线上泄漏 <｜｜DSML｜｜ calls> 变体） ====================
+// 线上案例：装饰收尾竖线与标签名之间出现空格（<｜｜DSML｜｜ calls>）。
+// 检测正则 DECORATION_SOURCE 尾部带 \s* 一直认得这种形态，但流式状态机 parseControlTag
+// 此前要求标签名紧跟竖线，导致"检测说有、抑制器放行"——整段协议文本漏给用户、
+// DSML 块未被捕获执行（表现为：审核抓到协议残留触发重写，但工具从未真正运行，
+// 用户只看到"图表已生成"的文字而图表不存在）。
+
+const OPEN_SPACED =
+  LT + FULL_PIPE + FULL_PIPE + 'DSML' + FULL_PIPE + FULL_PIPE + ' ';
+const CLOSE_SPACED =
+  LT + SL + FULL_PIPE + FULL_PIPE + 'DSML' + FULL_PIPE + FULL_PIPE + ' ';
+
+/** 拼装带空格变体的 invoke 块（装饰收尾竖线与标签名之间有一个空格） */
+function buildSpacedInvokeBlock(
+  tool: string,
+  params: Record<string, string>,
+): string {
+  let text = OPEN_SPACED + 'invoke name="' + tool + '">';
+  for (const [k, v] of Object.entries(params)) {
+    text +=
+      OPEN_SPACED +
+      'parameter name="' +
+      k +
+      '" string="true">' +
+      v +
+      CLOSE_SPACED +
+      'parameter>';
+  }
+  return text + CLOSE_SPACED + 'invoke>';
+}
+
+describe('P0 空白容错：装饰前缀与标签名之间的空格（线上泄漏变体）', () => {
+  it('检测层：<｜｜DSML｜｜ calls> 形态能被识别', () => {
+    expect(containsRawToolCallFormat(OPEN_SPACED + 'calls>')).toBe(true);
+  });
+
+  it('流式：带空格变体整块抑制、任意切分一致、捕获可解析执行', () => {
+    const block = buildSpacedInvokeBlock('get_weather', {
+      city: '成都',
+      days: '7',
+    });
+    expectInvariant('头' + block + '尾', '头尾', [
+      { name: 'get_weather', args: { city: '成都', days: 7 } },
+    ]);
+  });
+
+  it('装饰内部带空格（<｜ DSML ｜ invoke>）同样整块抑制', () => {
+    const block = buildSpacedInvokeBlock('search_web', {
+      query: '装饰内空格',
+    }).replace('DSML', ' DSML ');
+    expectInvariant('A' + block + 'B', 'AB', [
+      { name: 'search_web', args: { query: '装饰内空格' } },
+    ]);
+  });
+
+  it('antml: 冒号前后带空格仍可解析执行', () => {
+    const text =
+      LT +
+      'antml : invoke name="search_web">' +
+      LT +
+      'antml : parameter name="query" string="true">空格冒号' +
+      LT +
+      SL +
+      'antml : parameter' +
+      GT +
+      LT +
+      SL +
+      'antml : invoke' +
+      GT;
+    expect(parseDSMLToolCalls(text, AVAILABLE_TOOLS)).toEqual([
+      { name: 'search_web', args: { query: '空格冒号' } },
+    ]);
+  });
+
+  it('普通文本含 "< 后跟空格" 的场景零误吞', () => {
+    const texts = ['a < b 与 c > d', '< 未闭合的尖括号', '1 <\n2 换行比较'];
+    for (const text of texts) {
+      const s = new StreamingDsmlSuppressor();
+      expect(runStream(s, [text])).toBe(text);
+      expect(s.hasCaptured()).toBe(false);
+    }
+  });
+});

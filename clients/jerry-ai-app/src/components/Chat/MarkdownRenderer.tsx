@@ -296,10 +296,28 @@ const EChartsBlock: React.FC<{ optionJson: string }> = React.memo(({ optionJson 
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // ResizeObserver 在 window resize 之外补充"容器级"自适应：
+    // 消息气泡宽度会随流式渲染/侧栏开合/软键盘弹出而变化，window resize 覆盖不到这些场景，
+    // 不 resize 会导致 canvas 与容器尺寸脱节（手机端图表畸形的主因之一）
+    let resizeObserver: ResizeObserver | null = null;
+
     try {
       const option = JSON.parse(optionJson);
+      // 窄屏防御：多个系列名的图例挤一行必然互相重叠（真机截图复现），
+      // 容器宽度不足 480px 且模型未显式指定图例模式时，降级为滚动图例
+      if (
+        containerRef.current.clientWidth < 480 &&
+        option.legend &&
+        !option.legend.type
+      ) {
+        option.legend.type = 'scroll';
+      }
       if (!chartRef.current) {
         chartRef.current = echarts.init(containerRef.current);
+        resizeObserver = new ResizeObserver(() => {
+          chartRef.current?.resize();
+        });
+        resizeObserver.observe(containerRef.current);
       }
       chartRef.current.setOption(option, true);
       setError('');
@@ -314,6 +332,7 @@ const EChartsBlock: React.FC<{ optionJson: string }> = React.memo(({ optionJson 
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      resizeObserver?.disconnect();
     };
   }, [optionJson]);
 
@@ -334,11 +353,12 @@ const EChartsBlock: React.FC<{ optionJson: string }> = React.memo(({ optionJson 
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="mt-2 mb-4 p-4 bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600"
-      style={{ width: '100%', height: '400px' }}
-    />
+    <div className="mt-2 mb-4 p-4 bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-600">
+      {/* padding 必须放在外层：echarts.init 按 clientWidth（含 padding）确定 canvas 尺寸，
+          若直接在有内边距的容器上初始化，canvas 会比可视内容区宽出左右 padding、
+          底部同理，右/下边缘被裁掉（手机端窄屏下尤其明显） */}
+      <div ref={containerRef} style={{ width: '100%', height: '368px' }} />
+    </div>
   );
 });
 
