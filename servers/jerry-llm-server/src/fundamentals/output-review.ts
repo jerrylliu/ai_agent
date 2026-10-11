@@ -114,6 +114,28 @@ export function buildRewriteInstruction(reason: string): string {
   ].join('\n');
 }
 
+// ==================== 协议残留判定（资产补执行触发信号） ====================
+
+/**
+ * 判断审核 reason 是否属于"工具调用协议残留"类硬伤（纯函数，便于测试）。
+ *
+ * 背景：主流的 StreamingDsmlSuppressor 只能拦截已知方言；模型写出未知新变体时
+ * 协议文本会漏进 answer，对应的工具调用从未真正执行。审核模型能可靠地发现这类
+ * 残留（reason 中带 DSML/invoke/parameter 等字样），据此触发"代码补执行工具"
+ * 兜底（prompt.ts 传入的 salvageAssets 回调），产出真实资产而非让重写模型
+ * 凭空声称"图表已生成"。
+ *
+ * 匹配刻意宽松（宁误触发不漏触发）：误触发时 parseDSMLToolCalls 解析不出调用、
+ * 返回空串，补执行自然跳过，无副作用；漏触发则用户只会看到假文案。
+ *
+ * @param reason 审核不通过的理由
+ */
+export function isProtocolResidueReason(reason: string): boolean {
+  return /DSML|协议|invoke|tool_call|function_call|parameter/i.test(
+    reason || '',
+  );
+}
+
 // ==================== 重写轮资产保全 ====================
 
 /**

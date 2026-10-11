@@ -441,4 +441,43 @@ describe('output-review 模块', () => {
       expect(out).toBe('```' + longLine + '\ncontent');
     });
   });
+
+  /* ====================================================================
+   * isProtocolResidueReason（协议残留判定 → 触发资产补执行）
+   * ==================================================================*/
+  describe('isProtocolResidueReason', () => {
+    it('线上两类协议残留 reason 均命中', () => {
+      const { mod } = setup();
+      expect(
+        mod.isProtocolResidueReason(
+          '回答中残留了工具调用的协议标签文本（<｜｜DSML｜｜ calls>、<｜｜DSML｜｜ invoke>、<｜｜DSML｜｜ parameter> 等），属于协议残留硬伤。',
+        ),
+      ).toBe(true);
+      expect(
+        mod.isProtocolResidueReason(
+          '回答末尾残留工具调用协议原始文本（<｜｜DSML｜｜ calls>、<｜｜DSML｜｜ invoke>、parameter 等标记及裸露的调用参数体），命中协议残留硬伤。',
+        ),
+      ).toBe(true);
+    });
+
+    it('数据矛盾类 reason 不触发补执行', () => {
+      const { mod } = setup();
+      expect(
+        mod.isProtocolResidueReason(
+          '图表数据与文字总结自相矛盾：图中逐小时降水量合计约9.26mm，文字却称全天累计约3.3mm。',
+        ),
+      ).toBe(false);
+      expect(mod.isProtocolResidueReason('回答未覆盖用户问题')).toBe(false);
+    });
+
+    it('宽松匹配：任意标记字样（invoke/parameter/tool_call）即命中，空值不命中', () => {
+      const { mod } = setup();
+      expect(mod.isProtocolResidueReason('裸露的 invoke 标记')).toBe(true);
+      expect(mod.isProtocolResidueReason('参数体 parameter 泄漏')).toBe(true);
+      expect(mod.isProtocolResidueReason('')).toBe(false);
+      expect(mod.isProtocolResidueReason(undefined as unknown as string)).toBe(
+        false,
+      );
+    });
+  });
 });
