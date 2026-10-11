@@ -68,6 +68,7 @@ import {
   buildRewriteInstruction,
   extractPreservedAssetBlocks,
   createVisualFenceSuppressor,
+  isProtocolResidueReason,
 } from './output-review';
 
 // prompt-message-cleaner 提供"达到最大轮数强制总结"时的消息清理纯函数。
@@ -1026,6 +1027,13 @@ async function runOutputReviewPipeline(params: {
    * （fallback 文本若含模型自行编写的围栏块属应抑制内容，不作为保全来源）。
    */
   extraPreservedAssets?: string;
+  /**
+   * 协议残留补执行回调（方案 B 兜底，FC 各路径传入）：审核 reason 命中协议残留时，
+   * 用 answer 原文重新解析工具调用并由调用方真实执行（未知 DSML 变体漏过主流
+   * 抑制器时，工具从未运行，纯文字重写只能产出"图表已生成"的假文案）。
+   * 返回补执行产出的资产块文本（空串表示无可补执行），内部自带白名单与异常兜底。
+   */
+  salvageAssets?: (answer: string, reason: string) => Promise<string>;
 }): Promise<{ finalText: string }> {
   const {
     llm,
@@ -1038,6 +1046,7 @@ async function runOutputReviewPipeline(params: {
     abortSignal,
     stripImages,
     extraPreservedAssets,
+    salvageAssets,
   } = params;
 
   // 守卫：开关关闭或客户端已取消 → 跳过审核且不发 review_result
@@ -1060,6 +1069,37 @@ async function runOutputReviewPipeline(params: {
     answerLength: answer.length,
   });
   sendReviewResult(res, { status: 'revising', reason: review.reason });
+
+  // 资产保全：content_reset 会把前端已渲染的图表/思维导图/图片一并清掉，
+  // 而这些块是工具产出/服务端注入的真实数据（重写模型既不会原样复述大段 JSON，
+  // 也不允许它篡改数据），必须由服务端保全后原样重发。
+  // 来源二选一：主路径/强制回答路径的 answer 文本内含资产块（extract 提取）；
+  // fallback 路径资产不在 answer 内（extraPreservedAssets 传入，优先级更高）。
+  let preservedAssets =
+    extraPreservedAssets ?? extractPreservedAssetBlocks(answer);
+
+  // 方案 B：协议残留兜底——未知 DSML 变体漏过主流抑制器时协议文本进了 answer、
+  // 对应工具从未真正执行，纯文字重写只能产出"图表已生成"的假文案。命中残留类
+  // reason 时先由代码补执行资产工具，产出真实图表/导图/图片并入保全队列。
+  // 顺序在 sendContentReset 之前：补执行的工具状态事件期间旧文案保持可见，
+  // 用户体验优于"先清屏再长时间空白"
+  if (salvageAssets && isProtocolResidueReason(review.reason)) {
+    try {
+      const salvaged = await salvageAssets(answer, review.reason);
+      if (salvaged) {
+        preservedAssets = preservedAssets
+          ? salvaged + '\n\n' + preservedAssets
+          : salvaged;
+      }
+    } catch (e: any) {
+      // 补执行失败不阻塞重写：降级为纯文字重写（假文案劣于空白，更劣于崩溃）
+      logger.warn('输出自检：协议残留补执行失败，降级为纯文字重写', {
+        module: 'PromptService',
+        error: e?.message,
+      });
+    }
+  }
+
   // 先清空前端草稿正文，再流式重写（前端热替换，避免新旧内容拼接）
   sendContentReset(res);
 
@@ -1076,16 +1116,9 @@ async function runOutputReviewPipeline(params: {
   // 指令复述原回答的图表 → "服务端恢复的资产 + 模型复述块"双份图表，此处硬抑制兜底
   const visualSuppressor = createVisualFenceSuppressor();
   let revised = '';
-  // 资产保全：content_reset 会把前端已渲染的图表/思维导图/图片一并清掉，
-  // 而这些块是工具产出/服务端注入的真实数据（重写模型既不会原样复述大段 JSON，
-  // 也不允许它篡改数据），必须由服务端保全后原样重发。
-  // 来源二选一：主路径/强制回答路径的 answer 文本内含资产块（extract 提取）；
-  // fallback 路径资产不在 answer 内（extraPreservedAssets 传入，优先级更高）。
   // 懒发送：首个有效重写文本到来时先发资产块再发文字——
   //   1) 空重写走"恢复原答案全文"兜底时资产尚未重发，不会出现图表重复；
   //   2) 保持与主路径"资产注入在文字之前"一致的排版顺序。
-  const preservedAssets =
-    extraPreservedAssets ?? extractPreservedAssetBlocks(answer);
   let preservedAssetsEmitted = false;
   // 最终修正文本 = 已重发的资产块 + 重写文字（二次审核与落库口径与首次审核含资产一致）
   const composedRevised = (): string =>
@@ -2522,6 +2555,81 @@ async function promptWithFunctionCalling(
     }
   };
 
+  // ==================== 方案 B：协议残留的资产补执行回调 ====================
+  // 主流抑制器只拦已知 DSML 方言；模型写出未知新变体时协议文本漏进回答、
+  // 对应工具从未真正执行，审核命中残留后纯文字重写只能产出"图表已生成"的
+  // 假文案。此回调从 answer 原文重新解析调用并补执行白名单资产工具，
+  // 返回新产出的资产块文本（交由审核管道并入 preservedAssets 懒发送）。
+  // 定义在函数作用域：主流式 / fallback / 强制回答三个审核调用点共用。
+  const salvageAssetsFromResidue = async (
+    leakText: string,
+  ): Promise<string> => {
+    const calls = parseDSMLToolCalls(leakText, getAvailableToolNames());
+    // 白名单：只补执行产出可视化资产的工具——重写需要的是图表/图片/导图/
+    // 文档的真实产物；检索类结果脱离模型综合毫无意义；send_notification
+    // 有真实副作用（重复发邮件），绝不重放
+    const ASSET_TOOLS = new Set([
+      'generate_chart',
+      'generate_image',
+      'create_mindmap',
+      'generate_document',
+    ]);
+    const eligible = calls.filter(
+      (c) => ASSET_TOOLS.has(c.name) && hasTool(c.name),
+    );
+    if (eligible.length === 0) return '';
+    logger.warn('输出自检：协议残留命中，补执行资产工具', {
+      module: 'PromptService',
+      tools: eligible.map((c) => c.name),
+    });
+    // 记录补执行前的收集数组长度：只把本次新增的资产纳入返回值/卡片推送，
+    // 防止与主流已发送的资产重复
+    const before = {
+      images: collectedImages.length,
+      charts: collectedChartOptions.length,
+      mindmaps: collectedMindmaps.length,
+      cards: collectedFileCards.length,
+    };
+    await Promise.all(
+      eligible.map(async (call) => {
+        sendToolStatus(res, call.name, 'executing');
+        try {
+          const result = await executeTool(call.name, call.args, {
+            userId,
+            sessionId,
+            res,
+            imageModel,
+            originalQuery: promptText,
+            docIntents,
+          });
+          collectToolAssets(call.name, result);
+          toolCallsMade.push({ name: call.name, args: call.args });
+          sendToolStatus(res, call.name, 'done');
+          logger.info('输出自检：协议残留补执行成功', {
+            module: 'PromptService',
+            toolName: call.name,
+          });
+        } catch (toolError: any) {
+          sendToolStatus(res, call.name, 'done', { error: true });
+          logger.error('输出自检：协议残留补执行失败', {
+            module: 'PromptService',
+            toolName: call.name,
+            error: toolError.message,
+          });
+        }
+      }),
+    );
+    // 新增文件卡片走独立 SSE 事件（content_reset 不影响卡片，直接推不重复）
+    for (const card of collectedFileCards.slice(before.cards)) {
+      sendFileCard(res, card);
+    }
+    return renderCollectedAssetBlocks({
+      images: collectedImages.slice(before.images),
+      chartOptions: collectedChartOptions.slice(before.charts),
+      mindmaps: collectedMindmaps.slice(before.mindmaps),
+    });
+  };
+
   // 启动心跳，在工具调用循环期间保持连接活跃
   const heartbeatTimer = startHeartbeat(res);
 
@@ -3591,6 +3699,7 @@ async function promptWithFunctionCalling(
             isCancelled,
             abortSignal: abortController?.signal,
             stripImages: collectedImages.length > 0,
+            salvageAssets: salvageAssetsFromResidue,
           });
           fcFullResponse = reviewOutcome.finalText;
 
@@ -3704,6 +3813,7 @@ async function promptWithFunctionCalling(
                     chartOptions: collectedChartOptions,
                     mindmaps: collectedMindmaps,
                   }) || undefined,
+                salvageAssets: salvageAssetsFromResidue,
               });
               fallbackContent = fallbackReview.finalText;
               // fallback 一次性输出路径同样推送引用（与主流式路径口径一致）
@@ -3892,6 +4002,7 @@ async function promptWithFunctionCalling(
           fcRetrievedContexts.length > 0 ? fcRetrievedContexts : undefined,
         isCancelled,
         abortSignal: abortController?.signal,
+        salvageAssets: salvageAssetsFromResidue,
       });
       fullResponse = forcedReview.finalText;
 
