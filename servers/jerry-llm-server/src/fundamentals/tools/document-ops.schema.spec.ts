@@ -67,6 +67,57 @@ describe('createDocumentSchema', () => {
     });
     expect(r.success).toBe(false);
   });
+
+  // ==================== content 形态容错回归（生产案例 2026-10-12 12:24） ====================
+
+  it('content 传对象（含 text 字段）应提取为字符串并通过', () => {
+    const r = createDocumentParamsSchema.safeParse({
+      title: '笔记',
+      content: { text: '搜索结果正文', source: 'web' },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.content).toBe('搜索结果正文');
+    }
+  });
+
+  it('content 传对象（含 content 字段）应提取为字符串并通过', () => {
+    const r = createDocumentParamsSchema.safeParse({
+      title: '笔记',
+      content: { content: '# 标题\n正文' },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.content).toBe('# 标题\n正文');
+    }
+  });
+
+  it('content 传数组应 join 为字符串并通过', () => {
+    const r = createDocumentParamsSchema.safeParse({
+      title: '笔记',
+      content: ['第一段', '第二段'],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.content).toBe('第一段\n\n第二段');
+    }
+  });
+
+  it('content 传无有效字段的对象应 JSON.stringify 兜底', () => {
+    const r = createDocumentParamsSchema.safeParse({
+      title: '笔记',
+      content: { foo: 'bar' },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.content).toContain('foo');
+    }
+  });
+
+  it('content 空字符串仍应被拦截', () => {
+    const r = createDocumentParamsSchema.safeParse({ title: 'x', content: '' });
+    expect(r.success).toBe(false);
+  });
 });
 
 describe('updateDocumentSchema', () => {
@@ -105,6 +156,17 @@ describe('updateDocumentSchema', () => {
       content: 'x',
     });
     expect(r.success).toBe(false);
+  });
+
+  it('content 传对象应归一化为字符串并通过', () => {
+    const r = updateDocumentParamsSchema.safeParse({
+      documentId: 1,
+      content: { text: '新的正文内容' },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.content).toBe('新的正文内容');
+    }
   });
 });
 

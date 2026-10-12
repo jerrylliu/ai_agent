@@ -27,6 +27,7 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { logger } from '../logger';
 import { config } from '../config';
+import { tryParseJsonString } from './tool-param-coerce';
 import {
   isChartImageUrl,
   parseChartImageUrl,
@@ -112,22 +113,6 @@ export function isSendNotificationAvailable(): boolean {
 }
 
 // ==================== 工具 Schema ====================
-
-/**
- * 尝试把疑似 JSON 的字符串解析还原（仅当以 [ 或 { 开头才尝试，避免误伤普通文本）。
- * 解析失败或非 JSON 形态返回 undefined，调用方按原字符串处理。
- */
-function tryParseJsonString(v: string): unknown | undefined {
-  const s = v.trim();
-  if (s.startsWith('[') || s.startsWith('{')) {
-    try {
-      return JSON.parse(s) as unknown;
-    } catch {
-      // 非法 JSON：按原字符串走既有容错路径
-    }
-  }
-  return undefined;
-}
 
 /**
  * 把 LLM 误传的字符串形态归一化为数组
