@@ -30,6 +30,7 @@ import {
   compareDocumentsSchema,
   compareDocumentsParamsSchema,
 } from './document-ops';
+import { safeParseToolParams } from './_helpers';
 
 describe('createDocumentSchema', () => {
   it('title / content 必填，description / tags 可选', () => {
@@ -69,9 +70,11 @@ describe('createDocumentSchema', () => {
   });
 
   // ==================== content 形态容错回归（生产案例 2026-10-12 12:24） ====================
+  // 形态容错由 safeParseToolParams 的 schema 导向全局归一化提供，
+  // 因此这些用例走 safeParseToolParams 真实路径（与生产执行路径一致）
 
   it('content 传对象（含 text 字段）应提取为字符串并通过', () => {
-    const r = createDocumentParamsSchema.safeParse({
+    const r = safeParseToolParams(createDocumentParamsSchema, {
       title: '笔记',
       content: { text: '搜索结果正文', source: 'web' },
     });
@@ -82,7 +85,7 @@ describe('createDocumentSchema', () => {
   });
 
   it('content 传对象（含 content 字段）应提取为字符串并通过', () => {
-    const r = createDocumentParamsSchema.safeParse({
+    const r = safeParseToolParams(createDocumentParamsSchema, {
       title: '笔记',
       content: { content: '# 标题\n正文' },
     });
@@ -93,7 +96,7 @@ describe('createDocumentSchema', () => {
   });
 
   it('content 传数组应 join 为字符串并通过', () => {
-    const r = createDocumentParamsSchema.safeParse({
+    const r = safeParseToolParams(createDocumentParamsSchema, {
       title: '笔记',
       content: ['第一段', '第二段'],
     });
@@ -104,7 +107,7 @@ describe('createDocumentSchema', () => {
   });
 
   it('content 传无有效字段的对象应 JSON.stringify 兜底', () => {
-    const r = createDocumentParamsSchema.safeParse({
+    const r = safeParseToolParams(createDocumentParamsSchema, {
       title: '笔记',
       content: { foo: 'bar' },
     });
@@ -115,7 +118,10 @@ describe('createDocumentSchema', () => {
   });
 
   it('content 空字符串仍应被拦截', () => {
-    const r = createDocumentParamsSchema.safeParse({ title: 'x', content: '' });
+    const r = safeParseToolParams(createDocumentParamsSchema, {
+      title: 'x',
+      content: '',
+    });
     expect(r.success).toBe(false);
   });
 });
@@ -159,7 +165,7 @@ describe('updateDocumentSchema', () => {
   });
 
   it('content 传对象应归一化为字符串并通过', () => {
-    const r = updateDocumentParamsSchema.safeParse({
+    const r = safeParseToolParams(updateDocumentParamsSchema, {
       documentId: 1,
       content: { text: '新的正文内容' },
     });

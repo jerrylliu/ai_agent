@@ -28,6 +28,8 @@
  */
 
 import { z, ZodType } from 'zod';
+import { logger } from '../logger';
+import { coerceParamsBySchema } from './tool-param-coerce';
 
 /** OpenAI Function Calling 风格的 Tool Schema */
 export interface OpenAiFunctionToolSchema {
@@ -120,12 +122,25 @@ export function formatZodIssues(error: z.ZodError): string {
 /**
  * 统一的 Tool 入参校验：成功返回数据，失败返回包含错误信息的对象
  * 让各 Tool executor 入口少写样板代码
+ *
+ * 内置全局参数安检（2026-10-12 起生效）：校验前先按 schema 期望形态
+ * 自动归一化（JSON 字符串还原 / 对象转字符串 / 递归嵌套，见
+ * coerceParamsBySchema），所有走此入口的工具（全部 FC 工具）零配置获得
+ * 形态容错。每处修正打 warn 便于观测模型传参质量；修正失败时保持原值，
+ * zod 报错路径与旧版完全一致。
  */
 export function safeParseToolParams<T extends ZodType>(
   schema: T,
   params: unknown,
 ): { success: true; data: z.infer<T> } | { success: false; error: string } {
-  const result = schema.safeParse(params);
+  const { data: coerced, fixes } = coerceParamsBySchema(schema, params);
+  for (const fix of fixes) {
+    logger.warn('FC工具参数形态自动归一化（schema 导向全局安检）', {
+      module: 'Tool:SchemaCoerce',
+      fix,
+    });
+  }
+  const result = schema.safeParse(coerced);
   if (result.success) {
     return { success: true, data: result.data };
   }

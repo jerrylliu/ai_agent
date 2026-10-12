@@ -17,7 +17,6 @@ import { config } from '../config';
 import { launchBrowser } from '../web-crawler';
 import type { Browser } from 'puppeteer';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
-import { coerceToolParams } from './tool-param-coerce';
 import { parseToolResultJson } from '../llm-json-parser';
 import { MultiLevelCache } from '../multi-level-cache';
 import { metrics } from '../metrics';
@@ -96,32 +95,28 @@ export async function getCachedChartOption(
 
 // ==================== Zod Schema: generate_chart ====================
 
-export const generateChartParamsSchema = z.preprocess(
-  // 参数形态容错（生产案例 2026-10-12 14:03）：模型把 echartsOption / data
-  // 对象二次序列化为 JSON 字符串——还原后再校验，不赌模型传对参数。
-  // 用外层 preprocess 包 object（字段级 preprocess 会把字段从 JSON Schema
-  // required 中丢掉，详见 _helpers.ts 说明；此处两字段 optional，同模式保持一致）
-  (v) => coerceToolParams(v, { jsonFields: ['echartsOption', 'data'] }),
-  z.object({
-    title: z.string().optional().describe('图表标题'),
-    chartType: z
-      .enum(['line', 'bar', 'pie', 'scatter', 'radar', 'heatmap', 'funnel'])
-      .describe('图表类型'),
-    // 自由结构对象：ECharts option 字段过多，无法用 z.object 精确建模，passthrough 以保留所有字段
-    echartsOption: z
-      .record(z.string(), z.unknown())
-      .optional()
-      .describe(
-        'ECharts 完整配置 JSON（如果提供此参数，将忽略 title 和 chartType）',
-      ),
-    data: z
-      .record(z.string(), z.unknown())
-      .optional()
-      .describe(
-        '图表数据，格式取决于图表类型。line/bar: { labels: string[], series: Array<{name: string, values: number[]}> }；pie: { items: Array<{name: string, value: number}> }',
-      ),
-  }),
-);
+// echartsOption / data 的 JSON 字符串形态容错（生产案例 2026-10-12 14:03）
+// 已由 safeParseToolParams 的 schema 导向全局归一化统一处理（2026-10-12 重构），
+// 此处回归干净 schema
+export const generateChartParamsSchema = z.object({
+  title: z.string().optional().describe('图表标题'),
+  chartType: z
+    .enum(['line', 'bar', 'pie', 'scatter', 'radar', 'heatmap', 'funnel'])
+    .describe('图表类型'),
+  // 自由结构对象：ECharts option 字段过多，无法用 z.object 精确建模，passthrough 以保留所有字段
+  echartsOption: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      'ECharts 完整配置 JSON（如果提供此参数，将忽略 title 和 chartType）',
+    ),
+  data: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      '图表数据，格式取决于图表类型。line/bar: { labels: string[], series: Array<{name: string, values: number[]}> }；pie: { items: Array<{name: string, value: number}> }',
+    ),
+});
 
 export type GenerateChartParams = z.infer<typeof generateChartParamsSchema>;
 
