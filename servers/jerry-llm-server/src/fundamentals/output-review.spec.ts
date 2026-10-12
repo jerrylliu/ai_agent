@@ -480,4 +480,66 @@ describe('output-review 模块', () => {
       );
     });
   });
+
+  /* ====================================================================
+   * dedupeSalvagedAssetBlocks（补执行资产内容级去重）
+   * ==================================================================*/
+  describe('dedupeSalvagedAssetBlocks', () => {
+    const CHART_A = '{"series":[{"data":[1,2,3]}],"title":{"text":"成都天气"}}';
+    // 同数据不同缩进/键序的场景：JSON.parse 后归一化应视为相同
+    const CHART_A_REINDENTED =
+      '{\n  "title": {"text": "成都天气"},\n  "series": [{"data": [1, 2, 3]}]\n}';
+    const CHART_B = '{"series":[{"data":[4,5,6]}],"title":{"text":"上海天气"}}';
+
+    it('salvaged 为空返回空串；existing 为空时原样保留 salvaged', () => {
+      const { mod } = setup();
+      expect(mod.dedupeSalvagedAssetBlocks('', '')).toBe('');
+      expect(
+        mod.dedupeSalvagedAssetBlocks('', '```echarts\n' + CHART_A + '\n```\n\n'),
+      ).toBe('```echarts\n' + CHART_A + '\n```\n\n');
+    });
+
+    it('echarts 同数据（缩进/键序不同）去重，不同数据保留', () => {
+      const { mod } = setup();
+      const existing = '前文\n\n```echarts\n' + CHART_A + '\n```\n\n后文';
+      const salvaged =
+        '```echarts\n' +
+        CHART_A_REINDENTED +
+        '\n```\n\n```echarts\n' +
+        CHART_B +
+        '\n```\n\n';
+      const result = mod.dedupeSalvagedAssetBlocks(existing, salvaged);
+      expect(result).toBe('```echarts\n' + CHART_B + '\n```\n\n');
+      expect(result).not.toContain('成都天气');
+    });
+
+    it('mermaid 同内容去重（容忍首尾空白差异），不同内容保留', () => {
+      const { mod } = setup();
+      const existing = '```mermaid\ngraph TD; A-->B;\n```';
+      const salvaged =
+        '```mermaid\n\ngraph TD; A-->B;\n```\n\n```mermaid\ngraph TD; A-->C;\n```\n\n';
+      const result = mod.dedupeSalvagedAssetBlocks(existing, salvaged);
+      expect(result).toContain('A-->C');
+      expect(result).not.toMatch(/graph TD; A-->B;/);
+    });
+
+    it('图片同 URL 去重（alt 不同不算新图），不同 URL 保留', () => {
+      const { mod } = setup();
+      const existing = '![生成的图片](https://cdn.example.com/a.png)';
+      const salvaged =
+        '![生成的图片 1](https://cdn.example.com/a.png)\n![新图](https://cdn.example.com/b.png)\n\n';
+      const result = mod.dedupeSalvagedAssetBlocks(existing, salvaged);
+      expect(result).toBe('![新图](https://cdn.example.com/b.png)\n\n');
+    });
+
+    it('全重复时返回空串；existing 无资产签名时保留 salvaged（统一尾空行）', () => {
+      const { mod } = setup();
+      const broken = '```echarts\n不是合法JSON\n```';
+      expect(mod.dedupeSalvagedAssetBlocks(broken, broken + '\n\n')).toBe('');
+      const salvaged = '```echarts\n' + CHART_A + '\n```';
+      expect(mod.dedupeSalvagedAssetBlocks('无资产', salvaged)).toBe(
+        salvaged + '\n\n',
+      );
+    });
+  });
 });
