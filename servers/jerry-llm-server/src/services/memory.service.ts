@@ -132,7 +132,7 @@ export class MemoryService {
     }));
 
     // ---------- ③ 兜底层：LIKE 关键词 + top-20（现状行为，永远可用） ----------
-    const fallbackTexts = await this.getFallbackTexts(userId);
+    const fallbackMemories = await this.getFallbackMemories(userId);
 
     // ---------- ② 检索层：向量检索（故障自动降级） ----------
     let vectorItems: MemoryInjectItem[] = [];
@@ -162,29 +162,30 @@ export class MemoryService {
       }
     }
 
-    // 真假空判定：MySQL 有记忆但向量库查不到任何向量 → 假空异常，异步自愈重建
-    if (vectorHealthy && query.length > 0) {
+    // 真假空判定：仅在检索层确实空手而归时才值得查（命中了 8 条说明向量层健康，
+    // 每轮都跑 count 是白浪费两次查询）
+    if (vectorHealthy && query.length > 0 && vectorItems.length === 0) {
       void this.detectAndHealFalseEmpty(userId).catch(() => {
         /* 自愈内部已记日志，这里保证不阻塞注入 */
       });
     }
 
     // ---------- 合并（①→②→③ 优先级）+ Token 预算 ----------
-    const fallbackItems: MemoryInjectItem[] = fallbackTexts.map((t, i) => ({
-      // 兜底文本按 content 引用，id 用负数占位——它们不参与去重命中（③是最后补位层，
-      // 前面层的 id 已占位去重），且无需回写 accessCount（与现状 top-20 行为一致）
-      id: -(i + 1),
-      content: t,
+    // 兜底条目带真实 id：mergeWithBudget 的 seen 去重会自动跳过核心层/检索层
+    // 已命中的记忆——否则 importance=5 的记忆会从核心层和兜底层各注入一次
+    const fallbackItems: MemoryInjectItem[] = fallbackMemories.map((m) => ({
+      id: m.id,
+      content: m.content,
     }));
     const merged = mergeWithBudget(
       [coreItems, vectorItems, fallbackItems],
       config.memoryInjectTokenBudget,
     );
 
-    // ---------- 访问计数：保留现有口径（仅真实记忆 id 递增，供后续衰减/统计） ----------
-    const injectedIds = merged
-      .map((m) => m.id)
-      .filter((id) => id > 0);
+    // ---------- 访问计数：所有真实被注入的记忆统一递增（供后续衰减/统计） ----------
+    const injectedIds = Array.from(
+      new Set(merged.map((m) => m.id).filter((id) => id > 0)),
+    );
     if (injectedIds.length > 0) {
       try {
         await this.userMemoryRepository.increment(
@@ -214,18 +215,17 @@ export class MemoryService {
   }
 
   /**
-   * 兜底注入（现状 top-20 行为，方案 §5.1 ③层）
+   * 兜底注入候选（现状 top-20 行为，方案 §5.1 ③层）
    *
-   * 包含 LIKE 关键词命中（对"邮箱"这类具体词召回比纯 top-20 更准）+ 原排序 top-20
+   * 返回记忆对象（含 id）：供合并层按真实 id 去重——importance=5 的记忆
+   * 同时存在于核心层与 top-20 时，只注入核心层那一份
    */
-  private async getFallbackTexts(userId: string): Promise<string[]> {
-    // 原现状行为：importance + 时间 top-20（永远可用，兜底主体）
-    const top = await this.userMemoryRepository.find({
+  private async getFallbackMemories(userId: string): Promise<UserMemory[]> {
+    return this.userMemoryRepository.find({
       where: { userId },
       order: { importance: 'DESC', updatedAt: 'DESC' },
       take: 20,
     });
-    return top.map((m) => m.content);
   }
 
   /**
@@ -325,26 +325,56 @@ export class MemoryService {
         importance: memory.importance,
         updatedAt: memory.updatedAt,
       });
-      if (!memory.vectorSynced) {
-        await this.userMemoryRepository.update(
-          { id: memory.id },
-          { vectorSynced: true },
-        );
-      }
     } catch (e: any) {
-      // 真相优先：不回滚 MySQL，打"待同步"标记供 UI 显示徽标
-      logger.error('记忆向量同步失败，已标记待同步', {
-        module: 'MemoryService',
-        memoryId: memory.id,
-        userId: memory.userId,
-        error: e.message,
-      });
+      // 边界自愈：存量数据从未同步过向量（vectorSynced=false），此时仅改属性
+      // 会命中"仅 metadata 更新但向量不存在"——自动降级全量重试一次，
+      // 避免用户看到"待同步"还得手动补传
+      if (
+        !contentChanged &&
+        e.message?.includes('向量不存在')
+      ) {
+        try {
+          await upsertMemoryVector({
+            memoryId: memory.id,
+            userId: memory.userId,
+            content: memory.content,
+            category: memory.category,
+            importance: memory.importance,
+            updatedAt: memory.updatedAt,
+          });
+        } catch (retryError: any) {
+          this.markVectorUnsynced(memory, retryError);
+          return;
+        }
+      } else {
+        this.markVectorUnsynced(memory, e);
+        return;
+      }
+    }
+    if (!memory.vectorSynced) {
       await this.userMemoryRepository
-        .update({ id: memory.id }, { vectorSynced: false })
+        .update({ id: memory.id }, { vectorSynced: true })
         .catch(() => {
           /* 标记失败不影响主流程 */
         });
     }
+  }
+
+  /**
+   * 标记"待同步"（真相优先：不回滚 MySQL，error 日志留痕供 UI 展示徽标）
+   */
+  private markVectorUnsynced(memory: UserMemory, e: Error): void {
+    logger.error('记忆向量同步失败，已标记待同步', {
+      module: 'MemoryService',
+      memoryId: memory.id,
+      userId: memory.userId,
+      error: e.message,
+    });
+    void this.userMemoryRepository
+      .update({ id: memory.id }, { vectorSynced: false })
+      .catch(() => {
+        /* 标记失败不影响主流程 */
+      });
   }
 
   /**
@@ -353,11 +383,11 @@ export class MemoryService {
    * 与 updateUserMemory 的分档不同：补传场景无论内容是否变化都要确保
    * 向量存在（可能历史上同步失败过），因此强制走全量 re-embed 路径
    *
-   * @throws 记忆不存在或向量同步仍失败时向上抛（控制器转失败响应）
+   * @throws 记忆不存在/不属于该用户时抛错（防止跨用户操作他人记忆）
    */
-  async syncSingleMemoryVector(memoryId: number): Promise<void> {
+  async syncSingleMemoryVector(memoryId: number, userId: string): Promise<void> {
     const memory = await this.userMemoryRepository.findOne({
-      where: { id: memoryId },
+      where: { id: memoryId, userId },
     });
     if (!memory) {
       throw new Error('记忆不存在');
@@ -555,34 +585,44 @@ export class MemoryService {
 
   /**
    * 删除一条用户记忆（写穿：MySQL 删除 → 按 ID 精确删向量）
+   *
+   * @throws 记忆不存在/不属于该用户时抛错（防止跨用户删除他人记忆）
    */
-  async deleteUserMemory(id: number): Promise<void> {
-    const memory = await this.userMemoryRepository.findOne({ where: { id } });
+  async deleteUserMemory(id: number, userId: string): Promise<void> {
+    const memory = await this.userMemoryRepository.findOne({
+      where: { id, userId },
+    });
+    if (!memory) {
+      throw new Error('记忆不存在');
+    }
     await this.userMemoryRepository.delete({ id });
-    if (memory) {
-      try {
-        await deleteMemoryVector(memory.id);
-      } catch (e: any) {
-        // 目录删除失败：真相已删，向量成为孤儿——全量重建可清掉
-        logger.error('记忆向量删除失败（孤儿向量，待全量重建清理）', {
-          module: 'MemoryService',
-          memoryId: memory.id,
-          error: e.message,
-        });
-      }
+    try {
+      await deleteMemoryVector(memory.id);
+    } catch (e: any) {
+      // 目录删除失败：真相已删，向量成为孤儿——全量重建可清掉
+      logger.error('记忆向量删除失败（孤儿向量，待全量重建清理）', {
+        module: 'MemoryService',
+        memoryId: memory.id,
+        error: e.message,
+      });
     }
   }
 
   /**
    * 更新一条用户记忆（写穿分档：内容变更 re-embed；仅属性变更只更新 metadata）
+   *
+   * @throws 记忆不存在/不属于该用户时抛错（防止跨用户修改他人记忆）
    */
   async updateUserMemory(
     id: number,
+    userId: string,
     content?: string,
     category?: string,
     importance?: number,
   ): Promise<UserMemory> {
-    const memory = await this.userMemoryRepository.findOne({ where: { id } });
+    const memory = await this.userMemoryRepository.findOne({
+      where: { id, userId },
+    });
     if (!memory) {
       throw new Error('记忆不存在');
     }

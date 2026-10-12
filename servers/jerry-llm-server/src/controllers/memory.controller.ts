@@ -87,27 +87,40 @@ export class MemoryController {
   async updateUserMemory(
     @Param('id') id: string,
     @Body() body: { content: string; category?: string; importance?: number },
+    @Req() req: any,
   ) {
     if (!body.content) {
       return { success: false, message: '请提供 content 参数' };
     }
-    const memory = await this.memoryService.updateUserMemory(
-      parseInt(id),
-      body.content,
-      body.category,
-      body.importance,
-    );
-    return { success: true, memory };
+    try {
+      const memory = await this.memoryService.updateUserMemory(
+        parseInt(id),
+        req?.userId || 'default',
+        body.content,
+        body.category,
+        body.importance,
+      );
+      return { success: true, memory };
+    } catch (error: any) {
+      return { success: false, message: error.message };
+    }
   }
 
   /**
    * DELETE /memory/memories/:id
-   * 删除指定的一条记忆
+   * 删除指定的一条记忆（校验归属，防止跨用户删除）
    */
   @Delete('memories/:id')
-  async deleteUserMemory(@Param('id') id: string) {
-    await this.memoryService.deleteUserMemory(parseInt(id));
-    return { success: true, message: '记忆已删除' };
+  async deleteUserMemory(@Param('id') id: string, @Req() req: any) {
+    try {
+      await this.memoryService.deleteUserMemory(
+        parseInt(id),
+        req?.userId || 'default',
+      );
+      return { success: true, message: '记忆已删除' };
+    } catch (error: any) {
+      return { success: false, message: error.message };
+    }
   }
 
   /**
@@ -155,10 +168,13 @@ export class MemoryController {
    * 这里需要强制全量同步，直接走 syncVectorAfterWrite 全量路径）
    */
   @Post('memories/:id/sync-vector')
-  async syncMemoryVector(@Param('id') id: string) {
+  async syncMemoryVector(@Param('id') id: string, @Req() req: any) {
     const memoryId = parseInt(id);
     try {
-      await this.memoryService.syncSingleMemoryVector(memoryId);
+      await this.memoryService.syncSingleMemoryVector(
+        memoryId,
+        req?.userId || 'default',
+      );
       return { success: true };
     } catch (error: any) {
       return { success: false, message: `同步失败: ${error.message}` };

@@ -21,12 +21,23 @@
 import { ChromaClient } from 'chromadb';
 import { logger } from '../logger';
 import { config } from '../config';
-import { getEmbeddings } from './store-state';
+import {
+  getEmbeddings,
+  getActiveModelName,
+  collectionFingerprint,
+} from './store-state';
 
 // ==================== 常量 ====================
 
-/** 用户记忆专用 collection 名（与知识库 knowledge_base_* 前缀物理隔离） */
-export const MEMORY_COLLECTION_NAME = 'user_memories';
+/**
+ * 用户记忆专用 collection 名前缀（与知识库 knowledge_base_* 前缀物理隔离）
+ *
+ * 完整集合名 = 前缀 + 嵌入指纹（与知识库 collection 命名同一策略）：
+ * 换嵌入模型后指纹变化 → 新集合自然诞生（旧向量与新 query 向量不可比，
+ * 固定集合名会让检索质量静默劣化）→ 新集合为空触发假空自愈自动重建，
+ * 迁移零人工介入。旧集合留存不清理（真相在 MySQL，旧集合只是弃用目录）
+ */
+const MEMORY_COLLECTION_PREFIX = 'user_memories';
 
 /** 向量文档 ID 前缀：mem_{memoryId}，MySQL 主键直拼 */
 const MEMORY_DOC_ID_PREFIX = 'mem_';
@@ -36,57 +47,56 @@ const HNSW_METADATA = { 'hnsw:space': 'cosine' } as const;
 
 // ==================== 内部状态 ====================
 
-interface MemoryCollectionBundle {
-  client: ChromaClient;
-  collection: Awaited<ReturnType<ChromaClient['getCollection']>>;
-}
+/** 轻量缓存的 Chroma 客户端（无状态 HTTP 客户端，与嵌入配置无关，可长期复用） */
+let clientPromise: Promise<ChromaClient> | null = null;
 
-/** 懒加载单例：模块加载时不连 ChromaDB，首次使用才建立连接 */
-let bundlePromise: Promise<MemoryCollectionBundle> | null = null;
-
-/**
- * 获取（或初始化）用户记忆 collection
- *
- * collection 不存在时自动创建（cosine 空间）。连接失败向上抛错，
- * 由调用方决定降级行为（写路径记待同步 / 读路径落兜底层）
- */
-async function getMemoryCollection(): Promise<MemoryCollectionBundle> {
-  if (!bundlePromise) {
-    bundlePromise = (async () => {
-      const client = new ChromaClient({
+async function getChromaClient(): Promise<ChromaClient> {
+  if (!clientPromise) {
+    clientPromise = Promise.resolve(
+      new ChromaClient({
         host: config.chromaHost,
         port: config.chromaPort,
-      });
-      try {
-        const collection = await client.getCollection({
-          name: MEMORY_COLLECTION_NAME,
-          embeddingFunction: getEmbeddings() as any,
-        });
-        logger.debug('用户记忆集合已连接', {
-          module: 'MemoryVector',
-          collection: MEMORY_COLLECTION_NAME,
-        });
-        return { client, collection };
-      } catch {
-        // 集合不存在 → 创建；创建也失败（如 ChromaDB 不可用）→ 向上抛
-        const collection = await client.createCollection({
-          name: MEMORY_COLLECTION_NAME,
-          metadata: HNSW_METADATA,
-          embeddingFunction: getEmbeddings() as any,
-        });
-        logger.info('用户记忆集合不存在，已创建新集合', {
-          module: 'MemoryVector',
-          collection: MEMORY_COLLECTION_NAME,
-        });
-        return { client, collection };
-      }
-    })().catch((e: Error) => {
-      // 失败时清空 promise，下次调用重试连接（而不是永远缓存失败）
-      bundlePromise = null;
-      throw e;
-    });
+      }),
+    );
   }
-  return bundlePromise;
+  return clientPromise;
+}
+
+/** 当前嵌入配置对应的记忆集合名 */
+function getMemoryCollectionName(): string {
+  return `${MEMORY_COLLECTION_PREFIX}_${collectionFingerprint(getActiveModelName())}`;
+}
+
+/**
+ * 获取（或创建）当前指纹对应的用户记忆 collection
+ *
+ * 不缓存 collection 实例：运行中换嵌入模型时指纹随之变化，缓存会让
+ * 写入/检索继续落在旧指纹集合上（向量不可比）。每次解析仅一次 HTTP
+ * 往返，记忆操作频率低（每轮一次检索），成本可忽略
+ *
+ * @throws ChromaDB 不可用时向上抛，由调用方决定降级行为
+ */
+async function getMemoryCollection() {
+  const client = await getChromaClient();
+  const name = getMemoryCollectionName();
+  try {
+    return await client.getCollection({
+      name,
+      embeddingFunction: getEmbeddings() as any,
+    });
+  } catch {
+    // 集合不存在（首次使用/换模型后新指纹）→ 创建；创建也失败 → 向上抛
+    const collection = await client.createCollection({
+      name,
+      metadata: HNSW_METADATA,
+      embeddingFunction: getEmbeddings() as any,
+    });
+    logger.info('用户记忆集合不存在，已创建新集合', {
+      module: 'MemoryVector',
+      collection: name,
+    });
+    return collection;
+  }
 }
 
 /** 拼向量文档 ID：memoryId → mem_{memoryId} */
@@ -124,7 +134,7 @@ export async function upsertMemoryVector(params: {
   importance: number;
   updatedAt: Date;
 }): Promise<void> {
-  const { collection } = await getMemoryCollection();
+  const collection = await getMemoryCollection();
   const metadata: ChromaMetadata = {
     userId: params.userId,
     memoryId: params.memoryId,
@@ -134,8 +144,13 @@ export async function upsertMemoryVector(params: {
   };
 
   if (params.content === null) {
-    // 仅属性变更：按 ID get 后原向量 + 新 metadata 覆盖写，不触发嵌入
-    const existing = await collection.get({ ids: [memoryDocId(params.memoryId)] });
+    // 仅属性变更：按 ID get 后原向量 + 新 metadata 覆盖写，不触发嵌入。
+    // 显式 include embeddings：Chroma get 默认不含 embeddings，漏带会让
+    // upsert 隐藏地重新嵌入一次（行为正确但多花一次嵌入调用）
+    const existing = await collection.get({
+      ids: [memoryDocId(params.memoryId)],
+      include: ['documents', 'embeddings'],
+    });
     if (!existing.documents || existing.documents.length === 0 || !existing.documents[0]) {
       // 向量还不存在（如历史上同步失败）：降级为全量写（需要 content）
       throw new Error('向量不存在，无法仅更新 metadata，需要全量同步');
@@ -169,7 +184,7 @@ export async function upsertMemoryVector(params: {
  * 向量本就不存在时静默成功（幂等：删真相后目录同步失败重试也安全）
  */
 export async function deleteMemoryVector(memoryId: number): Promise<void> {
-  const { collection } = await getMemoryCollection();
+  const collection = await getMemoryCollection();
   await collection.delete({ ids: [memoryDocId(memoryId)] });
 }
 
@@ -177,7 +192,7 @@ export async function deleteMemoryVector(memoryId: number): Promise<void> {
  * 删除某用户的全部记忆向量（清空记忆场景，按 metadata 过滤批量删除）
  */
 export async function deleteAllMemoryVectorsForUser(userId: string): Promise<void> {
-  const { collection } = await getMemoryCollection();
+  const collection = await getMemoryCollection();
   await collection.delete({ where: { userId } });
 }
 
@@ -204,7 +219,7 @@ export async function searchMemoryVectors(params: {
   userId: string;
   topK: number;
 }): Promise<MemoryVectorHit[]> {
-  const { collection } = await getMemoryCollection();
+  const collection = await getMemoryCollection();
   const queryEmbedding = await getEmbeddings().embedQuery(params.query);
   const result = await collection.query({
     queryEmbeddings: [queryEmbedding],
@@ -239,8 +254,12 @@ export async function searchMemoryVectors(params: {
  * MySQL 有记忆但此数为 0 → "假空"异常信号（collection 被删/重建失败/同步全挂）
  */
 export async function countMemoryVectorsForUser(userId: string): Promise<number> {
-  const { collection } = await getMemoryCollection();
-  const result = await collection.get({ where: { userId }, include: [] });
+  const collection = await getMemoryCollection();
+  // include 用最小合法集合（空数组在部分 SDK 版本校验不过）：只数条数，不取内容
+  const result = await collection.get({
+    where: { userId },
+    include: ['metadatas'],
+  });
   return result.ids?.length ?? 0;
 }
 
@@ -265,7 +284,7 @@ export async function rebuildMemoryVectorsForUser(params: {
     updatedAt: Date;
   }>;
 }): Promise<number> {
-  const { collection } = await getMemoryCollection();
+  const collection = await getMemoryCollection();
 
   // 1. 清该用户全部旧向量（幂等重建的"清"半步）
   await collection.delete({ where: { userId: params.userId } });

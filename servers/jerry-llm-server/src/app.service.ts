@@ -57,7 +57,11 @@ export class AppService {
         .slice(-2)
         .map((h) => h.content)
         .filter((c): c is string => typeof c === 'string' && c.length > 0);
-      const retrievalQuery = [...recentTurns, message ?? ''].join('\n');
+      // 截断防御：超长 query 会拖慢 embedding 调用（3 秒超时内可能完不成），
+      // 检索只要"话题意图"，2000 字符远超足够
+      const retrievalQuery = [...recentTurns, message ?? '']
+        .join('\n')
+        .slice(0, 2000);
       const { memoryTexts: texts } =
         await this.memoryService.getMemoriesForInjection(userId, retrievalQuery);
       memoryTexts = texts;
