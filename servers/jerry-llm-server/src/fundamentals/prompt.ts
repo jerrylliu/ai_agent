@@ -3619,10 +3619,9 @@ async function promptWithFunctionCalling(
             // 把本轮新产生的资产发送给客户端（正文注入 + 文件卡片事件）
             fcFullResponse += emitNewAssets();
 
-            // 最后一轮不再续写（循环即将结束），避免追加无用的消息
-            if (streamRound >= MAX_DSML_STREAM_ROUNDS) break;
-
-            // 续写：占位 AIMessage 保持消息序列合法，HumanMessage 携带结果摘要让模型基于结果继续回答
+            // 结果摘要必须无条件入列（含最后一轮）：审核重写用的正是这份 messages，
+            // 若最后一轮跳过入列，重写模型拿不到工具结果，只能产出"我来帮您完成"
+            // 式空话（生产案例 2026-10-12 12:09，answerLength=57）
             messages.push(
               new AIMessage({
                 content: '（工具调用已由系统解析并执行完成，结果见下方）',
@@ -3636,12 +3635,36 @@ async function promptWithFunctionCalling(
                   '\n请基于上述结果继续完成对用户问题的回答。直接输出正文内容，不要再输出任何工具调用格式的文本。',
               }),
             );
+
+            // 最后一轮只跳过续写流（省一次模型调用），结果摘要已在上方入列
+            if (streamRound >= MAX_DSML_STREAM_ROUNDS) break;
           }
+
+          // ==================== AI 输出自检（方案 C：草稿态显示） ====================
+          // 必须在延迟文档落盘之前执行：重写可能整体替换 fcFullResponse，
+          // 文档正文只有取重写后的最终文本才能与用户看到的回答一致——
+          // 否则审核改写后 PDF 内容还是重写前的空话（生产案例 2026-10-12 12:09）。
+          // 引用解析、用量记录（assistantMessage 即落库文本）同样基于最终文本。
+          const reviewOutcome = await runOutputReviewPipeline({
+            llm,
+            messages,
+            res,
+            question: promptText || '',
+            answer: fcFullResponse,
+            contexts:
+              fcRetrievedContexts.length > 0 ? fcRetrievedContexts : undefined,
+            isCancelled,
+            abortSignal: abortController?.signal,
+            stripImages: collectedImages.length > 0,
+            salvageAssets: salvageAssetsFromResidue,
+          });
+          fcFullResponse = reviewOutcome.finalText;
 
           // ==================== 延迟文档落盘（P1：正文与格式分离） ====================
           // 模型调用 generate_document 时只给了 title + format（没给 content），意图登记在
-          // docIntents 里。此时本轮回复正文已经流式输出完毕，用它作为文档正文落盘，并推送
-          // 文件卡片。这样大 payload 不再经过工具参数，既快又不会被中转站截断。
+          // docIntents 里。此时 fcFullResponse 已是输出自检（含重写）后的最终文本，用它作为
+          // 文档正文落盘，并推送文件卡片。这样大 payload 不再经过工具参数，既快又不会被
+          // 中转站截断，且审核重写不会造成"回答与 PDF 内容不一致"。
           if (docIntents.length > 0) {
             const docBody = fcFullResponse.trim();
             if (!docBody) {
@@ -3718,24 +3741,6 @@ async function promptWithFunctionCalling(
             fcFullResponseLength: fcFullResponse.length,
             estimatedOutputTokens: estimateTokens(fcFullResponse),
           });
-
-          // ==================== AI 输出自检（方案 C：草稿态显示） ====================
-          // 延迟文档落盘后、引用解析/落库/[DONE] 之前执行：重写替换 fcFullResponse 后，
-          // 引用解析、用量记录（assistantMessage 即落库文本）均基于最终文本。
-          const reviewOutcome = await runOutputReviewPipeline({
-            llm,
-            messages,
-            res,
-            question: promptText || '',
-            answer: fcFullResponse,
-            contexts:
-              fcRetrievedContexts.length > 0 ? fcRetrievedContexts : undefined,
-            isCancelled,
-            abortSignal: abortController?.signal,
-            stripImages: collectedImages.length > 0,
-            salvageAssets: salvageAssetsFromResidue,
-          });
-          fcFullResponse = reviewOutcome.finalText;
 
           // ==================== 引用解析（可验证生成，FC 主路径） ====================
           // 与 RAG 注入路径同构：从完整回答提取（【文档 X】）→ 映射 fcDocSources → 一次性推送。
