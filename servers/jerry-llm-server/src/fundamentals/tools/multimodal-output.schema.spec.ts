@@ -33,6 +33,9 @@ import {
   createMindmapSchema,
   createMindmapParamsSchema,
   normalizeEChartsOption,
+  extractLabels,
+  extractSeries,
+  extractPieItems,
 } from './multimodal-output';
 import { safeParseToolParams } from './_helpers';
 
@@ -90,6 +93,59 @@ describe('normalizeEChartsOption', () => {
   it('非法入参（null / 数组）原样返回不抛错', () => {
     expect(normalizeEChartsOption(null as any, 'line')).toBeNull();
     expect(normalizeEChartsOption([1, 2] as any, 'line')).toEqual([1, 2]);
+  });
+});
+
+// ==================== data 形状容错提取器（生产案例 2026-10-13 第三变体） ====================
+// 现象：模型传 {date:[...], high:[...], low:[...]} 等价数据但字段名非标准，
+// 构建器刚性取 labels/series 静默产出空骨架图
+
+describe('extractLabels / extractSeries / extractPieItems', () => {
+  it('labels 等价字段名 dates/days/categories 均可提取', () => {
+    expect(extractLabels({ dates: ['10-13', '10-14'] })).toEqual([
+      '10-13',
+      '10-14',
+    ]);
+    expect(extractLabels({ categories: ['a', 'b'] })).toEqual(['a', 'b']);
+    expect(extractLabels({ labels: ['x'] })).toEqual(['x']);
+    expect(extractLabels({ xAxis: { data: ['p', 'q'] } })).toEqual(['p', 'q']);
+  });
+
+  it('并行数组形态（生产案例原样复现）→ 每个数值数组一个系列，键名做系列名', () => {
+    const r = extractSeries({
+      date: ['10-13', '10-14'],
+      high: [25, 22],
+      low: [19, 19],
+    });
+    expect(r).toEqual([
+      { name: 'high', data: [25, 22] },
+      { name: 'low', data: [19, 19] },
+    ]);
+  });
+
+  it('标准 series 形态优先，data|values 双收', () => {
+    expect(
+      extractSeries({ series: [{ name: 'n', values: [1, 2] }] }),
+    ).toEqual([{ name: 'n', data: [1, 2] }]);
+    expect(
+      extractSeries({ series: [{ name: 'n', data: [3] }] }),
+    ).toEqual([{ name: 'n', data: [3] }]);
+  });
+
+  it('pie：items/data/series 数组与 {名称:数值} 字典形态均可提取', () => {
+    expect(extractPieItems({ items: [{ name: 'a', value: 1 }] })).toEqual([
+      { name: 'a', value: 1 },
+    ]);
+    expect(extractPieItems({ 多云: 12, 小雨: 5 })).toEqual([
+      { name: '多云', value: 12 },
+      { name: '小雨', value: 5 },
+    ]);
+  });
+
+  it('字符串数组不会被误认为数值系列（labels 键排除）', () => {
+    expect(extractSeries({ dates: ['a'], temps: [1] })).toEqual([
+      { name: 'temps', data: [1] },
+    ]);
   });
 });
 
