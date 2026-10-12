@@ -292,8 +292,16 @@ export function routeRequest(userInput: string | undefined): RoutingResult {
     if (scores[role] > maxScore) maxScore = scores[role];
   }
 
+  // 复合意图检测：≥2 个专家 Agent 同时得分，说明任务横跨多个领域
+  // （如"查天气→画图表→生成PDF→发邮件"）。单一专家的人格提示会压制跨域
+  // 工具的使用倾向，此时回落到 general（完整能力兜底），人格与工具完整性二选一时保工具。
+  const hitSpecialists = (
+    ['search', 'analysis', 'creative', 'document'] as AgentRole[]
+  ).filter((role) => scores[role] > 0);
+  const isComposite = hitSpecialists.length >= 2;
+
   let selectedRole: AgentRole;
-  if (maxScore === 0) {
+  if (maxScore === 0 || isComposite) {
     selectedRole = 'general';
   } else {
     // 平局按优先级裁决
@@ -318,6 +326,8 @@ export function routeRequest(userInput: string | undefined): RoutingResult {
     matchedBy: result.matchedBy,
     score: maxScore,
     allScores: scores,
+    hitSpecialists: hitSpecialists.join(', '),
+    isComposite,
     suggestedWorkflow: suggestedWorkflow?.templateId,
   });
 
@@ -364,24 +374,42 @@ export function getAgent(role: AgentRole): AgentConfig {
 }
 
 /**
- * 应用 Agent 的工具白名单：从 schemas 中过滤出该 Agent 可用的子集
- * 当 Agent 未配置 toolWhitelist 时返回原列表（不过滤）
+ * 按 Agent 白名单对工具 schema 排序：白名单工具排到最前，其余工具保留但排后
+ *
+ * 设计变更（生产案例 2026-10-12 15:35）：原实现把白名单之外的工具"硬过滤"掉，
+ * 导致复合任务（如"查天气→画图表→生成PDF→发邮件"）在专家 Agent 下看不到
+ * 跨域工具，模型如实报告"工具未挂载"。现改为"优先级排序"：白名单工具排前
+ * 获得模型注意力（保留专家聚焦的设计意图），但绝不隐藏任何已注册工具——
+ * 工具可见性统一由注册门控 + 模型裁剪 + 动态工具选择三层管理。
+ *
+ * 当 Agent 未配置 toolWhitelist 时返回原列表（顺序不变）。
  */
-export function applyAgentToolWhitelist(
+export function applyAgentToolPriority(
   schemas: any[],
   agent: AgentConfig,
 ): any[] {
   if (!agent.toolWhitelist || agent.toolWhitelist.length === 0) {
     return schemas;
   }
-  const whitelistSet = new Set(agent.toolWhitelist);
-  const filtered = schemas.filter((s) => whitelistSet.has(s?.function?.name));
-  logger.info('Agent Router：已应用工具白名单', {
+  // 非白名单工具统一排到 MAX_SAFE_INTEGER 档：两两相减为 0（保持原相对顺序），
+  // 与白名单档相减为极正值（排后）。不能用 Infinity——Infinity-Infinity=NaN 会让排序不可预测
+  const NON_PRIORITY = Number.MAX_SAFE_INTEGER;
+  const rank = new Map<string, number>(
+    agent.toolWhitelist.map((name, index) => [name, index]),
+  );
+  const priorityOf = (schema: any): number => {
+    const name = schema?.function?.name;
+    return typeof name === 'string'
+      ? (rank.get(name) ?? NON_PRIORITY)
+      : NON_PRIORITY;
+  };
+  // Array.prototype.sort 为稳定排序（ES2019+）：同档工具保持原相对顺序
+  const ordered = [...schemas].sort((a, b) => priorityOf(a) - priorityOf(b));
+  logger.info('Agent Router：已应用工具白名单优先级（不再硬过滤）', {
     module: 'AgentRouter',
     agentRole: agent.role,
-    originalCount: schemas.length,
-    filteredCount: filtered.length,
-    filteredTools: filtered.map((s) => s?.function?.name).join(', '),
+    totalCount: ordered.length,
+    priorityTools: agent.toolWhitelist.join(', '),
   });
-  return filtered;
+  return ordered;
 }

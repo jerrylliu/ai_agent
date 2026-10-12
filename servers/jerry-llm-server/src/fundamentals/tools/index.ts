@@ -187,6 +187,12 @@ import {
 } from '../human-in-the-loop';
 import { sendConfirmationRequest } from '../sse-writer';
 import { applySelfHealing } from './self-healing';
+// 动态工具选择：核心算法在 tool-selection.ts（仅依赖 logger，可独立单测）。
+// 独立原因见该文件头注释——barrel 拖带 40+ 重依赖导致原逻辑零测试覆盖
+import {
+  selectToolsByQuery as selectToolsByNames,
+  TOOL_RETRIEVAL_THRESHOLD,
+} from './tool-selection';
 
 export interface ToolContext {
   userId?: string;
@@ -947,165 +953,13 @@ export async function getToolSchemasForModel(
 // ==================== 动态工具选择（工具 > 15 时激活） ====================
 
 /**
- * 工具语义描述，用于关键词匹配检索
- * 当工具数量超过 TOOL_RETRIEVAL_THRESHOLD 时，根据用户 query 匹配最相关的工具
- *
- * 格式约定：
- *   - 普通关键词：用空格分隔（每命中 +3 分）
- *   - 强意图词（动词短语等高判别力词）：用"!!"前缀（命中 +10 分）
- *     用于让"发邮件/发消息/查数据库"等明确意图压过"内容/文件"等通用名词
- */
-const TOOL_SEMANTIC_DESCRIPTIONS: Record<string, string> = {
-  search_knowledge_base: '搜索 知识库 文档 上传 文件 查找 资料',
-  list_knowledge_base: '列出 概览 清单 有什么 包含 哪些 文档列表 知识库内容',
-  search_web:
-    '!!联网搜索 !!最新新闻 !!实时信息 联网 搜索 网页 互联网 最新 新闻 实时 在线 查询',
-  get_weather:
-    '!!查天气 !!天气预报 天气 气温 温度 下雨 晴天 阴天 湿度 风力 空气质量 预报',
-  calculate: '!!计算 !!算一下 数学 运算 算术 公式 三角函数 对数 开方 乘除',
-  manage_session:
-    '!!新建会话 !!删除会话 !!切换会话 会话 对话 新建 删除 重命名 置顶 切换 管理',
-  create_plan: '规划 计划 步骤 任务 分步 执行 复杂 多步骤',
-  update_plan_step: '更新 步骤 状态 完成 失败 跳过',
-  get_plan: '查看 计划 进度 回顾 状态',
-  crawl_webpage: '!!抓取网页 !!读取网页 抓取 网页 全文 深度 阅读 读取 页面',
-  create_document: '!!创建文档 !!新建文档 创建 新建 文档 笔记 记录 写入 保存',
-  update_document: '!!更新文档 !!修改文档 更新 修改 编辑 文档 版本 变更',
-  summarize_document: '!!生成摘要 !!总结文档 摘要 总结 概括 文档 核心 要点',
-  compare_documents: '!!对比文档 !!比较文档 对比 比较 差异 不同 文档 区别',
-  list_documents: '!!列文档 !!文档清单 文档列表 无标签 标签筛选 找文档 文档ID',
-  update_document_meta: '!!改标签 !!打标签 加标签 标签 改标题 文档描述',
-  delete_document: '!!删除文档 删文档 删除 移除 文档',
-  list_document_versions: '!!版本列表 !!历史版本 版本 历史',
-  restore_document_version: '!!恢复版本 !!回退版本 恢复 回退 还原',
-  // ---------------- 知识源管理工具（第 2 批） ----------------
-  list_knowledge_sources:
-    '!!知识源 !!爬取源 !!网站源 知识源 爬取源 同步状态 清单 列表 订阅源',
-  add_knowledge_source:
-    '!!添加知识源 !!添加爬取源 !!订阅网站 !!新增知识源 添加 新增 知识源 爬取 网站 订阅',
-  delete_knowledge_source: '!!删除知识源 !!删爬取源 删除 移除 知识源 爬取源',
-  sync_knowledge_source:
-    '!!同步知识源 !!同步 !!重新爬取 同步 更新 知识源 爬取 抓取 刷新',
-  get_knowledge_status:
-    '!!知识库状态 知识库 统计 健康状况 向量库 索引进度 多少文档 片段数',
-  rebuild_knowledge_index:
-    '!!重建索引 !!重建向量 !!全量重建 重建 索引 向量 全量 重嵌入 修复检索',
-  // ---------------- 设置域 / 评估 / 收藏工具（第 3 批） ----------------
-  get_system_status:
-    '!!系统状态 !!当前模型 !!什么模型 设置 状态 Key配置 功能开关 开着吗 用哪个模型',
-  switch_model:
-    '!!切换模型 !!换模型 !!换个模型 切换 换 模型 改用 换个大模型 用某某模型',
-  toggle_feature:
-    '!!打开记忆 !!关闭记忆 !!打开摘要 !!关闭摘要 !!开关功能 记忆 摘要 开启 关闭 功能开关 MinerU 解析',
-  query_evaluation_stats:
-    '!!评估统计 !!回答质量 质量 评估 点赞 点踩 满意度 编造 判分 忠实率 相关率',
-  list_favorite_documents:
-    '!!收藏夹 !!看收藏 收藏 清单 列表 生成文档 收藏的文档',
-  toggle_document_favorite:
-    '!!收藏 !!取消收藏 收藏 取消收藏 收藏夹 生成文档',
-  generate_chart:
-    '!!画图 !!生成图表 !!可视化 图表 折线图 柱状图 饼图 数据可视化 绘图',
-  generate_image: '!!画图 !!生成图片 !!文生图 图片 画图 生成图 图像 绘画',
-  create_mindmap: '!!思维导图 !!脑图 思维导图 脑图 知识结构 逻辑关系 梳理',
-  execute_workflow:
-    '!!执行工作流 !!运行流水线 工作流 流水线 流程 一键 自动化 组合 多步 模板',
-  // ---------------- 外部 API 集成工具：意图词重点加权 ----------------
-  send_notification:
-    '!!发邮件 !!发消息 !!发送邮件 !!发送消息 !!发飞书 !!发钉钉 !!发通知 !!推送 !!提醒我 !!告诉 !!通知 通知 提醒 飞书 邮件 邮箱 钉钉 webhook 推送 告诉 发消息 发邮件 发送',
-  query_database:
-    '!!查数据库 !!查表 !!查询数据 !!统计销售 !!统计订单 !!查订单 !!查用户 数据库 查询 SQL 业务数据 统计 订单 销售 用户 表',
-  mcp_proxy:
-    '!!调用MCP !!使用MCP !!MCP工具 MCP GitHub 文件系统 Slack Notion 外部工具 生态 扩展',
-};
-
-/** 动态工具选择阈值，工具数超过此值才启用 */
-const TOOL_RETRIEVAL_THRESHOLD = 15;
-
-/** 动态选择返回的最大工具数 */
-const TOOL_RETRIEVAL_TOP_K = 8;
-
-/**
- * 基于用户 query 动态选择最相关的工具
- * 使用关键词匹配评分，工具数 <= TOOL_RETRIEVAL_THRESHOLD 时直接返回全量
+ * 基于用户 query 动态选择最相关的工具（委托 tool-selection 模块）
  *
  * @param query 用户输入的查询文本
  * @returns 选出的工具名称列表
  */
 export function selectToolsByQuery(query: string): string[] {
-  const allNames = getAvailableToolNames();
-
-  // 工具数未超过阈值，不需要动态选择
-  if (allNames.length <= TOOL_RETRIEVAL_THRESHOLD) {
-    return allNames;
-  }
-
-  if (!query || query.trim().length === 0) {
-    // 无 query 时返回核心工具
-    const coreTools = allNames.filter((name) =>
-      ['search_knowledge_base', 'calculate'].includes(name),
-    );
-    return coreTools.length > 0
-      ? coreTools
-      : allNames.slice(0, TOOL_RETRIEVAL_TOP_K);
-  }
-
-  const queryLower = query.toLowerCase();
-  const queryChars = new Set(queryLower.split(''));
-
-  // 计算每个工具与 query 的相关性分数
-  const scored = allNames.map((name) => {
-    const desc = TOOL_SEMANTIC_DESCRIPTIONS[name] || name;
-    const descLower = desc.toLowerCase();
-    let score = 0;
-
-    // 关键词匹配：区分"强意图词"（!! 前缀，权重 10）和"普通词"（权重 3）
-    // 这样"发邮件/查数据库"等明确意图能压过"内容/文件"等通用名词
-    const keywords = descLower.split(/\s+/);
-    for (const kw of keywords) {
-      if (!kw) continue;
-      if (kw.startsWith('!!')) {
-        const intent = kw.slice(2);
-        if (intent && queryLower.includes(intent)) {
-          score += 10; // 强意图词命中：极高权重
-        }
-      } else if (queryLower.includes(kw)) {
-        score += 3; // 普通词命中
-      }
-    }
-
-    // 字符级重叠度（处理中文无空格的情况）
-    let charOverlap = 0;
-    for (const char of queryChars) {
-      if (descLower.includes(char) && /[\u4e00-\u9fff]/.test(char)) {
-        charOverlap++;
-      }
-    }
-    score += charOverlap * 0.5;
-
-    // 工具名匹配
-    if (queryLower.includes(name.toLowerCase())) {
-      score += 5;
-    }
-
-    return { name, score };
-  });
-
-  // 按分数降序排列，取 Top-K
-  scored.sort((a, b) => b.score - a.score);
-  const selected = scored.slice(0, TOOL_RETRIEVAL_TOP_K).map((s) => s.name);
-
-  logger.info('动态工具选择', {
-    module: 'ToolRegistry',
-    query: query.substring(0, 100),
-    totalTools: allNames.length,
-    selectedTools: selected.join(', '),
-    topScores: scored
-      .slice(0, TOOL_RETRIEVAL_TOP_K)
-      .map((s) => `${s.name}(${s.score.toFixed(1)})`)
-      .join(', '),
-  });
-
-  return selected;
+  return selectToolsByNames(query, getAvailableToolNames());
 }
 
 export async function executeTool(

@@ -150,10 +150,10 @@ import {
 } from './tools/plan-execute';
 // 【智能路由】根据用户输入判断走哪条链路（普通 chat / RAG / Agent）：
 //   routeRequest             —— 给定 query，返回路由决策
-//   applyAgentToolWhitelist  —— 按 Agent 类型筛掉禁用的工具
+//   applyAgentToolPriority  —— 按 Agent 白名单排序工具（白名单排前，不再硬过滤）
 import {
   routeRequest,
-  applyAgentToolWhitelist,
+  applyAgentToolPriority,
   getAgent,
 } from './router/agent-router';
 // 【搜索结果格式化】把搜索引擎原始 JSON 转成模型友好的 Markdown 摘要。
@@ -2287,8 +2287,10 @@ async function promptWithFunctionCalling(
     supportsFC: caps.supportsFC,
     query: promptText,
   });
-  // 应用 Agent 工具白名单：在 general Agent 下不过滤，专业 Agent 下只暴露其专长工具
-  const filteredToolSchemas = applyAgentToolWhitelist(
+  // Agent 工具优先级：白名单工具排到最前（专家聚焦），但不再硬过滤——
+  // 硬过滤会饿死复合任务的跨域工具（生产案例 2026-10-12 15:35：
+  // 模型只见到 2 个工具，如实报告"工具未挂载"导致任务无法执行）
+  const filteredToolSchemas = applyAgentToolPriority(
     toolSchemas,
     routing.agent,
   );
@@ -2965,7 +2967,14 @@ async function promptWithFunctionCalling(
         });
 
         if (!hasTool(toolCall.name)) {
-          const availableTools = getAvailableToolNames().join(', ');
+          // 引导信息必须列出"本轮实际绑定给模型的工具"，而非全量注册表——
+          // 两者在动态工具选择/Agent 优先级裁剪后可能不一致，报全量会误导模型
+          // 继续尝试绑定期就不可见的工具（与 15:35"声称工具未挂载"同族问题）
+          const availableTools =
+            filteredToolSchemas
+              .map((s: any) => s?.function?.name)
+              .filter(Boolean)
+              .join(', ') || getAvailableToolNames().join(', ');
           logger.warn('FC模式：LLM调用了不存在的工具，返回引导信息', {
             module: 'PromptService',
             requestedTool: toolCall.name,

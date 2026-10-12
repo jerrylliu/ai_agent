@@ -5,7 +5,7 @@
  * 1. detectToolIntent 能正确识别图片/图表/思维导图生成意图
  * 2. 当用户意图工具不在路由 Agent 白名单时，应 fallback 到 general Agent
  * 3. fallback 后 general Agent 的 extraPrompt 不会产生矛盾指令
- * 4. applyAgentToolWhitelist 在 general Agent 下不过滤工具
+ * 4. applyAgentToolPriority 白名单排序（general 下原样，专家下白名单排前不过滤）
  *
  * 注意：prompt.ts import 了大量重型模块（数据库、Redis、LLM 等），
  *       此处用 jest.mock 全部 mock 掉，只测试 detectToolIntent 纯函数 + agent-router 组合行为。
@@ -134,7 +134,7 @@ import { detectToolIntent, ToolIntentDetection } from './prompt';
 import {
   routeRequest,
   getAgent,
-  applyAgentToolWhitelist,
+  applyAgentToolPriority,
   AgentConfig,
 } from './router/agent-router';
 
@@ -306,8 +306,10 @@ describe('Agent 能力协商逻辑（P2）', () => {
     });
   });
 
-  // ==================== applyAgentToolWhitelist 行为验证 ====================
-  describe('能力协商：applyAgentToolWhitelist 在 fallback 后不过滤工具', () => {
+  // ==================== applyAgentToolPriority 行为验证 ====================
+  // 设计变更（生产案例 2026-10-12 15:35）：白名单不再硬过滤工具（会饿死复合
+  // 任务的跨域工具），改为优先级排序——白名单工具排前，其余保留排后
+  describe('能力协商：applyAgentToolPriority 白名单排序不过滤工具', () => {
     const mockSchemas = [
       { function: { name: 'generate_image' } },
       { function: { name: 'search_knowledge_base' } },
@@ -315,40 +317,43 @@ describe('Agent 能力协商逻辑（P2）', () => {
       { function: { name: 'calculate' } },
     ];
 
-    it('general Agent → 不过滤，返回所有工具', () => {
+    it('general Agent → 无白名单，原样返回', () => {
       const generalAgent = getAgent('general');
-      const filtered = applyAgentToolWhitelist(mockSchemas, generalAgent);
-      expect(filtered.length).toBe(4);
-      expect(filtered.some((s) => s.function.name === 'generate_image')).toBe(
-        true,
-      );
+      const ordered = applyAgentToolPriority(mockSchemas, generalAgent);
+      expect(ordered).toEqual(mockSchemas);
     });
 
-    it('search Agent → 只返回白名单内的工具（不含 generate_image）', () => {
+    it('search Agent → 白名单工具排前，generate_image 仍保留（不再被过滤）', () => {
       const searchAgent = getAgent('search');
-      const filtered = applyAgentToolWhitelist(mockSchemas, searchAgent);
-      expect(filtered.some((s) => s.function.name === 'generate_image')).toBe(
-        false,
+      const ordered = applyAgentToolPriority(mockSchemas, searchAgent);
+      // 总数不变：工具只是排序，不丢弃
+      expect(ordered.length).toBe(4);
+      // 白名单工具全部在非白名单工具之前
+      const names = ordered.map((s) => s.function.name);
+      const firstNonWhitelistIdx = names.findIndex(
+        (n) => !searchAgent.toolWhitelist!.includes(n),
       );
+      const lastWhitelistIdx = names.reduce(
+        (last, n, idx) =>
+          searchAgent.toolWhitelist!.includes(n) ? idx : last,
+        -1,
+      );
+      expect(lastWhitelistIdx).toBeLessThan(firstNonWhitelistIdx);
+    });
+
+    it('fallback 到 general 后，generate_image 保留在 filteredToolSchemas 中', () => {
+      // 模拟完整链路：search Agent fallback 到 general → 工具原样可用
+      const searchAgent = getAgent('search');
+      const orderedBefore = applyAgentToolPriority(mockSchemas, searchAgent);
+      // 修复后：即使不 fallback，generate_image 也只是排序靠后而非被删除
       expect(
-        filtered.some((s) => s.function.name === 'search_knowledge_base'),
+        orderedBefore.some((s) => s.function.name === 'generate_image'),
       ).toBe(true);
-      expect(filtered.some((s) => s.function.name === 'search_web')).toBe(true);
-    });
 
-    it('fallback 到 general 后，generate_image 会保留在 filteredToolSchemas 中', () => {
-      // 模拟完整链路：search Agent fallback 到 general → applyAgentToolWhitelist 不过滤
-      const searchAgent = getAgent('search');
-      const filteredBefore = applyAgentToolWhitelist(mockSchemas, searchAgent);
-      expect(
-        filteredBefore.some((s) => s.function.name === 'generate_image'),
-      ).toBe(false);
-
-      // fallback
       const generalAgent = getAgent('general');
-      const filteredAfter = applyAgentToolWhitelist(mockSchemas, generalAgent);
+      const orderedAfter = applyAgentToolPriority(mockSchemas, generalAgent);
       expect(
-        filteredAfter.some((s) => s.function.name === 'generate_image'),
+        orderedAfter.some((s) => s.function.name === 'generate_image'),
       ).toBe(true);
     });
   });
@@ -411,13 +416,13 @@ describe('Agent 能力协商逻辑（P2）', () => {
       // Step 4: 验证 fallback 后 general 的 extraPrompt 不会产生矛盾指令
       expect(fallbackAgent.extraPrompt).toBe('');
 
-      // Step 5: 验证 applyAgentToolWhitelist 在 general 下不过滤 generate_image
+      // Step 5: 验证 applyAgentToolPriority 在 general 下原样返回 generate_image
       const mockSchemas = [
         { function: { name: 'generate_image' } },
         { function: { name: 'search_knowledge_base' } },
       ];
-      const filtered = applyAgentToolWhitelist(mockSchemas, fallbackAgent);
-      expect(filtered.some((s) => s.function.name === 'generate_image')).toBe(
+      const ordered = applyAgentToolPriority(mockSchemas, fallbackAgent);
+      expect(ordered.some((s) => s.function.name === 'generate_image')).toBe(
         true,
       );
     });

@@ -6,7 +6,7 @@
  * 2. 平局裁决 - AGENT_PRIORITY 顺序
  * 3. 兜底 - 无关键词命中时回落 general
  * 4. Pipeline 模板触发建议
- * 5. applyAgentToolWhitelist 工具过滤
+ * 5. applyAgentToolPriority 工具优先级排序（白名单排前，不再硬过滤）
  */
 
 // Mock logger
@@ -33,7 +33,7 @@ jest.mock('../workflow/pipeline-templates', () => ({
 
 import {
   routeRequest,
-  applyAgentToolWhitelist,
+  applyAgentToolPriority,
   getAgent,
   listAgents,
 } from './agent-router';
@@ -181,7 +181,30 @@ describe('Agent Router（P2）', () => {
     });
   });
 
-  describe('applyAgentToolWhitelist 工具过滤', () => {
+  describe('复合意图路由（跨域任务回落 general）', () => {
+    it('跨域任务（查询天气 + 图表）应回落 general Agent', () => {
+      // 生产案例 2026-10-12 15:35：复合任务被路由到单一专家后跨域工具不可见
+      const r = routeRequest('查询重庆天气并生成天气图表');
+      expect(r.agent.role).toBe('general');
+    });
+
+    it('跨域任务（搜索新闻 + 图表）应回落 general Agent', () => {
+      const r = routeRequest('搜索最新的国外新闻并画成图表');
+      expect(r.agent.role).toBe('general');
+    });
+
+    it('单一领域任务仍路由到对应专家', () => {
+      expect(routeRequest('计算一下复利').agent.role).toBe('analysis');
+      expect(routeRequest('帮我画一张山水画').agent.role).toBe('creative');
+    });
+
+    it('复合任务的 Pipeline 模板建议不受影响', () => {
+      const r = routeRequest('搜索知识库资料并画成图表');
+      expect(r.suggestedWorkflow?.templateId).toBe('search_kb_and_chart');
+    });
+  });
+
+  describe('applyAgentToolPriority 工具优先级排序', () => {
     const allSchemas = [
       { type: 'function', function: { name: 'search_knowledge_base' } },
       { type: 'function', function: { name: 'search_web' } },
@@ -192,55 +215,54 @@ describe('Agent Router（P2）', () => {
       { type: 'function', function: { name: 'create_plan' } },
       { type: 'function', function: { name: 'execute_workflow' } },
     ];
+    const names = (schemas: any[]) =>
+      schemas.map((s) => s.function?.name).filter(Boolean);
 
-    it('general Agent 不过滤任何工具', () => {
-      const filtered = applyAgentToolWhitelist(allSchemas, getAgent('general'));
-      expect(filtered).toHaveLength(allSchemas.length);
+    it('general Agent 无白名单，顺序原样返回', () => {
+      const ordered = applyAgentToolPriority(allSchemas, getAgent('general'));
+      expect(ordered).toEqual(allSchemas);
     });
 
-    it('search Agent 应只保留搜索相关工具', () => {
-      const filtered = applyAgentToolWhitelist(allSchemas, getAgent('search'));
-      const names = filtered.map((s) => s.function.name);
-      expect(names).toContain('search_knowledge_base');
-      expect(names).toContain('search_web');
-      expect(names).not.toContain('generate_image');
-      expect(names).not.toContain('calculate');
-    });
-
-    it('creative Agent 应只保留创意类工具', () => {
-      const filtered = applyAgentToolWhitelist(
-        allSchemas,
-        getAgent('creative'),
+    it('search Agent：白名单工具排前，非白名单工具保留不丢弃', () => {
+      const ordered = applyAgentToolPriority(allSchemas, getAgent('search'));
+      // 关键断言：总数不变（不再硬过滤）
+      expect(ordered).toHaveLength(allSchemas.length);
+      const n = names(ordered);
+      expect(n).toContain('generate_image');
+      expect(n).toContain('calculate');
+      // 白名单工具应全部排在非白名单工具之前
+      const firstNonWhitelistIdx = n.findIndex(
+        (name) => !getAgent('search').toolWhitelist!.includes(name),
       );
-      const names = filtered.map((s) => s.function.name);
-      expect(names).toContain('generate_image');
-      expect(names).toContain('create_mindmap');
-      expect(names).not.toContain('search_web');
-      expect(names).not.toContain('create_document');
-    });
-
-    it('analysis Agent 应包含 calculate 但不含 create_document', () => {
-      const filtered = applyAgentToolWhitelist(
-        allSchemas,
-        getAgent('analysis'),
+      const lastWhitelistIdx = n.reduce(
+        (last, name, idx) =>
+          getAgent('search').toolWhitelist!.includes(name) ? idx : last,
+        -1,
       );
-      const names = filtered.map((s) => s.function.name);
-      expect(names).toContain('calculate');
-      expect(names).not.toContain('create_document');
+      expect(lastWhitelistIdx).toBeLessThan(firstNonWhitelistIdx);
     });
 
-    it('应保留 create_plan / execute_workflow（专家 Agent 共享）', () => {
-      for (const role of [
-        'search',
-        'analysis',
-        'creative',
-        'document',
-      ] as const) {
-        const filtered = applyAgentToolWhitelist(allSchemas, getAgent(role));
-        const names = filtered.map((s) => s.function.name);
-        expect(names).toContain('create_plan');
-        expect(names).toContain('execute_workflow');
-      }
+    it('analysis Agent：calculate 排最前且 create_document 仍可见', () => {
+      const ordered = applyAgentToolPriority(allSchemas, getAgent('analysis'));
+      const n = names(ordered);
+      expect(n[0]).toBe('calculate'); // analysis 白名单首位
+      expect(n).toContain('calculate');
+      expect(n).toContain('create_document'); // 不再被过滤掉
+    });
+
+    it('非白名单工具之间保持原相对顺序（稳定排序）', () => {
+      const ordered = applyAgentToolPriority(allSchemas, getAgent('search'));
+      const n = names(ordered);
+      const tail = n.filter(
+        (name) => !getAgent('search').toolWhitelist!.includes(name),
+      );
+      // allSchemas 中非白名单的顺序：generate_image, create_mindmap, calculate, create_document
+      expect(tail).toEqual([
+        'generate_image',
+        'create_mindmap',
+        'calculate',
+        'create_document',
+      ]);
     });
   });
 
