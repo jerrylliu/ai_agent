@@ -207,7 +207,94 @@ function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
   return buildOptionFromData(params);
 }
 
-/** 从简化 data 参数（labels/series/items/values）按图表类型构建 option */
+// ==================== data 形状容错提取器 ====================
+// 生产案例 2026-10-13（第三次同根变体）：模型传了真实数据但字段名不是标准的
+// labels/series（如 {date:[...], high:[...], low:[...]}），构建器刚性取字段名
+// 静默产出空骨架图。教训：对 LLM 传参做"格式对就对、不对就空"的刚性假设，
+// 等于把空图交付给用户。以下提取器导出仅为单测。
+
+/** 类目轴文本数组提取：labels 及常见等价字段名 */
+export function extractLabels(data: Record<string, any>): string[] {
+  for (const key of ['labels', 'dates', 'days', 'times', 'categories', 'x']) {
+    const v = data[key];
+    if (
+      Array.isArray(v) &&
+      v.length > 0 &&
+      v.every((i: unknown) => typeof i === 'string')
+    ) {
+      return v;
+    }
+  }
+  const xd = data.xAxis?.data;
+  if (Array.isArray(xd)) return xd;
+  return [];
+}
+
+/**
+ * line/bar 系列提取：标准 series[{name,data|values}] 或并行数值数组。
+ * 并行数组形态 {dates:[...], 最高温:[25,22], 最低温:[19,19]} → 每个数值数组一个系列，
+ * 系列名取键名（键名是中文时天然就是图例文本）
+ */
+export function extractSeries(
+  data: Record<string, any>,
+): Array<{ name: string; data: number[] }> {
+  if (Array.isArray(data.series) && data.series.length > 0) {
+    return data.series.map((s: any) => ({
+      name: s?.name ?? '',
+      data: s?.data ?? s?.values ?? [],
+    }));
+  }
+  const labelKeys = new Set([
+    'labels',
+    'dates',
+    'days',
+    'times',
+    'categories',
+    'x',
+    'xAxis',
+  ]);
+  const series: Array<{ name: string; data: number[] }> = [];
+  for (const [key, v] of Object.entries(data)) {
+    if (labelKeys.has(key)) continue;
+    if (
+      Array.isArray(v) &&
+      v.length > 0 &&
+      v.every((i: unknown) => typeof i === 'number')
+    ) {
+      series.push({ name: key, data: v });
+    }
+  }
+  return series;
+}
+
+/** pie 数据提取：items / data 数组，或 {名称: 数值} 字典形态 */
+export function extractPieItems(
+  data: Record<string, any>,
+): Array<{ name: string; value: number }> {
+  for (const key of ['items', 'data', 'series']) {
+    const v = data[key];
+    if (
+      Array.isArray(v) &&
+      v.length > 0 &&
+      v.every(
+        (i: unknown) =>
+          typeof i === 'object' && i !== null && 'name' in (i as object),
+      )
+    ) {
+      return v;
+    }
+  }
+  // 字典形态 { "多云": 12, "小雨": 5 }
+  const entries = Object.entries(data).filter(
+    ([, v]) => typeof v === 'number',
+  );
+  if (entries.length > 0) {
+    return entries.map(([name, value]) => ({ name, value: value as number }));
+  }
+  return [];
+}
+
+/** 根据简化 data 参数（labels/series/items/values）按图表类型构建 option */
 function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
   const title = params.title || '';
   const chartType = params.chartType;
@@ -234,31 +321,26 @@ function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
     return option;
   }
 
-  // 根据图表类型构建配置
+  // 根据图表类型构建配置（统一走形状容错提取器，不做刚性字段名假设）
   switch (chartType) {
     case 'line':
     case 'bar': {
-      const labels = data.labels || [];
-      const series = data.series || [];
-      option.xAxis = { type: 'category', data: labels };
+      option.xAxis = { type: 'category', data: extractLabels(data) };
       option.yAxis = { type: 'value' };
       option.legend = { top: 30 };
-      // 契约词汇为 data（ECharts 原生）；values 是历史格式与模型惯用误写，
-      // 双收兜底（生产案例 2026-10-13）
-      option.series = series.map((s: any) => ({
+      option.series = extractSeries(data).map((s) => ({
         name: s.name,
         type: chartType,
-        data: s.data ?? s.values,
+        data: s.data,
       }));
       break;
     }
     case 'pie': {
-      const items = data.items || [];
       option.series = [
         {
           type: 'pie',
           radius: '50%',
-          data: items.map((item: any) => ({
+          data: extractPieItems(data).map((item) => ({
             name: item.name,
             value: item.value,
           })),
@@ -274,7 +356,8 @@ function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
       break;
     }
     case 'scatter': {
-      const scatterData = data.values || [];
+      const scatterData =
+        data.values ?? data.points ?? data.data ?? [];
       option.xAxis = { type: 'value' };
       option.yAxis = { type: 'value' };
       option.series = [
@@ -298,7 +381,7 @@ function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
       break;
     }
     default: {
-      option.xAxis = { type: 'category', data: data.labels || [] };
+      option.xAxis = { type: 'category', data: extractLabels(data) };
       option.yAxis = { type: 'value' };
       option.series = [{ type: chartType, data: data.values || [] }];
     }
@@ -521,6 +604,38 @@ export async function executeGenerateChart(
   const params = parsed.data;
 
   const echartsOption = buildEChartsOption(params);
+
+  // 空图守卫（生产案例 2026-10-13 第三变体）：宁可把格式说明作为错误反馈给
+  // 模型让它重试，也绝不把空骨架图交付给用户。FC 循环会把本 message 回传模型
+  const seriesList = Array.isArray(echartsOption.series)
+    ? echartsOption.series
+    : [];
+  const hasData = seriesList.some((s: any) =>
+    Array.isArray(s?.data) ? s.data.length > 0 : s?.data != null,
+  );
+  if (!hasData) {
+    const dataKeys =
+      params.data && typeof params.data === 'object'
+        ? Object.keys(params.data as Record<string, unknown>).join(', ')
+        : '(未传)';
+    logger.warn('FC工具 [generate_chart] data 未能解析出任何系列，返回格式说明', {
+      module: 'Tool:MultiModal',
+      chartType: params.chartType,
+      dataKeys,
+    });
+    return {
+      type: 'chart',
+      chartType: params.chartType,
+      echartsOption: {},
+      imageUrl: '',
+      message:
+        '图表数据为空：data 参数未能解析出任何数据系列。请用标准格式重试——' +
+        'line/bar 传 { labels: ["10-13",...], series: [{ name: "最高温", data: [25,22,...] }] }；' +
+        'pie 传 { items: [{ name, value }] }；' +
+        '也支持并行数组形态 { dates: ["10-13",...], 最高温: [25,22,...], 最低温: [19,19,...] }',
+    };
+  }
+
   // 内部协议 URL：send_notification 收到后用 puppeteer 渲染 PNG 嵌入邮件
   const imageUrl = await chartImageUrl(echartsOption);
 
