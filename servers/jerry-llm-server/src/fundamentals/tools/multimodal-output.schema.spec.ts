@@ -32,8 +32,66 @@ import {
   generateImageParamsSchema,
   createMindmapSchema,
   createMindmapParamsSchema,
+  normalizeEChartsOption,
 } from './multimodal-output';
 import { safeParseToolParams } from './_helpers';
+
+// ==================== normalizeEChartsOption（生产案例 2026-10-13 回归） ====================
+// 现象：图表渲染了标题和 X 轴但没有任何数据线
+
+describe('normalizeEChartsOption', () => {
+  it('series 项误写 values → 归一化为 data（14:03 日志原样复现）', () => {
+    const option = {
+      xAxis: { type: 'category', data: ['10-13', '10-14'] },
+      yAxis: { type: 'value' },
+      series: [
+        { name: '最高气温(℃)', values: [25, 25] },
+        { name: '最低气温(℃)', values: [19, 19] },
+      ],
+    };
+    const r = normalizeEChartsOption(option, 'line');
+    expect(r.series[0].data).toEqual([25, 25]);
+    expect(r.series[0].values).toBeUndefined();
+    expect(r.series[1].data).toEqual([19, 19]);
+  });
+
+  it('series 项已有 data 时不触碰（values 与 data 并存时以 data 为准）', () => {
+    const option = {
+      series: [{ type: 'line', data: [1, 2], values: [9, 9] }],
+    };
+    const r = normalizeEChartsOption(option, 'line');
+    expect(r.series[0].data).toEqual([1, 2]);
+  });
+
+  it('series 项漏写 type → 按 chartType 推断', () => {
+    const option = { series: [{ name: 'a', data: [1] }] };
+    const r = normalizeEChartsOption(option, 'bar');
+    expect(r.series[0].type).toBe('bar');
+  });
+
+  it('series 传成单个对象 → 包装成数组', () => {
+    const option = { series: { name: 'a', data: [1, 2] } };
+    const r = normalizeEChartsOption(option, 'line');
+    expect(Array.isArray(r.series)).toBe(true);
+    expect(r.series[0].name).toBe('a');
+  });
+
+  it('合法 option 原样保留其余字段（title/xAxis 等不被破坏）', () => {
+    const option = {
+      backgroundColor: '#0b1020',
+      title: { text: 'T' },
+      series: [{ type: 'line', data: [1] }],
+    };
+    const r = normalizeEChartsOption(option, 'line');
+    expect(r.backgroundColor).toBe('#0b1020');
+    expect(r.title).toEqual({ text: 'T' });
+  });
+
+  it('非法入参（null / 数组）原样返回不抛错', () => {
+    expect(normalizeEChartsOption(null as any, 'line')).toBeNull();
+    expect(normalizeEChartsOption([1, 2] as any, 'line')).toEqual([1, 2]);
+  });
+});
 
 describe('generateChartSchema', () => {
   it('chartType 必填，含 7 个枚举值', () => {
@@ -54,6 +112,18 @@ describe('generateChartSchema', () => {
     const params = generateChartSchema.function.parameters as any;
     expect(params.properties.echartsOption.type).toBe('object');
     expect(params.properties.data.type).toBe('object');
+  });
+
+  it('契约守卫：description 必须教 ECharts 原生 data，禁止再教 values（生产案例 2026-10-13）', () => {
+    // 服务端文档曾教模型写 series[].values，ECharts 静默忽略画出空图。
+    // 改契约时工具 description 与 prompt.ts 图表规则两处必须同步，此用例守住前者
+    const params = generateChartSchema.function.parameters as any;
+    const echartsDesc: string = params.properties.echartsOption.description;
+    const dataDesc: string = params.properties.data.description;
+    expect(dataDesc).toContain('data: number[]');
+    expect(dataDesc).not.toContain('values');
+    expect(echartsDesc).toContain('data');
+    expect(echartsDesc).toContain('不要用 values');
   });
 
   it('chartType 越界应被拦截', () => {

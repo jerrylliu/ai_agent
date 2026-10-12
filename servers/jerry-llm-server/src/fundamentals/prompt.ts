@@ -1744,11 +1744,15 @@ ${toolList}
   }
 
   if (availableTools.includes('generate_chart')) {
+    // ⚠️ 契约词汇（生产案例 2026-10-13）：series 数据字段必须是 ECharts 原生的
+    // `data`。此规则曾教 `values`，与工具 description 的 `data` 冲突，模型混用
+    // 两套词汇导致 ECharts 静默忽略数据画出空图。改词汇时两处必须同步
     prompt += `\n\n图表生成规则：
 - 当用户要求生成图表、数据可视化时，必须调用 generate_chart 工具，不要仅用文字描述
 - 支持图表类型：line（折线图）、bar（柱状图）、pie（饼图）、scatter（散点图）、radar（雷达图）、heatmap（热力图）、funnel（漏斗图）
 - 可以直接提供 echartsOption（完整 ECharts 配置），也可以提供 chartType + data 让工具自动构建
-- data 格式：line/bar 为 { labels: string[], series: Array<{name, values}> }；pie 为 { items: Array<{name, value}> }
+- series 数据字段必须用 ECharts 原生的 data：line/bar 为 { labels: string[], series: Array<{name, data: number[]}> }；pie 为 { items: Array<{name, value}> }。禁止用 values 字段名传数据，ECharts 不认识会画出空图
+- echartsOption 路径同理：series 数组每一项必须含 type 和 data，如 { series: [{ type: "line", name: "气温", data: [25, 22] }] }
 - 工具返回 imageUrl 字段（图表的静态 PNG 图片 URL），如果用户要求发图表邮件，把 imageUrl 传给 send_notification 的 attachments 字段即可`;
   }
 

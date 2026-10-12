@@ -104,17 +104,21 @@ export const generateChartParamsSchema = z.object({
     .enum(['line', 'bar', 'pie', 'scatter', 'radar', 'heatmap', 'funnel'])
     .describe('图表类型'),
   // 自由结构对象：ECharts option 字段过多，无法用 z.object 精确建模，passthrough 以保留所有字段
+  // ⚠️ 契约词汇（生产案例 2026-10-13）：series 数据字段必须是 ECharts 原生的 `data`，
+  // 绝不能写 `values`——ECharts 对未知字段静默忽略，只画坐标轴不画数据线。
+  // 此描述与系统提示词（prompt.ts 图表生成规则）保持同一词汇，两处曾分别教
+  // `values`/`data` 导致模型两套混用产生空图表
   echartsOption: z
     .record(z.string(), z.unknown())
     .optional()
     .describe(
-      'ECharts 完整配置 JSON（如果提供此参数，将忽略 title 和 chartType）',
+      'ECharts 完整配置 JSON（如果提供此参数，将忽略 title 和 chartType）。series 数组的每一项必须含 type 和 data 字段（数据用 data，不要用 values），如 { series: [{ type: "line", name: "气温", data: [25, 22] }] }',
     ),
   data: z
     .record(z.string(), z.unknown())
     .optional()
     .describe(
-      '图表数据，格式取决于图表类型。line/bar: { labels: string[], series: Array<{name: string, values: number[]}> }；pie: { items: Array<{name: string, value: number}> }',
+      '图表数据，格式取决于图表类型。line/bar: { labels: string[], series: Array<{name: string, data: number[]}> }；pie: { items: Array<{name: string, value: number}> }',
     ),
 });
 
@@ -140,14 +144,71 @@ export const generateChartResultSchema = z.looseObject({
 export type GenerateChartResult = z.infer<typeof generateChartResultSchema>;
 
 /**
+ * 归一化模型手写的完整 ECharts option（生产案例 2026-10-13：图表渲染了标题和
+ * X 轴但无任何数据线）。根因：模型在 series 项里用 `values` 传数据（ECharts
+ * 只认 `data`，未知字段被静默忽略，只画坐标轴不画线），或漏写 series[].type。
+ * ECharts 对非法字段"静默不渲染"的特性让这类错误无报错、极难排查，必须在
+ * 服务端出口处归一化。导出仅为单测，业务勿直接依赖。
+ */
+export function normalizeEChartsOption(
+  option: Record<string, any>,
+  chartType?: string,
+): Record<string, any> {
+  if (!option || typeof option !== 'object' || Array.isArray(option)) {
+    return option;
+  }
+  const normalized: Record<string, any> = { ...option };
+
+  // series 传成单个对象 → 包装成数组（ECharts 要求 series 必为数组）
+  if (
+    normalized.series &&
+    typeof normalized.series === 'object' &&
+    !Array.isArray(normalized.series)
+  ) {
+    normalized.series = [normalized.series];
+  }
+
+  if (Array.isArray(normalized.series)) {
+    normalized.series = normalized.series.map((s: any) => {
+      if (!s || typeof s !== 'object' || Array.isArray(s)) return s;
+      const item = { ...s };
+      // values → data：模型高频误写字段（14:03 日志原样复现）
+      if (item.values !== undefined && item.data === undefined) {
+        item.data = item.values;
+        delete item.values;
+      }
+      // 漏写 type：按 chartType 参数推断（line/bar 直接对应，其余取 line 兜底）
+      if (!item.type && chartType) {
+        item.type = chartType === 'pie' ? 'pie' : chartType;
+      }
+      return item;
+    });
+  }
+
+  return normalized;
+}
+
+/**
  * 根据简化的数据和图表类型构建 ECharts option
  */
 function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
-  // 如果直接提供了完整的 ECharts option，直接返回
+  // 如果直接提供了完整的 ECharts option，归一化后返回
   if (params.echartsOption) {
-    return params.echartsOption;
+    const option = normalizeEChartsOption(params.echartsOption, params.chartType);
+    // 归一化后仍无任何 series 数据，但 data 参数带了结构化数据 →
+    // 退回 data 构建路径兜底，绝不交付空图表
+    if (!Array.isArray(option.series) || option.series.length === 0) {
+      if (params.data && Object.keys(params.data).length > 0) {
+        return buildOptionFromData(params);
+      }
+    }
+    return option;
   }
+  return buildOptionFromData(params);
+}
 
+/** 从简化 data 参数（labels/series/items/values）按图表类型构建 option */
+function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
   const title = params.title || '';
   const chartType = params.chartType;
   // data 字段在 zod schema 中为自由结构（z.record(z.string(), z.unknown())），
@@ -182,10 +243,12 @@ function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
       option.xAxis = { type: 'category', data: labels };
       option.yAxis = { type: 'value' };
       option.legend = { top: 30 };
+      // 契约词汇为 data（ECharts 原生）；values 是历史格式与模型惯用误写，
+      // 双收兜底（生产案例 2026-10-13）
       option.series = series.map((s: any) => ({
         name: s.name,
         type: chartType,
-        data: s.values,
+        data: s.data ?? s.values,
       }));
       break;
     }
