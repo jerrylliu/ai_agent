@@ -1295,6 +1295,8 @@ export interface UserMemoryData {
   userId: string;
   importance: number;
   accessCount: number;
+  /** 向量库同步状态：false = 待同步（检索层暂未收录，兜底仍可用） */
+  vectorSynced: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -1415,6 +1417,46 @@ export async function extractMemories(
     },
   );
   return handleResponse<UserMemoriesResponse>(response);
+}
+
+/**
+ * 全量重建当前用户的记忆向量（"全部同步"按钮）
+ * 手动对账 / 存量迁移 / 假空自愈三合一
+ */
+export async function rebuildMemoryVectors(): Promise<{
+  success: boolean;
+  syncedCount?: number;
+  message?: string;
+}> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/memory/memories/rebuild-vectors`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
+  return handleResponse<{
+    success: boolean;
+    syncedCount?: number;
+    message?: string;
+  }>(response);
+}
+
+/**
+ * 单条补传：把指定记忆同步到向量库（"待同步"条目的补传按钮）
+ * @param id 记忆 ID
+ */
+export async function syncMemoryVector(
+  id: number,
+): Promise<{ success: boolean; message?: string }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.BASE_URL}/memory/memories/${id}/sync-vector`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  );
+  return handleResponse<{ success: boolean; message?: string }>(response);
 }
 
 // ============================================

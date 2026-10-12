@@ -56,6 +56,16 @@ export class UserMemory {
   @Column({ default: 0 })
   accessCount: number;
 
+  /**
+   * 向量库同步状态：true = 已同步到 user_memories collection
+   *
+   * MySQL 是真相源，向量库只是检索目录——此字段记录"目录是否跟上账本"。
+   * 同步失败时保持 false 并由 UI 显示"待同步"徽标，用户可单条补传或全量重建。
+   * 旧数据迁移前默认 false，由全量重建统一置位
+   */
+  @Column({ default: false })
+  vectorSynced: boolean;
+
   @CreateDateColumn()
   createdAt: Date;
 

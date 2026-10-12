@@ -350,6 +350,25 @@ const RootSchema = z.object({
    * 默认值不写在这里，是因为它依赖 store-state.ts 的文件位置（__dirname 相对推导）。
    */
   chromaPersistDir: z.string().min(1).optional(),
+
+  /**
+   * 用户记忆向量检索（memory-vector-retrieval-plan.md）
+   *
+   * 三级瀑布注入：核心层(importance=5 直查 MySQL) → 向量检索层 → MySQL 兜底层。
+   * 向量库只是派生的检索目录，MySQL 是唯一真相源——任何向量层故障自动降级，
+   * 最差情况等于改造前的 top-20 行为
+   */
+  // 总开关：false 时完全回到 top-20 现状（= 回滚开关）
+  memoryVectorEnabled: zBoolFromString(true),
+  // 单次向量检索超时（毫秒）：到点放弃落兜底层。记忆库几百条，正常几十毫秒
+  memoryVectorTimeoutMs: z.coerce.number().int().positive().default(3000),
+  // 检索层召回条数
+  memoryRetrievalTopK: z.coerce.number().int().positive().default(8),
+  // 核心层（importance=5）注入上限
+  memoryCoreLayerLimit: z.coerce.number().int().positive().default(10),
+  // 注入总 token 预算（粗估：字符数/1.5），超预算按 核心→检索→兜底 顺序截断
+  memoryInjectTokenBudget: z.coerce.number().int().positive().default(1000),
+
   serverBaseUrl: z.string().min(1).default('http://localhost:3000'),
 
   /**
@@ -422,6 +441,11 @@ function buildRawConfig() {
     ollamaBaseUrl: env.OLLAMA_BASE_URL,
     chromaUrl: env.CHROMA_URL,
     chromaPersistDir: env.CHROMA_PERSIST_DIR,
+    memoryVectorEnabled: env.MEMORY_VECTOR_ENABLED,
+    memoryVectorTimeoutMs: env.MEMORY_VECTOR_TIMEOUT_MS,
+    memoryRetrievalTopK: env.MEMORY_RETRIEVAL_TOP_K,
+    memoryCoreLayerLimit: env.MEMORY_CORE_LAYER_LIMIT,
+    memoryInjectTokenBudget: env.MEMORY_INJECT_TOKEN_BUDGET,
     serverBaseUrl: env.SERVER_BASE_URL,
 
     onlineJudgeEnabled: env.ONLINE_JUDGE_ENABLED,
@@ -642,6 +666,11 @@ export const config = {
    * 同时决定 ChromaDB 数据目录与 BM25 索引落盘目录，生产不配置即零影响
    */
   chromaPersistDir: parsed.chromaPersistDir,
+  memoryVectorEnabled: parsed.memoryVectorEnabled,
+  memoryVectorTimeoutMs: parsed.memoryVectorTimeoutMs,
+  memoryRetrievalTopK: parsed.memoryRetrievalTopK,
+  memoryCoreLayerLimit: parsed.memoryCoreLayerLimit,
+  memoryInjectTokenBudget: parsed.memoryInjectTokenBudget,
   get chromaHost() {
     return safeUrlPart(this.chromaUrl, (u) => u.hostname, 'localhost');
   },

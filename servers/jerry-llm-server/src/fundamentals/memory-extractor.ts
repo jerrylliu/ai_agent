@@ -143,6 +143,78 @@ const MEMORY_MERGE_PROMPT = `你是一个信息去重专家。你的任务是比
 
 只输出 JSON 数组，不要输出其他内容。`;
 
+// ==================== 类别治理（memory-vector-retrieval-plan.md §4.5） ====================
+
+/**
+ * 内置类别（与前端记忆模块展示一致）
+ *
+ * 提取 LLM 可在 5 类都不合适时提议新类别（如 hobby/relationship），
+ * 由 guardCategory 做归一化守护，防止"分类法污染"（偏好/preference/preference2 并存）
+ */
+export const BUILTIN_MEMORY_CATEGORIES = [
+  'preference',
+  'fact',
+  'decision',
+  'context',
+  'skill',
+] as const;
+
+/** 同义词归并表：中文/变体 → 内置类别（trim + lowerCase 后精确匹配） */
+const CATEGORY_SYNONYMS: Record<string, string> = {
+  偏好: 'preference',
+  事实: 'fact',
+  决策: 'decision',
+  上下文: 'context',
+  背景: 'context',
+  技能: 'skill',
+  能力: 'skill',
+  喜好: 'preference',
+  habit: 'preference',
+  profile: 'fact',
+  info: 'fact',
+  information: 'fact',
+};
+
+/**
+ * 类别守护：trim → 小写 → 同义词归并 → 内置类别直通 → 未知值按 slug 规则接受
+ *
+ * 返回 null 表示入参无效（空/超长），调用方应回退到 'fact'
+ *
+ * 设计取舍：
+ * - 内置类别（任何大小写/空白变体）直接归并，杜绝 "Fact"/" FACT " 这类漂移
+ * - 未知新类别不否决——按 slug 规则（≤24 字符、字母数字下划线连字符中文）规范化后
+ *   接受，新类别的"该不该建"由它是否真的出现来判断，服务端只挡格式污染
+ */
+export function guardCategory(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed || trimmed.length > 24) return null;
+  if ((BUILTIN_MEMORY_CATEGORIES as readonly string[]).includes(trimmed)) {
+    return trimmed;
+  }
+  if (CATEGORY_SYNONYMS[trimmed]) {
+    return CATEGORY_SYNONYMS[trimmed];
+  }
+  // slug 规则：字母/数字/下划线/连字符/中文，不允许空格与符号（挡 "偏好 2!" 这类）
+  if (!/^[a-z0-9_\-\u4e00-\u9fa5]+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
+ * 批量守护提取结果的类别：无效类别回退 'fact'
+ *
+ * 守护失败（返回 null）的条目保留内容但归入 fact——内容比分类重要，
+ * 不因分类异常丢弃用户信息
+ */
+export function guardExtractedMemories(
+  memories: Array<{ content: string; category: string; importance: number }>,
+): Array<{ content: string; category: string; importance: number }> {
+  return memories.map((m) => ({
+    ...m,
+    category: guardCategory(m.category) ?? 'fact',
+  }));
+}
+
 // ==================== 类型定义 ====================
 
 export interface ExtractedMemory {
@@ -234,11 +306,11 @@ export async function extractMemories(
         ? result.content
         : JSON.stringify(result.content);
 
-    // 解析 JSON 结果（zod 校验，失败降级为空数组）
+    // 解析 JSON 结果（zod 校验，失败降级为空数组）；类别过守护（§4.5）
     const parsed = parseLlmJson(content, ExtractedMemoryArraySchema, {
       module: 'MemoryExtractor:Extract',
     });
-    const memories = parsed.success ? parsed.data : [];
+    const memories = parsed.success ? guardExtractedMemories(parsed.data) : [];
 
     logger.info('提取到用户记忆', {
       module: 'MemoryExtractor',
