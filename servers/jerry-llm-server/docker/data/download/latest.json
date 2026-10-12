@@ -1,11 +1,11 @@
 {
-  "version": "0.1.15",
-  "pub_date": "2026-10-12T06:00:00Z",
-  "notes": "1. 手机端图表显示修复：窄屏下标题/图例不再裁切重叠，布局变化实时自适应\n2. AI 图表更稳定：回答修正时图表不再丢失，异常场景自动补生成真实图表\n3. 服务端输出自检链路加固",
+  "version": "0.1.16",
+  "pub_date": "2026-10-12T08:00:00Z",
+  "notes": "1. 记忆全面升级：AI 能按语义想起你的任何记忆，不再受条数限制（重要记忆永远优先）\n2. 记忆管理增强：每条记忆显示同步状态，支持单条补传与全部同步\n3. 携带 0.1.15 全部修复：手机端图表显示、AI 图表稳定性、服务端自检加固",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUN5SzdyVzZyMjlabDdxZVBhMUVlWllqbERRK3VMeTdqVjE5ZzRUMWtGazc4c2N0YitkT1oxcXBzaTBWTVFxamtMWE1iNjUrR2xkWGRJcFJqSWJ0b2drPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNzg0NzE3CWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xNV94NjQtc2V0dXAuZXhlCmxjdWR3U3pvYkVjamE2bWNsU09zdHR6b0ZWcE9tYXNQd0w3cHN1bDFJeHNxSDdsYVBrN1c0NkpxckFaWkl6WE5jYTJDSU5zL0Z1U3V3OW4ySlp5R0RBPT0K",
-      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.15_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUFiWU11dHNmUWNISzYrNk5VVXVIaGdQSTJDNkh5UDFNb0ZGbHFPT2llQlYrZmRLSDk3bXhha0lGYVFiTWVkUGtWOFhWQjk4V0hDcDlvZEJOQUs2MFEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNzk3NjUzCWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xNl94NjQtc2V0dXAuZXhlCmpHV3N4UmJpNG1pWEltNHQ3dzlzVFkzUTUrL0EyQWF6YjYyK3E4N0prZ2RzeUNOd1Y3Vys5ODJ5bjlvc2hYMVFLYmFKK0JyY2lsQU5KRGNmQnZIR0RBPT0K",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.16_x64-setup.exe"
     }
   }
 }
