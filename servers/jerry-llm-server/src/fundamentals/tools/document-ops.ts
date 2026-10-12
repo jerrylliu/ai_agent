@@ -14,6 +14,7 @@ import { createLLM, buildModelConfig } from '../model-provider';
 import { HumanMessage } from '@langchain/core/messages';
 import * as Diff from 'diff';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import { coerceContentLikeToString } from './tool-param-coerce';
 
 // ==================== DocumentService 注入 ====================
 
@@ -32,12 +33,31 @@ export function initDocumentTools(service: any): void {
 
 // ==================== create_document ====================
 
-export const createDocumentParamsSchema = z.object({
-  title: z.string().min(1).describe('文档标题'),
-  content: z.string().min(1).describe('文档内容（纯文本或 Markdown 格式）'),
-  description: z.string().optional().describe('文档描述（可选）'),
-  tags: z.array(z.string()).optional().describe('文档标签列表（可选）'),
-});
+/**
+ * content 形态容错（生产案例 2026-10-12 12:24）：模型偶发把内容传成对象/数组，
+ * 在对象层先归一化 content 字段，再走普通 zod 校验。
+ *
+ * ⚠️ 为什么不用字段级 z.preprocess：zod 4 的 z.toJSONSchema(io: 'input') 会把
+ * pipe 字段的输入端视为 unknown，导致该字段从 JSON Schema 的 required 中消失
+ * ——LLM 会以为 content 可以不传，反而诱发新的缺参问题（实测验证过）。
+ * 外层 preprocess 包整个 object 无此问题（plan-execute 同款做法）。
+ */
+function coerceDocumentContentParams(v: unknown): unknown {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return v;
+  const o = { ...(v as Record<string, unknown>) };
+  if ('content' in o) o.content = coerceContentLikeToString(o.content);
+  return o;
+}
+
+export const createDocumentParamsSchema = z.preprocess(
+  coerceDocumentContentParams,
+  z.object({
+    title: z.string().min(1).describe('文档标题'),
+    content: z.string().min(1).describe('文档内容（纯文本或 Markdown 格式）'),
+    description: z.string().optional().describe('文档描述（可选）'),
+    tags: z.array(z.string()).optional().describe('文档标签列表（可选）'),
+  }),
+);
 
 export type CreateDocumentParams = z.infer<typeof createDocumentParamsSchema>;
 
@@ -127,17 +147,23 @@ export async function executeCreateDocument(
 
 // ==================== update_document ====================
 
-export const updateDocumentParamsSchema = z.object({
-  documentId: z.number().int().positive().describe('要更新的文档ID'),
-  content: z.string().min(1).describe('新的文档内容（纯文本或 Markdown 格式）'),
-  title: z.string().optional().describe('新标题（可选，不传则保持原标题）'),
-  tags: z
-    .array(z.string())
-    .optional()
-    .describe(
-      '文档标签列表（可选）。传入时整体替换现有标签，空数组表示清空全部标签；不传则保持不变',
-    ),
-});
+export const updateDocumentParamsSchema = z.preprocess(
+  coerceDocumentContentParams,
+  z.object({
+    documentId: z.number().int().positive().describe('要更新的文档ID'),
+    content: z
+      .string()
+      .min(1)
+      .describe('新的文档内容（纯文本或 Markdown 格式）'),
+    title: z.string().optional().describe('新标题（可选，不传则保持原标题）'),
+    tags: z
+      .array(z.string())
+      .optional()
+      .describe(
+        '文档标签列表（可选）。传入时整体替换现有标签，空数组表示清空全部标签；不传则保持不变',
+      ),
+  }),
+);
 
 export type UpdateDocumentParams = z.infer<typeof updateDocumentParamsSchema>;
 

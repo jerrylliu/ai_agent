@@ -90,6 +90,79 @@ describe('createPlanSchema', () => {
     });
     expect(r.success).toBe(false);
   });
+
+  // ==================== 参数形态容错回归（生产案例 2026-10-12 12:19） ====================
+
+  it('steps 传 JSON 字符串应解析为数组并通过（多余字段被剥离）', () => {
+    const r = createPlanParamsSchema.safeParse({
+      goal: '重庆天气图表',
+      steps: JSON.stringify([
+        {
+          step: 1,
+          description: '查询重庆未来天气预报数据',
+          tool: 'get_weather',
+          params: { city: '重庆', type: 'daily' },
+        },
+        {
+          step: 2,
+          description: '联网搜索最近国外新闻',
+          tool: 'search_web',
+          inputMapping: { data: '$step1.output' },
+        },
+      ]),
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.steps).toHaveLength(2);
+      expect(r.data.steps[0].description).toBe('查询重庆未来天气预报数据');
+      expect(r.data.steps[1].inputMapping).toEqual({ data: '$step1.output' });
+    }
+  });
+
+  it('goal 缺失误传 title 时应别名兜底', () => {
+    const r = createPlanParamsSchema.safeParse({
+      title: '重庆天气图表 + 国外新闻PDF → 邮件与飞书推送',
+      steps: [{ description: '步骤1' }],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.goal).toBe('重庆天气图表 + 国外新闻PDF → 邮件与飞书推送');
+    }
+  });
+
+  it('完整复现生产日志：steps JSON 字符串 + title 别名 + 多余字段应通过', () => {
+    const r = createPlanParamsSchema.safeParse({
+      title: '重庆天气图表 + 国外新闻PDF → 邮件与飞书推送',
+      steps:
+        '[{"step": 1, "description": "查询重庆未来天气预报数据", "tool": "get_weather", "params": {"city": "重庆", "type": "daily"}}, {"step": 2, "description": "联网搜索最近国外新闻", "tool": "search_web"}]',
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.goal).toBe('重庆天气图表 + 国外新闻PDF → 邮件与飞书推送');
+      expect(r.data.steps).toHaveLength(2);
+      expect(r.data.steps[0].description).toBe('查询重庆未来天气预报数据');
+    }
+  });
+
+  it('steps 传非法 JSON 字符串应保持失败（不给模糊兜底）', () => {
+    const r = createPlanParamsSchema.safeParse({
+      goal: 'g',
+      steps: '这不是JSON',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('goal 与 title 同时存在时应优先 goal', () => {
+    const r = createPlanParamsSchema.safeParse({
+      goal: '真正的目标',
+      title: '别名的标题',
+      steps: [{ description: 's' }],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.goal).toBe('真正的目标');
+    }
+  });
 });
 
 describe('updatePlanStepSchema', () => {

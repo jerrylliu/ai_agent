@@ -27,7 +27,7 @@
  *   `formatZodIssues` 输出统一错误信息
  */
 
-import { z, ZodObject, ZodType } from 'zod';
+import { z, ZodType } from 'zod';
 
 /** OpenAI Function Calling 风格的 Tool Schema */
 export interface OpenAiFunctionToolSchema {
@@ -42,13 +42,16 @@ export interface OpenAiFunctionToolSchema {
 /**
  * 把 zod 对象 schema 转成 OpenAI Function Calling 风格的工具描述
  *
- * 注意：参数 schema 必须是 z.object，因为 OpenAI function calling
- * 要求 parameters 是 object 类型
+ * 注意：参数 schema 必须是 z.object（或外层 z.preprocess 包裹的 z.object），
+ * 因为 OpenAI function calling 要求 parameters 是 object 类型。
+ * ⚠️ 若要做参数形态容错，只允许在**外层**包 z.preprocess——字段级 preprocess
+ * 会让 z.toJSONSchema(io: 'input') 把该字段视为 optional，从 JSON Schema 的
+ * required 中消失，LLM 会以为可以不传（见 document-ops.ts 中的说明）。
  */
 export function buildToolJsonSchema(
   name: string,
   description: string,
-  paramsSchema: ZodObject<any>,
+  paramsSchema: ZodType,
 ): OpenAiFunctionToolSchema {
   const parameters = z.toJSONSchema(paramsSchema, {
     target: 'openapi-3.0',

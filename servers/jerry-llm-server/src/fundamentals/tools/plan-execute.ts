@@ -20,6 +20,7 @@
 import { z } from 'zod';
 import { logger } from '../logger.js';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers.js';
+import { coerceToolParams } from './tool-param-coerce.js';
 import {
   sendCardMessage,
   buildCardJson,
@@ -317,13 +318,22 @@ const createPlanStepSchema = z.object({
     ),
 });
 
-export const createPlanParamsSchema = z.object({
-  goal: z.string().min(1).describe('任务的最终目标描述'),
-  steps: z
-    .array(createPlanStepSchema)
-    .min(1)
-    .describe('执行步骤列表，按顺序排列'),
-});
+export const createPlanParamsSchema = z.preprocess(
+  // 参数形态容错（生产案例 2026-10-12 12:19）：模型把 steps 数组二次序列化为
+  // JSON 字符串、goal 字段误传为 title——归一化后再校验，不赌模型传对参数
+  (v) =>
+    coerceToolParams(v, {
+      jsonFields: ['steps'],
+      alias: { from: 'title', to: 'goal' },
+    }),
+  z.object({
+    goal: z.string().min(1).describe('任务的最终目标描述'),
+    steps: z
+      .array(createPlanStepSchema)
+      .min(1)
+      .describe('执行步骤列表，按顺序排列'),
+  }),
+);
 
 export type CreatePlanParams = z.infer<typeof createPlanParamsSchema>;
 
