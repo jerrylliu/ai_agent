@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Brain, FileText, Trash2, RefreshCw, Plus, Loader2, Pencil, Check } from 'lucide-react';
+import { X, Brain, FileText, Trash2, RefreshCw, Plus, Loader2, Pencil, Check, CloudUpload, CloudOff } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import {
@@ -9,6 +9,8 @@ import {
   updateUserMemory,
   getSessionSummary,
   generateSessionSummary,
+  rebuildMemoryVectors,
+  syncMemoryVector,
   type UserMemoryData,
   type SessionSummaryData,
 } from '../../lib/api';
@@ -51,6 +53,9 @@ const MemorySummaryDialog: React.FC<MemorySummaryDialogProps> = ({ open, onClose
   const [editContent, setEditContent] = useState('');
   const [editCategory, setEditCategory] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
+  // 向量同步：全部重建进行中 / 单条补传进行中的记忆 id 集合
+  const [rebuilding, setRebuilding] = useState(false);
+  const [syncingIds, setSyncingIds] = useState<number[]>([]);
 
   // 加载记忆列表
   const loadMemories = async () => {
@@ -106,6 +111,41 @@ const MemorySummaryDialog: React.FC<MemorySummaryDialogProps> = ({ open, onClose
       if (editingId === id) setEditingId(null);
     } catch (error) {
       console.error('删除记忆失败:', error);
+    }
+  };
+
+  // 全量重建记忆向量（"全部同步"按钮：手动对账 / 存量迁移 / 自愈三合一）
+  const handleRebuildVectors = async () => {
+    setRebuilding(true);
+    try {
+      const result = await rebuildMemoryVectors();
+      if (result.success) {
+        // 重建成功后全部记忆已同步，刷新列表拿到最新 vectorSynced 状态
+        await loadMemories();
+      } else {
+        console.error('全部同步失败:', result.message);
+      }
+    } catch (error) {
+      console.error('全部同步失败:', error);
+    } finally {
+      setRebuilding(false);
+    }
+  };
+
+  // 单条补传：把"待同步"记忆推到向量库
+  const handleSyncVector = async (id: number) => {
+    setSyncingIds(prev => [...prev, id]);
+    try {
+      const result = await syncMemoryVector(id);
+      if (result.success) {
+        setMemories(prev => prev.map(m => (m.id === id ? { ...m, vectorSynced: true } : m)));
+      } else {
+        console.error('补传失败:', result.message);
+      }
+    } catch (error) {
+      console.error('补传失败:', error);
+    } finally {
+      setSyncingIds(prev => prev.filter(x => x !== id));
     }
   };
 
@@ -213,11 +253,46 @@ const MemorySummaryDialog: React.FC<MemorySummaryDialogProps> = ({ open, onClose
               <span className="text-sm text-muted-foreground cyberpunk-ms-subtext">
                 共 {memories.length} 条记忆
               </span>
-              <Button variant="outline" size="sm" onClick={() => setShowAddForm(!showAddForm)}>
-                <Plus className="h-4 w-4 mr-1" />
-                添加
-              </Button>
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRebuildVectors}
+                  disabled={rebuilding || memories.length === 0}
+                  title="把所有记忆重新同步到向量检索库（检索更智能，失败可重试）"
+                >
+                  {rebuilding ? (
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  ) : (
+                    <CloudUpload className="h-4 w-4 mr-1" />
+                  )}
+                  全部同步
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setShowAddForm(!showAddForm)}>
+                  <Plus className="h-4 w-4 mr-1" />
+                  添加
+                </Button>
+              </div>
             </div>
+
+            {/* 待同步提示条（非阻塞 Banner：不影响 AI 使用，仅提示可优化检索质量） */}
+            {memories.some((m) => !m.vectorSynced) && (
+              <div className="flex items-center justify-between px-3 py-2 rounded-lg border border-amber-500/40 bg-amber-500/10 text-sm text-amber-700 dark:text-amber-300">
+                <span className="flex items-center min-w-0">
+                  <CloudOff className="h-4 w-4 mr-2 shrink-0" />
+                  {memories.filter((m) => !m.vectorSynced).length} 条记忆待同步到向量检索库（不影响 AI 使用，同步后检索更准）
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-2 shrink-0 text-amber-700 dark:text-amber-300 hover:text-amber-800 dark:hover:text-amber-200"
+                  onClick={handleRebuildVectors}
+                  disabled={rebuilding}
+                >
+                  {rebuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : '立即同步'}
+                </Button>
+              </div>
+            )}
 
             {/* 添加记忆表单 */}
             {showAddForm && (
@@ -299,7 +374,7 @@ const MemorySummaryDialog: React.FC<MemorySummaryDialogProps> = ({ open, onClose
                         <p className="text-sm text-foreground break-words cyberpunk-ms-text">
                           {memory.content}
                         </p>
-                        <div className="flex items-center space-x-2 mt-2">
+                        <div className="flex items-center space-x-2 mt-2 flex-wrap">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium cyberpunk-ms-badge ${CATEGORY_COLORS[memory.category] || 'bg-muted text-muted-foreground'}`}>
                             {CATEGORY_LABELS[memory.category] || memory.category}
                           </span>
@@ -309,6 +384,28 @@ const MemorySummaryDialog: React.FC<MemorySummaryDialogProps> = ({ open, onClose
                           <span className="text-xs text-muted-foreground cyberpunk-ms-subtext">
                             访问: {memory.accessCount}次
                           </span>
+                          {/* 同步状态徽标：待同步时可点击直接补传 */}
+                          {memory.vectorSynced ? (
+                            <span className="inline-flex items-center text-xs text-emerald-600 dark:text-emerald-400">
+                              <CloudUpload className="h-3 w-3 mr-0.5" />
+                              已同步
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              className="inline-flex items-center text-xs text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-50"
+                              onClick={() => handleSyncVector(memory.id)}
+                              disabled={syncingIds.includes(memory.id)}
+                              title="同步到向量检索库（当前 AI 仍可通过兜底检索到此记忆）"
+                            >
+                              {syncingIds.includes(memory.id) ? (
+                                <Loader2 className="h-3 w-3 mr-0.5 animate-spin" />
+                              ) : (
+                                <CloudOff className="h-3 w-3 mr-0.5" />
+                              )}
+                              待同步·点击补传
+                            </button>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center space-x-1 shrink-0 ml-2">

@@ -124,6 +124,47 @@ export class MemoryController {
     return { success: true, memories, count: memories.length };
   }
 
+  /**
+   * POST /memory/memories/rebuild-vectors
+   * 全量重建当前用户的记忆向量（手动对账 / 存量迁移 / 假空自愈三合一）
+   *
+   * 对应前端记忆模块的"全部同步"按钮；单个补传复用 updateUserMemory 的
+   * 写穿分档（或直接调 syncMemoryVector），此处只做全量动作
+   */
+  @Post('memories/rebuild-vectors')
+  async rebuildMemoryVectors(@Req() req: any) {
+    const effectiveUserId = req?.userId || 'default';
+    try {
+      const written = await this.memoryService.rebuildVectorsForUser(
+        effectiveUserId,
+      );
+      return { success: true, syncedCount: written };
+    } catch (error: any) {
+      return {
+        success: false,
+        message: `向量重建失败: ${error.message}`,
+      };
+    }
+  }
+
+  /**
+   * POST /memory/memories/:id/sync-vector
+   * 单条补传：把指定记忆同步到向量库（对应"待同步"条目的补传按钮）
+   *
+   * 复用 updateUserMemory 写穿逻辑（内容不变 → 仅属性分档不会 re-embed，
+   * 这里需要强制全量同步，直接走 syncVectorAfterWrite 全量路径）
+   */
+  @Post('memories/:id/sync-vector')
+  async syncMemoryVector(@Param('id') id: string) {
+    const memoryId = parseInt(id);
+    try {
+      await this.memoryService.syncSingleMemoryVector(memoryId);
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, message: `同步失败: ${error.message}` };
+    }
+  }
+
   // ==================== 会话摘要接口 ====================
 
   /**

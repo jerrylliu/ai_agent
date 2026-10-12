@@ -48,10 +48,18 @@ export class AppService {
     }
 
     // 获取用户记忆（如果记忆功能已启用且允许注入）
+    // 检索 query = 当前消息 + 最近 1~2 轮：用户说"继续"这类短消息时纯当前句
+    // 语义几乎为零，拼上近期轮次才能保证召回（方案 §5.2）；纯图片消息
+    // message 为空 → getMemoriesForInjection 内部跳过向量层走 ①+③
     let memoryTexts: string[] = [];
     if (memoryEnabled !== false && injectMemory !== false) {
+      const recentTurns = (history ?? [])
+        .slice(-2)
+        .map((h) => h.content)
+        .filter((c): c is string => typeof c === 'string' && c.length > 0);
+      const retrievalQuery = [...recentTurns, message ?? ''].join('\n');
       const { memoryTexts: texts } =
-        await this.memoryService.getMemoriesForInjection(userId, 20);
+        await this.memoryService.getMemoriesForInjection(userId, retrievalQuery);
       memoryTexts = texts;
     }
 
