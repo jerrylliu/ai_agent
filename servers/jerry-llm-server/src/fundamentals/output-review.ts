@@ -256,7 +256,6 @@ export function dedupeSalvagedAssetBlocks(
   salvaged: string,
 ): string {
   if (!salvaged) return '';
-  if (!existing) return salvaged;
   const sigs = collectAssetSignatures(existing);
 
   // 与 extractPreservedAssetBlocks 相同的拆块逻辑：围栏块 + 围栏外图片，按位置排序
@@ -288,13 +287,19 @@ export function dedupeSalvagedAssetBlocks(
         } catch {
           normalized = body.trim();
         }
-        if (sigs.echartsJson.has(normalized)) continue; // 已有同数据图表，丢弃
+        // 已有同数据图表丢弃（含本批次先前已保留的块：签名随保留回写，
+        // 补执行同批解析出的两份相同图表只留一份）
+        if (sigs.echartsJson.has(normalized)) continue;
+        sigs.echartsJson.add(normalized);
       } else {
-        if (sigs.mermaidBodies.has(body.trim())) continue; // 已有同内容导图，丢弃
+        const mermaidSig = body.trim();
+        if (sigs.mermaidBodies.has(mermaidSig)) continue;
+        sigs.mermaidBodies.add(mermaidSig);
       }
     } else {
       const url = text.match(/\(([^)\n]+)\)$/)?.[1] ?? '';
       if (url && sigs.imageUrls.has(url)) continue; // 已有同 URL 图片，丢弃
+      if (url) sigs.imageUrls.add(url);
     }
     kept.push(text);
   }

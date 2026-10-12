@@ -1215,8 +1215,10 @@ async function runOutputReviewPipeline(params: {
     }
     const visualTail = visualSuppressor.flush();
     if (visualTail && !rewriteCancelled) emitRewriteDelta(visualTail);
-    // 残留处理：图片缓冲里未闭合的尾巴（与主路径同口径）
-    if (stripImages && imageMarkdownBuffer && !rewriteCancelled) {
+    // 残留处理：图片缓冲里未闭合的尾巴（与主路径同口径）。
+    // 判定必须用 shouldStripRewriteImages（含补执行新增图片的动态结果），
+    // 用旧快照 stripImages 会导致该场景下尾部残留被静默吞掉
+    if (shouldStripRewriteImages && imageMarkdownBuffer && !rewriteCancelled) {
       const cleaned = stripMarkdownImages(imageMarkdownBuffer);
       imageMarkdownBuffer = '';
       if (cleaned) emitRewriteDelta(cleaned);
@@ -2591,7 +2593,10 @@ async function promptWithFunctionCalling(
       // 有真实副作用（重复发邮件），绝不重放
       if (!ASSET_TOOLS.has(c.name) || !hasTool(c.name)) return false;
       // 精确去重：主流路径已执行过的同一调用不再重放——其资产已随主流发送
-      // 且在 answer 文本内被 extractPreservedAssetBlocks 保全，重放必然双份
+      // 且在 answer 文本内被 extractPreservedAssetBlocks 保全，重放必然双份。
+      // 注意：semanticDedupTracker 只覆盖三个 search 工具（SEMANTIC_DEDUP_TOOLS
+      // 白名单），对资产工具不生效，此处不做语义级调用去重；"同数据不同参数"
+      // 的重复由 dedupeSalvagedAssetBlocks 在内容级兜底
       const callKey = `${c.name}:${JSON.stringify(c.args ?? {})}`;
       if (
         toolCallsMade.some(
@@ -2601,21 +2606,6 @@ async function promptWithFunctionCalling(
         logger.info('输出自检：补执行跳过主流已执行的调用', {
           module: 'PromptService',
           toolName: c.name,
-        });
-        return false;
-      }
-      // 语义去重：参数高度相似（换措辞重查同一目标）的调用同样跳过，
-      // 防止"同一张图换个标题再生成一份"式的近似重复
-      const dupResult = semanticDedupTracker.check(
-        sessionId || '',
-        c.name,
-        c.args,
-      );
-      if (dupResult.isDuplicate) {
-        logger.info('输出自检：补执行语义去重拦截', {
-          module: 'PromptService',
-          toolName: c.name,
-          similarity: Number(dupResult.similarity.toFixed(3)),
         });
         return false;
       }
@@ -2648,9 +2638,6 @@ async function promptWithFunctionCalling(
           });
           collectToolAssets(call.name, result);
           toolCallsMade.push({ name: call.name, args: call.args });
-          // 记录到语义去重追踪器：补执行过的调用在后续主流轮次/再次补执行中
-          // 也能被识别为重复（与 invoke 循环成功后的记录口径一致）
-          semanticDedupTracker.record(sessionId || '', call.name, call.args);
           sendToolStatus(res, call.name, 'done');
           logger.info('输出自检：协议残留补执行成功', {
             module: 'PromptService',
