@@ -67,6 +67,7 @@ import {
   reviewFinalAnswer,
   buildRewriteInstruction,
   extractPreservedAssetBlocks,
+  dedupeSalvagedAssetBlocks,
   createVisualFenceSuppressor,
   isProtocolResidueReason,
 } from './output-review';
@@ -1087,9 +1088,14 @@ async function runOutputReviewPipeline(params: {
     try {
       const salvaged = await salvageAssets(answer, review.reason);
       if (salvaged) {
-        preservedAssets = preservedAssets
-          ? salvaged + '\n\n' + preservedAssets
-          : salvaged;
+        // 内容级去重：剔除与已有保全资产同数据/同内容的块（精确/语义去重拦不住
+        // 的"同数据换措辞再生成"在此兜底），防止前端出现两份相同的图
+        const freshBlocks = dedupeSalvagedAssetBlocks(preservedAssets, salvaged);
+        if (freshBlocks) {
+          preservedAssets = preservedAssets
+            ? freshBlocks + '\n\n' + preservedAssets
+            : freshBlocks;
+        }
       }
     } catch (e: any) {
       // 补执行失败不阻塞重写：降级为纯文字重写（假文案劣于空白，更劣于崩溃）
@@ -1141,9 +1147,14 @@ async function runOutputReviewPipeline(params: {
   const REWRITE_TIMEOUT_MS = 120_000;
 
   // 重写 delta 输出：与主路径 emitSafeText 同款逻辑——
-  // 抑制器产出安全文本 →（可选）图片 Markdown 缓冲剥离 → SSE 发送 + 累加到重写文本
+  // 抑制器产出安全文本 →（可选）图片 Markdown 缓冲剥离 → SSE 发送 + 累加到重写文本。
+  // 剥离判定不能只看调用方传入的 stripImages：它是补执行之前算好的快照，若
+  // 补执行新增了图片资产（保全文本里出现 ![ 字样），重写模型回显的图片 Markdown
+  // 也必须剥离，否则前端出现"恢复的图片 + 模型回显"双份
+  const shouldStripRewriteImages =
+    stripImages || preservedAssets.includes('![');
   const emitRewriteDelta = (text: string): void => {
-    if (!stripImages) {
+    if (!shouldStripRewriteImages) {
       emitPreservedAssetsOnce();
       revised += text;
       sendContent(res, text);
@@ -2574,9 +2585,42 @@ async function promptWithFunctionCalling(
       'create_mindmap',
       'generate_document',
     ]);
-    const eligible = calls.filter(
-      (c) => ASSET_TOOLS.has(c.name) && hasTool(c.name),
-    );
+    const eligible = calls.filter((c) => {
+      // 白名单：只补执行产出可视化资产的工具——重写需要的是图表/图片/导图/
+      // 文档的真实产物；检索类结果脱离模型综合毫无意义；send_notification
+      // 有真实副作用（重复发邮件），绝不重放
+      if (!ASSET_TOOLS.has(c.name) || !hasTool(c.name)) return false;
+      // 精确去重：主流路径已执行过的同一调用不再重放——其资产已随主流发送
+      // 且在 answer 文本内被 extractPreservedAssetBlocks 保全，重放必然双份
+      const callKey = `${c.name}:${JSON.stringify(c.args ?? {})}`;
+      if (
+        toolCallsMade.some(
+          (m) => `${m.name}:${JSON.stringify(m.args ?? {})}` === callKey,
+        )
+      ) {
+        logger.info('输出自检：补执行跳过主流已执行的调用', {
+          module: 'PromptService',
+          toolName: c.name,
+        });
+        return false;
+      }
+      // 语义去重：参数高度相似（换措辞重查同一目标）的调用同样跳过，
+      // 防止"同一张图换个标题再生成一份"式的近似重复
+      const dupResult = semanticDedupTracker.check(
+        sessionId || '',
+        c.name,
+        c.args,
+      );
+      if (dupResult.isDuplicate) {
+        logger.info('输出自检：补执行语义去重拦截', {
+          module: 'PromptService',
+          toolName: c.name,
+          similarity: Number(dupResult.similarity.toFixed(3)),
+        });
+        return false;
+      }
+      return true;
+    });
     if (eligible.length === 0) return '';
     logger.warn('输出自检：协议残留命中，补执行资产工具', {
       module: 'PromptService',
@@ -2604,6 +2648,9 @@ async function promptWithFunctionCalling(
           });
           collectToolAssets(call.name, result);
           toolCallsMade.push({ name: call.name, args: call.args });
+          // 记录到语义去重追踪器：补执行过的调用在后续主流轮次/再次补执行中
+          // 也能被识别为重复（与 invoke 循环成功后的记录口径一致）
+          semanticDedupTracker.record(sessionId || '', call.name, call.args);
           sendToolStatus(res, call.name, 'done');
           logger.info('输出自检：协议残留补执行成功', {
             module: 'PromptService',

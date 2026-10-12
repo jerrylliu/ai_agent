@@ -179,6 +179,128 @@ export function extractPreservedAssetBlocks(answer: string): string {
   return entries.map((e) => e.text).join('\n\n') + '\n\n';
 }
 
+// ==================== 补执行资产内容级去重 ====================
+
+/**
+ * 递归键排序的 canonical JSON 序列化（内部辅助）：同数据但键序/缩进不同的
+ * 两个 echarts option 归一化为相同字符串。工具产出与模型复述块的键序可能
+ * 不一致，仅 parse+stringify 不足以识别"同数据"。
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+      out[k] = canonicalize((value as Record<string, unknown>)[k]);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
+ * 收集一段文本内全部资产块的"内容签名"（内部辅助，供去重比对）。
+ *
+ * 签名口径：
+ *   - echarts：JSON.parse 后 canonicalize（键序+空白归一）再 stringify；
+ *     解析失败的块退化为 trim 后原文比对；
+ *   - mermaid：围栏体 trim 后原文比对；
+ *   - 图片：URL（alt 文本可不同，URL 相同即同一张图）。
+ */
+function collectAssetSignatures(text: string): {
+  echartsJson: Set<string>;
+  mermaidBodies: Set<string>;
+  imageUrls: Set<string>;
+} {
+  const sigs = {
+    echartsJson: new Set<string>(),
+    mermaidBodies: new Set<string>(),
+    imageUrls: new Set<string>(),
+  };
+  const fenceRe = /```(echarts|mermaid)\r?\n([\s\S]*?)(?:\r?\n)?```/g;
+  for (const m of text.matchAll(fenceRe)) {
+    const lang = m[1];
+    const body = m[2] ?? '';
+    if (lang === 'echarts') {
+      try {
+        sigs.echartsJson.add(JSON.stringify(canonicalize(JSON.parse(body))));
+      } catch {
+        sigs.echartsJson.add(body.trim());
+      }
+    } else {
+      sigs.mermaidBodies.add(body.trim());
+    }
+  }
+  const imageRe = /!\[[^\]\n]*\]\(([^)\n]+)\)/g;
+  for (const m of text.matchAll(imageRe)) {
+    sigs.imageUrls.add(m[1] ?? '');
+  }
+  return sigs;
+}
+
+/**
+ * 对补执行产出的资产块做内容级去重（纯函数，便于测试）。
+ *
+ * 为什么需要：补执行的调用若与主流已执行调用参数措辞不同（精确/语义去重都拦不住），
+ * 会再产出一份图表；若原回答文本中恰好有模型复述的同数据 echarts 块
+ * （extractPreservedAssetBlocks 已提取保全），前端会看到两份相同的图。
+ * 此处按内容签名（归一化 JSON / mermaid 原文 / 图片 URL）剔除与已有资产重复的块，
+ * 只保留真正的新增内容。
+ *
+ * @param existing 已确定的保全资产文本（extract 提取结果 + 之前已并入的补执行块）
+ * @param salvaged 本次补执行新产出的资产块文本
+ * @returns 剔除重复后的新增块文本（格式与 extract 一致，块间空行、末尾带空行），全重复时返回空串
+ */
+export function dedupeSalvagedAssetBlocks(
+  existing: string,
+  salvaged: string,
+): string {
+  if (!salvaged) return '';
+  if (!existing) return salvaged;
+  const sigs = collectAssetSignatures(existing);
+
+  // 与 extractPreservedAssetBlocks 相同的拆块逻辑：围栏块 + 围栏外图片，按位置排序
+  const fenceRe = /```(?:echarts|mermaid)\r?\n[\s\S]*?(?:\r?\n)?```/g;
+  const imageRe = /!\[[^\]\n]*\]\([^)\n]+\)/g;
+  const entries: Array<{ start: number; text: string }> = [];
+  for (const m of salvaged.matchAll(fenceRe)) {
+    entries.push({ start: m.index ?? 0, text: m[0] });
+  }
+  for (const m of salvaged.matchAll(imageRe)) {
+    const start = m.index ?? 0;
+    const insideFence = entries.some(
+      (e) => e.text.startsWith('```') && start > e.start && start < e.start + e.text.length,
+    );
+    if (!insideFence) entries.push({ start, text: m[0] });
+  }
+  entries.sort((a, b) => a.start - b.start);
+
+  const kept: string[] = [];
+  for (const { text } of entries) {
+    if (text.startsWith('```')) {
+      const bodyMatch = text.match(/^```(echarts|mermaid)\r?\n([\s\S]*?)(?:\r?\n)?```$/);
+      const lang = bodyMatch?.[1];
+      const body = bodyMatch?.[2] ?? '';
+      if (lang === 'echarts') {
+        let normalized: string;
+        try {
+          normalized = JSON.stringify(canonicalize(JSON.parse(body)));
+        } catch {
+          normalized = body.trim();
+        }
+        if (sigs.echartsJson.has(normalized)) continue; // 已有同数据图表，丢弃
+      } else {
+        if (sigs.mermaidBodies.has(body.trim())) continue; // 已有同内容导图，丢弃
+      }
+    } else {
+      const url = text.match(/\(([^)\n]+)\)$/)?.[1] ?? '';
+      if (url && sigs.imageUrls.has(url)) continue; // 已有同 URL 图片，丢弃
+    }
+    kept.push(text);
+  }
+  return kept.length > 0 ? kept.join('\n\n') + '\n\n' : '';
+}
+
 // ==================== 重写流视觉围栏抑制 ====================
 
 /** 视觉围栏抑制器（有状态，逐 push；供重写流逐 chunk 过滤） */
