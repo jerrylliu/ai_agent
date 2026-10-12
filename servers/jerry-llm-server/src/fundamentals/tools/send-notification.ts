@@ -114,32 +114,80 @@ export function isSendNotificationAvailable(): boolean {
 // ==================== 工具 Schema ====================
 
 /**
+ * 尝试把疑似 JSON 的字符串解析还原（仅当以 [ 或 { 开头才尝试，避免误伤普通文本）。
+ * 解析失败或非 JSON 形态返回 undefined，调用方按原字符串处理。
+ */
+function tryParseJsonString(v: string): unknown | undefined {
+  const s = v.trim();
+  if (s.startsWith('[') || s.startsWith('{')) {
+    try {
+      return JSON.parse(s) as unknown;
+    } catch {
+      // 非法 JSON：按原字符串走既有容错路径
+    }
+  }
+  return undefined;
+}
+
+/**
  * 把 LLM 误传的字符串形态归一化为数组
  * 背景：生产日志出现 recipients/attachments 被模型传成单个字符串
  * （如 "user@qq.com"）导致 zod 校验失败、发送静默失败。
  * 在 schema 层做兜底归一化，不赌模型永远传对数组。
  */
 function coerceStringToArray(v: unknown): unknown {
-  return typeof v === 'string' ? [v] : v;
+  if (typeof v === 'string') {
+    // 模型可能把整个数组二次序列化为 JSON 字符串：先尝试还原
+    const parsed = tryParseJsonString(v);
+    if (Array.isArray(parsed)) return parsed;
+    return [v];
+  }
+  return v;
 }
 
 /**
  * 单附件字符串形态归一化：视为一个 URL 引用（http/https/fc:///data URI 均适用），
  * filename 必填故从 URL 推断（带扩展名的 basename 优先，否则用通用名）
  */
-function coerceStringToAttachments(v: unknown): unknown {
-  if (typeof v !== 'string') return v;
-  const url = v.trim();
-  if (!url) return [];
+function singleUrlAttachment(url: string): { filename: string; url: string } {
+  const trimmed = url.trim();
   let filename = 'attachment';
   try {
     const basename =
-      new URL(url).pathname.split('/').filter(Boolean).pop() || '';
+      new URL(trimmed).pathname.split('/').filter(Boolean).pop() || '';
     if (/\.[a-z0-9]{1,8}$/i.test(basename)) filename = basename;
   } catch {
     // URL 解析失败（如裸 fc:// 短引用解析异常）使用通用文件名
   }
-  return [{ filename, url }];
+  return { filename, url: trimmed };
+}
+
+/**
+ * attachments 参数归一化：
+ * 1. 单 URL 字符串 → [{ filename, url }]（既有容错）；
+ * 2. 生产案例（2026-10-12）：模型把整个 attachments 数组二次序列化为 JSON 字符串
+ *    （'[{"filename":"x.pdf","url":"fc://document/xxx"}]'），旧逻辑把整段 JSON
+ *    当成单个 url，fc:// 引用解析失败、附件被跳过。此处尝试 JSON.parse 还原；
+ * 3. 数组中的字符串元素同样按单 URL 归一化（模型传 ["fc://chart/abc"] 变体）。
+ */
+function coerceStringToAttachments(v: unknown): unknown {
+  if (typeof v === 'string') {
+    const parsed = tryParseJsonString(v);
+    if (parsed !== undefined) return coerceStringToAttachments(parsed);
+    const url = v.trim();
+    if (!url) return [];
+    return [singleUrlAttachment(url)];
+  }
+  if (Array.isArray(v)) {
+    return v.map((item) =>
+      typeof item === 'string' ? singleUrlAttachment(item) : item,
+    );
+  }
+  // 单对象形态（JSON 字符串解析产物或模型直接传对象）：包装为数组
+  if (typeof v === 'object' && v !== null) {
+    return [v];
+  }
+  return v;
 }
 
 // ==================== 收件人归一化 ====================
