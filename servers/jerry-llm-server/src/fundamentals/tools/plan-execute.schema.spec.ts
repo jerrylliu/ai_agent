@@ -29,6 +29,7 @@ import {
   getPlanSchema,
   getPlanParamsSchema,
 } from './plan-execute';
+import { safeParseToolParams } from './_helpers';
 
 describe('createPlanSchema', () => {
   it('应是 OpenAI Function Calling 格式', () => {
@@ -92,9 +93,11 @@ describe('createPlanSchema', () => {
   });
 
   // ==================== 参数形态容错回归（生产案例 2026-10-12 12:19） ====================
+  // 形态容错由 safeParseToolParams 的 schema 导向全局归一化提供，
+  // 因此这些用例走 safeParseToolParams 真实路径（与生产执行路径一致）
 
   it('steps 传 JSON 字符串应解析为数组并通过（多余字段被剥离）', () => {
-    const r = createPlanParamsSchema.safeParse({
+    const r = safeParseToolParams(createPlanParamsSchema, {
       goal: '重庆天气图表',
       steps: JSON.stringify([
         {
@@ -120,7 +123,7 @@ describe('createPlanSchema', () => {
   });
 
   it('goal 缺失误传 title 时应别名兜底', () => {
-    const r = createPlanParamsSchema.safeParse({
+    const r = safeParseToolParams(createPlanParamsSchema, {
       title: '重庆天气图表 + 国外新闻PDF → 邮件与飞书推送',
       steps: [{ description: '步骤1' }],
     });
@@ -131,7 +134,7 @@ describe('createPlanSchema', () => {
   });
 
   it('完整复现生产日志：steps JSON 字符串 + title 别名 + 多余字段应通过', () => {
-    const r = createPlanParamsSchema.safeParse({
+    const r = safeParseToolParams(createPlanParamsSchema, {
       title: '重庆天气图表 + 国外新闻PDF → 邮件与飞书推送',
       steps:
         '[{"step": 1, "description": "查询重庆未来天气预报数据", "tool": "get_weather", "params": {"city": "重庆", "type": "daily"}}, {"step": 2, "description": "联网搜索最近国外新闻", "tool": "search_web"}]',
@@ -145,7 +148,7 @@ describe('createPlanSchema', () => {
   });
 
   it('steps 传非法 JSON 字符串应保持失败（不给模糊兜底）', () => {
-    const r = createPlanParamsSchema.safeParse({
+    const r = safeParseToolParams(createPlanParamsSchema, {
       goal: 'g',
       steps: '这不是JSON',
     });
@@ -153,7 +156,7 @@ describe('createPlanSchema', () => {
   });
 
   it('goal 与 title 同时存在时应优先 goal', () => {
-    const r = createPlanParamsSchema.safeParse({
+    const r = safeParseToolParams(createPlanParamsSchema, {
       goal: '真正的目标',
       title: '别名的标题',
       steps: [{ description: 's' }],

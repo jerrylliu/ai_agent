@@ -319,13 +319,11 @@ const createPlanStepSchema = z.object({
 });
 
 export const createPlanParamsSchema = z.preprocess(
-  // 参数形态容错（生产案例 2026-10-12 12:19）：模型把 steps 数组二次序列化为
-  // JSON 字符串、goal 字段误传为 title——归一化后再校验，不赌模型传对参数
-  (v) =>
-    coerceToolParams(v, {
-      jsonFields: ['steps'],
-      alias: { from: 'title', to: 'goal' },
-    }),
+  // 业务特例别名兜底（生产案例 2026-10-12 12:19）：模型把 goal 误传为 title。
+  // 全项目唯一保留的 preprocess 补丁——别名修复是 create_plan 专属语义，
+  // 不适合放进全局安检；steps 的 JSON 字符串还原已由 safeParseToolParams
+  // 的 schema 导向全局归一化统一处理，此处不再配置 jsonFields
+  (v) => coerceToolParams(v, { alias: { from: 'title', to: 'goal' } }),
   z.object({
     goal: z.string().min(1).describe('任务的最终目标描述'),
     steps: z

@@ -33,6 +33,7 @@ import {
   createMindmapSchema,
   createMindmapParamsSchema,
 } from './multimodal-output';
+import { safeParseToolParams } from './_helpers';
 
 describe('generateChartSchema', () => {
   it('chartType 必填，含 7 个枚举值', () => {
@@ -69,9 +70,11 @@ describe('generateChartSchema', () => {
   });
 
   // ==================== 参数形态容错回归（生产案例 2026-10-12 14:03） ====================
+  // 形态容错由 safeParseToolParams 的 schema 导向全局归一化提供，
+  // 因此这些用例走 safeParseToolParams 真实路径（与生产执行路径一致）
 
   it('echartsOption 传 JSON 字符串应解析为对象并通过（完整复现生产日志）', () => {
-    const r = generateChartParamsSchema.safeParse({
+    const r = safeParseToolParams(generateChartParamsSchema, {
       chartType: 'line',
       title: '重庆未来天气趋势（深色科技风）',
       echartsOption: JSON.stringify({
@@ -93,7 +96,7 @@ describe('generateChartSchema', () => {
   });
 
   it('data 传 JSON 字符串应解析为对象并通过（完整复现生产日志）', () => {
-    const r = generateChartParamsSchema.safeParse({
+    const r = safeParseToolParams(generateChartParamsSchema, {
       chartType: 'line',
       title: '重庆未来天气趋势（2026年10月12日起）',
       data:
@@ -112,7 +115,7 @@ describe('generateChartSchema', () => {
   });
 
   it('data 传非法 JSON 字符串应保持失败（不给模糊兜底）', () => {
-    const r = generateChartParamsSchema.safeParse({
+    const r = safeParseToolParams(generateChartParamsSchema, {
       chartType: 'line',
       data: '这不是JSON',
     });
@@ -120,7 +123,7 @@ describe('generateChartSchema', () => {
   });
 
   it('正常对象形态不受容错影响', () => {
-    const r = generateChartParamsSchema.safeParse({
+    const r = safeParseToolParams(generateChartParamsSchema, {
       chartType: 'pie',
       data: { items: [{ name: 'a', value: 1 }] },
     });
