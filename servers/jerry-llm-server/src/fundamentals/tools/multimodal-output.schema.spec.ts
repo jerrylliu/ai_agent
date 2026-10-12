@@ -67,6 +67,68 @@ describe('generateChartSchema', () => {
     });
     expect(r.success).toBe(true);
   });
+
+  // ==================== 参数形态容错回归（生产案例 2026-10-12 14:03） ====================
+
+  it('echartsOption 传 JSON 字符串应解析为对象并通过（完整复现生产日志）', () => {
+    const r = generateChartParamsSchema.safeParse({
+      chartType: 'line',
+      title: '重庆未来天气趋势（深色科技风）',
+      echartsOption: JSON.stringify({
+        backgroundColor: '#0b1020',
+        title: { text: '重庆未来天气趋势', left: 'center', top: 10 },
+        tooltip: { trigger: 'axis' },
+        legend: { top: 30 },
+      }),
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.echartsOption).toEqual({
+        backgroundColor: '#0b1020',
+        title: { text: '重庆未来天气趋势', left: 'center', top: 10 },
+        tooltip: { trigger: 'axis' },
+        legend: { top: 30 },
+      });
+    }
+  });
+
+  it('data 传 JSON 字符串应解析为对象并通过（完整复现生产日志）', () => {
+    const r = generateChartParamsSchema.safeParse({
+      chartType: 'line',
+      title: '重庆未来天气趋势（2026年10月12日起）',
+      data:
+        '{"labels":["10-12","10-13","10-14"],"series":[{"name":"最高气温(℃)","values":[25,25,22]},{"name":"最低气温(℃)","values":[19,19,19]}]}',
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.data).toEqual({
+        labels: ['10-12', '10-13', '10-14'],
+        series: [
+          { name: '最高气温(℃)', values: [25, 25, 22] },
+          { name: '最低气温(℃)', values: [19, 19, 19] },
+        ],
+      });
+    }
+  });
+
+  it('data 传非法 JSON 字符串应保持失败（不给模糊兜底）', () => {
+    const r = generateChartParamsSchema.safeParse({
+      chartType: 'line',
+      data: '这不是JSON',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('正常对象形态不受容错影响', () => {
+    const r = generateChartParamsSchema.safeParse({
+      chartType: 'pie',
+      data: { items: [{ name: 'a', value: 1 }] },
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.data).toEqual({ items: [{ name: 'a', value: 1 }] });
+    }
+  });
 });
 
 describe('generateImageSchema', () => {
