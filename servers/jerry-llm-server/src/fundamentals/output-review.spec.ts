@@ -541,5 +541,14 @@ describe('output-review 模块', () => {
         salvaged + '\n\n',
       );
     });
+
+    it('同批次内两份相同块只保留一份（签名随保留回写）', () => {
+      const { mod } = setup();
+      const chart = '```echarts\n' + CHART_A + '\n```';
+      const salvaged = chart + '\n\n' + chart + '\n\n' + '```echarts\n' + CHART_B + '\n```\n\n';
+      const result = mod.dedupeSalvagedAssetBlocks('', salvaged);
+      expect(result.match(/成都天气/g)?.length ?? 0).toBe(1);
+      expect(result).toContain('上海天气');
+    });
   });
 });
