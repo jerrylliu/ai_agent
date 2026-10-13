@@ -418,6 +418,353 @@ describe('executeTableOps - 跨表聚合与重算（真实用户场景）', () =
   });
 });
 
+describe('executeTableOps - groupCreateSheet（功能 1：分组建表）', () => {
+  // 丙的销售额为空：其组无可计算数字，应被跳过且不导致整体失败
+  const text = singleSheetText(
+    '销售员,销售额',
+    '甲,100',
+    '乙,200',
+    '甲,300',
+    '丙,',
+    '乙,50',
+  );
+
+  it('基础分组求和：新表含分组行 + 总计行，跳过无可算数字的组', () => {
+    const { sheetText, report } = executeTableOps(text, [
+      {
+        type: 'groupCreateSheet',
+        groupBy: '销售员',
+        valueColumn: '销售额',
+        fn: 'sum',
+        resultLabel: '销售额合计',
+        newSheetName: '按销售员统计',
+      },
+    ]);
+    // 甲=100+300=400，乙=200+50=250，丙空值跳过；总计=650
+    expect(report[0].message).toContain('已新建工作表「按销售员统计」');
+    expect(report[0].message).toContain('共 2 组');
+    expect(report[0].message).toContain('总计 650');
+    expect(report[0].message).toContain('1 组无可计算数字已跳过（丙）');
+    expect(sheetText).toContain('Sheet: 按销售员统计');
+    expect(sheetText).toContain('销售员,销售额合计');
+    expect(sheetText).toContain('甲,400');
+    expect(sheetText).toContain('乙,250');
+    expect(sheetText).toContain('总计,650');
+    // 结果表在原文之后追加，原数据未被改动
+    expect(sheetText).toContain('甲,100');
+  });
+
+  it('resultLabel 省略时用统计列原名作为结果表数值列名', () => {
+    const { sheetText } = executeTableOps(text, [
+      { type: 'groupCreateSheet', groupBy: '销售员', valueColumn: '销售额', fn: 'count', newSheetName: '统计' },
+    ]);
+    expect(sheetText).toContain('销售员,销售额');
+    // count 统计非空格数：甲 2、乙 2，丙组全空 0 → count 不需要数字，丙=0
+    expect(sheetText).toContain('甲,2');
+    expect(sheetText).toContain('丙,0');
+    expect(sheetText).toContain('总计,4');
+  });
+
+  it('分组键为空的行归入"(空)"组', () => {
+    const withEmptyKey = singleSheetText('区域,销售额', ',100', '华南,200');
+    const { sheetText } = executeTableOps(withEmptyKey, [
+      { type: 'groupCreateSheet', groupBy: '区域', valueColumn: '销售额', fn: 'sum', newSheetName: '分区统计' },
+    ]);
+    expect(sheetText).toContain('(空),100');
+    expect(sheetText).toContain('华南,200');
+    expect(sheetText).toContain('总计,300');
+  });
+
+  it('同名 sheet 已存在 → 整表重建（幂等），不插出多张同名表', () => {
+    const op = {
+      type: 'groupCreateSheet' as const,
+      groupBy: '销售员',
+      valueColumn: '销售额',
+      fn: 'sum' as const,
+      resultLabel: '销售额合计',
+      newSheetName: '按销售员统计',
+    };
+    const first = executeTableOps(text, [op]);
+    const second = executeTableOps(first.sheetText, [op]);
+    expect(second.report[0].message).toContain('已重建工作表');
+    // 只有一张同名表（不重复追加）
+    expect(
+      second.sheetText.split('\n').filter((l) => l.startsWith('Sheet: 按销售员统计')),
+    ).toHaveLength(1);
+    // 重建后内容一致（不叠加）
+    expect(second.sheetText).toBe(first.sheetText);
+  });
+
+  it('新表名含 Excel 非法字符 → 清洗为下划线', () => {
+    const { sheetText } = executeTableOps(text, [
+      { type: 'groupCreateSheet', groupBy: '销售员', valueColumn: '销售额', fn: 'sum', newSheetName: '统计/汇总:2026' },
+    ]);
+    expect(sheetText).toContain('Sheet: 统计_汇总_2026');
+  });
+
+  it('sourceSheet 跨表分组 + where 过滤', () => {
+    const multi = [
+      'Sheet: 汇总',
+      '类别,金额',
+      '',
+      'Sheet: 明细',
+      '类别,金额,备注',
+      'A,100,重点客户',
+      'B,200,',
+      'A,300,重点客户',
+      'C,400,',
+    ].join('\n');
+    const { sheetText, report } = executeTableOps(multi, [
+      {
+        type: 'groupCreateSheet',
+        sourceSheet: '明细',
+        groupBy: '类别',
+        valueColumn: '金额',
+        fn: 'sum',
+        where: { column: '备注', op: 'eq', value: '重点客户' },
+        newSheetName: '重点客户统计',
+      },
+    ]);
+    // 只统计重点客户：A=400，总计=400；源表"明细"保持原样（where 只作用于分组统计）
+    expect(report[0].message).toContain('共 1 组');
+    expect(report[0].message).toContain('总计 400');
+    const newSection = sheetText.split('Sheet: 重点客户统计')[1] ?? '';
+    expect(newSection).toContain('A,400');
+    expect(newSection).toContain('总计,400');
+    expect(newSection).not.toContain('B');
+  });
+
+  it('分组列/统计列不存在 → 报错', () => {
+    expect(() =>
+      executeTableOps(text, [
+        { type: 'groupCreateSheet', groupBy: '不存在的列', valueColumn: '销售额', fn: 'sum', newSheetName: 'x' },
+      ]),
+    ).toThrow(/找不到列/);
+    expect(() =>
+      executeTableOps(text, [
+        { type: 'groupCreateSheet', groupBy: '销售员', valueColumn: '不存在列', fn: 'sum', newSheetName: 'x' },
+      ]),
+    ).toThrow(/找不到列/);
+  });
+
+  it('统计列全空 → 报错（无任何可计算数字）', () => {
+    const allEmpty = singleSheetText('销售员,销售额', '甲,', '乙,');
+    expect(() =>
+      executeTableOps(allEmpty, [
+        { type: 'groupCreateSheet', groupBy: '销售员', valueColumn: '销售额', fn: 'sum', newSheetName: 'x' },
+      ]),
+    ).toThrow(/没有可计算的数字/);
+  });
+
+  it('where 过滤后 0 匹配 → 报错', () => {
+    expect(() =>
+      executeTableOps(text, [
+        {
+          type: 'groupCreateSheet',
+          groupBy: '销售员',
+          valueColumn: '销售额',
+          fn: 'sum',
+          where: { column: '销售员', op: 'eq', value: '不存在的人' },
+          newSheetName: 'x',
+        },
+      ]),
+    ).toThrow(/没有满足条件/);
+  });
+});
+
+describe('executeTableOps - deriveColumn（功能 2：公式补数）', () => {
+  const text = singleSheetText(
+    '名称,数量,单价,销售额',
+    'a,2,10,999',
+    'b,3,5,',
+    'c,,4,',
+    'd,0,10,',
+  );
+
+  it('表达式逐行计算 + where 限定：只补空行，已有值保留', () => {
+    const { sheetText, report } = executeTableOps(text, [
+      {
+        type: 'deriveColumn',
+        targetColumn: '销售额',
+        expression: '[数量]*[单价]',
+        where: { column: '销售额', op: 'empty', value: '' },
+      },
+    ]);
+    // a 行已有 999 不动；b=3*5=15 补上；c 数量为空跳过；d=0*10=0 写 0
+    expect(report[0].message).toContain('计算写入 2 行');
+    expect(report[0].message).toContain('跳过 1 行');
+    expect(sheetText).toContain('a,2,10,999');
+    expect(sheetText).toContain('b,3,5,15');
+    expect(sheetText).toContain('c,,4,');
+    expect(sheetText).toContain('d,0,10,0');
+  });
+
+  it('目标列不存在 → 新增该列并全量计算', () => {
+    const base = singleSheetText('名称,数量,单价', 'a,2,10', 'b,3,5');
+    const { sheetText, report } = executeTableOps(base, [
+      { type: 'deriveColumn', targetColumn: '金额', expression: '[数量]*[单价]' },
+    ]);
+    expect(report[0].message).toContain('已新增列「金额」');
+    expect(sheetText).toContain('名称,数量,单价,金额');
+    expect(sheetText).toContain('a,2,10,20');
+    expect(sheetText).toContain('b,3,5,15');
+  });
+
+  it('除零 → 该行跳过保留原值（不中断整体）', () => {
+    const withZero = singleSheetText('名称,数量,除数,结果', 'a,10,2,', 'b,10,0,', 'c,10,5,99');
+    const { sheetText, report } = executeTableOps(withZero, [
+      { type: 'deriveColumn', targetColumn: '结果', expression: '[数量]/[除数]' },
+    ]);
+    expect(report[0].message).toContain('计算写入 2 行');
+    expect(report[0].message).toContain('跳过 1 行');
+    expect(sheetText).toContain('a,10,2,5');
+    expect(sheetText).toContain('b,10,0,');
+    expect(sheetText).toContain('c,10,5,2'); // 无 where → 全表计算，c=10/5=2
+  });
+
+  it('表达式支持括号/加减/一元负号：[数量]*([单价]-2)+5', () => {
+    const base = singleSheetText('名称,数量,单价', 'a,3,10', 'b,2,0');
+    const { sheetText } = executeTableOps(base, [
+      { type: 'deriveColumn', targetColumn: '运费', expression: '[数量]*([单价]-2)+5' },
+    ]);
+    // a: 3*(10-2)+5=29；b: 2*(0-2)+5=1
+    expect(sheetText).toContain('a,3,10,29');
+    expect(sheetText).toContain('b,2,0,1');
+  });
+
+  it('语法错误 → 报错（表达式不完整/非法字符/多余内容）', () => {
+    const base = singleSheetText('名称,数量', 'a,1');
+    expect(() =>
+      executeTableOps(base, [{ type: 'deriveColumn', targetColumn: 'x', expression: '[数量]*' }]),
+    ).toThrow(/表达式不完整/);
+    expect(() =>
+      executeTableOps(base, [{ type: 'deriveColumn', targetColumn: 'x', expression: '[数量]abs' }]),
+    ).toThrow(/不支持的内容/);
+    expect(() =>
+      executeTableOps(base, [{ type: 'deriveColumn', targetColumn: 'x', expression: '1 2' }]),
+    ).toThrow(/多余内容/);
+    expect(() =>
+      executeTableOps(base, [{ type: 'deriveColumn', targetColumn: 'x', expression: '[数量' }]),
+    ).toThrow(/\[缺少对应的 \]/);
+    // 绝不 eval：system 命令注入在词法阶段被拒
+    expect(() =>
+      executeTableOps(base, [
+        { type: 'deriveColumn', targetColumn: 'x', expression: 'process.exit(1)' },
+      ]),
+    ).toThrow(/不支持的内容/);
+  });
+
+  it('引用列不存在 → 报错', () => {
+    const base = singleSheetText('名称,数量', 'a,1');
+    expect(() =>
+      executeTableOps(base, [
+        { type: 'deriveColumn', targetColumn: 'x', expression: '[不存在列]*2' },
+      ]),
+    ).toThrow(/找不到列/);
+  });
+});
+
+describe('executeTableOps - 多条件 where（功能 3：AND/OR）', () => {
+  const text = singleSheetText(
+    '区域,销售员,销售额',
+    '华南,甲,100',
+    '华北,乙,200',
+    '华南,丙,3000',
+    '东北,丁,50',
+  );
+
+  it('and 组合删行：区域=华南 且 销售额>1000 → 只删丙', () => {
+    const { sheetText, report } = executeTableOps(text, [
+      {
+        type: 'deleteRows',
+        where: {
+          mode: 'and',
+          conditions: [
+            { column: '区域', op: 'eq', value: '华南' },
+            { column: '销售额', op: 'gt', value: '1000' },
+          ],
+        },
+      },
+    ]);
+    expect(report[0].message).toContain('删除 1 行');
+    expect(report[0].message).toContain('区域 = 华南 且 销售额 > 1000');
+    expect(sheetText).not.toContain('华南,丙,3000');
+    // 甲虽然区域=华南但销售额 1000 不满足 >1000，保留
+    expect(sheetText).toContain('华南,甲,100');
+  });
+
+  it('or 组合更新：区域=华北 或 销售额<=50 → 更新 2 行', () => {
+    const { sheetText, report } = executeTableOps(text, [
+      {
+        type: 'updateCells',
+        targetColumn: '区域',
+        where: {
+          mode: 'or',
+          conditions: [
+            { column: '区域', op: 'eq', value: '华北' },
+            { column: '销售额', op: 'lte', value: '50' },
+          ],
+        },
+        newValue: '特殊',
+      },
+    ]);
+    expect(report[0].message).toContain('2 行');
+    expect(sheetText).toContain('特殊,乙,200');
+    expect(sheetText).toContain('特殊,丁,50');
+    // 未匹配的行不动
+    expect(sheetText).toContain('华南,甲,100');
+    expect(sheetText).toContain('华南,丙,3000');
+  });
+
+  it('组合条件用于聚合 where：or 过滤后求和', () => {
+    const { sheetText, report } = executeTableOps(text, [
+      {
+        type: 'aggregateAppendRow',
+        column: '销售额',
+        fn: 'sum',
+        label: '重点区域合计',
+        where: {
+          mode: 'or',
+          conditions: [
+            { column: '区域', op: 'eq', value: '华南' },
+            { column: '区域', op: 'eq', value: '东北' },
+          ],
+        },
+      },
+    ]);
+    // 华南 100+3000 + 东北 50 = 3150；3 列表追加行：标签在第一列，第二列（销售员）留空
+    expect(report[0].message).toContain('3150');
+    expect(sheetText).toContain('重点区域合计,,3150');
+  });
+
+  it('组合条件内列不存在 → 报错（校验阶段拦截）', () => {
+    expect(() =>
+      executeTableOps(text, [
+        {
+          type: 'deleteRows',
+          where: {
+            mode: 'and',
+            conditions: [
+              { column: '区域', op: 'eq', value: '华南' },
+              { column: '不存在列', op: 'eq', value: 'x' },
+            ],
+          },
+        },
+      ]),
+    ).toThrow(/找不到列/);
+  });
+
+  it('单条件写法向后兼容（回归：既有 deleteRows/updateCells 行为不变）', () => {
+    const { sheetText } = executeTableOps(text, [
+      { type: 'deleteRows', where: { column: '销售额', op: 'gte', value: '200' } },
+    ]);
+    expect(sheetText).not.toContain('华北,乙,200');
+    expect(sheetText).not.toContain('华南,丙,3000');
+    expect(sheetText).toContain('华南,甲,100');
+    expect(sheetText).toContain('东北,丁,50');
+  });
+});
+
 describe('buildSheetOverview', () => {
   it('输出表头 + 最多 2 行样本，不含全表数据', () => {
     const text = singleSheetText('名称,数量', 'a,1', 'b,2', 'c,3', 'd,4');

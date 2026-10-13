@@ -9,6 +9,8 @@ import { ModelController } from './controllers/model.controller.js';
 import { EmbeddingController } from './controllers/embedding.controller.js';
 import { UploadController } from './controllers/upload.controller.js';
 import { DocumentController } from './controllers/document.controller.js';
+import { TableRuleController } from './controllers/table-rule.controller.js';
+import { SemanticFillController } from './controllers/semantic-fill.controller.js';
 import { KnowledgeSourceController } from './controllers/knowledge-source.controller.js';
 import { SettingsController } from './controllers/settings.controller.js';
 import { RedisDashboardController } from './controllers/redis-dashboard.controller.js';
@@ -44,9 +46,12 @@ import { ImageDescription } from './entities/image-description.entity.js';
 import { KgEntity } from './entities/kg-entity.entity.js';
 import { KgTriple } from './entities/kg-triple.entity.js';
 import { KgExtractOp } from './entities/kg-extract-op.entity.js';
+import { TableRule } from './entities/table-rule.entity.js';
+import { TableRuleService } from './services/table-rule.service.js';
 import { DocumentService } from './services/document.service.js';
 import { DocumentScanService } from './services/document-scan.service.js';
 import { TableOpsService } from './services/table-ops.service.js';
+import { SemanticFillService } from './services/semantic-fill.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
 import { ImageRetrySchedulerService } from './services/image-retry-scheduler.service.js';
 import { KnowledgeSourceService } from './services/knowledge-source.service.js';
@@ -118,6 +123,8 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
         KgEntity,
         KgTriple,
         KgExtractOp,
+        // 表格规则器（功能 5"表格的 ESLint"）
+        TableRule,
       ],
       // 不在 NestJS 启动时加载 migrations：
       // 1. NestJS 运行在 ESM 模式，TypeORM 同步 require 加载 ESM 迁移文件会崩
@@ -151,6 +158,7 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
       KgEntity,
       KgTriple,
       KgExtractOp,
+      TableRule,
     ]),
     AuthModule,
   ],
@@ -172,6 +180,10 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     MetricsController,
     // KG 图谱只读查询（档位3 可视化面板数据源，直查库不依赖 KG 开关）
     KgGraphController,
+    // 表格规则器（功能 5：规则 CRUD + 检查/修复 + AI 提议）
+    TableRuleController,
+    // 语义填充分批任务（功能 4：start/status/cancel）
+    SemanticFillController,
   ],
   providers: [
     AppService,
@@ -183,6 +195,10 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     DocumentService,
     // AI 表格指令服务（M2 指令下推：LLM 解析意图 + 代码精确执行）
     TableOpsService,
+    // 表格规则器服务（功能 5：规则 CRUD + 检查/修复编排 + AI 提议）
+    TableRuleService,
+    // 语义填充服务（功能 4：路径决策 + 映射/分批执行 + 任务调度）
+    SemanticFillService,
     // 文档安全扫描服务（入库前注入扫描门禁 + 人工复核）
     DocumentScanService,
     DocumentSchedulerService,

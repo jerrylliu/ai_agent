@@ -81,6 +81,12 @@ const RuntimeConfigMineruSchema = z.object({
   modelVersion: z.string().optional(),
 });
 
+// 聊天直传解析上限（功能 6）：/upload/extract 的截断阈值，设置界面可调
+// 加载路径宽松（nonnegative）：脏值回退默认 5 万，由写入路径严格校验兜底
+const RuntimeConfigUploadExtractSchema = z.object({
+  maxChars: z.number().int().nonnegative().optional(),
+});
+
 /**
  * 逐区块校验：失败时记录告警并返回 undefined（调用方用默认值补齐）
  *
@@ -152,6 +158,15 @@ export const MineruConfigUpdateSchema = z.object({
   modelVersion: z.string().max(50).optional(),
 });
 
+export const UploadExtractConfigUpdateSchema = z.object({
+  /**
+   * 聊天直传解析的字符截断上限
+   * 0 = 不人为限制（发送前仍按模型上下文窗口预检）；
+   * 上限 2000 万字符防误填天文数字拖垮解析与内存
+   */
+  maxChars: z.number().int().min(0).max(20_000_000).optional(),
+});
+
 // 功能开关全局默认（记忆/摘要/新会话注入记忆）
 // 字段为 undefined 表示服务端未显式设置，前端设备按各自本地默认生效；
 // 一旦显式设置（前端保存或 AI toggle_feature），所有未自定义的设备跟随此全局默认
@@ -168,6 +183,7 @@ export const RuntimeConfigUpdateSchema = z
     embedding: RuntimeConfigEmbeddingSchema.optional(),
     mineru: MineruConfigUpdateSchema.optional(),
     features: FeaturesConfigUpdateSchema.optional(),
+    uploadExtract: UploadExtractConfigUpdateSchema.optional(),
   })
   .loose();
 
@@ -245,6 +261,16 @@ export type FeatureDefaultsConfig = {
   injectMemoryOnNewSession?: boolean;
 };
 
+// 用 type 而非 interface：mergeDefined 泛型约束为 Record<string, unknown>，
+// 对象字面量类型有隐式索引签名而 interface 没有
+export type UploadExtractConfig = {
+  /**
+   * 聊天直传解析的字符截断上限（/upload/extract）
+   * 0 = 不人为限制（发送前按模型窗口预检）；历史基线为硬编码的 50000
+   */
+  maxChars: number;
+};
+
 export interface RuntimeConfig {
   cache: {
     maxEntries: number;
@@ -271,6 +297,8 @@ export interface RuntimeConfig {
   mineru: MineruRuntimeConfig;
   /** 功能开关全局默认（记忆/摘要/新会话注入记忆） */
   features: FeatureDefaultsConfig;
+  /** 聊天直传解析上限（功能 6，设置界面可调） */
+  uploadExtract: UploadExtractConfig;
 }
 
 // ==================== 默认配置 ====================
@@ -324,6 +352,10 @@ export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
     memoryEnabled: undefined,
     summaryEnabled: undefined,
     injectMemoryOnNewSession: undefined,
+  },
+  // 聊天直传解析上限：与升级前硬编码值一致（5 万字符），行为零变化
+  uploadExtract: {
+    maxChars: 50000,
   },
 };
 
@@ -413,6 +445,11 @@ export function loadRuntimeConfig(): RuntimeConfig {
       savedObj.features,
       'features',
     );
+    const savedUploadExtract = parseSection(
+      RuntimeConfigUploadExtractSchema,
+      savedObj.uploadExtract,
+      'uploadExtract',
+    );
 
     // 深度合并：默认值 + 文件中的值
     const config: RuntimeConfig = {
@@ -452,6 +489,10 @@ export function loadRuntimeConfig(): RuntimeConfig {
         injectMemoryOnNewSession:
           savedFeatures?.injectMemoryOnNewSession ??
           DEFAULT_RUNTIME_CONFIG.features.injectMemoryOnNewSession,
+      },
+      uploadExtract: {
+        ...DEFAULT_RUNTIME_CONFIG.uploadExtract,
+        ...savedUploadExtract,
       },
     };
 
@@ -532,6 +573,25 @@ export function getFeatureDefaults(): {
 }
 
 /**
+ * 解析聊天直传解析上限的当前生效值（功能 6）
+ *
+ * maxParagraphs 按比例放宽：历史基线 5 万字符对应 500 段（约 100 字符/段），
+ * 字符上限调大时段数同步放宽（如 20 万字符 → 2000 段），避免"调大了字符上限、
+ * 内容仍被隐藏的段数上限砍掉"；maxChars = 0（不限）时段数同样不限
+ * （段数天然受文本长度约束，不需要独立硬顶）。
+ */
+export function getUploadExtractLimits(): {
+  maxChars: number;
+  maxParagraphs: number;
+} {
+  const maxChars = currentConfig.uploadExtract.maxChars;
+  return {
+    maxChars,
+    maxParagraphs: maxChars === 0 ? 0 : Math.max(500, Math.ceil(maxChars / 100)),
+  };
+}
+
+/**
  * 浅合并且忽略 patch 中值为 undefined 的键。
  * 部分更新场景下，未提供的字段必须以"不覆盖"语义处理；
  * 直接展开会把显式 undefined 写进已保存配置（如只传 apiKey 时清空 provider）。
@@ -568,6 +628,9 @@ export function updateRuntimeConfig(partial: {
     memoryEnabled?: boolean;
     summaryEnabled?: boolean;
     injectMemoryOnNewSession?: boolean;
+  };
+  uploadExtract?: {
+    maxChars?: number;
   };
 }): RuntimeConfig {
   // 写入前严格校验：非法值一律抛错，绝不落盘。
@@ -618,6 +681,12 @@ export function updateRuntimeConfig(partial: {
     currentConfig.features = mergeDefined(
       currentConfig.features,
       partial.features,
+    );
+  }
+  if (partial.uploadExtract) {
+    currentConfig.uploadExtract = mergeDefined(
+      currentConfig.uploadExtract,
+      partial.uploadExtract,
     );
   }
   saveRuntimeConfig(currentConfig);

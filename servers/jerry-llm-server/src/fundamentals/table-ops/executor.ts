@@ -17,7 +17,12 @@
  */
 
 import { parseCsvLine, SHEET_HEADING_RE } from '../document-parser.js';
-import type { OpReport, TableOp } from './schema.js';
+import type {
+  OpReport,
+  RowCondition,
+  TableOp,
+  WhereClause,
+} from './schema.js';
 
 // ==================== 常量 ====================
 
@@ -26,8 +31,11 @@ export const MAX_DATA_ROWS = 20000;
 
 // ==================== 数据结构 ====================
 
-/** 解析后的单个 sheet：headers 为表头数组，rows 为数据行（不含表头） */
-interface SheetData {
+/**
+ * 解析后的单个 sheet：headers 为表头数组，rows 为数据行（不含表头）。
+ * Sheet 解析中间结构（供同模块族的 rules.ts 复用，不对外泄露到模块族之外）
+ */
+export interface SheetData {
   name: string;
   headers: string[];
   rows: string[][];
@@ -57,7 +65,7 @@ export class TableOpsError extends Error {
  *   - `Sheet: 名称` 行开新 sheet；标题前散行归入 name='' 的无名块；
  *   - 每块首个非空行为表头，其余为数据行；空行跳过。
  */
-function parseSheetData(text: string): SheetData[] {
+export function parseSheetData(text: string): SheetData[] {
   interface Block {
     name: string;
     lines: string[];
@@ -112,14 +120,14 @@ function sheetToText(sheet: SheetData): string {
   return sheet.name ? `Sheet: ${sheet.name}\n${body}` : body;
 }
 
-function serializeSheetData(sheets: SheetData[]): string {
+export function serializeSheetData(sheets: SheetData[]): string {
   return sheets.map(sheetToText).join('\n\n');
 }
 
 // ==================== 基础工具 ====================
 
-/** 宽松数字解析：去逗号/货币符号/空格后 parseFloat；失败返回 null */
-function parseLooseNumber(value: string): number | null {
+/** 宽松数字解析：去逗号/货币符号/空格后 parseFloat；失败返回 null（rules.ts 复用） */
+export function parseLooseNumber(value: string): number | null {
   const cleaned = value.replace(/[,¥$￥\s]/g, '');
   if (!cleaned) return null;
   const n = Number.parseFloat(cleaned);
@@ -134,6 +142,26 @@ function formatAggregate(n: number): string {
 
 /** 聚合方式 */
 type AggregateFn = 'sum' | 'avg' | 'count' | 'min' | 'max';
+
+/** 聚合方式人可读名称（执行报告用） */
+const AGGREGATE_FN_TEXT: Record<AggregateFn, string> = {
+  sum: '求和',
+  avg: '平均',
+  count: '计数',
+  min: '最小',
+  max: '最大',
+};
+
+/**
+ * 新建 sheet 名清洗：替换 Excel 非法字符与换行、截断 28 字符、空名兜底。
+ * 与导出层 dedupeSheetName 的清洗规则保持一致（那边是私有函数，这里本地实现）；
+ * 重名场景由 groupCreateSheet 的"同名重建"语义处理，这里不做去重后缀。
+ */
+const SHEET_NAME_INVALID_RE = /[:\\/?*[\]\r\n]/g;
+function sanitizeSheetName(raw: string): string {
+  const cleaned = raw.replace(SHEET_NAME_INVALID_RE, '_').trim();
+  return (cleaned || '统计结果').slice(0, 28);
+}
 
 /**
  * 对一列的原始值做聚合。
@@ -169,7 +197,7 @@ function computeAggregate(values: string[], fn: AggregateFn, colName: string): n
  *      落在数据行里），扫描各行找到首个等于列名的单元格位置。
  * 两级都未命中 → 抛 TableOpsError（消息带当前表头与提示）。
  */
-function findColumn(sheet: SheetData, name: string): number {
+export function findColumn(sheet: SheetData, name: string): number {
   const target = name.trim();
   const idx = sheet.headers.findIndex((h) => h.trim() === target);
   if (idx !== -1) return idx;
@@ -187,7 +215,7 @@ function findColumn(sheet: SheetData, name: string): number {
 }
 
 /** 按 sheet 名取目标 sheet（精确匹配优先；单 sheet 时任意名都可命中，容忍 LLM 记错名） */
-function findSheet(sheets: SheetData[], targetSheet: string | undefined): SheetData {
+export function findSheet(sheets: SheetData[], targetSheet: string | undefined): SheetData {
   if (sheets.length === 0) {
     throw new TableOpsError('表格内容为空，无可执行的操作');
   }
@@ -249,10 +277,293 @@ function matchCondition(row: string[], colIdx: number, op: string, value: string
   return false;
 }
 
+// ==================== where 子句（功能 3：多条件 AND/OR） ====================
+
+/** 比较方式的人可读符号（报告/错误消息用） */
+const CONDITION_OP_TEXT: Record<string, string> = {
+  eq: '=',
+  ne: '≠',
+  contains: '包含',
+  gt: '>',
+  lt: '<',
+  gte: '≥',
+  lte: '≤',
+  empty: '为空',
+  notEmpty: '不为空',
+};
+
+/** 单条件人可读描述（如"销售额 < 1000"） */
+function describeCondition(c: RowCondition): string {
+  const opText = CONDITION_OP_TEXT[c.op] ?? c.op;
+  const valueText = c.op === 'empty' || c.op === 'notEmpty' ? '' : ` ${c.value}`;
+  return `${c.column} ${opText}${valueText}`.trim();
+}
+
+/** where 子句人可读描述：单条件直接描述，组合条件用 且/或 连接 */
+function describeWhere(where: WhereClause): string {
+  if ('conditions' in where) {
+    return where.conditions
+      .map(describeCondition)
+      .join(where.mode === 'and' ? ' 且 ' : ' 或 ');
+  }
+  return describeCondition(where);
+}
+
+/**
+ * where 子句行匹配：单条件直接比较；组合条件按 and（全满足）/ or（任一满足）聚合。
+ * resolveColumn 由调用方注入（带缓存的列定位器），避免逐行重复 findColumn。
+ */
+function matchWhere(
+  row: string[],
+  where: WhereClause,
+  resolveColumn: (name: string) => number,
+): boolean {
+  if ('conditions' in where) {
+    const results = where.conditions.map((c) =>
+      matchCondition(row, resolveColumn(c.column), c.op, c.value),
+    );
+    return where.mode === 'and' ? results.every(Boolean) : results.some(Boolean);
+  }
+  return matchCondition(row, resolveColumn(where.column), where.op, where.value);
+}
+
+/** 校验 where 子句引用的全部条件列存在（不存在抛 TableOpsError） */
+function validateWhereColumns(where: WhereClause, sheet: SheetData): void {
+  const conditions = 'conditions' in where ? where.conditions : [where];
+  for (const c of conditions) {
+    findColumn(sheet, c.column);
+  }
+}
+
+/**
+ * op 内列定位缓存器：同一列只 findColumn 一次。
+ * 大表逐行 findColumn 是 O(n²) 纯浪费；校验阶段已保证列存在，
+ * 执行期缓存未命中再查一次也必然命中。
+ */
+function makeColumnResolver(sheet: SheetData): (name: string) => number {
+  const cache = new Map<string, number>();
+  return (name: string) => {
+    const key = name.trim();
+    let idx = cache.get(key);
+    if (idx === undefined) {
+      idx = findColumn(sheet, key);
+      cache.set(key, idx);
+    }
+    return idx;
+  };
+}
+
+// ==================== 表达式求值器（功能 2：公式补数，绝不 eval） ====================
+
+/**
+ * 自制迷你表达式引擎：只支持数字、[列名] 引用、+ - * / ( ) 和一元负号。
+ * 安全性 = 9 类操作同级：语法是我们定义的白名单，任何注入内容都会在
+ * 词法阶段抛错，不存在执行任意代码的可能。
+ */
+
+/** 表达式 AST 节点 */
+type ExprNode =
+  | { kind: 'num'; value: number }
+  | { kind: 'col'; name: string }
+  | { kind: 'bin'; op: '+' | '-' | '*' | '/'; left: ExprNode; right: ExprNode }
+  | { kind: 'neg'; operand: ExprNode };
+
+/** 词法单元 */
+type ExprToken = { t: 'num'; v: number } | { t: 'col'; v: string } | { t: 'op'; v: string };
+
+/** 词法分析：非法字符一律抛 TableOpsError（注入内容进不了 AST） */
+function tokenizeExpression(expr: string): ExprToken[] {
+  const tokens: ExprToken[] = [];
+  let i = 0;
+  while (i < expr.length) {
+    const ch = expr[i];
+    if (/\s/.test(ch)) {
+      i++;
+      continue;
+    }
+    if (ch === '[') {
+      // 列引用：[列名]，列名内不允许出现 ]（闭合即止）
+      const close = expr.indexOf(']', i);
+      if (close === -1) {
+        throw new TableOpsError(`表达式「${expr}」中的 [缺少对应的 ]`);
+      }
+      const name = expr.slice(i + 1, close).trim();
+      if (!name) {
+        throw new TableOpsError('表达式中的列引用不能为空，应写为 [列名]（如 [数量]）');
+      }
+      tokens.push({ t: 'col', v: name });
+      i = close + 1;
+      continue;
+    }
+    if (/[0-9]/.test(ch)) {
+      const m = /^\d+(\.\d+)?|\.\d+/.exec(expr.slice(i));
+      if (!m) {
+        throw new TableOpsError(`表达式中的「${ch}」不是合法数字`);
+      }
+      tokens.push({ t: 'num', v: Number.parseFloat(m[0]) });
+      i += m[0].length;
+      continue;
+    }
+    if ('+-*/()'.includes(ch)) {
+      tokens.push({ t: 'op', v: ch });
+      i++;
+      continue;
+    }
+    throw new TableOpsError(
+      `表达式含不支持的内容「${ch}」：只支持数字、[列名] 引用和 + - * / ( ) 运算`,
+    );
+  }
+  if (tokens.length === 0) {
+    throw new TableOpsError('表达式不能为空');
+  }
+  return tokens;
+}
+
+/** 语法分析（递归下降）：expr := term (('+'|'-') term)* ；term := factor (('*'|'/') factor)* */
+function parseExpressionTokens(tokens: ExprToken[]): ExprNode {
+  let pos = 0;
+  /** 预看下一个运算符（非运算符返回 null，不消费） */
+  const peekOp = (): string | null => {
+    const tok = tokens[pos];
+    return tok && tok.t === 'op' ? tok.v : null;
+  };
+  const parseExpr = (): ExprNode => {
+    let left = parseTerm();
+    let op = peekOp();
+    while (op === '+' || op === '-') {
+      pos++;
+      left = { kind: 'bin', op, left, right: parseTerm() };
+      op = peekOp();
+    }
+    return left;
+  };
+  const parseTerm = (): ExprNode => {
+    let left = parseFactor();
+    let op = peekOp();
+    while (op === '*' || op === '/') {
+      pos++;
+      left = { kind: 'bin', op, left, right: parseFactor() };
+      op = peekOp();
+    }
+    return left;
+  };
+  const parseFactor = (): ExprNode => {
+    const tok = tokens[pos];
+    if (!tok) {
+      throw new TableOpsError('表达式不完整（意外结尾），请检查运算符两侧的操作数');
+    }
+    if (tok.t === 'num') {
+      pos++;
+      return { kind: 'num', value: tok.v };
+    }
+    if (tok.t === 'col') {
+      pos++;
+      return { kind: 'col', name: tok.v };
+    }
+    if (tok.v === '(') {
+      pos++;
+      const inner = parseExpr();
+      if (peekOp() !== ')') {
+        throw new TableOpsError('表达式括号不匹配');
+      }
+      pos++;
+      return inner;
+    }
+    if (tok.v === '-') {
+      pos++;
+      return { kind: 'neg', operand: parseFactor() };
+    }
+    if (tok.v === '+') {
+      pos++;
+      return parseFactor();
+    }
+    throw new TableOpsError(`表达式在「${tok.v}」处无法解析`);
+  };
+  const node = parseExpr();
+  if (pos !== tokens.length) {
+    throw new TableOpsError('表达式有多余内容，无法解析（例如缺少运算符）');
+  }
+  return node;
+}
+
+/** 编译表达式 → AST（语法错误抛 TableOpsError，消息面向用户） */
+function compileExpression(expr: string): ExprNode {
+  return parseExpressionTokens(tokenizeExpression(expr));
+}
+
+/** 收集 AST 中全部列引用（去重、保序） */
+function collectColumnRefs(node: ExprNode): string[] {
+  const refs: string[] = [];
+  const walk = (n: ExprNode): void => {
+    switch (n.kind) {
+      case 'col':
+        if (!refs.includes(n.name)) refs.push(n.name);
+        break;
+      case 'bin':
+        walk(n.left);
+        walk(n.right);
+        break;
+      case 'neg':
+        walk(n.operand);
+        break;
+      case 'num':
+        break;
+    }
+  };
+  walk(node);
+  return refs;
+}
+
+/**
+ * 求值：任一引用列的值无法解析为数字 / 除零 → 返回 null，
+ * 由调用方决定跳过该行（数据不丢、不填错值）。
+ */
+function evalExprNode(
+  node: ExprNode,
+  resolveColValue: (name: string) => number | null,
+): number | null {
+  switch (node.kind) {
+    case 'num':
+      return node.value;
+    case 'col':
+      return resolveColValue(node.name);
+    case 'neg': {
+      const v = evalExprNode(node.operand, resolveColValue);
+      return v === null ? null : -v;
+    }
+    case 'bin': {
+      const l = evalExprNode(node.left, resolveColValue);
+      if (l === null) return null;
+      const r = evalExprNode(node.right, resolveColValue);
+      if (r === null) return null;
+      switch (node.op) {
+        case '+':
+          return l + r;
+        case '-':
+          return l - r;
+        case '*':
+          return l * r;
+        case '/':
+          return r === 0 ? null : l / r;
+      }
+    }
+  }
+}
+
 // ==================== 静态校验（先校验后执行） ====================
 
 /** 校验单个 op 的所有列/sheet 引用；引用不存在抛 TableOpsError */
 function validateOp(op: TableOp, sheets: SheetData[]): void {
+  // 分组建表不作用于已有工作表（读取来源表 → 新建结果表），走独立校验分支
+  if (op.type === 'groupCreateSheet') {
+    // 来源表/分组列/统计列必须存在；新表名允许与现有表重名（幂等重建语义）
+    const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : sheets[0];
+    findColumn(source, op.groupBy);
+    findColumn(source, op.valueColumn);
+    if (op.where) validateWhereColumns(op.where, source);
+    return;
+  }
+
   const target = findSheet(sheets, op.targetSheet);
 
   switch (op.type) {
@@ -265,7 +576,7 @@ function validateOp(op: TableOp, sheets: SheetData[]): void {
     case 'aggregateAppendRow': {
       const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : target;
       findColumn(source, op.column);
-      if (op.where) findColumn(source, op.where.column);
+      if (op.where) validateWhereColumns(op.where, source);
       if (op.labelColumn) findColumn(target, op.labelColumn);
       if (op.valueColumn) findColumn(target, op.valueColumn);
       break;
@@ -276,16 +587,16 @@ function validateOp(op: TableOp, sheets: SheetData[]): void {
       if (op.sourceSheet) {
         const source = findSheet(sheets, op.sourceSheet);
         findColumn(source, op.sourceColumn ?? op.column);
-        if (op.where) findColumn(source, op.where.column);
+        if (op.where) validateWhereColumns(op.where, source);
       }
       break;
     }
     case 'updateCells':
       findColumn(target, op.targetColumn);
-      if (op.where) findColumn(target, op.where.column);
+      if (op.where) validateWhereColumns(op.where, target);
       break;
     case 'deleteRows':
-      findColumn(target, op.where.column);
+      validateWhereColumns(op.where, target);
       break;
     case 'deleteColumn':
       findColumn(target, op.column);
@@ -308,6 +619,16 @@ function validateOp(op: TableOp, sheets: SheetData[]): void {
         throw new TableOpsError(`新列名「${op.to}」与现有列重名`);
       }
       break;
+    case 'deriveColumn': {
+      // 表达式语法错误/引用列不存在在这里统一暴露（执行期不再抛）
+      const ast = compileExpression(op.expression);
+      const resolve = makeColumnResolver(target);
+      for (const ref of collectColumnRefs(ast)) {
+        resolve(ref);
+      }
+      if (op.where) validateWhereColumns(op.where, target);
+      break;
+    }
   }
 }
 
@@ -336,16 +657,16 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
     case 'aggregateAppendRow': {
       // 聚合来源：sourceSheet 跨表聚合，否则聚合目标表自身
       const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : sheet;
-      const srcColIdx = findColumn(source, op.column);
+      const resolveSource = makeColumnResolver(source);
+      const srcColIdx = resolveSource(op.column);
       let pool = source.rows.map((r) => padRow(r, source.headers.length));
       let matchedDesc = `全部 ${pool.length} 行`;
       const where = op.where;
       if (where) {
-        const wIdx = findColumn(source, where.column);
-        pool = pool.filter((r) => matchCondition(r, wIdx, where.op, where.value));
+        pool = pool.filter((r) => matchWhere(r, where, resolveSource));
         if (pool.length === 0) {
           throw new TableOpsError(
-            `「${source.name || '未命名'}」中没有满足条件（${where.column} ${where.op} ${where.value || ''}）的行`,
+            `「${source.name || '未命名'}」中没有满足条件（${describeWhere(where)}）的行`,
           );
         }
         matchedDesc = `匹配 ${pool.length} 行`;
@@ -355,8 +676,9 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
         op.fn,
         op.column,
       );
-      const labelColIdx = op.labelColumn ? findColumn(sheet, op.labelColumn) : 0;
-      const valueColIdx = op.valueColumn ? findColumn(sheet, op.valueColumn) : findColumn(sheet, op.column);
+      const resolveTarget = makeColumnResolver(sheet);
+      const labelColIdx = op.labelColumn ? resolveTarget(op.labelColumn) : 0;
+      const valueColIdx = op.valueColumn ? resolveTarget(op.valueColumn) : resolveTarget(op.column);
       // 幂等守卫：目标表中已存在同标签行（精确匹配）→ 就地更新数值，不重复插入。
       // 否则用户重复执行同一条聚合指令会插出多行同名合计，且后续"重算总计"
       // 会把旧合计行也累计进去，数值静默翻倍
@@ -404,11 +726,11 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
         const source = findSheet(sheets, op.sourceSheet);
         const srcColName = op.sourceColumn ?? op.column;
         const srcColIdx = findColumn(source, srcColName);
+        const resolveSource = makeColumnResolver(source);
         let pool = source.rows.map((r) => padRow(r, source.headers.length));
         const where = op.where;
         if (where) {
-          const wIdx = findColumn(source, where.column);
-          pool = pool.filter((r) => matchCondition(r, wIdx, where.op, where.value));
+          pool = pool.filter((r) => matchWhere(r, where, resolveSource));
         }
         if (pool.length === 0) {
           throw new TableOpsError(`来源「${source.name || '未命名'}」中没有满足条件的行`);
@@ -430,16 +752,13 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
     }
 
     case 'updateCells': {
-      const targetIdx = findColumn(sheet, op.targetColumn);
-      // 条件列定位提到循环外（大表逐行 findColumn 是纯浪费）
+      const resolve = makeColumnResolver(sheet);
+      const targetIdx = resolve(op.targetColumn);
       const where = op.where;
-      const whereIdx = where ? findColumn(sheet, where.column) : -1;
       let affected = 0;
       for (const row of sheet.rows) {
         const padded = padRow(row, sheet.headers.length);
-        const matched = where
-          ? matchCondition(padded, whereIdx, where.op, where.value)
-          : true;
+        const matched = where ? matchWhere(padded, where, resolve) : true;
         if (matched) {
           padded[targetIdx] = op.newValue;
           affected++;
@@ -451,12 +770,12 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
     }
 
     case 'deleteRows': {
-      const colIdx = findColumn(sheet, op.where.column);
+      const resolve = makeColumnResolver(sheet);
       const before = sheet.rows.length;
       sheet.rows = sheet.rows.filter(
-        (row) => !matchCondition(padRow(row, sheet.headers.length), colIdx, op.where.op, op.where.value),
+        (row) => !matchWhere(padRow(row, sheet.headers.length), op.where, resolve),
       );
-      return `已删除 ${before - sheet.rows.length} 行（条件：${op.where.column} ${op.where.op} ${op.where.value || ''}）`;
+      return `已删除 ${before - sheet.rows.length} 行（条件：${describeWhere(op.where)}）`;
     }
 
     case 'deleteColumn': {
@@ -502,6 +821,127 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       sheet.headers[colIdx] = op.to;
       return `已将列「${op.from}」重命名为「${op.to}」`;
     }
+
+    case 'groupCreateSheet': {
+      // 本操作不作用于传入的 sheet，而是读取来源表 → 新建/重建结果表
+      const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : sheets[0];
+      const resolveSource = makeColumnResolver(source);
+      const groupIdx = resolveSource(op.groupBy);
+      const valueIdx = resolveSource(op.valueColumn);
+      let pool = source.rows.map((r) => padRow(r, source.headers.length));
+      const where = op.where;
+      if (where) {
+        pool = pool.filter((r) => matchWhere(r, where, resolveSource));
+        if (pool.length === 0) {
+          throw new TableOpsError(
+            `「${source.name || '未命名'}」中没有满足条件（${describeWhere(where)}）的行`,
+          );
+        }
+      }
+      // 分组：保持首次出现顺序（结果可预期）；分组键为空归"(空)"组
+      const groups = new Map<string, string[]>();
+      for (const r of pool) {
+        const key = (r[groupIdx] ?? '').trim() || '(空)';
+        const bucket = groups.get(key);
+        if (bucket) bucket.push(r[valueIdx] ?? '');
+        else groups.set(key, [r[valueIdx] ?? '']);
+      }
+      // 逐组聚合：个别组无可计算数字 → 跳过该组并在报告中说明（不算整体失败）
+      const resultRows: string[][] = [];
+      const skippedGroups: string[] = [];
+      for (const [key, values] of groups) {
+        try {
+          resultRows.push([key, formatAggregate(computeAggregate(values, op.fn, op.valueColumn))]);
+        } catch (err) {
+          if (err instanceof TableOpsError) {
+            skippedGroups.push(key);
+          } else {
+            throw err;
+          }
+        }
+      }
+      if (resultRows.length === 0) {
+        throw new TableOpsError(`列「${op.valueColumn}」没有可计算的数字，无法分组统计`);
+      }
+      // 总计行：对全池（过滤后）统计
+      const total = computeAggregate(
+        pool.map((r) => r[valueIdx] ?? ''),
+        op.fn,
+        op.valueColumn,
+      );
+      const label = op.resultLabel?.trim() || op.valueColumn;
+      const name = sanitizeSheetName(op.newSheetName);
+      const newSheet: SheetData = {
+        name,
+        headers: [op.groupBy, label],
+        rows: [...resultRows, ['总计', formatAggregate(total)]],
+      };
+      // 幂等守卫：同名 sheet 已存在 → 整表重建（就地更新），避免重复执行插出多张同名表
+      const existIdx = sheets.findIndex((s) => s.name === name);
+      let action: string;
+      if (existIdx !== -1) {
+        sheets[existIdx] = newSheet;
+        action = `已重建工作表「${name}」`;
+      } else {
+        sheets.push(newSheet);
+        action = `已新建工作表「${name}」`;
+      }
+      const skipText =
+        skippedGroups.length > 0
+          ? `，${skippedGroups.length} 组无可计算数字已跳过（${skippedGroups.slice(0, 3).join('、')}）`
+          : '';
+      return `${action}：按「${op.groupBy}」分组${AGGREGATE_FN_TEXT[op.fn]}「${op.valueColumn}」，共 ${resultRows.length} 组，总计 ${formatAggregate(total)}${skipText}`;
+    }
+
+    case 'deriveColumn': {
+      // 校验阶段已确认语法与引用列存在，这里直接取 AST 执行
+      const ast = compileExpression(op.expression);
+      const resolve = makeColumnResolver(sheet);
+      const refIdx = new Map<string, number>();
+      for (const ref of collectColumnRefs(ast)) {
+        refIdx.set(ref, resolve(ref));
+      }
+      // 目标列：表头精确匹配；不存在则新增该列
+      const targetName = op.targetColumn.trim();
+      let targetIdx = sheet.headers.findIndex((h) => h.trim() === targetName);
+      const isNewColumn = targetIdx === -1;
+      if (isNewColumn) {
+        sheet.headers.push(op.targetColumn);
+        targetIdx = sheet.headers.length - 1;
+      }
+      const where = op.where;
+      let ok = 0;
+      let skipped = 0;
+      for (const row of sheet.rows) {
+        const padded = padRow(row, sheet.headers.length);
+        const matched = where ? matchWhere(padded, where, resolve) : true;
+        if (matched) {
+          const value = evalExprNode(ast, (colName) => {
+            const idx = refIdx.get(colName);
+            return idx === undefined ? null : parseLooseNumber(padded[idx] ?? '');
+          });
+          if (value === null) {
+            // 无法计算的行：新列留空 / 已有列保留原值——不中断、不填错值
+            skipped++;
+          } else {
+            padded[targetIdx] = formatAggregate(value);
+            ok++;
+          }
+        }
+        row.length = 0;
+        row.push(...padded);
+      }
+      const condText = where ? `（条件：${describeWhere(where)}）` : '';
+      const skipText =
+        skipped > 0 ? `，跳过 ${skipped} 行（引用列含非数字/空值或除零，已保留原值）` : '';
+      return `${isNewColumn ? `已新增列「${op.targetColumn}」并` : ''}按表达式 ${op.expression} 计算写入 ${ok} 行${condText}${skipText}`;
+    }
+
+    case 'semanticFill': {
+      // 正常流程到不了这里：executeTableOps 入口已整体拦截语义填充（服务层分流）。
+      // 保留 case 是为了维持穷尽性检查——未来新增 op 类型时编译器会继续强制各 switch 处理
+      throw new TableOpsError('语义填充不能由表格执行器处理，请单独发起填充指令');
+    }
   }
 }
 
@@ -516,6 +956,14 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
  * @throws TableOpsError 任何引用不存在 / 护栏拦截 → 整体不执行
  */
 export function executeTableOps(text: string, ops: TableOp[]): ExecuteResult {
+  // 防御纵深：semanticFill 是 LLM 推断型操作，只能由 TableOpsService 分流给
+  // SemanticFillService 单独执行；若混入执行器（解析分流被绕过）在这里显式拒绝，
+  // 而不是让 switch 静默跳过造成"指令成功但什么都没发生"
+  if (ops.some((o) => o.type === 'semanticFill')) {
+    throw new TableOpsError(
+      '语义填充需单独执行（请在指令中只描述填充需求），不能与其他表格操作混用',
+    );
+  }
   const sheets = parseSheetData(text);
   if (sheets.length === 0) {
     throw new TableOpsError('表格内容为空，无可执行的操作');
@@ -534,9 +982,16 @@ export function executeTableOps(text: string, ops: TableOp[]): ExecuteResult {
     const op = ops[i];
     try {
       validateOp(op, sheets);
-      const target = findSheet(sheets, op.targetSheet);
+      // groupCreateSheet 不作用于已有工作表（产出为新表），报告以清洗后的新表名为目标
+      const target =
+        op.type === 'groupCreateSheet' ? sheets[0] : findSheet(sheets, op.targetSheet);
       const message = executeOp(op, target, sheets);
-      report.push({ type: op.type, targetSheet: target.name, message });
+      report.push({
+        type: op.type,
+        targetSheet:
+          op.type === 'groupCreateSheet' ? sanitizeSheetName(op.newSheetName) : target.name,
+        message,
+      });
     } catch (err) {
       if (err instanceof TableOpsError) {
         throw new TableOpsError(`第 ${i + 1} 步失败：${err.message}`);
@@ -583,3 +1038,25 @@ export function buildSheetOverview(text: string): string {
     })
     .join('\n\n');
 }
+
+// ==================== 表达式求值对外包装（rules.ts 规则器复用） ====================
+
+/**
+ * 求值一条表达式（功能 5 规则器复用功能 2 求值器）。
+ * 语法错误抛 TableOpsError（消息面向用户）；引用列无法解析为数字/除零返回 null，
+ * 由调用方决定跳过该行。
+ */
+export function evaluateSheetExpression(
+  expr: string,
+  resolveColValue: (name: string) => number | null,
+): number | null {
+  return evalExprNode(compileExpression(expr), resolveColValue);
+}
+
+/** 收集表达式引用的全部列名（去重、保序），供规则器提前校验列存在性 */
+export function collectExpressionColumnRefs(expr: string): string[] {
+  return collectColumnRefs(compileExpression(expr));
+}
+
+/** 表达式结果的展示格式化（整数不带小数，小数最多 2 位去尾零） */
+export const formatExpressionNumber = formatAggregate;

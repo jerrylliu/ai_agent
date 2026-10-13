@@ -22,6 +22,7 @@ import {
   probeModelCapabilities as probeModelCapabilitiesApi,
   subscribeChatEvents,
   fetchFeatureDefaults,
+  fetchUploadExtractSettings,
 } from "../lib/api";
 import type {
   AvailableModel,
@@ -147,6 +148,10 @@ export interface PendingDocument {
   truncated: boolean;
   /** 文档原始总字符数（截断前） */
   totalChars?: number;
+  /** 提取时服务端生效的解析上限（0=不限制），发送前预检用它对比当前上限 */
+  limit?: number;
+  /** 提取时服务端按当前模型估的窗口字符数（0=未知），发送前预检用它拦截超窗口文档 */
+  modelWindowChars?: number;
   /** 后端文档记录 ID */
   documentId?: number;
   /** 来源格式标记：'xlsx' 时编辑器把 sheet 文本转为网格表格 */
@@ -299,6 +304,23 @@ export function useChat(
   };
   const syncFeatureDefaultsRef = useRef(syncFeatureDefaults);
   syncFeatureDefaultsRef.current = syncFeatureDefaults;
+
+  // 同步聊天直传解析上限的本地缓存（功能 6）：启动 / SSE settings_changed 时刷新，
+  // 发送消息前据此预检。失败静默（维持本地缓存值）
+  const syncUploadExtractSettings = async () => {
+    try {
+      const settings = await fetchUploadExtractSettings();
+      if (settings) {
+        useSettingsStore
+          .getState()
+          .setUploadExtractCache(settings.maxChars, settings.modelWindowChars);
+      }
+    } catch {
+      /* 拿不到就维持本地缓存 */
+    }
+  };
+  const syncUploadExtractSettingsRef = useRef(syncUploadExtractSettings);
+  syncUploadExtractSettingsRef.current = syncUploadExtractSettings;
 
   useEffect(() => {
     void loadModelInfo().catch(() => {});
@@ -650,9 +672,14 @@ export function useChat(
           if (event.section === 'model') {
             // AI 在任意端切换了全局模型 → 刷新本端模型显示
             void loadModelInfo().catch(() => {});
+            // 模型窗口估算随模型变化 → 同步刷新本地缓存
+            void syncUploadExtractSettingsRef.current();
           } else if (event.section === 'features') {
             // 功能开关全局默认变更 → 重新拉取并覆盖未自定义的本地开关
             void syncFeatureDefaultsRef.current();
+          } else if (event.section === 'uploadExtract') {
+            // 聊天直传解析上限变更 → 刷新本地缓存（发送前预检用）
+            void syncUploadExtractSettingsRef.current();
           }
           // 转发给其他组件（如设置面板的"跟随全局默认"标记）
           window.dispatchEvent(
@@ -664,6 +691,7 @@ export function useChat(
 
     // 连接建立后同步一次全局默认（设备刚上线时对齐服务端状态）
     void syncFeatureDefaultsRef.current();
+    void syncUploadExtractSettingsRef.current();
 
     return () => {
       sseConnectedRef.current = false;
@@ -756,6 +784,41 @@ export function useChat(
       return;
     }
 
+    // 发送前预检（功能 6）：拦截两种"失效发送"——
+    // 1) 文档是在更高上限时上传的，当前上限已调低，继续发送会撑爆上下文；
+    // 2) 文档内容超出当前模型的上下文窗口估算。
+    // 比较对象用 doc.text.length（已截取内容）而非 totalChars：
+    // 已按当前配置合法截断的文档不应被拦截（警告条已提示截断，见 ChatInput）。
+    const settingsState = useSettingsStore.getState();
+    const currentLimit = settingsState.uploadExtractMaxChars;
+    const defaultWindow = settingsState.uploadExtractModelWindowChars;
+    for (const doc of documents) {
+      if (!doc.text) continue;
+      const contentChars = doc.text.length;
+      if (currentLimit > 0 && contentChars > currentLimit) {
+        const errorMessage: Message = {
+          id: generateId(),
+          content: `⚠️ 文档「${doc.fileName}」上传时解析上限更高（${doc.limit ?? "未知"} 字），当前上限已调整为 ${currentLimit} 字，已截取的 ${contentChars} 字超出限制，已阻止发送。\n请删除该文档重新上传，或在设置中调高「聊天直传解析上限」。`,
+          role: "assistant",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+        return;
+      }
+      // 模型窗口：优先用文档提取时的快照，无快照（旧文档/失败兜底）时退回当前缓存值
+      const windowChars = doc.modelWindowChars ?? defaultWindow;
+      if (windowChars > 0 && contentChars > windowChars) {
+        const errorMessage: Message = {
+          id: generateId(),
+          content: `⚠️ 文档「${doc.fileName}」内容约 ${contentChars} 字，超出当前模型可读范围（约 ${windowChars} 字），已阻止发送。\n请缩小文件，或切换到长上下文模型后再试。`,
+          role: "assistant",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+        return;
+      }
+    }
+
     // 拼装"发给 AI"的内容：用户输入文字 + 文档全文（含截断标记）
     // 这部分是 AI 实际看到的，包括所有文档原文
     let aiInputContent = userInput.trim();
@@ -794,6 +857,7 @@ export function useChat(
               charCount: d.text.length,
               truncated: d.truncated,
               totalChars: d.totalChars,
+              limit: d.limit,
               fileUrl: d.fileUrl,
               contentJson: d.contentJson,
               documentId: d.documentId,
@@ -1167,6 +1231,8 @@ export function useChat(
           fileUrl: result.fileUrl,
           truncated: result.truncated,
           totalChars: result.totalChars,
+          limit: result.limit,
+          modelWindowChars: result.modelWindowChars,
           documentId: result.documentId,
           sourceFormat: result.sourceFormat,
         };

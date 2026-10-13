@@ -16,9 +16,12 @@ import { Body, Controller, Get, Put } from '@nestjs/common';
 import { logger } from '../fundamentals/logger';
 import {
   FeaturesConfigUpdateSchema,
+  UploadExtractConfigUpdateSchema,
   getFeatureDefaults,
+  getUploadExtractLimits,
   updateRuntimeConfig,
 } from '../fundamentals/runtime-config';
+import { getModelCapabilities } from '../fundamentals/model-provider';
 import { publishSettingsChangedEvent } from '../fundamentals/chat-event-bus';
 
 @Controller('settings')
@@ -77,6 +80,67 @@ export class SettingsController {
       return { success: true, data: { defaults: getFeatureDefaults() } };
     } catch (error: any) {
       logger.error('更新功能开关默认值失败', {
+        module: 'SettingsController',
+        error: error.message,
+      });
+      return { success: false, message: `更新失败: ${error.message}` };
+    }
+  }
+
+  // ==================== 聊天直传解析上限（功能 6） ====================
+
+  /**
+   * GET /settings/upload-extract
+   * 获取聊天直传解析上限的当前配置
+   *
+   * 返回 maxChars（0 = 不人为限制）/ maxParagraphs（按比例放宽的段数上限，0 = 不限）/
+   * modelWindowChars（当前模型上下文窗口按 ≈4 字符/token 估算的字符数，前端预检用）
+   */
+  @Get('upload-extract')
+  async getUploadExtractSettings() {
+    try {
+      const limits = getUploadExtractLimits();
+      const modelWindowChars = Math.floor(
+        getModelCapabilities().contextLength * 4,
+      );
+      return { success: true, data: { ...limits, modelWindowChars } };
+    } catch (error: any) {
+      logger.error('获取聊天直传解析上限失败', {
+        module: 'SettingsController',
+        error: error.message,
+      });
+      return { success: false, message: `获取失败: ${error.message}` };
+    }
+  }
+
+  /**
+   * PUT /settings/upload-extract
+   * 更新聊天直传解析上限（body: { maxChars }，0 = 不人为限制）
+   * 成功后广播 settings_changed 事件，在线端刷新本地缓存的限额值
+   */
+  @Put('upload-extract')
+  async updateUploadExtractSettings(@Body() body: unknown) {
+    try {
+      const parsed = UploadExtractConfigUpdateSchema.safeParse(body);
+      if (!parsed.success) {
+        const messages = parsed.error.issues
+          .map((i) => `${i.path.join('.')}: ${i.message}`)
+          .join('; ');
+        return { success: false, message: `参数校验失败: ${messages}` };
+      }
+      if (parsed.data.maxChars === undefined) {
+        return { success: false, message: 'maxChars 必须提供' };
+      }
+
+      updateRuntimeConfig({ uploadExtract: parsed.data });
+      publishSettingsChangedEvent({ section: 'uploadExtract' });
+      logger.info('聊天直传解析上限已更新', {
+        module: 'SettingsController',
+        maxChars: parsed.data.maxChars,
+      });
+      return { success: true, data: { maxChars: parsed.data.maxChars } };
+    } catch (error: any) {
+      logger.error('更新聊天直传解析上限失败', {
         module: 'SettingsController',
         error: error.message,
       });

@@ -17,13 +17,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Save, Loader2, CheckCircle2, UploadCloud, BookOpen, Sparkles, PanelRightClose, Download } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, CheckCircle2, UploadCloud, BookOpen, Sparkles, PanelRightClose, Download, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DocumentEditor, type Editor, type JSONContent } from '@/components/Editor/DocumentEditor';
 import { EditorToolbar } from '@/components/Editor/EditorToolbar';
 import { SelectionToolbar } from '@/components/Editor/SelectionToolbar';
 import { KnowledgePanel } from '@/components/Editor/panels/KnowledgePanel';
 import { AIWritingPanel } from '@/components/Editor/panels/AIWritingPanel';
+import { TableRulesPanel } from '@/components/Editor/panels/TableRulesPanel';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { cn } from '@/utils/index';
 import {
@@ -128,7 +129,7 @@ export default function DocumentEditorPage({
 
   /** 右侧面板：是否展开 + 当前 Tab */
   const [rightPanelOpen, setRightPanelOpen] = useState(false);
-  const [rightPanelTab, setRightPanelTab] = useState<'knowledge' | 'aiwriting'>('knowledge');
+  const [rightPanelTab, setRightPanelTab] = useState<'knowledge' | 'aiwriting' | 'rules'>('knowledge');
 
   /** 当前文档 ID（草稿保存后更新，后续保存走已有文档逻辑） */
   const [currentDocId, setCurrentDocId] = useState<number | undefined>(documentId);
@@ -704,6 +705,20 @@ export default function DocumentEditorPage({
           >
             <Sparkles className="h-4 w-4" />
           </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              const isSameTab = rightPanelOpen && rightPanelTab === 'rules';
+              console.log('[DocumentEditorPage] 切换表格规则面板', { willOpen: !isSameTab });
+              setRightPanelTab('rules');
+              setRightPanelOpen(!isSameTab);
+            }}
+            title="表格规则面板"
+            className={cn('shrink-0', rightPanelOpen && rightPanelTab === 'rules' && 'bg-accent text-accent-foreground')}
+          >
+            <ShieldCheck className="h-4 w-4" />
+          </Button>
 
           <Button
             variant="default"
@@ -828,7 +843,7 @@ export default function DocumentEditorPage({
              <div className="w-80 shrink-0 border-l border-border">
                <Tabs
                  value={rightPanelTab}
-                 onValueChange={(v) => setRightPanelTab(v as 'knowledge' | 'aiwriting')}
+                 onValueChange={(v) => setRightPanelTab(v as 'knowledge' | 'aiwriting' | 'rules')}
                  className="h-full flex flex-col"
                >
                  <TabsList className="w-full rounded-none border-b border-border">
@@ -839,6 +854,10 @@ export default function DocumentEditorPage({
                    <TabsTrigger value="aiwriting" className="flex-1 gap-1">
                      <Sparkles className="h-3.5 w-3.5" />
                      AI 写作
+                   </TabsTrigger>
+                   <TabsTrigger value="rules" className="flex-1 gap-1">
+                     <ShieldCheck className="h-3.5 w-3.5" />
+                     规则
                    </TabsTrigger>
                    <Button
                      variant="ghost"
@@ -854,7 +873,10 @@ export default function DocumentEditorPage({
                    <KnowledgePanel editor={editorInstance} documentId={currentDocId} />
                  </TabsContent>
                  <TabsContent value="aiwriting" className="flex-1 min-h-0 overflow-hidden">
-                   <AIWritingPanel editor={editorInstance} />
+                   <AIWritingPanel editor={editorInstance} documentId={currentDocId} />
+                 </TabsContent>
+                 <TabsContent value="rules" className="flex-1 min-h-0 overflow-hidden">
+                   <TableRulesPanel editor={editorInstance} documentId={currentDocId} />
                  </TabsContent>
                </Tabs>
              </div>

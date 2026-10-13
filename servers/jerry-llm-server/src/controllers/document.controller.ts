@@ -67,6 +67,8 @@ const WRITE_THROTTLE = { default: { ttl: 60000, limit: 10 } };
 const RunTableOpsSchema = z.object({
   instruction: z.string().min(1).max(2000),
   sheetText: z.string().min(1).max(3_000_000),
+  // 已保存文档传入后，执行结果先过该文档的表格规则（功能 5 规则门禁）；未保存文档省略
+  documentId: z.number().int().positive().optional(),
 });
 type RunTableOpsDto = z.infer<typeof RunTableOpsSchema>;
 
@@ -117,7 +119,7 @@ export class DocumentController {
       instructionLength: body.instruction.length,
       sheetTextLength: body.sheetText.length,
     });
-    return this.tableOpsService.run(body.instruction, body.sheetText);
+    return this.tableOpsService.run(body.instruction, body.sheetText, body.documentId);
   }
 
   /**

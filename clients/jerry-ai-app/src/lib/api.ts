@@ -246,6 +246,66 @@ export async function fetchFeatureDefaults(): Promise<FeatureDefaults | null> {
   }
 }
 
+// ==================== 聊天直传解析上限（settings/upload-extract） ====================
+
+/** 聊天直传解析上限配置（与后端 GET /settings/upload-extract 响应对应） */
+export interface UploadExtractSettings {
+  /** 字符截断上限（0 = 不人为限制，仅受模型窗口预检约束） */
+  maxChars: number;
+  /** 段数上限（按比例放宽，0 = 不限；只影响编辑器预览，不影响 AI 读到的文本） */
+  maxParagraphs: number;
+  /** 当前模型上下文窗口按 ≈4 字符/token 估算的字符数 */
+  modelWindowChars: number;
+}
+
+/**
+ * 获取聊天直传解析上限配置。
+ * 拉取失败（后端未启动/网络异常）返回 null，调用方维持本地缓存值即可。
+ */
+export async function fetchUploadExtractSettings(): Promise<UploadExtractSettings | null> {
+  try {
+    const response = await fetch(API_ENDPOINTS.SETTINGS_UPLOAD_EXTRACT, {
+      method: "GET",
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as {
+      success: boolean;
+      data?: UploadExtractSettings;
+    };
+    return data?.data ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 更新聊天直传解析上限（0 = 不人为限制）。
+ * 失败时抛出错误（message 为后端返回的中文原因），由调用方展示。
+ */
+export async function updateUploadExtractSettings(
+  maxChars: number,
+): Promise<UploadExtractSettings> {
+  const response = await fetch(API_ENDPOINTS.SETTINGS_UPLOAD_EXTRACT, {
+    method: "PUT",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ maxChars }),
+  });
+  const data = (await response.json()) as {
+    success: boolean;
+    message?: string;
+  };
+  if (!response.ok || !data.success) {
+    throw new Error(data.message || "保存失败");
+  }
+  // 保存成功后重新拉取完整配置（含段数上限与模型窗口估算）
+  const settings = await fetchUploadExtractSettings();
+  if (!settings) {
+    throw new Error("已保存，但刷新配置失败");
+  }
+  return settings;
+}
+
 /**
  * 保存聊天记录
  * @param data 聊天历史项数据
@@ -700,12 +760,14 @@ export interface ExtractDocumentResponse {
   sizeBytes: number;
   /** 文件下载 URL */
   fileUrl: string;
-  /** 是否被截断（超过 5 万字符） */
+  /** 是否被截断（超过配置的解析上限） */
   truncated: boolean;
-  /** 截断阈值 */
-  maxChars: number;
+  /** 截断上限（0 = 未人为限制，仅受模型窗口约束） */
+  limit: number;
   /** 文档原始总字符数（截断前） */
   totalChars?: number;
+  /** 当前模型上下文窗口按 ≈4 字符/token 估算的字符数（发送前预检用） */
+  modelWindowChars?: number;
   /** 后端创建的文档记录 ID（已废弃：输入框上传不再入库，此字段恒为 undefined） */
   documentId?: number;
   /** 来源格式标记：'xlsx' 时前端编辑器把 sheet 文本转为网格表格；其他格式为 undefined */
@@ -1843,19 +1905,25 @@ export interface TableOpsReportItem {
 export interface TableOpsRunResponse {
   /** 是否成功；false 时 message 说明原因 */
   ok: boolean;
-  /** 执行后的完整 sheet 结构化文本 */
+  /** 执行后的完整 sheet 结构化文本；语义填充分批报价时省略 */
   sheetText?: string;
   report?: TableOpsReportItem[];
   message?: string;
+  /** 语义填充（功能 4）：命中填充意图时携带映射结果或分批报价 */
+  semanticFill?: SemanticFillInfo;
 }
 
 /**
  * 执行 AI 表格指令：自然语言指令 + 当前表格数据 → 服务端 LLM 解析意图、
  * 代码级精确执行 → 返回新文本 + 执行报告。无副作用，确认应用由前端负责。
+ *
+ * documentId 传入后（已保存文档），执行结果先过该文档的启用表格规则（功能 5
+ * 规则门禁）：违规整体拒绝并附原因。未保存文档省略（无规则可查）。
  */
 export async function runTableOps(params: {
   instruction: string;
   sheetText: string;
+  documentId?: number;
 }): Promise<TableOpsRunResponse> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-ops`, {
     method: "POST",
@@ -1863,6 +1931,362 @@ export async function runTableOps(params: {
     body: JSON.stringify(params),
   });
   return handleResponse<TableOpsRunResponse>(response);
+}
+
+// ==================== 语义填充（功能 4） ====================
+
+/** 规则提议（AI 建议把依据列取值白名单存为校验规则，用户确认后调 batchCreateTableRules 入库） */
+export interface SemanticFillSuggestRule {
+  name: string;
+  column: string;
+  values: string[];
+}
+
+/**
+ * 映射路径结果：后端已完成填充（新文本在 TableOpsRunResponse.sheetText，
+ * 应用走通用确认流），本对象用于展示映射明细与规则提议卡片。
+ */
+export interface SemanticFillMappingResult {
+  path: "mapping";
+  ok: true;
+  targetColumn: string;
+  /** 实际使用的依据列 */
+  hintColumns: string[];
+  emptyCount: number;
+  distinctCount: number;
+  /** 去重值映射明细（依据值 → 填充值） */
+  mapping: Array<{ from: string; to: string }>;
+  appliedRows: number;
+  suggestRule?: SemanticFillSuggestRule;
+}
+
+/** 分批报价：去重值太多无法一次映射，需任务模式分批处理（未执行，等用户确认） */
+export interface SemanticFillBatchQuote {
+  path: "batch";
+  ok: true;
+  targetColumn: string;
+  hintColumns: string[];
+  emptyCount: number;
+  distinctCount: number;
+  /** 需要的批次数 */
+  batchCount: number;
+  /** 每批行数 */
+  batchRows: number;
+}
+
+export type SemanticFillInfo = SemanticFillMappingResult | SemanticFillBatchQuote;
+
+/** start 创建任务的回执 */
+export interface SemanticFillStartResult {
+  taskId: string;
+  targetColumn: string;
+  hintColumns: string[];
+  emptyCount: number;
+  batchCount: number;
+  batchRows: number;
+}
+
+/** 任务状态（GET status 响应体；与后端 SemanticFillTaskStatus 同构） */
+export interface SemanticFillTaskStatus {
+  taskId: string;
+  status: "running" | "done" | "failed" | "cancelled";
+  targetColumn: string;
+  hintColumns: string[];
+  emptyCount: number;
+  batchCount: number;
+  completedBatches: number;
+  /** 进度 0~1 */
+  progress: number;
+  appliedRows: number;
+  /** 用户已请求取消、当前批完成后停止 */
+  cancelRequested: boolean;
+  /** 终态且有已填充内容时的结果（failed/cancelled 时也可能是已完成批次的部分结果） */
+  filledText?: string;
+  error?: string;
+  failedBatch?: number;
+}
+
+/** GET status 响应：任务不存在（已过期/服务重启）时 found:false */
+export interface SemanticFillStatusResponse {
+  found: boolean;
+  task?: SemanticFillTaskStatus;
+}
+
+/**
+ * 创建分批填充任务：服务端按传入的最新表格文本重新统计空缺并切批，
+ * 立即开始后台执行，返回 taskId 供轮询。任务状态存服务端内存，
+ * 服务重启后任务作废（status 返回 found:false）。
+ */
+export async function startSemanticFillTask(params: {
+  instruction: string;
+  sheetText: string;
+  targetColumn: string;
+  hintColumns: string[];
+  targetSheet?: string;
+  documentId?: number;
+}): Promise<SemanticFillStartResult> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-ops/semantic-fill/start`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(params),
+  });
+  return handleResponse<SemanticFillStartResult>(response);
+}
+
+/** 查询分批填充任务的进度与结果 */
+export async function getSemanticFillStatus(taskId: string): Promise<SemanticFillStatusResponse> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/table-ops/semantic-fill/status/${encodeURIComponent(taskId)}`,
+    { headers: getAuthHeaders() },
+  );
+  return handleResponse<SemanticFillStatusResponse>(response);
+}
+
+/** 请求取消任务：协作式取消（当前批完成后停止），已完成批次结果保留可应用 */
+export async function cancelSemanticFillTask(
+  taskId: string,
+): Promise<{ cancelled: boolean; message: string }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/table-ops/semantic-fill/cancel/${encodeURIComponent(taskId)}`,
+    { method: "POST", headers: getAuthHeaders() },
+  );
+  return handleResponse<{ cancelled: boolean; message: string }>(response);
+}
+
+// ==================== 表格规则器（功能 5"表格的 ESLint"） ====================
+
+/** 修复动作（与后端 FixActionSchema 同构）；规则未配置 = 只标记不修复 */
+export type TableRuleFixAction =
+  | { kind: "fixedValue"; value: string }
+  | { kind: "formula"; expression: string }
+  | { kind: "deleteRow" };
+
+/** 规则定义（与后端 TableRuleSchema discriminatedUnion 同构，type 与 params 联动） */
+export type TableRuleInput =
+  | { name: string; type: "notEmpty"; params: { column: string }; fixAction?: TableRuleFixAction }
+  | { name: string; type: "allowedValues"; params: { column: string; values: string[] }; fixAction?: TableRuleFixAction }
+  | { name: string; type: "numericRange"; params: { column: string; min?: number; max?: number }; fixAction?: TableRuleFixAction }
+  | { name: string; type: "unique"; params: { column: string }; fixAction?: TableRuleFixAction }
+  | { name: string; type: "formula"; params: { targetColumn: string; expression: string }; fixAction?: TableRuleFixAction };
+
+/** 后端返回的规则（含元数据；脏数据兜底时 params 可能回显原始 JSON） */
+export type TableRuleDto = TableRuleInput & {
+  id: number;
+  documentId: number;
+  enabled: boolean;
+  /** 来源：manual 手写 / ai 提议入库 */
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** 单条违规记录（与后端 RuleViolation 同构） */
+export interface TableRuleViolation {
+  ruleId: number;
+  ruleName: string;
+  ruleType: TableRuleInput["type"];
+  /** 数据行号（1 起，不含表头），与编辑器"第 N 行"口径一致 */
+  rowIndex: number;
+  column: string;
+  currentValue: string;
+  expectation: string;
+  /** 该规则是否配置了修复动作 */
+  fixable: boolean;
+}
+
+/** 失效规则（绑定的列/表达式引用列在表中不存在，面板标红处理） */
+export interface TableRuleInvalidInfo {
+  ruleId: number;
+  ruleName: string;
+  reason: string;
+}
+
+/** 检查结果（干跑，纯只读，与后端 RuleCheckResult 同构） */
+export interface TableRuleCheckResult {
+  checkedRules: number;
+  violations: TableRuleViolation[];
+  invalidRules: TableRuleInvalidInfo[];
+  /** 违规清单是否因超出展示上限被截断 */
+  truncated: boolean;
+}
+
+/** 单条规则的修复报告项 */
+export interface TableRuleFixReportItem {
+  ruleId: number;
+  ruleName: string;
+  message: string;
+}
+
+/** 修复响应：新表格文本 + 报告 + 过期跳过行数 */
+export interface TableRuleFixResponse {
+  sheetText: string;
+  report: TableRuleFixReportItem[];
+  /** 表格在检查后被改过、行号对不上的行数（服务端自动跳过，防篡改） */
+  skippedStale: number;
+}
+
+/** 单列统计（AI 提议规则的依据） */
+export interface TableRuleColumnStats {
+  column: string;
+  totalRows: number;
+  emptyCount: number;
+  distinctValues: string[];
+  distinctCount: number;
+  numericCount: number;
+  numericMin?: number;
+  numericMax?: number;
+}
+
+/** 单工作表统计 */
+export interface TableRuleSheetStats {
+  sheetName: string;
+  columns: TableRuleColumnStats[];
+}
+
+/** AI 提议响应：统计 + 候选规则（不落库，用户确认后批量入库） */
+export interface TableRuleSuggestResponse {
+  stats: TableRuleSheetStats[];
+  candidates: TableRuleInput[];
+}
+
+/** 规则更新入参；fixAction 传 null 表示清除修复动作 */
+export interface TableRuleUpdatePatch {
+  name?: string;
+  enabled?: boolean;
+  params?: Record<string, unknown>;
+  fixAction?: Record<string, unknown> | null;
+}
+
+/** 拉取文档的全部规则（含停用） */
+export async function listTableRules(documentId: number): Promise<TableRuleDto[]> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/table-rules`,
+    { headers: getAuthHeaders() },
+  );
+  // 后端直接返回数组；非数组（异常响应）兜底为空列表
+  const data = await handleResponse<TableRuleDto[] | null>(response);
+  return Array.isArray(data) ? data : [];
+}
+
+/** 新增一条规则（手动创建） */
+export async function createTableRule(
+  documentId: number,
+  rule: TableRuleInput,
+): Promise<TableRuleDto> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/table-rules`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(rule),
+    },
+  );
+  return handleResponse<TableRuleDto>(response);
+}
+
+/** 批量入库（AI 提议确认后，source 标记 ai），返回逐条成败 */
+export async function batchCreateTableRules(
+  documentId: number,
+  rules: TableRuleInput[],
+): Promise<{ created: TableRuleDto[]; failed: { name: string; reason: string }[] }> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/table-rules/batch`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ rules }),
+    },
+  );
+  return handleResponse<{ created: TableRuleDto[]; failed: { name: string; reason: string }[] }>(
+    response,
+  );
+}
+
+/** 更新规则（改名/启停/改参数/改修复动作；fixAction 传 null 清除） */
+export async function updateTableRule(
+  ruleId: number,
+  patch: TableRuleUpdatePatch,
+): Promise<TableRuleDto> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-rules/${ruleId}`, {
+    method: "PUT",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return handleResponse<TableRuleDto>(response);
+}
+
+/** 删除单条规则 */
+export async function deleteTableRule(ruleId: number): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-rules/${ruleId}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse<{ success: boolean }>(response);
+}
+
+/** 规则检查（干跑，无副作用）：违规行清单 + 失效规则 */
+export async function checkTableRules(
+  documentId: number,
+  sheetText: string,
+): Promise<TableRuleCheckResult> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/table-rules/check`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ sheetText }),
+    },
+  );
+  return handleResponse<TableRuleCheckResult>(response);
+}
+
+/** 应用修复（用户确认后调用）：服务端以最新检查结果校验行号，过期行自动跳过 */
+export async function fixTableRules(
+  documentId: number,
+  sheetText: string,
+  items: { ruleId: number; rowIndex: number }[],
+): Promise<TableRuleFixResponse> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/table-rules/fix`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ sheetText, items }),
+    },
+  );
+  return handleResponse<TableRuleFixResponse>(response);
+}
+
+/** 列级统计（AI 提议依据，纯只读） */
+export async function getTableRuleStats(
+  documentId: number,
+  sheetText: string,
+): Promise<TableRuleSheetStats[]> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/table-rules/stats`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ sheetText }),
+    },
+  );
+  return handleResponse<TableRuleSheetStats[]>(response);
+}
+
+/** AI 看列级统计提议规则候选（不落库，展示给用户确认） */
+export async function suggestTableRules(
+  documentId: number,
+  sheetText: string,
+): Promise<TableRuleSuggestResponse> {
+  const response = await fetch(
+    `${API_ENDPOINTS.DOCUMENTS}/${documentId}/table-rules/suggest`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ sheetText }),
+    },
+  );
+  return handleResponse<TableRuleSuggestResponse>(response);
 }
 
 /** 激活版本 */
