@@ -189,6 +189,25 @@ describe('chart-theme 默认主题接入', () => {
     expect(r.tooltip.backgroundColor).toBeUndefined();
   });
 
+  it('applyThemeDefaults：模型写过任何文字配色（假定白底深字）→ 整体放手不注入背景', () => {
+    // 防止"模型按白底配 #333 轴文字 + 我们注入深色背景"组合出不可读图表
+    const option = {
+      xAxis: { type: 'category', data: ['a'], axisLabel: { color: '#333' } },
+      series: [{ type: 'line', data: [1] }],
+    };
+    const r = applyThemeDefaults(option);
+    expect(r.backgroundColor).toBeUndefined();
+    expect(r.textStyle).toBeUndefined();
+    expect(r.tooltip).toBeUndefined();
+  });
+
+  it('applyThemeDefaults：浅合并不破坏模型已有 textStyle 其他字段', () => {
+    const option = { textStyle: { fontFamily: 'monospace' }, series: [] };
+    const r = applyThemeDefaults(option);
+    expect(r.textStyle.fontFamily).toBe('monospace');
+    expect(r.textStyle.color).toBe('#e6f1ff');
+  });
+
   it('buildDefaultSeriesStyle：前两个系列带渐变面积，第三个起虚线', () => {
     const first = buildDefaultSeriesStyle('#ff7e45', 'line', 0);
     expect(first.smooth).toBe(true);
