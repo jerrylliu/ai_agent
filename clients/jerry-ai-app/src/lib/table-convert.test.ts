@@ -11,6 +11,7 @@ import {
   tableDocToSheets,
   tableDocToSheetText,
   docContainsTable,
+  flattenDocText,
   maxTableRowCount,
   firstTableOf,
   TABLE_HARD_ROW_LIMIT,
@@ -288,5 +289,55 @@ describe('docContainsTable / tableDocToSheetText', () => {
       content: [{ type: 'paragraph', content: [{ type: 'text', text: '纯文本' }] }],
     };
     expect(tableDocToSheetText(doc)).toBeNull();
+  });
+});
+
+// ==================== doc 文本提取（后端 contentJson 形态兼容） ====================
+
+describe('flattenDocText', () => {
+  it('段落间补换行：sheet 边界不粘连（线上 bug 回归）', () => {
+    // 后端 textToTiptapJson 按空行分段、段内保留 \n。
+    // 若提取时直接 join('')，"…,4398" 与下一段的 "Sheet: 汇总" 会粘成一行，
+    // 转换后上一 sheet 末单元格出现 "4398Sheet: 汇总"
+    const doc: JSONContent = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Sheet: 销售明细\n产品,金额\n升降桌,4398' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Sheet: 汇总\n类别,金额\n电子产品,24393' }] },
+      ],
+    };
+    const text = flattenDocText(doc);
+    expect(text).toContain('升降桌,4398\nSheet: 汇总');
+
+    const { doc: converted } = sheetTextToTableDoc(text);
+    const headings = converted.content!.filter((n) => n.type === 'heading');
+    expect(headings.map((h) => h.content![0].text)).toEqual(['销售明细', '汇总']);
+    const tables = converted.content!.filter((n) => n.type === 'table');
+    expect(tables).toHaveLength(2);
+    // 粘连时末单元格会是 "4398Sheet: 汇总"——逐格断言确保数据干净
+    const firstTable = tables[0];
+    const lastCell =
+      (firstTable.content![1].content![1].content![0].content![0] as JSONContent).text;
+    expect(lastCell).toBe('4398');
+  });
+
+  it('hardBreak 还原为换行（段落内硬换行形态）', () => {
+    const doc: JSONContent = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'Sheet: A' },
+            { type: 'hardBreak' },
+            { type: 'text', text: 'h1,h2' },
+            { type: 'hardBreak' },
+            { type: 'text', text: '1,2' },
+          ],
+        },
+      ],
+    };
+    const { doc: converted } = sheetTextToTableDoc(flattenDocText(doc));
+    expect(maxTableRowCount(converted)).toBe(2);
   });
 });

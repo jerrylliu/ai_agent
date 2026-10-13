@@ -1219,7 +1219,9 @@ button.decorum-tb-btn {
 
 /* ==================== 编辑器表格样式（Excel 网格化编辑） ==================== */
 /* Tiptap table 节点默认无边框，这里补齐网格视觉。
-   亮色用 border 变量、暗色/cyberpunk 用低饱和青灰，两种主题都可读 */
+   注意：本项目的 CSS 变量是完整颜色值（oklch/hex，Tailwind v4 风格），
+   必须直接 var() 引用——不能包 hsl()（那是 v3 裸分量写法，会生成非法值
+   导致整条声明被浏览器丢弃，表现为表格无网格线） */
 
 .ProseMirror table {
   border-collapse: collapse;
@@ -1231,7 +1233,7 @@ button.decorum-tb-btn {
 
 .ProseMirror table td,
 .ProseMirror table th {
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--border);
   padding: 4px 8px;
   vertical-align: top;
   position: relative;
@@ -1239,31 +1241,21 @@ button.decorum-tb-btn {
 }
 
 .ProseMirror table th {
-  background-color: hsl(var(--muted) / 0.6);
+  background-color: var(--muted);
   font-weight: 600;
   text-align: left;
 }
 
-/* 单元格选中态（Tiptap 通过 columnSelection 类标记） */
+/* 单元格选中态（Tiptap 通过 .selectedCell 类标记） */
 .ProseMirror table .selectedCell::after {
   content: '';
   position: absolute;
   inset: 0;
-  background-color: hsl(var(--primary) / 0.12);
+  background-color: color-mix(in oklab, var(--primary) 12%, transparent);
   pointer-events: none;
 }
 
-/* 暗色模式：边框提亮一档保证可见 */
-.dark .ProseMirror table td,
-.dark .ProseMirror table th {
-  border-color: hsl(var(--border) / 0.9);
-}
-
-.dark .ProseMirror table th {
-  background-color: hsl(var(--muted) / 0.35);
-}
-
-/* 赛博朋克模式：霓虹青网格线 */
+/* 赛博朋克模式：霓虹青网格线（其余主题变量已自动适配亮/暗色） */
 .cyberpunk .cyberpunk-editor-content .ProseMirror table td,
 .cyberpunk .cyberpunk-editor-content .ProseMirror table th {
   border-color: #5FF6FF33;

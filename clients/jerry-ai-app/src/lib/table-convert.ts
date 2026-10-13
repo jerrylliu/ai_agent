@@ -280,6 +280,36 @@ export function tableNodeToCsv(table: JSONContent): string {
     .join('\n');
 }
 
+// ==================== doc 文本提取（表格化前置） ====================
+
+/** 块级节点类型：提取文本后补换行，恢复源文本的行结构 */
+const BLOCK_TYPES = new Set([
+  'paragraph',
+  'heading',
+  'blockquote',
+  'codeBlock',
+  'listItem',
+  'taskItem',
+  'table',
+]);
+
+/**
+ * 递归提取 doc 内全部文本，并恢复原始换行结构：
+ *   - 块级节点（段落/标题等）之间补 '\n'——后端 textToTiptapJson 按空行分段、
+ *     段内保留 '\n'，若直接 join('') 会吞掉段边界换行，导致上一个 sheet 的
+ *     末行与下一个 `Sheet:` 标题粘连（实测 bug：单元格出现 "4398Sheet: 汇总"）；
+ *   - hardBreak 还原为 '\n'（覆盖段落内以硬换行分行的内容形态）。
+ *
+ * 多产生的空行无害：isSheetStructuredText / splitSheetBlocks 均按行处理并跳过空行。
+ * 注意：本函数只应作用于"无表格"的 doc（表格化前置提取），表格文档由上层提前短路。
+ */
+export function flattenDocText(node: JSONContent): string {
+  if (node.type === 'text') return node.text ?? '';
+  if (node.type === 'hardBreak') return '\n';
+  const joined = (node.content ?? []).map(flattenDocText).join('');
+  return BLOCK_TYPES.has(node.type ?? '') ? `${joined}\n` : joined;
+}
+
 // ==================== 统计（性能警告用） ====================
 
 /** 统计 doc 中最大单表行数（性能警告判定） */
