@@ -48,13 +48,14 @@ const SYSTEM_PROMPT = `你是表格数据操作助手。根据表格概览和用
 输出示例：{"ops":[{"type":"aggregateAppendRow","targetSheet":"汇总","sourceSheet":"大表压力测试","column":"销售额","where":{"column":"备注","op":"eq","value":"重点客户"},"fn":"sum","label":"重点客户合计","valueColumn":"金额小计","beforeRow":"总计"},{"type":"aggregateUpdateCell","targetSheet":"汇总","rowLabel":"总计","column":"金额小计","fn":"sum"}]}`;
 
 /**
- * 端点不支持强制结构化输出的开关（进程级记忆）：
+ * "该模型不支持强制结构化输出"的进程级记忆（按模型 ID 区分）：
  *   - thinking 模型拒绝 tool_choice（"Thinking mode does not support this tool_choice"）
  *   - 部分兼容端点拒绝 response_format=json_schema（400）
- * 命中过一次后本进程内直接走兜底路径，避免每次指令都白打一轮 400。
- * 重启服务 / 切换模型后自动重试主路径。
+ * 命中后同一模型直接走兜底路径，避免每次指令都白打一轮 400；
+ * 运行时切换到其他模型（如换智谱标准版）会自动重试主路径——
+ * 思考型不通的模型，标准型可能就通。
  */
-let structuredOutputUnavailable = false;
+let structuredOutputUnavailableModelId: string | null = null;
 
 /** 递归把 JSON 里的 number/boolean 值转为字符串。
  * LLM 常把 "数量: 20" 输出成数字 20，而操作 schema 的值字段全为 string——
@@ -84,7 +85,8 @@ export async function parseTableOpsInstruction(
   instruction: string,
   sheetOverview: string,
 ): Promise<TableOp[]> {
-  const modelConfig = buildModelConfig(getCurrentModelId());
+  const modelId = getCurrentModelId();
+  const modelConfig = buildModelConfig(modelId);
   // 指令解析要稳定，温度 0 减少发散
   modelConfig.temperature = 0;
   const llm: BaseChatModel = createRateLimitedLLM(modelConfig, 'fast');
@@ -100,9 +102,9 @@ export async function parseTableOpsInstruction(
   // 显式指定 method: 'functionCalling'——默认的 jsonSchema 方法会发
   // response_format=json_schema，zhipu 等兼容端点返回 400
   // "This response_format type is unavailable now"
-  // 注意：thinking 模型的端点会拒绝 tool_choice（400），这类端点主路径
-  // 必然失败——命中后置 structuredOutputUnavailable 跳过，直接走兜底
-  if (!structuredOutputUnavailable) {
+  // 注意：thinking 模型的端点会拒绝 tool_choice（400），这类模型主路径
+  // 必然失败——命中后按模型 ID 记忆跳过，直接走兜底
+  if (structuredOutputUnavailableModelId !== modelId) {
     try {
       const structured = llm.withStructuredOutput(TableOpsPlanSchema, { method: 'functionCalling' });
       const plan = await structured.invoke(messages);
@@ -110,9 +112,10 @@ export async function parseTableOpsInstruction(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/response_format|tool_choice|Thinking mode/i.test(msg)) {
-        structuredOutputUnavailable = true;
-        logger.warn('端点不支持强制结构化输出，本进程内改走提示词抽取路径', {
+        structuredOutputUnavailableModelId = modelId;
+        logger.warn('当前模型不支持强制结构化输出，后续指令直接走提示词抽取路径', {
           module: 'TableOpsParse',
+          modelId,
           error: msg,
         });
       } else {
