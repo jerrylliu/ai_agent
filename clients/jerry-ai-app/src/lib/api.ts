@@ -1829,6 +1829,42 @@ export async function exportVersion(
   return response.blob();
 }
 
+// ==================== AI 表格指令（M2 指令下推） ====================
+
+/** 单个操作的执行报告项（与后端 OpReport 同构） */
+export interface TableOpsReportItem {
+  type: string;
+  targetSheet: string;
+  /** 中文执行结果说明（如"已删除 12 行""求和结果 41400 已追加"） */
+  message: string;
+}
+
+/** AI 表格指令执行响应（与后端 TableOpsRunResult 同构） */
+export interface TableOpsRunResponse {
+  /** 是否成功；false 时 message 说明原因 */
+  ok: boolean;
+  /** 执行后的完整 sheet 结构化文本 */
+  sheetText?: string;
+  report?: TableOpsReportItem[];
+  message?: string;
+}
+
+/**
+ * 执行 AI 表格指令：自然语言指令 + 当前表格数据 → 服务端 LLM 解析意图、
+ * 代码级精确执行 → 返回新文本 + 执行报告。无副作用，确认应用由前端负责。
+ */
+export async function runTableOps(params: {
+  instruction: string;
+  sheetText: string;
+}): Promise<TableOpsRunResponse> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-ops`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(params),
+  });
+  return handleResponse<TableOpsRunResponse>(response);
+}
+
 /** 激活版本 */
 export async function activateVersion(
   documentId: number,
