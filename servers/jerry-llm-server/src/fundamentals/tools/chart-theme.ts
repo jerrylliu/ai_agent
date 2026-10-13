@@ -57,12 +57,14 @@ export function buildThemeBaseOption(input: ChartThemeInput): Record<string, any
       iconStyle: { borderColor: '#7a8ba8' },
     },
     legend: {
-      top: 36,
+      top: 40,
       textStyle: { color: '#e6f1ff' },
-      // 单系列不显示图例（图例文本=系列名，重复信息）
-      ...(input.chartType && { type: 'scroll' }),
+      // 滚动图例：系列名过长或系列过多时不溢出画布
+      type: 'scroll',
     },
-    grid: { left: 56, right: 56, top: 80, bottom: 48, containLabel: false },
+    // containLabel: true 让坐标轴文字参与布局计算——固定 left/right 遇到
+    // 大数值（如 1,000,000 的 y 轴标签）会被裁切，这是固定边距的隐性风险
+    grid: { left: 16, right: 16, top: 84, bottom: 16, containLabel: true },
   };
   return option;
 }
@@ -80,7 +82,6 @@ export function buildDefaultSeriesStyle(
     // bar 不加面积，仅收个圆角
     return { itemStyle: { borderRadius: [4, 4, 0, 0] } };
   }
-  void seriesIndex;
   return {
     smooth: true,
     lineStyle: { width: 2.5 },
@@ -109,20 +110,44 @@ export function buildDefaultSeriesStyle(
 }
 
 /**
- * echartsOption 路径的主题补全：仅当模型没写对应字段时注入默认值，
- * 模型显式定义的任何样式一律保留（不覆盖、不合并、不"优化"）
+ * 检测模型是否已对配色表达过"意见"（写过任何文字/图形颜色）。
+ * 有意见 = 模型心里有自己假定的背景基调（很可能按白底配了深灰文字），
+ * 此时注入深色背景会产出"深底深字"的不可读图表——整体放手不注入。
+ */
+function hasColorOpinion(o: Record<string, any>): boolean {
+  if (o.textStyle?.color) return true;
+  if (o.legend?.textStyle?.color) return true;
+  const axes = [
+    ...(Array.isArray(o.xAxis) ? o.xAxis : [o.xAxis]),
+    ...(Array.isArray(o.yAxis) ? o.yAxis : [o.yAxis]),
+  ].filter(Boolean);
+  if (axes.some((a) => a.axisLabel?.color || a.axisLine?.lineStyle?.color)) {
+    return true;
+  }
+  if (
+    Array.isArray(o.series) &&
+    o.series.some((s) => s?.label?.color || s?.itemStyle?.color)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * echartsOption 路径的主题补全：模型没表达任何配色意见时，才注入深色主题
+ * 缺失字段；模型写过任何颜色则整体放手（防止"模型按白底配深灰文字 + 我们
+ * 注入深色背景"组合出不可读图表）。注入时浅合并，不破坏模型已有的同名字段
  */
 export function applyThemeDefaults(option: Record<string, any>): Record<string, any> {
-  const defaults: Record<string, unknown> = {
-    backgroundColor: '#0b1020',
-    textStyle: { color: '#e6f1ff' },
-  };
-  for (const [key, value] of Object.entries(defaults)) {
-    if (option[key] === undefined) {
-      option[key] = value;
-    }
+  if (hasColorOpinion(option)) {
+    return option;
   }
-  // 模型没写 tooltip 样式但写了 tooltip 结构，或完全没写时，补深色弹层
+  if (option.backgroundColor === undefined) {
+    option.backgroundColor = '#0b1020';
+  }
+  if (option.textStyle?.color === undefined) {
+    option.textStyle = { ...(option.textStyle ?? {}), color: '#e6f1ff' };
+  }
   if (!option.tooltip) {
     option.tooltip = {
       trigger: 'axis',
