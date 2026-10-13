@@ -27,6 +27,7 @@ import type { Response } from 'express';
 import { DocumentService } from '../services/document.service';
 import { DocumentScanService } from '../services/document-scan.service';
 import { DocumentSchedulerService } from '../services/document-scheduler.service';
+import { TableOpsService } from '../services/table-ops.service';
 import {
   VersionStatus,
   DocumentVersion,
@@ -60,6 +61,15 @@ function serializeVersions(versions: DocumentVersion[]) {
 /** 写操作限流：10 次/分钟（上传/发布/删除/复核/定时任务手动触发等重操作防刷） */
 const WRITE_THROTTLE = { default: { ttl: 60000, limit: 10 } };
 
+// ==================== AI 表格指令（M2 指令下推） ====================
+
+/** 表格指令入参 schema：指令 + 当前 sheet 结构化文本（编辑器序列化产物） */
+const RunTableOpsSchema = z.object({
+  instruction: z.string().min(1).max(2000),
+  sheetText: z.string().min(1).max(3_000_000),
+});
+type RunTableOpsDto = z.infer<typeof RunTableOpsSchema>;
+
 // ==================== MinerU 解析配置（运行时可配） ====================
 
 /**
@@ -86,7 +96,29 @@ export class DocumentController {
     private readonly documentService: DocumentService,
     private readonly schedulerService: DocumentSchedulerService,
     private readonly documentScanService: DocumentScanService,
+    private readonly tableOpsService: TableOpsService,
   ) {}
+
+  // ==================== AI 表格指令（M2 指令下推） ====================
+
+  /**
+   * POST /documents/table-ops
+   * AI 表格指令：自然语言 → 结构化操作（LLM）→ 代码级精确执行 → 返回新文本+报告。
+   * 无副作用：不写库，前端确认应用后由用户保存走既有版本链。
+   */
+  @Post('table-ops')
+  @Throttle(WRITE_THROTTLE)
+  async runTableOps(
+    @Body(new ZodValidationPipe(RunTableOpsSchema, { label: 'RunTableOps' }))
+    body: RunTableOpsDto,
+  ) {
+    logger.info('收到 AI 表格指令请求', {
+      module: 'DocumentController',
+      instructionLength: body.instruction.length,
+      sheetTextLength: body.sheetText.length,
+    });
+    return this.tableOpsService.run(body.instruction, body.sheetText);
+  }
 
   /**
    * POST /documents/upload
