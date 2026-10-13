@@ -141,7 +141,7 @@ const MineruSchema = z.object({
 
 // VLM 视觉语言模型配置（图片翻译为文字描述，用于多模态入库）
 // 默认关闭，启用后需要配置 API Key
-// 走 OpenAI 兼容协议，可接入 Qwen3-VL / GLM-4.6V / SiliconFlow 等任何兼容服务
+// 走 OpenAI 兼容协议，可接入 Qwen3-VL / GLM-5.3-Flash / SiliconFlow 等任何兼容服务
 const VlmSchema = z.object({
   enabled: zBoolFromString(false),
   // OpenAI 兼容 API Base URL
@@ -156,7 +156,7 @@ const VlmSchema = z.object({
   concurrency: z.coerce.number().int().positive().default(3),
   // 单文档 VLM 调用上限（超过则走元数据兜底，避免成本失控）
   maxCallsPerDoc: z.coerce.number().int().positive().default(50),
-  // 备用模型名称（主模型连续失败时降级，如 glm-4.6v）
+  // 备用模型名称（主模型连续失败时降级，如 glm-5.3-flash）
   fallbackModel: z.string().default(''),
   // 备用模型 API Base（为空则复用主模型 apiBase）
   fallbackApiBase: z.string().default(''),
@@ -378,7 +378,7 @@ const RootSchema = z.object({
    */
   onlineJudgeEnabled: zBoolFromString(true),
   /** 在线 judge 模型 id（model-provider AVAILABLE_MODELS 中的 id；与被评模型错开厂商可减少同源偏置） */
-  onlineJudgeModel: z.string().min(1).default('zhipu:glm-4.7'),
+  onlineJudgeModel: z.string().min(1).default('zhipu:glm-5.3'),
 
   deepseekBaseUrl: z.string().min(1).default('https://api.deepseek.com'),
   zhipuBaseUrl: z

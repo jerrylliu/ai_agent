@@ -96,15 +96,15 @@ export const PROBE_TARGETS: ProbeTarget[] = [
     requiresApiKey: true,
   },
   {
-    id: 'zhipu:glm-4.6v',
+    id: 'zhipu:glm-5.3-flash',
     provider: 'zhipu',
-    name: 'GLM-4.6V',
+    name: 'GLM-5.3-Flash',
     requiresApiKey: true,
   },
   {
-    id: 'zhipu:glm-4.7',
+    id: 'zhipu:glm-5.3',
     provider: 'zhipu',
-    name: 'GLM-4.7',
+    name: 'GLM-5.3',
     requiresApiKey: true,
   },
 ];

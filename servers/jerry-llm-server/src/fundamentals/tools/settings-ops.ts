@@ -125,7 +125,7 @@ export const switchModelParamsSchema = z.object({
     .string()
     .min(1)
     .describe(
-      '目标模型ID（来自 get_system_status 的 availableModels，如 deepseek:deepseek-chat、zhipu:glm-4.7、ollama:minicpm）',
+      '目标模型ID（来自 get_system_status 的 availableModels，如 deepseek:deepseek-chat、zhipu:glm-5.3、ollama:minicpm）',
     ),
 });
 

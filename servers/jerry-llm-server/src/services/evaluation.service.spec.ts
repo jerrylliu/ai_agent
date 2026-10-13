@@ -23,14 +23,14 @@ jest.mock('../fundamentals/logger', () => ({
 jest.mock('../fundamentals/config.js', () => ({
   config: {
     onlineJudgeEnabled: true,
-    onlineJudgeModel: 'zhipu:glm-4.7',
+    onlineJudgeModel: 'zhipu:glm-5.3',
   },
 }));
 
 jest.mock('../fundamentals/model-provider.js', () => ({
   buildModelConfig: jest.fn(() => ({
     provider: 'zhipu',
-    model: 'glm-4.7',
+    model: 'glm-5.3',
   })),
   createLLM: jest.fn(() => ({ invoke: jest.fn() })),
 }));
@@ -113,7 +113,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   // 恢复 mock config 默认值（个别测试会改开关）
   mutableConfig.onlineJudgeEnabled = true;
-  mutableConfig.onlineJudgeModel = 'zhipu:glm-4.7';
+  mutableConfig.onlineJudgeModel = 'zhipu:glm-5.3';
 });
 
 // ==================== 在线 judge 集成 ====================
@@ -136,7 +136,7 @@ describe('autoEvaluate 在线 judge 集成', () => {
       judgeRelevant: true,
       unfaithfulClaims: JSON.stringify(['答案里编造的句子']),
       judgeReason: '存在上下文无法支撑的细节',
-      judgeModel: 'zhipu:glm-4.7',
+      judgeModel: 'zhipu:glm-5.3',
     });
   });
 
@@ -387,7 +387,7 @@ describe('getEvaluationStats judge 聚合', () => {
         judgeRelevant: true,
         unfaithfulClaims: null,
         judgeReason: '有依据',
-        judgeModel: 'zhipu:glm-4.7',
+        judgeModel: 'zhipu:glm-5.3',
         createdAt: new Date('2026-09-28'),
       },
       {
@@ -397,7 +397,7 @@ describe('getEvaluationStats judge 聚合', () => {
         judgeRelevant: true,
         unfaithfulClaims: JSON.stringify(['编造句1', 123]),
         judgeReason: '有编造',
-        judgeModel: 'zhipu:glm-4.7',
+        judgeModel: 'zhipu:glm-5.3',
         createdAt: new Date('2026-09-27'),
       },
       {
@@ -417,7 +417,7 @@ describe('getEvaluationStats judge 聚合', () => {
         judgeRelevant: false,
         unfaithfulClaims: '{broken json',
         judgeReason: '脏JSON',
-        judgeModel: 'zhipu:glm-4.7',
+        judgeModel: 'zhipu:glm-5.3',
         createdAt: new Date('2026-09-25'),
       },
     ]);

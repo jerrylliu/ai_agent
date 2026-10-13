@@ -69,7 +69,7 @@ export class AutoEvaluation {
   @Column({ nullable: true, type: 'text' })
   judgeReason: string;
 
-  /** 执行判分的 judge 模型 id（如 zhipu:glm-4.7，可观测判分来源；长度与迁移 1790600000000 对齐） */
+  /** 执行判分的 judge 模型 id（如 zhipu:glm-5.3，可观测判分来源；长度与迁移 1790600000000 对齐） */
   @Column({ nullable: true, length: 120 })
   judgeModel: string;
 
