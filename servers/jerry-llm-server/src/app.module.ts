@@ -46,6 +46,7 @@ import { KgTriple } from './entities/kg-triple.entity.js';
 import { KgExtractOp } from './entities/kg-extract-op.entity.js';
 import { DocumentService } from './services/document.service.js';
 import { DocumentScanService } from './services/document-scan.service.js';
+import { TableOpsService } from './services/table-ops.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
 import { ImageRetrySchedulerService } from './services/image-retry-scheduler.service.js';
 import { KnowledgeSourceService } from './services/knowledge-source.service.js';
@@ -180,6 +181,8 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     UsageService,
     EvaluationService,
     DocumentService,
+    // AI 表格指令服务（M2 指令下推：LLM 解析意图 + 代码精确执行）
+    TableOpsService,
     // 文档安全扫描服务（入库前注入扫描门禁 + 人工复核）
     DocumentScanService,
     DocumentSchedulerService,

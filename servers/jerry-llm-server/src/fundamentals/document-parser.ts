@@ -598,8 +598,9 @@ async function parseExcelFile(filePath: string): Promise<ParsedDocument> {
  * 与前端 table-convert.ts 的 parseCsvLine 逻辑保持一致——
  * 两侧都只处理"本项目生成的 CSV"（sheet_to_csv / 前端 escapeCsvCell 产物），
  * 多行引号单元格这类极端输入是已接受的 M1 边界。
+ * 导出供 table-ops 执行器复用（AI 表格指令在文本层读写同一格式）。
  */
-function parseCsvLine(line: string): string[] {
+export function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
   let cur = '';
   let inQuotes = false;
@@ -630,7 +631,7 @@ function parseCsvLine(line: string): string[] {
 }
 
 /** sheet 标题行格式（与 parseExcelFile 产物、前端 table-convert.ts 三方对齐） */
-const SHEET_HEADING_RE = /^#{0,4}\s*Sheet\s*[:：]\s*(.+)$/;
+export const SHEET_HEADING_RE = /^#{0,4}\s*Sheet\s*[:：]\s*(.+)$/;
 
 /** Excel sheet 名的非法字符（Excel 规范禁止 : \ / ? * [ ]） */
 const SHEET_NAME_INVALID_CHARS = /[:\\/?*[\]]/g;

@@ -5,24 +5,33 @@
  *   - 提供基于全文的 AI 快捷指令：润色 / 总结 / 翻译 / 续写大纲
  *   - 支持自定义指令输入
  *   - 流式输出到面板预览区，用户可"插入到光标"或"替换全文"
+ *   - 表格文档的自定义指令自动分流为"AI 表格指令"（M2 指令下推）：
+ *     服务端 LLM 解析意图 + 代码精确执行，报告确认后应用回表格
  *
  * 设计要点：
- *   - 复用后端 /ai/completion (SSE) 接口，不新建后端端点
+ *   - 复用后端 /ai/completion (SSE) 接口做普通写作；表格指令走
+ *     POST /documents/table-ops（非流式，结果需确认应用）
  *   - 生成期间通过 setGhostContinuing 抑制幽灵补全，避免冲突
  *   - 不引入 markdown 解析器（marked 未安装），AI 输出按换行拆分为段落插入
  *   - 与 KnowledgePanel 共用右侧面板区域，通过 Tabs 切换
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles, PenLine, FileText, Languages, ListTree,
   Square, Copy, CheckCircle2, AlertCircle, Loader2,
+  Table2, RotateCcw,
 } from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import type { JSONContent } from '@tiptap/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { requestCompletionStream, type CompletionMode } from '@/lib/api';
+import { requestCompletionStream, runTableOps, type CompletionMode, type TableOpsReportItem } from '@/lib/api';
+import {
+  docContainsTable,
+  sheetTextToTableDoc,
+  tableDocToSheetText,
+} from '@/lib/table-convert';
 import { setContinuing as setGhostContinuing } from '../extensions/GhostSuggestion';
 import { cn } from '@/utils/index';
 
@@ -79,6 +88,16 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
   const [customInstruction, setCustomInstruction] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // ==================== AI 表格指令状态（M2 指令下推） ====================
+  /** 当前文档是否含表格（决定自定义指令走普通写作还是表格指令路径） */
+  const hasTable = useMemo(() => (editor ? docContainsTable(editor.getJSON()) : false), [editor]);
+  /** 表格指令执行中 */
+  const [tableRunning, setTableRunning] = useState(false);
+  /** 表格指令执行结果（待用户确认应用） */
+  const [tableResult, setTableResult] = useState<{ sheetText: string; report: TableOpsReportItem[] } | null>(null);
+  /** 表格指令失败信息 */
+  const [tableError, setTableError] = useState('');
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -225,6 +244,92 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
     }
   }, [output, status]);
 
+  // ==================== AI 表格指令（M2 指令下推） ====================
+
+  /**
+   * 执行 AI 表格指令：编辑器表格 → sheet 文本 → 服务端解析+精确执行 → 报告待确认。
+   * 失败（网络/解析/引用校验）一律在此兜底展示，不影响编辑器内容。
+   */
+  const handleTableOpsExecute = useCallback(async () => {
+    if (!editor) return;
+    const trimmed = customInstruction.trim();
+    if (!trimmed) return;
+
+    // 序列化当前表格数据（含未保存编辑，与用户所见一致）
+    const sheetText = tableDocToSheetText(editor.getJSON());
+    if (!sheetText) {
+      console.warn('[AIWritingPanel] 表格数据序列化失败，无法执行表格指令');
+      showToast(false, '无法提取表格数据，请重试');
+      return;
+    }
+
+    console.log('[AIWritingPanel] 执行 AI 表格指令', {
+      instructionLength: trimmed.length,
+      sheetTextLength: sheetText.length,
+    });
+
+    setTableRunning(true);
+    setTableError('');
+    setTableResult(null);
+
+    try {
+      const result = await runTableOps({ instruction: trimmed, sheetText });
+      if (!result.ok) {
+        // 业务级失败（指令无法理解/引用不存在/护栏拦截）：服务端已返回可读原因
+        const msg = result.message ?? '表格指令执行失败';
+        console.warn('[AIWritingPanel] 表格指令被拒绝', { message: msg });
+        setTableError(msg);
+        showToast(false, msg);
+        return;
+      }
+      // ok 必有 sheetText 与 report（类型上 optional，运行时由后端保证，仍做兜底）
+      const nextText = result.sheetText ?? '';
+      if (!nextText) {
+        setTableError('服务端返回内容为空，请重试');
+        showToast(false, '服务端返回内容为空，请重试');
+        return;
+      }
+      setTableResult({ sheetText: nextText, report: result.report ?? [] });
+      showToast(true, '执行完成，请确认后应用');
+    } catch (err) {
+      const msg = (err as Error)?.message || '表格指令执行失败';
+      console.error('[AIWritingPanel] 表格指令请求失败', err);
+      setTableError(msg);
+      showToast(false, msg);
+    } finally {
+      setTableRunning(false);
+    }
+  }, [editor, customInstruction]);
+
+  /** 应用表格指令结果：新文本转回表格节点替换编辑器内容（Ctrl+Z 可撤销） */
+  const handleApplyTableOps = useCallback(() => {
+    if (!editor || !tableResult) return;
+    try {
+      const { doc: newDoc, degraded } = sheetTextToTableDoc(tableResult.sheetText);
+      if (degraded) {
+        // 转换层自检失败降级为纯文本——不强写进编辑器，避免用户表格被降级
+        showToast(false, '结果未能转换为表格，已放弃应用，请重试');
+        setTableResult(null);
+        return;
+      }
+      editor.commands.setContent(newDoc);
+      setTableResult(null);
+      setTableError('');
+      showToast(true, '已应用到表格，Ctrl+Z 可撤销');
+    } catch (err) {
+      console.error('[AIWritingPanel] 应用表格指令结果失败', err);
+      showToast(false, '应用失败：结果内容无法解析');
+    }
+  }, [editor, tableResult]);
+
+  /** 放弃表格指令结果 */
+  const handleDiscardTableOps = useCallback(() => {
+    setTableResult(null);
+    setTableError('');
+  }, []);
+
+  // ==================== 指令入口 ====================
+
   /** 点击快捷指令 */
   const handleQuickAction = useCallback((action: QuickAction) => {
     const config = QUICK_ACTIONS[action];
@@ -233,17 +338,26 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
     void runGeneration(config.mode, config.instruction, config.label);
   }, [runGeneration]);
 
-  /** 执行自定义指令 */
+  /**
+   * 执行自定义指令——按文档类型智能分流：
+   *   - 含表格文档 → AI 表格指令（LLM 解析意图 + 代码精确执行，报告确认后应用）
+   *   - 普通文档   → 原有 rewrite 流式改写
+   */
   const handleCustomExecute = useCallback(() => {
     const trimmed = customInstruction.trim();
     if (!trimmed) {
       console.warn('[AIWritingPanel] 自定义指令为空，跳过');
       return;
     }
+    if (hasTable) {
+      console.log('[AIWritingPanel] 文档含表格，走表格指令路径');
+      void handleTableOpsExecute();
+      return;
+    }
     console.log('[AIWritingPanel] 执行自定义指令', { instructionLength: trimmed.length });
     setActiveAction(null);
     void runGeneration('rewrite', trimmed, '自定义指令');
-  }, [customInstruction, runGeneration]);
+  }, [customInstruction, hasTable, handleTableOpsExecute, runGeneration]);
 
   /** 将文本按换行拆分为 Tiptap 段落数组 */
   const textToParagraphs = useCallback((text: string): JSONContent[] => {
@@ -350,15 +464,27 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
           })}
         </div>
 
-        {/* 自定义指令 */}
+        {/* 自定义指令（含表格文档时自动分流为 AI 表格指令） */}
         <div className="text-xs text-muted-foreground pt-1">自定义指令</div>
+        {hasTable && (
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2 py-1.5">
+            <Table2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">
+              已识别表格文档，指令将作用于表格数据（求和/筛选/排序等，结果确认后应用）
+            </span>
+          </div>
+        )}
         <div className="flex gap-1.5">
           <Input
             value={customInstruction}
             onChange={(e) => setCustomInstruction(e.target.value)}
-            placeholder="例如：把全文改成口语化"
+            placeholder={
+              hasTable
+                ? '例如：把销售员3号的所有销售额加起来，追加为新的一行'
+                : '例如：把全文改成口语化'
+            }
             className="h-8 text-sm"
-            disabled={isGenerating}
+            disabled={isGenerating || tableRunning}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleCustomExecute();
             }}
@@ -367,20 +493,73 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
             variant="default"
             size="sm"
             className="h-8 shrink-0"
-            disabled={isGenerating || !customInstruction.trim()}
+            disabled={isGenerating || tableRunning || !customInstruction.trim()}
             onClick={handleCustomExecute}
           >
-            执行
+            {tableRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '执行'}
           </Button>
         </div>
       </div>
 
       {/* 生成结果区 */}
       <div className="flex-1 overflow-y-auto p-3">
-        {status === 'idle' && !output && (
+        {/* AI 表格指令：执行中 */}
+        {tableRunning && (
+          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-8">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <span className="text-xs">正在解析指令并计算表格数据…</span>
+          </div>
+        )}
+
+        {/* AI 表格指令：执行失败 */}
+        {!tableRunning && tableError && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-2">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <span className="text-xs text-destructive leading-relaxed">{tableError}</span>
+            </div>
+            <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={handleDiscardTableOps}>
+              <RotateCcw className="h-3 w-3" />
+              清除
+            </Button>
+          </div>
+        )}
+
+        {/* AI 表格指令：执行报告 + 确认应用 */}
+        {!tableRunning && tableResult && (
+          <div className="space-y-3">
+            <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2 max-h-[50vh] overflow-y-auto">
+              <div className="text-xs font-medium text-foreground">执行报告</div>
+              {tableResult.report.map((item, idx) => (
+                <div key={idx} className="flex items-start gap-2 text-xs leading-relaxed">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0 mt-0.5" />
+                  <span className="text-muted-foreground">
+                    {item.targetSheet ? `「${item.targetSheet}」` : ''}
+                    {item.message}
+                  </span>
+                </div>
+              ))}
+              {tableResult.report.length === 0 && (
+                <div className="text-xs text-muted-foreground">操作已执行（无明细报告）</div>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button variant="default" size="sm" className="h-7 gap-1 text-xs" onClick={handleApplyTableOps} disabled={!editor}>
+                <CheckCircle2 className="h-3 w-3" />
+                应用到表格
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={handleDiscardTableOps}>
+                <RotateCcw className="h-3 w-3" />
+                放弃
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {status === 'idle' && !output && !tableRunning && !tableError && !tableResult && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-8">
             <Sparkles className="h-8 w-8 opacity-40" />
-            <span className="text-xs">选择快捷指令或输入自定义指令</span>
+            <span className="text-xs">{hasTable ? '输入指令操作表格数据' : '选择快捷指令或输入自定义指令'}</span>
           </div>
         )}
 
