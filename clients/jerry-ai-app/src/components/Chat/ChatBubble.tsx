@@ -284,7 +284,7 @@ function UserDocumentCard({ card }: { card: MessageDocumentCard }) {
           {card.contentJson != null && (
             <button
               type="button"
-              onClick={() => { void openEditorWithContent(card.contentJson, card.fileName, card.documentId); }}
+              onClick={() => { void openEditorWithContent(card.contentJson, card.fileName, card.documentId, card.sourceFormat); }}
               className="inline-flex items-center gap-1 px-3 py-1.5 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
               title="在编辑器中打开"
             >

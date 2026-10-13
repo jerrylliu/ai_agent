@@ -753,21 +753,21 @@ export class DocumentController {
   }
 
   /**
-   * GET /documents/:id/versions/:versionId/export?format=md|txt|docx
+   * GET /documents/:id/versions/:versionId/export?format=md|txt|docx|xlsx
    * 导出指定版本内容到指定格式（包含编辑后的最新内容）
    */
   @Get(':id/versions/:versionId/export')
   async exportVersion(
     @Param('id', ParseIntPipe) id: number,
     @Param('versionId', ParseIntPipe) versionId: number,
-    @Query('format') format: 'md' | 'txt' | 'docx',
+    @Query('format') format: 'md' | 'txt' | 'docx' | 'xlsx',
     @Res() res: Response,
   ) {
     try {
-      if (!['md', 'txt', 'docx'].includes(format)) {
+      if (!['md', 'txt', 'docx', 'xlsx'].includes(format)) {
         return res
           .status(400)
-          .json({ success: false, message: 'format 仅支持 md / txt / docx' });
+          .json({ success: false, message: 'format 仅支持 md / txt / docx / xlsx' });
       }
 
       const result = await this.documentService.exportVersion(

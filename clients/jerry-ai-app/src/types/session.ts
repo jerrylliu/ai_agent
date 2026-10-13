@@ -119,6 +119,8 @@ export interface MessageDocumentCard {
   contentJson: unknown;
   /** 后端文档记录 ID（有值时编辑器走版本管理逻辑） */
   documentId?: number;
+  /** 来源格式标记：'xlsx' 时编辑器把 sheet 文本转为网格表格 */
+  sourceFormat?: string;
 }
 
 export interface HistoryItem {

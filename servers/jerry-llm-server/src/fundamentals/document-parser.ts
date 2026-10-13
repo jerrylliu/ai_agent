@@ -578,10 +578,133 @@ async function parseExcelFile(filePath: string): Promise<ParsedDocument> {
       const csv = XLSX.utils.sheet_to_csv(sheet);
       sheets.push(`Sheet: ${sheetName}\n${csv}`);
     }
-    return { text: sheets.join('\n\n'), images: [] };
+    return {
+      text: sheets.join('\n\n'),
+      images: [],
+      // 标记来源为 Excel：前端编辑器据此把 sheet 结构化文本转为网格表格；
+      // 聊天/检索链路只消费 text 字段，不受该标记影响
+      sourceFormat: 'xlsx',
+      sheetNames: [...workbook.SheetNames],
+    };
   } catch (err: any) {
     throw new Error(`解析 Excel 文件失败: ${err.message}`);
   }
+}
+
+// ==================== sheet 结构化文本 → xlsx 导出 ====================
+
+/**
+ * 单行 CSV 解析（RFC 4180 子集：支持引号包裹与 "" 转义）。
+ * 与前端 table-convert.ts 的 parseCsvLine 逻辑保持一致——
+ * 两侧都只处理"本项目生成的 CSV"（sheet_to_csv / 前端 escapeCsvCell 产物），
+ * 多行引号单元格这类极端输入是已接受的 M1 边界。
+ */
+function parseCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      cells.push(cur);
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  cells.push(cur);
+  return cells;
+}
+
+/** sheet 标题行格式（与 parseExcelFile 产物、前端 table-convert.ts 三方对齐） */
+const SHEET_HEADING_RE = /^#{0,4}\s*Sheet\s*[:：]\s*(.+)$/;
+
+/** Excel sheet 名的非法字符（Excel 规范禁止 : \ / ? * [ ]） */
+const SHEET_NAME_INVALID_CHARS = /[:\\/?*[\]]/g;
+
+/** Excel sheet 名最大长度（Excel 规范 31 字符；留 3 位给去重后缀 "(9)"） */
+const SHEET_NAME_MAX_LENGTH = 28;
+
+/**
+ * 清洗 sheet 名称：替换非法字符、截断、去空，保证是合法且不重复的 Excel sheet 名
+ */
+function dedupeSheetName(rawName: string, used: Set<string>): string {
+  let base = rawName.replace(SHEET_NAME_INVALID_CHARS, '_').trim() || 'Sheet1';
+  if (base.length > SHEET_NAME_MAX_LENGTH) base = base.slice(0, SHEET_NAME_MAX_LENGTH);
+  if (!used.has(base)) {
+    used.add(base);
+    return base;
+  }
+  let i = 2;
+  while (used.has(`${base}(${i})`)) i++;
+  const name = `${base}(${i})`;
+  used.add(name);
+  return name;
+}
+
+/**
+ * 把"sheet 结构化文本"还原为 xlsx 二进制（编辑器 Excel 导出用）。
+ *
+ * 输入格式与 parseExcelFile 的产物一致：`Sheet: 名称` 行 + CSV 行，sheet 间空行分隔。
+ * 编辑器保存产生的版本（contentText 落盘为 txt 版本文件）与原始 xlsx 版本
+ * 经 parseVersionText 后都是该格式，因此导出统一走本函数，无需区分版本种类。
+ *
+ * 容错（宁肯多保数据，不可导出报错）：
+ *   - 标题前的散行归入 "Sheet1"；普通文本行按单列数据保留（数据不丢）；
+ *   - 空行是 sheet 分隔符，跳过；
+ *   - sheet 名非法/重复自动清洗去重；
+ *   - 无任何数据行时返回 null，调用方给业务错误提示。
+ *
+ * @param text sheet 结构化文本
+ * @returns xlsx 文件 Buffer；无表格数据时返回 null
+ */
+export function sheetTextToXlsx(text: string): Buffer | null {
+  interface OutSheet {
+    name: string;
+    rows: string[][];
+  }
+  const sheets: OutSheet[] = [];
+  let current: OutSheet | null = null;
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const m = rawLine.trim().match(SHEET_HEADING_RE);
+    if (m) {
+      current = { name: m[1].trim(), rows: [] };
+      sheets.push(current);
+      continue;
+    }
+    if (!rawLine.trim()) continue;
+    // 标题前的散行（无所属 sheet）归入默认 sheet
+    if (!current) {
+      current = { name: 'Sheet1', rows: [] };
+      sheets.push(current);
+    }
+    current.rows.push(parseCsvLine(rawLine));
+  }
+
+  const validSheets = sheets.filter((s) => s.rows.length > 0);
+  if (validSheets.length === 0) return null;
+
+  const usedNames = new Set<string>();
+  const workbook = XLSX.utils.book_new();
+  for (const sheet of validSheets) {
+    const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
+    XLSX.utils.book_append_sheet(workbook, ws, dedupeSheetName(sheet.name, usedNames));
+  }
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
 
 /**

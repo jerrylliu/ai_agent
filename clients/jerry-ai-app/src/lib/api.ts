@@ -708,6 +708,10 @@ export interface ExtractDocumentResponse {
   totalChars?: number;
   /** 后端创建的文档记录 ID（已废弃：输入框上传不再入库，此字段恒为 undefined） */
   documentId?: number;
+  /** 来源格式标记：'xlsx' 时前端编辑器把 sheet 文本转为网格表格；其他格式为 undefined */
+  sourceFormat?: string;
+  /** Excel 各 sheet 名称（仅 sourceFormat='xlsx' 时有值） */
+  sheetNames?: string[];
 }
 
 /**
@@ -1809,11 +1813,11 @@ export async function getDocumentVersions(
   return data.versions ?? [];
 }
 
-/** 导出指定版本内容到 md/txt/docx 格式，返回 Blob */
+/** 导出指定版本内容到 md/txt/docx/xlsx 格式，返回 Blob */
 export async function exportVersion(
   documentId: number,
   versionId: number,
-  format: "md" | "txt" | "docx",
+  format: "md" | "txt" | "docx" | "xlsx",
 ): Promise<Blob> {
   const response = await fetch(
     `${API_ENDPOINTS.DOCUMENTS}/${documentId}/versions/${versionId}/export?format=${format}`,
