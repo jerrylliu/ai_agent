@@ -149,6 +149,8 @@ export interface PendingDocument {
   totalChars?: number;
   /** 后端文档记录 ID */
   documentId?: number;
+  /** 来源格式标记：'xlsx' 时编辑器把 sheet 文本转为网格表格 */
+  sourceFormat?: string;
 }
 
 export function useChat(
@@ -795,6 +797,7 @@ export function useChat(
               fileUrl: d.fileUrl,
               contentJson: d.contentJson,
               documentId: d.documentId,
+              sourceFormat: d.sourceFormat,
             }))
           : undefined,
     };
@@ -1165,6 +1168,7 @@ export function useChat(
           truncated: result.truncated,
           totalChars: result.totalChars,
           documentId: result.documentId,
+          sourceFormat: result.sourceFormat,
         };
         setPendingDocuments((prev) => [...prev, pending]);
       } catch (err) {

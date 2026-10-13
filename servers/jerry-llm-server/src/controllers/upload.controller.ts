@@ -157,6 +157,10 @@ export class UploadController {
         truncated,
         maxChars: MAX_CHARS,
         totalChars: text.length,
+        // Excel 来源标记：前端编辑器据此把 sheet 文本二次转换为网格表格；
+        // 非Excel 文档该字段为 undefined，JSON 序列化时自动省略，旧前端不受影响
+        sourceFormat: parsed.sourceFormat,
+        sheetNames: parsed.sheetNames,
       };
     } catch (err: any) {
       logger.error('文档内容提取失败', {

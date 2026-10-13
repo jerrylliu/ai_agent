@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Save, Loader2, CheckCircle2, UploadCloud, BookOpen, Sparkles, PanelRightClose } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, CheckCircle2, UploadCloud, BookOpen, Sparkles, PanelRightClose, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { DocumentEditor, type Editor, type JSONContent } from '@/components/Editor/DocumentEditor';
 import { EditorToolbar } from '@/components/Editor/EditorToolbar';
@@ -34,11 +34,20 @@ import {
   getDocumentByTitle,
   getDocumentVersions,
   publishToVectorStore,
+  exportVersion,
   type DocumentItem,
 } from '@/lib/api';
 import { consumeTransientContent, isTauri, readHashQueryValue } from '@/lib/window';
 import { ANCHOR_NOT_FOUND, findAnchorBlockIndex, normalizeAnchorText } from '@/lib/anchor-match';
 import { highlightAnchor } from '@/components/Editor/extensions/AnchorHighlight';
+import {
+  docContainsTable,
+  isSheetStructuredText,
+  maxTableRowCount,
+  sheetTextToTableDoc,
+  tableDocToSheetText,
+  TABLE_SOFT_ROW_LIMIT,
+} from '@/lib/table-convert';
 
 export interface DocumentEditorPageProps {
   /** 要编辑的文档 ID；不传则进入草稿模式 */
@@ -57,6 +66,41 @@ const EMPTY_DOC: JSONContent = {
   type: 'doc',
   content: [{ type: 'paragraph' }],
 };
+
+/** 递归提取节点内全部文本（供 sheet 结构判定用，不注入块级分隔符） */
+function flattenDocPlainText(node: JSONContent): string {
+  if (node.type === 'text') return node.text ?? '';
+  return (node.content ?? []).map(flattenDocPlainText).join('');
+}
+
+/**
+ * xlsx 来源内容表格化：把"sheet 结构化文本段落"转换为 heading + table 节点。
+ *
+ * 兜底策略（宁可不转，不可转坏）：
+ *   - 已含表格（新编辑器保存过）→ 原样返回，不重复转换；
+ *   - 内容识别不出 sheet 结构（且无 sourceFormat 提示）→ 原样返回；
+ *   - 转换层内部自检失败会自动降级纯文本，任何异常都捕获后原样返回，
+ *     保证加载流程永不因表格化而失败。
+ *
+ * @param json 加载到的文档内容（可能来自后端 contentJson / 聊天 transient / 本地草稿）
+ * @param xlsxHint 明确的 Excel 来源信号（sourceFormat 或扩展名），放宽判定条件
+ * @returns 表格化后的 doc；不需要/不能转换时返回 null（调用方用原内容）
+ */
+function tryConvertSheetContent(json: JSONContent, xlsxHint = false): JSONContent | null {
+  try {
+    if (docContainsTable(json)) return null;
+    const text = flattenDocPlainText(json);
+    if (!text.trim()) return null;
+    // 无明确信号时要求内容能识别出 sheet 结构，避免把普通文档误转成表格
+    if (!xlsxHint && !isSheetStructuredText(text)) return null;
+    const { doc } = sheetTextToTableDoc(text);
+    return doc;
+  } catch (err) {
+    // 表格化失败一律降级为原始内容（段落形态），不阻塞文档打开
+    console.warn('[DocumentEditorPage] Excel 表格化失败，保留纯文本渲染', err);
+    return null;
+  }
+}
 
 /** 锚点未命中提示文案 */
 const ANCHOR_MISS_NOTICE = '未能定位到该引用片段，已打开全文（文档可能已被修改，或引用来自图片说明）';
@@ -261,7 +305,9 @@ export default function DocumentEditorPage({
             const content = await getDocumentContent(documentId);
             if (cancelled) return;
             if (content.contentJson) {
-              setContent(content.contentJson as JSONContent);
+              const json = content.contentJson as JSONContent;
+              // xlsx 来源的旧版本可能是纯段落形态：能识别 sheet 结构则表格化
+              setContent(tryConvertSheetContent(json) ?? json);
             } else {
               // 后端无内容 → 尝试本地草稿
               const cached = localStorage.getItem(draftKey(documentId));
@@ -291,6 +337,9 @@ export default function DocumentEditorPage({
           const transient = consumeTransientContent();
           console.log('[Editor] 草稿模式启动，临时内容:', transient ? `命中(${transient.fileName})` : '未命中');
           if (transient) {
+            // Excel 来源信号：sourceFormat 标记或扩展名（旧消息卡片无 sourceFormat，靠扩展名兜底）
+            const xlsxHint =
+              transient.sourceFormat === 'xlsx' || /\.(xlsx|xls)$/i.test(transient.fileName);
             // 先按文件名查后端，找到则走已有文档模式加载最新内容
             // （聊天卡片的 documentId 可能缺失，但后端可能已通过编辑器保存创建了同名文档）
             const title = transient.fileName.replace(/\.[^/.]+$/, '');
@@ -304,11 +353,15 @@ export default function DocumentEditorPage({
                 try {
                   const contentResp = await getDocumentContent(existingDoc.id);
                   if (!cancelled && contentResp.contentJson) {
-                    setContent(contentResp.contentJson as JSONContent);
+                    const json = contentResp.contentJson as JSONContent;
+                    setContent(tryConvertSheetContent(json, xlsxHint) ?? json);
                   }
                 } catch {
                   // 加载远端内容失败，用 transient 快照兜底
-                  if (!cancelled) setContent(transient.contentJson as JSONContent);
+                  if (!cancelled) {
+                    const json = transient.contentJson as JSONContent;
+                    setContent(tryConvertSheetContent(json, xlsxHint) ?? json);
+                  }
                 }
                 foundRemote = true;
               }
@@ -318,7 +371,8 @@ export default function DocumentEditorPage({
 
             // 后端未找到 → 用 transient 的旧快照
             if (!foundRemote && !cancelled) {
-              setContent(transient.contentJson as JSONContent);
+              const json = transient.contentJson as JSONContent;
+              setContent(tryConvertSheetContent(json, xlsxHint) ?? json);
               setDoc({
                 id: 0,
                 title: transient.fileName,
@@ -364,23 +418,50 @@ export default function DocumentEditorPage({
 
   /**
    * 从 Tiptap JSONContent 提取纯文本
-   * 用于后端 RAG 分块；递归遍历所有 text 节点，块级节点之间补换行
+   * 用于后端 RAG 分块；递归遍历所有 text 节点，块级节点之间补换行。
+   * 表格节点按行提取：单元格用逗号连接、行间换行（避免单元格文字粘连成一坨）。
    */
   const extractText = useCallback((node: JSONContent): string => {
     if (!node) return '';
     if (node.type === 'text') return node.text ?? '';
+    if (node.type === 'table') {
+      const rows = (node.content ?? []).filter((r) => r.type === 'tableRow');
+      if (rows.length === 0) return '';
+      const lines = rows.map((row) =>
+        (row.content ?? [])
+          .map((cell) => extractText(cell).replace(/\n+$/, ''))
+          .join(','),
+      );
+      return lines.join('\n') + '\n';
+    }
     const blockTypes = new Set(['paragraph', 'heading', 'blockquote', 'codeBlock', 'listItem', 'taskItem']);
     const childTexts = (node.content ?? []).map(extractText);
     const joined = childTexts.join('');
     return blockTypes.has(node.type ?? '') ? joined + '\n' : joined;
   }, []);
 
+  /**
+   * 生成用于持久化/RAG/导出的内容文本。
+   * 含表格的文档优先走 tableDocToSheetText（sheet 结构化文本：Sheet 标题 + CSV），
+   * 服务端 ?format=xlsx 导出据此还原工作簿；序列化失败或无表时回退 extractText 原路径。
+   */
+  const buildContentText = useCallback(
+    (json: JSONContent): string => {
+      if (docContainsTable(json)) {
+        const sheetText = tableDocToSheetText(json);
+        if (sheetText) return sheetText;
+      }
+      return extractText(json).trim();
+    },
+    [extractText],
+  );
+
   // 保存
   const handleSave = useCallback(async () => {
     setSaving(true);
     setError(null);
     try {
-      const contentText = extractText(content).trim();
+      const contentText = buildContentText(content);
 
       if (currentDocId) {
         // 已有文档 → 直接保存（内容变了会自动创建新版本）
@@ -415,7 +496,7 @@ export default function DocumentEditorPage({
     } finally {
       setSaving(false);
     }
-  }, [content, currentDocId, doc, extractText]);
+  }, [content, currentDocId, doc, buildContentText]);
 
   /**
    * 发布到知识库
@@ -429,7 +510,7 @@ export default function DocumentEditorPage({
     try {
       // 先保存未保存的修改
       if (dirty) {
-        const contentText = extractText(content).trim();
+        const contentText = buildContentText(content);
         await saveDocumentContent(currentDocId, { contentJson: content, contentText });
         setDirty(false);
         setSavedAt(new Date());
@@ -455,7 +536,62 @@ export default function DocumentEditorPage({
     } finally {
       setPublishing(false);
     }
-  }, [currentDocId, dirty, content, extractText]);
+  }, [currentDocId, dirty, content, buildContentText]);
+
+  // ==================== 表格（Excel 网格化）支持 ====================
+
+  /** 文档是否含表格：决定"下载 Excel"入口显隐（顶层遍历，开销可忽略） */
+  const hasTable = docContainsTable(content);
+
+  /** 表格行数性能提示（非阻塞浮层，手动关闭后本次会话不再打扰） */
+  const [tableNotice, setTableNotice] = useState<string | null>(null);
+  const [tableNoticeDismissed, setTableNoticeDismissed] = useState(false);
+  useEffect(() => {
+    if (loading || tableNoticeDismissed) return;
+    const rows = maxTableRowCount(content);
+    // 500~2000 行可编辑但可能卡顿（>2000 行在转换层已被硬限降级，不会出现在表格态）
+    setTableNotice(
+      rows > TABLE_SOFT_ROW_LIMIT
+        ? `当前表格约 ${rows} 行，编辑可能略卡顿，建议拆分工作表`
+        : null,
+    );
+  }, [content, loading, tableNoticeDismissed]);
+
+  const [downloading, setDownloading] = useState(false);
+
+  /**
+   * 下载 Excel：取最新版本导出 .xlsx（编辑后的内容随保存进入最新版本）。
+   * 服务端把版本的 sheet 结构化文本还原为工作簿；用临时 <a> 触发 Blob 下载
+   * （Tauri WebView 与浏览器通用，无需插件）。
+   */
+  const handleDownloadXlsx = useCallback(async () => {
+    if (!currentDocId) return;
+    setDownloading(true);
+    setError(null);
+    try {
+      const versions = await getDocumentVersions(currentDocId);
+      if (!versions || versions.length === 0) {
+        throw new Error('未找到可下载的版本，请先保存文档');
+      }
+      const latestVersion = versions.reduce((a, b) =>
+        a.versionNumber > b.versionNumber ? a : b,
+      );
+      const blob = await exportVersion(currentDocId, latestVersion.id, 'xlsx');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // 文件名兜底：title 若带扩展名（老数据）先去掉，避免 xxx.xlsx.xlsx
+      a.download = `${title.replace(/\.(xlsx|xls)$/i, '')}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '下载失败');
+    } finally {
+      setDownloading(false);
+    }
+  }, [currentDocId, title]);
 
   // 快捷键：Ctrl/Cmd + S 保存
   useEffect(() => {
@@ -568,6 +704,24 @@ export default function DocumentEditorPage({
             )}
             保存
           </Button>
+          {/* 下载 Excel：文档含表格时提供（导出最新版本的编辑后内容） */}
+          {currentDocId && hasTable && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleDownloadXlsx()}
+              disabled={downloading || saving}
+              className="gap-1.5"
+              title="将当前表格内容导出为 .xlsx 文件（保存后生效）"
+            >
+              {downloading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              {downloading ? '导出中...' : '下载 Excel'}
+            </Button>
+          )}
           {/* 发布到知识库：已有文档时显示（含草稿保存后创建的文档） */}
           {currentDocId && (
             <Button
@@ -602,6 +756,24 @@ export default function DocumentEditorPage({
           <button
             type="button"
             onClick={() => setAnchorNotice(null)}
+            className="text-muted-foreground hover:text-foreground font-medium"
+            aria-label="关闭提示"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* 表格过大性能提示：非阻塞，可手动关闭（关闭后本次会话不再打扰） */}
+      {tableNotice && (
+        <div className="flex items-start gap-2 px-4 py-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-500/10 border-b border-amber-500/30">
+          <span className="flex-1">{tableNotice}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setTableNotice(null);
+              setTableNoticeDismissed(true);
+            }}
             className="text-muted-foreground hover:text-foreground font-medium"
             aria-label="关闭提示"
           >

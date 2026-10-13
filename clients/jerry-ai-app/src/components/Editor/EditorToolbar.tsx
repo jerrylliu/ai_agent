@@ -23,6 +23,9 @@ import {
   Sparkles, Square,
   CheckCircle2, AlertCircle,
   MessageSquareWarning, Info, CheckCircle, AlertTriangle, XCircle,
+  Table as TableIcon,
+  ArrowUpToLine, ArrowDownToLine, Rows3, Columns3,
+  Trash2,
 } from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import { Button } from '@/components/ui/button';
@@ -353,6 +356,65 @@ export function EditorToolbar({ editor, className }: EditorToolbarProps) {
       >
         <Minus className="h-4 w-4" />
       </ToolButton>
+
+      <Divider />
+
+      {/* 表格：插入 + 光标所在行/列的操作（Excel 网格化编辑，见 EXCEL_GRID_EDITOR_PLAN.md） */}
+      <ToolButton
+        onClick={() =>
+          editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
+        }
+        active={editor.isActive('table')}
+        title="插入表格（3×3 含表头）"
+      >
+        <TableIcon className="h-4 w-4" />
+      </ToolButton>
+      {editor.isActive('table') && (
+        <>
+          <ToolButton
+            onClick={() => editor.chain().focus().addRowBefore().run()}
+            title="在上方插入行"
+          >
+            <ArrowUpToLine className="h-4 w-4" />
+          </ToolButton>
+          <ToolButton
+            onClick={() => editor.chain().focus().addRowAfter().run()}
+            title="在下方插入行"
+          >
+            <ArrowDownToLine className="h-4 w-4" />
+          </ToolButton>
+          <ToolButton
+            onClick={() => editor.chain().focus().deleteRow().run()}
+            title="删除当前行"
+          >
+            <Rows3 className="h-4 w-4" />
+          </ToolButton>
+          <ToolButton
+            onClick={() => editor.chain().focus().addColumnBefore().run()}
+            title="在左侧插入列"
+          >
+            <ArrowUpToLine className="h-4 w-4 rotate-90" />
+          </ToolButton>
+          <ToolButton
+            onClick={() => editor.chain().focus().addColumnAfter().run()}
+            title="在右侧插入列"
+          >
+            <ArrowDownToLine className="h-4 w-4 rotate-90" />
+          </ToolButton>
+          <ToolButton
+            onClick={() => editor.chain().focus().deleteColumn().run()}
+            title="删除当前列"
+          >
+            <Columns3 className="h-4 w-4" />
+          </ToolButton>
+          <ToolButton
+            onClick={() => editor.chain().focus().deleteTable().run()}
+            title="删除整个表格"
+          >
+            <Trash2 className="h-4 w-4" />
+          </ToolButton>
+        </>
+      )}
 
       <Divider />
 

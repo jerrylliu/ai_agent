@@ -44,7 +44,11 @@ import {
   deleteDocumentImageFiles,
   readVersionFile,
 } from '../fundamentals/file-storage';
-import { parseDocument, getMimeType } from '../fundamentals/document-parser';
+import {
+  parseDocument,
+  getMimeType,
+  sheetTextToXlsx,
+} from '../fundamentals/document-parser';
 import {
   addDocuments,
   addImageChunks,
@@ -2112,13 +2116,16 @@ export class DocumentService implements OnApplicationBootstrap {
 
   /**
    * 导出指定版本内容到指定格式
-   * 支持格式：md / txt / docx
+   * 支持格式：md / txt / docx / xlsx
    * - md/txt：直接返回解析后的文本
    * - docx：用 markdownToDocx 生成（纯文本按段落处理）
+   * - xlsx：把 sheet 结构化文本还原为 Excel 工作簿（编辑器 Excel 导出），
+   *   版本文本对"编辑器保存版本（txt 版本文件=contentText）"与
+   *   "原始 xlsx 版本（parseExcelFile 产物同构）"都成立
    */
   async exportVersion(
     versionId: number,
-    format: 'md' | 'txt' | 'docx',
+    format: 'md' | 'txt' | 'docx' | 'xlsx',
   ): Promise<{ buffer: Buffer; fileName: string; mimeType: string }> {
     const version = await this.versionRepo.findOne({
       where: { id: versionId },
@@ -2136,6 +2143,20 @@ export class DocumentService implements OnApplicationBootstrap {
 
     // 解析版本文本（已 normalize）
     const text = await this.parseVersionText(version);
+
+    if (format === 'xlsx') {
+      // sheet 结构化文本 → Excel 工作簿；无表格数据时给业务错误（不静默返回空文件）
+      const workbookBuffer = sheetTextToXlsx(text);
+      if (!workbookBuffer) {
+        throw new Error('该版本没有可导出的表格数据');
+      }
+      return {
+        buffer: workbookBuffer,
+        fileName: `${baseName}.xlsx`,
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      };
+    }
 
     if (format === 'docx') {
       // 纯文本按段落用空行分隔，转成 markdown 再生成 docx

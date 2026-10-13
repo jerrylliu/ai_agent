@@ -118,6 +118,8 @@ const TRANSIENT_CONTENT_KEY_PREFIX = 'editor-transient-content:';
 interface TransientContent {
   contentJson: unknown;
   fileName: string;
+  /** 来源格式标记：'xlsx' 时编辑器把 sheet 文本转为网格表格（旧消息无此字段） */
+  sourceFormat?: string;
   createdAt: number;
 }
 
@@ -135,11 +137,13 @@ function generateToken(): string {
  * @param contentJson Tiptap JSONContent（草稿模式时使用）
  * @param fileName 文档文件名（用作窗口标题）
  * @param documentId 后端文档记录 ID（有值时走已有文档模式，编辑保存走版本管理）
+ * @param sourceFormat 来源格式标记（'xlsx' 时编辑器做网格化转换；可选，旧调用不传）
  */
 export async function openEditorWithContent(
   contentJson: unknown,
   fileName: string,
   documentId?: number,
+  sourceFormat?: string,
 ): Promise<string> {
   // 有 documentId → 已有文档模式，编辑器从后端加载内容
   if (documentId) {
@@ -152,6 +156,7 @@ export async function openEditorWithContent(
   const payload: TransientContent = {
     contentJson,
     fileName,
+    sourceFormat,
     createdAt: Date.now(),
   };
   try {
@@ -177,7 +182,11 @@ export async function openEditorWithContent(
  *   3. 读取成功后**不立即删除**，因为 StrictMode 会双调用；
  *      由 cleanupExpiredTransients 在 30 分钟后清理（或下次写入时清理）
  */
-export function consumeTransientContent(): { contentJson: unknown; fileName: string } | null {
+export function consumeTransientContent(): {
+  contentJson: unknown;
+  fileName: string;
+  sourceFormat?: string;
+} | null {
   const token = readHashQuery('transientToken');
   console.log('[window] 读取 transient token from URL:', token, 'hash:', window.location.hash);
   if (!token) return null;
@@ -189,7 +198,11 @@ export function consumeTransientContent(): { contentJson: unknown; fileName: str
 
   try {
     const payload = JSON.parse(raw) as TransientContent;
-    return { contentJson: payload.contentJson, fileName: payload.fileName };
+    return {
+      contentJson: payload.contentJson,
+      fileName: payload.fileName,
+      sourceFormat: payload.sourceFormat,
+    };
   } catch {
     return null;
   }

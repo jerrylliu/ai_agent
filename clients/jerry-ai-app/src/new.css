@@ -1217,6 +1217,64 @@ button.decorum-tb-btn {
   box-shadow: 0 0 6px #ff336622;
 }
 
+/* ==================== 编辑器表格样式（Excel 网格化编辑） ==================== */
+/* Tiptap table 节点默认无边框，这里补齐网格视觉。
+   亮色用 border 变量、暗色/cyberpunk 用低饱和青灰，两种主题都可读 */
+
+.ProseMirror table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  margin: 0.5em 0;
+  overflow: hidden;
+}
+
+.ProseMirror table td,
+.ProseMirror table th {
+  border: 1px solid hsl(var(--border));
+  padding: 4px 8px;
+  vertical-align: top;
+  position: relative;
+  min-width: 2em;
+}
+
+.ProseMirror table th {
+  background-color: hsl(var(--muted) / 0.6);
+  font-weight: 600;
+  text-align: left;
+}
+
+/* 单元格选中态（Tiptap 通过 columnSelection 类标记） */
+.ProseMirror table .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: hsl(var(--primary) / 0.12);
+  pointer-events: none;
+}
+
+/* 暗色模式：边框提亮一档保证可见 */
+.dark .ProseMirror table td,
+.dark .ProseMirror table th {
+  border-color: hsl(var(--border) / 0.9);
+}
+
+.dark .ProseMirror table th {
+  background-color: hsl(var(--muted) / 0.35);
+}
+
+/* 赛博朋克模式：霓虹青网格线 */
+.cyberpunk .cyberpunk-editor-content .ProseMirror table td,
+.cyberpunk .cyberpunk-editor-content .ProseMirror table th {
+  border-color: #5FF6FF33;
+}
+
+.cyberpunk .cyberpunk-editor-content .ProseMirror table th {
+  background-color: #5FF6FF10;
+  color: #5FF6FF;
+  text-shadow: none;
+}
+
 /* ==================== 全局基础样式 ==================== */
 @layer base {
   * {

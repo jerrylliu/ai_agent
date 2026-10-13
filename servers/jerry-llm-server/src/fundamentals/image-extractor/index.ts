@@ -56,4 +56,14 @@ export interface ParsedDocument {
 
   /** 提取的图片资源列表（可能为空） */
   images: ImageAsset[];
+
+  /**
+   * 来源格式标识（可选）。目前仅 Excel 解析器填充 'xlsx'：
+   * 前端编辑器据此把 sheet 结构化文本二次转换为网格表格；
+   * 其他解析器不填（undefined），前端按普通文档渲染，零回归。
+   */
+  sourceFormat?: 'xlsx';
+
+  /** Excel 各 sheet 名称（仅 sourceFormat='xlsx' 时有值，供前端展示/校验） */
+  sheetNames?: string[];
 }

@@ -19,6 +19,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
+import { TableKit } from '@tiptap/extension-table';
 import {
   GhostSuggestion,
   setEnabled as setGhostEnabled,
@@ -89,6 +90,11 @@ export function DocumentEditor({
       TaskList,
       TaskItem.configure({
         nested: true,
+      }),
+      // 表格节点组（table/tableRow/tableHeader/tableCell + 行列操作命令）
+      // 服务于 Excel 网格化编辑（见 EXCEL_GRID_EDITOR_PLAN.md）
+      TableKit.configure({
+        table: { resizable: false },
       }),
       // AI 幽灵补全（只读模式下禁用；运行时开关由 useEffect + setGhostEnabled 控制）
       GhostSuggestion.configure({
