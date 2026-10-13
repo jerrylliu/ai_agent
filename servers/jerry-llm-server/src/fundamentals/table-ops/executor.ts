@@ -406,17 +406,24 @@ export function executeTableOps(text: string, ops: TableOp[]): ExecuteResult {
     throw new TableOpsError(`表格共 ${totalRows} 行，超过单次指令处理上限 ${MAX_DATA_ROWS} 行`);
   }
 
-  // 先校验：所有 op 引用合法性整体预检，任一失败即整体拒绝
-  for (const op of ops) {
-    validateOp(op, sheets);
-  }
-
-  // 再执行：校验已通过，执行中的唯一可能异常是聚合列全空（数据级），同样整体失败
+  // 顺序校验 + 执行：op 之间允许依赖前序 op 的结果（如"删除备注列再新增备注列"），
+  // 所以每个 op 在执行前针对"当前（已被前序 op 变更过）"的状态校验。
+  // 原子性保证：任何一步失败直接抛错，函数不返回文本——调用方持有原文本，
+  // 天然不会出现"执行一半"的落盘状态；错误带步骤编号便于定位是哪条指令没被满足
   const report: OpReport[] = [];
-  for (const op of ops) {
-    const target = findSheet(sheets, op.targetSheet);
-    const message = executeOp(op, target);
-    report.push({ type: op.type, targetSheet: target.name, message });
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    try {
+      validateOp(op, sheets);
+      const target = findSheet(sheets, op.targetSheet);
+      const message = executeOp(op, target);
+      report.push({ type: op.type, targetSheet: target.name, message });
+    } catch (err) {
+      if (err instanceof TableOpsError) {
+        throw new TableOpsError(`第 ${i + 1} 步失败：${err.message}`);
+      }
+      throw err;
+    }
   }
 
   return { sheetText: serializeSheetData(sheets), report };
