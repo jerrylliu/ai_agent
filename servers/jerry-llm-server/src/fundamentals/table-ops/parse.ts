@@ -48,6 +48,31 @@ const SYSTEM_PROMPT = `你是表格数据操作助手。根据表格概览和用
 输出示例：{"ops":[{"type":"aggregateAppendRow","targetSheet":"汇总","sourceSheet":"大表压力测试","column":"销售额","where":{"column":"备注","op":"eq","value":"重点客户"},"fn":"sum","label":"重点客户合计","valueColumn":"金额小计","beforeRow":"总计"},{"type":"aggregateUpdateCell","targetSheet":"汇总","rowLabel":"总计","column":"金额小计","fn":"sum"}]}`;
 
 /**
+ * 端点不支持强制结构化输出的开关（进程级记忆）：
+ *   - thinking 模型拒绝 tool_choice（"Thinking mode does not support this tool_choice"）
+ *   - 部分兼容端点拒绝 response_format=json_schema（400）
+ * 命中过一次后本进程内直接走兜底路径，避免每次指令都白打一轮 400。
+ * 重启服务 / 切换模型后自动重试主路径。
+ */
+let structuredOutputUnavailable = false;
+
+/** 递归把 JSON 里的 number/boolean 值转为字符串。
+ * LLM 常把 "数量: 20" 输出成数字 20，而操作 schema 的值字段全为 string——
+ * 预先宽松化再校验，比让用户重试体验好得多 */
+function stringifyPrimitives(value: unknown): unknown {
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map(stringifyPrimitives);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = stringifyPrimitives(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+/**
  * 把自然语言指令解析为操作序列。
  *
  * @param instruction   用户自然语言指令（如"把销售员3号的所有销售额加起来加到新的一行"）
@@ -75,15 +100,28 @@ export async function parseTableOpsInstruction(
   // 显式指定 method: 'functionCalling'——默认的 jsonSchema 方法会发
   // response_format=json_schema，zhipu 等兼容端点返回 400
   // "This response_format type is unavailable now"
-  try {
-    const structured = llm.withStructuredOutput(TableOpsPlanSchema, { method: 'functionCalling' });
-    const plan = await structured.invoke(messages);
-    return plan.ops;
-  } catch (err) {
-    logger.warn('表格指令 withStructuredOutput 失败，降级为提示词抽取路径', {
-      module: 'TableOpsParse',
-      error: err instanceof Error ? err.message : String(err),
-    });
+  // 注意：thinking 模型的端点会拒绝 tool_choice（400），这类端点主路径
+  // 必然失败——命中后置 structuredOutputUnavailable 跳过，直接走兜底
+  if (!structuredOutputUnavailable) {
+    try {
+      const structured = llm.withStructuredOutput(TableOpsPlanSchema, { method: 'functionCalling' });
+      const plan = await structured.invoke(messages);
+      return plan.ops;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/response_format|tool_choice|Thinking mode/i.test(msg)) {
+        structuredOutputUnavailable = true;
+        logger.warn('端点不支持强制结构化输出，本进程内改走提示词抽取路径', {
+          module: 'TableOpsParse',
+          error: msg,
+        });
+      } else {
+        logger.warn('表格指令 withStructuredOutput 失败，降级为提示词抽取路径', {
+          module: 'TableOpsParse',
+          error: msg,
+        });
+      }
+    }
   }
 
   // 兜底路径：普通调用 + extractJsonText + zod safeParse
@@ -142,13 +180,19 @@ export async function parseTableOpsInstruction(
     }
   }
 
-  const result = TableOpsPlanSchema.safeParse({ ops: opsRaw ?? [] });
+  // 宽松化预处理：数字/布尔 → 字符串（LLM 常把 "数量: 20" 输出成数字 20）
+  const normalized = stringifyPrimitives(opsRaw ?? []);
+
+  const result = TableOpsPlanSchema.safeParse({ ops: normalized });
   if (!result.success) {
+    const issueDesc = result.error.issues
+      .map((i) => `${i.path.join('.')}: ${i.message}`)
+      .join('; ');
     logger.warn('表格指令兜底路径 zod 校验失败', {
       module: 'TableOpsParse',
-      issues: result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+      issues: issueDesc,
     });
-    throw new Error('AI 解析出的操作不合法，请重试或换一种说法');
+    throw new Error(`AI 解析出的操作不合法（${issueDesc.slice(0, 120)}），请重试或换一种说法`);
   }
 
   return result.data.ops;
