@@ -262,6 +262,132 @@ describe('executeTableOps - 护栏与边界', () => {
   });
 });
 
+describe('executeTableOps - 跨表聚合与重算（真实用户场景）', () => {
+  // 模拟真实测试文件：汇总 sheet 顶部有合并单元格标题行（真实表头"产品类别,金额小计"落在数据行）
+  const multi = [
+    'Sheet: 汇总',
+    '销售汇总报告,',
+    '2026-10-01 ~ 2026-10-10,',
+    '产品类别,金额小计',
+    '电子产品,24393',
+    '电脑配件,7215',
+    '办公家具,9792',
+    '总计,41400',
+    '',
+    'Sheet: 大表压力测试',
+    '序号,区域,销售员,销售额,备注',
+    '1,华南,销售员2号,1037,重点客户',
+    '2,华北,销售员3号,1074,',
+    '3,西南,销售员4号,1111,重点客户',
+    '4,华东,销售员5号,9400,重点客户',
+  ].join('\n');
+
+  it('端到端：跨表聚合重点客户 → 插到总计前 → 重算总计', () => {
+    const { sheetText, report } = executeTableOps(multi, [
+      {
+        type: 'aggregateAppendRow',
+        targetSheet: '汇总',
+        sourceSheet: '大表压力测试',
+        column: '销售额',
+        where: { column: '备注', op: 'eq', value: '重点客户' },
+        fn: 'sum',
+        label: '重点客户合计',
+        valueColumn: '金额小计',
+        beforeRow: '总计',
+      },
+      {
+        type: 'aggregateUpdateCell',
+        targetSheet: '汇总',
+        rowLabel: '总计',
+        column: '金额小计',
+        fn: 'sum',
+      },
+    ]);
+    // 重点客户 = 1037 + 1111 + 9400 = 11548；重算总计 = 24393+7215+9792+11548 = 52948
+    expect(report[0].message).toContain('11548');
+    expect(report[1].message).toContain('52948');
+    const lines = sheetText.split('\n');
+    // 新行插在"总计"之前（汇总部分共 9 行：Sheet 标题+表头+6 数据行+新行）
+    expect(lines[7]).toBe('重点客户合计,11548');
+    expect(lines[8]).toBe('总计,52948');
+    // 大表数据未被改动
+    expect(sheetText).toContain('1,华南,销售员2号,1037,重点客户');
+  });
+
+  it('合并单元格标题表：按数据行中的真实表头列名操作（扩展列查找）', () => {
+    const { sheetText } = executeTableOps(multi, [
+      {
+        type: 'updateCells',
+        targetSheet: '汇总',
+        targetColumn: '金额小计',
+        where: { column: '产品类别', op: 'eq', value: '电子产品' },
+        newValue: '25000',
+      },
+    ]);
+    expect(sheetText).toContain('电子产品,25000');
+  });
+
+  it('aggregateUpdateCell 指定来源表聚合', () => {
+    const { sheetText } = executeTableOps(multi, [
+      {
+        type: 'aggregateUpdateCell',
+        targetSheet: '汇总',
+        rowLabel: '总计',
+        column: '金额小计',
+        sourceSheet: '大表压力测试',
+        sourceColumn: '销售额',
+        fn: 'max',
+      },
+    ]);
+    expect(sheetText).toContain('总计,9400');
+  });
+
+  it('where 条件 0 匹配 → 报错（宁失败不静默算 0）', () => {
+    expect(() =>
+      executeTableOps(multi, [
+        {
+          type: 'aggregateAppendRow',
+          targetSheet: '汇总',
+          sourceSheet: '大表压力测试',
+          column: '销售额',
+          where: { column: '备注', op: 'eq', value: 'VIP客户' },
+          fn: 'sum',
+          label: 'x',
+        },
+      ]),
+    ).toThrow(/没有满足条件/);
+  });
+
+  it('beforeRow 锚点不存在 → 报错', () => {
+    expect(() =>
+      executeTableOps(multi, [
+        {
+          type: 'aggregateAppendRow',
+          targetSheet: '汇总',
+          column: '金额小计',
+          fn: 'sum',
+          label: 'x',
+          beforeRow: '不存在的行',
+        },
+      ]),
+    ).toThrow(/找不到标签/);
+  });
+
+  it('rowLabel 行不存在 → 报错', () => {
+    expect(() =>
+      executeTableOps(multi, [
+        {
+          type: 'aggregateUpdateCell',
+          targetSheet: '汇总',
+          rowLabel: '合计（不存在）',
+          column: '金额小计',
+          fn: 'sum',
+        },
+      ]),
+    ).toThrow(/找不到标签含/);
+  });
+});
+
 describe('buildSheetOverview', () => {
   it('输出表头 + 最多 2 行样本，不含全表数据', () => {
     const text = singleSheetText('名称,数量', 'a,1', 'b,2', 'c,3', 'd,4');
@@ -276,5 +402,11 @@ describe('buildSheetOverview', () => {
   it('无名块标注为 (未命名)', () => {
     const overview = buildSheetOverview('名称,数量\na,1');
     expect(overview).toContain('(未命名)');
+  });
+
+  it('输出每列去重取值示例（帮 LLM 选对 where 条件值）', () => {
+    const text = singleSheetText('名称,备注', 'a,重点客户', 'b,普通客户');
+    const overview = buildSheetOverview(text);
+    expect(overview).toContain('备注={重点客户|普通客户}');
   });
 });

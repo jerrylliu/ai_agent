@@ -132,15 +132,58 @@ function formatAggregate(n: number): string {
   return String(rounded);
 }
 
-/** 归一化列名匹配（trim 后精确比对） */
-function findColumn(headers: string[], name: string): number {
-  const idx = headers.findIndex((h) => h.trim() === name.trim());
-  if (idx === -1) {
-    throw new TableOpsError(
-      `找不到列「${name}」，当前表头：${headers.join('、')}`,
-    );
+/** 聚合方式 */
+type AggregateFn = 'sum' | 'avg' | 'count' | 'min' | 'max';
+
+/**
+ * 对一列的原始值做聚合。
+ * count 统计非空格数；其余方式过滤出可解析为数字的值参与计算，
+ * 一个数字都没有 → 抛 TableOpsError（避免把空列静默算成 0 误导用户）。
+ */
+function computeAggregate(values: string[], fn: AggregateFn, colName: string): number {
+  const nonEmpty = values.map((v) => (v ?? '').trim()).filter((v) => v !== '');
+  if (fn === 'count') return nonEmpty.length;
+  const nums = nonEmpty
+    .map(parseLooseNumber)
+    .filter((n): n is number => n !== null);
+  if (nums.length === 0) {
+    throw new TableOpsError(`列「${colName}」没有可计算的数字`);
   }
-  return idx;
+  switch (fn) {
+    case 'sum':
+      return nums.reduce((a, b) => a + b, 0);
+    case 'avg':
+      return nums.reduce((a, b) => a + b, 0) / nums.length;
+    case 'min':
+      return Math.min(...nums);
+    case 'max':
+      return Math.max(...nums);
+  }
+}
+
+/**
+ * 列名定位（两级查找）：
+ *   1. 表头精确匹配——常规 sheet；
+ *   2. 数据行单元格扫描——兼容合并单元格标题表（如"汇总"sheet 顶部的
+ *      "销售汇总报告"标题行占据了表头位，真实表头"产品类别,金额小计"
+ *      落在数据行里），扫描各行找到首个等于列名的单元格位置。
+ * 两级都未命中 → 抛 TableOpsError（消息带当前表头与提示）。
+ */
+function findColumn(sheet: SheetData, name: string): number {
+  const target = name.trim();
+  const idx = sheet.headers.findIndex((h) => h.trim() === target);
+  if (idx !== -1) return idx;
+  for (const row of sheet.rows) {
+    const cIdx = row.findIndex((c) => (c ?? '').trim() === target);
+    if (cIdx !== -1) return cIdx;
+  }
+  const headerText = sheet.headers.filter((h) => h.trim()).join('、') || '(空)';
+  throw new TableOpsError(
+    `找不到列「${name}」，当前表头：${headerText}` +
+      (sheet.headers.some((h) => !h.trim())
+        ? '。该表可能含合并单元格标题行，请使用表格中实际表头行的列名'
+        : ''),
+  );
 }
 
 /** 按 sheet 名取目标 sheet（精确匹配优先；单 sheet 时任意名都可命中，容忍 LLM 记错名） */
@@ -214,25 +257,38 @@ function validateOp(op: TableOp, sheets: SheetData[]): void {
 
   switch (op.type) {
     case 'appendRow':
-      // 追加行的列名必须在表头中（避免 LLM 编造列名静默丢数据）
+      // 追加行的列名必须能定位（避免 LLM 编造列名静默丢数据）
       for (const key of Object.keys(op.cells)) {
-        findColumn(target.headers, key);
+        findColumn(target, key);
       }
       break;
     case 'aggregateAppendRow': {
-      findColumn(target.headers, op.column);
-      if (op.labelColumn) findColumn(target.headers, op.labelColumn);
+      const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : target;
+      findColumn(source, op.column);
+      if (op.where) findColumn(source, op.where.column);
+      if (op.labelColumn) findColumn(target, op.labelColumn);
+      if (op.valueColumn) findColumn(target, op.valueColumn);
+      break;
+    }
+    case 'aggregateUpdateCell': {
+      findColumn(target, op.column);
+      if (op.labelColumn) findColumn(target, op.labelColumn);
+      if (op.sourceSheet) {
+        const source = findSheet(sheets, op.sourceSheet);
+        findColumn(source, op.sourceColumn ?? op.column);
+        if (op.where) findColumn(source, op.where.column);
+      }
       break;
     }
     case 'updateCells':
-      findColumn(target.headers, op.targetColumn);
-      if (op.where) findColumn(target.headers, op.where.column);
+      findColumn(target, op.targetColumn);
+      if (op.where) findColumn(target, op.where.column);
       break;
     case 'deleteRows':
-      findColumn(target.headers, op.where.column);
+      findColumn(target, op.where.column);
       break;
     case 'deleteColumn':
-      findColumn(target.headers, op.column);
+      findColumn(target, op.column);
       if (target.headers.length <= 1) {
         throw new TableOpsError('至少要保留一列，不能删除最后一列');
       }
@@ -244,10 +300,10 @@ function validateOp(op: TableOp, sheets: SheetData[]): void {
       }
       break;
     case 'sortRows':
-      findColumn(target.headers, op.column);
+      findColumn(target, op.column);
       break;
     case 'renameColumn':
-      findColumn(target.headers, op.from);
+      findColumn(target, op.from);
       if (op.from.trim() !== op.to.trim() && target.headers.some((h) => h.trim() === op.to.trim())) {
         throw new TableOpsError(`新列名「${op.to}」与现有列重名`);
       }
@@ -264,7 +320,7 @@ function padRow(row: string[], width: number): string[] {
   return padded;
 }
 
-function executeOp(op: TableOp, sheet: SheetData): string {
+function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
   switch (op.type) {
     case 'appendRow': {
       const row = sheet.headers.map((h) => op.cells[h] ?? '');
@@ -273,53 +329,99 @@ function executeOp(op: TableOp, sheet: SheetData): string {
     }
 
     case 'aggregateAppendRow': {
-      const colIdx = findColumn(sheet.headers, op.column);
-      const values = sheet.rows
-        .map((r) => (r[colIdx] ?? '').trim())
-        .filter((v) => v !== '');
-      let result: number;
-      switch (op.fn) {
-        case 'sum':
-          result = values.reduce((acc, v) => acc + (parseLooseNumber(v) ?? 0), 0);
-          break;
-        case 'avg':
-          result =
-            values.length === 0
-              ? 0
-              : values.reduce((acc, v) => acc + (parseLooseNumber(v) ?? 0), 0) /
-                values.length;
-          break;
-        case 'count':
-          result = values.length;
-          break;
-        case 'min': {
-          const nums = values.map(parseLooseNumber).filter((n): n is number => n !== null);
-          if (nums.length === 0) throw new TableOpsError(`列「${op.column}」没有可计算的数字`);
-          result = Math.min(...nums);
-          break;
+      // 聚合来源：sourceSheet 跨表聚合，否则聚合目标表自身
+      const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : sheet;
+      const srcColIdx = findColumn(source, op.column);
+      let pool = source.rows.map((r) => padRow(r, source.headers.length));
+      let matchedDesc = `全部 ${pool.length} 行`;
+      const where = op.where;
+      if (where) {
+        const wIdx = findColumn(source, where.column);
+        pool = pool.filter((r) => matchCondition(r, wIdx, where.op, where.value));
+        if (pool.length === 0) {
+          throw new TableOpsError(
+            `「${source.name || '未命名'}」中没有满足条件（${where.column} ${where.op} ${where.value || ''}）的行`,
+          );
         }
-        case 'max': {
-          const nums = values.map(parseLooseNumber).filter((n): n is number => n !== null);
-          if (nums.length === 0) throw new TableOpsError(`列「${op.column}」没有可计算的数字`);
-          result = Math.max(...nums);
-          break;
-        }
+        matchedDesc = `匹配 ${pool.length} 行`;
       }
-      const labelColIdx = op.labelColumn ? findColumn(sheet.headers, op.labelColumn) : 0;
+      const result = computeAggregate(
+        pool.map((r) => r[srcColIdx] ?? ''),
+        op.fn,
+        op.column,
+      );
+      const labelColIdx = op.labelColumn ? findColumn(sheet, op.labelColumn) : 0;
+      const valueColIdx = op.valueColumn ? findColumn(sheet, op.valueColumn) : findColumn(sheet, op.column);
       const row = padRow([], sheet.headers.length);
       row[labelColIdx] = op.label;
-      row[colIdx] = formatAggregate(result);
-      sheet.rows.push(row);
-      return `已聚合列「${op.column}」（${op.fn}），结果 ${formatAggregate(result)} 追加为第 ${sheet.rows.length} 行`;
+      row[valueColIdx] = formatAggregate(result);
+      // 插入位置：beforeRow 锚点行之前（如插到"总计"行上方），否则追加到末尾
+      let insertIdx = sheet.rows.length;
+      if (op.beforeRow) {
+        const lbl = op.beforeRow.trim();
+        const paddedRows = sheet.rows.map((r) => padRow(r, sheet.headers.length));
+        let bi = paddedRows.findIndex((r) => (r[labelColIdx] ?? '').trim() === lbl);
+        if (bi === -1) bi = paddedRows.findIndex((r) => (r[labelColIdx] ?? '').includes(lbl));
+        if (bi === -1) {
+          throw new TableOpsError(`「${sheet.name}」中找不到标签为「${op.beforeRow}」的行`);
+        }
+        insertIdx = bi;
+      }
+      sheet.rows.splice(insertIdx, 0, row);
+      return `已聚合「${source.name || '未命名'}」列「${op.column}」（${op.fn}，${matchedDesc}），结果 ${formatAggregate(result)} 写入「${sheet.name}」第 ${insertIdx + 1} 行`;
+    }
+
+    case 'aggregateUpdateCell': {
+      const labelColIdx = op.labelColumn ? findColumn(sheet, op.labelColumn) : 0;
+      const writeIdx = findColumn(sheet, op.column);
+      const paddedRows = sheet.rows.map((r) => padRow(r, sheet.headers.length));
+      const lbl = op.rowLabel.trim();
+      // 行定位：先精确匹配，再包含匹配（容忍"总计"/"合计"类近似写法）
+      let rowIdx = paddedRows.findIndex((r) => (r[labelColIdx] ?? '').trim() === lbl);
+      if (rowIdx === -1) rowIdx = paddedRows.findIndex((r) => (r[labelColIdx] ?? '').includes(lbl));
+      if (rowIdx === -1) {
+        throw new TableOpsError(`「${sheet.name}」中找不到标签含「${op.rowLabel}」的行`);
+      }
+      let result: number;
+      let sourceDesc: string;
+      if (op.sourceSheet) {
+        // 指定来源表：从其他表聚合（可带 where 过滤）
+        const source = findSheet(sheets, op.sourceSheet);
+        const srcColName = op.sourceColumn ?? op.column;
+        const srcColIdx = findColumn(source, srcColName);
+        let pool = source.rows.map((r) => padRow(r, source.headers.length));
+        const where = op.where;
+        if (where) {
+          const wIdx = findColumn(source, where.column);
+          pool = pool.filter((r) => matchCondition(r, wIdx, where.op, where.value));
+        }
+        if (pool.length === 0) {
+          throw new TableOpsError(`来源「${source.name || '未命名'}」中没有满足条件的行`);
+        }
+        result = computeAggregate(pool.map((r) => r[srcColIdx] ?? ''), op.fn, srcColName);
+        sourceDesc = `「${source.name || '未命名'}」列「${srcColName}」`;
+      } else {
+        // 重算语义：同列、目标行上方的所有行（标题/文本行会被数字过滤自然跳过）
+        result = computeAggregate(
+          paddedRows.slice(0, rowIdx).map((r) => r[writeIdx] ?? ''),
+          op.fn,
+          op.column,
+        );
+        sourceDesc = `同列上方 ${rowIdx} 行`;
+      }
+      sheet.rows[rowIdx] = paddedRows[rowIdx];
+      sheet.rows[rowIdx][writeIdx] = formatAggregate(result);
+      return `已将「${sheet.name}」第 ${rowIdx + 1} 行（${lbl}）的「${op.column}」更新为 ${formatAggregate(result)}（${op.fn}，来源：${sourceDesc}）`;
     }
 
     case 'updateCells': {
-      const targetIdx = findColumn(sheet.headers, op.targetColumn);
+      const targetIdx = findColumn(sheet, op.targetColumn);
       let affected = 0;
       for (const row of sheet.rows) {
         const padded = padRow(row, sheet.headers.length);
-        const matched = op.where
-          ? matchCondition(padded, findColumn(sheet.headers, op.where.column), op.where.op, op.where.value)
+        const where = op.where;
+        const matched = where
+          ? matchCondition(padded, findColumn(sheet, where.column), where.op, where.value)
           : true;
         if (matched) {
           padded[targetIdx] = op.newValue;
@@ -332,7 +434,7 @@ function executeOp(op: TableOp, sheet: SheetData): string {
     }
 
     case 'deleteRows': {
-      const colIdx = findColumn(sheet.headers, op.where.column);
+      const colIdx = findColumn(sheet, op.where.column);
       const before = sheet.rows.length;
       sheet.rows = sheet.rows.filter(
         (row) => !matchCondition(padRow(row, sheet.headers.length), colIdx, op.where.op, op.where.value),
@@ -341,7 +443,7 @@ function executeOp(op: TableOp, sheet: SheetData): string {
     }
 
     case 'deleteColumn': {
-      const colIdx = findColumn(sheet.headers, op.column);
+      const colIdx = findColumn(sheet, op.column);
       sheet.headers.splice(colIdx, 1);
       for (const row of sheet.rows) {
         if (colIdx < row.length) row.splice(colIdx, 1);
@@ -359,7 +461,7 @@ function executeOp(op: TableOp, sheet: SheetData): string {
     }
 
     case 'sortRows': {
-      const colIdx = findColumn(sheet.headers, op.column);
+      const colIdx = findColumn(sheet, op.column);
       const allNumeric =
         sheet.rows.length > 0 &&
         sheet.rows.every((r) => (r[colIdx] ?? '').trim() === '' || parseLooseNumber(r[colIdx]) !== null);
@@ -379,7 +481,7 @@ function executeOp(op: TableOp, sheet: SheetData): string {
     }
 
     case 'renameColumn': {
-      const colIdx = findColumn(sheet.headers, op.from);
+      const colIdx = findColumn(sheet, op.from);
       sheet.headers[colIdx] = op.to;
       return `已将列「${op.from}」重命名为「${op.to}」`;
     }
@@ -416,7 +518,7 @@ export function executeTableOps(text: string, ops: TableOp[]): ExecuteResult {
     try {
       validateOp(op, sheets);
       const target = findSheet(sheets, op.targetSheet);
-      const message = executeOp(op, target);
+      const message = executeOp(op, target, sheets);
       report.push({ type: op.type, targetSheet: target.name, message });
     } catch (err) {
       if (err instanceof TableOpsError) {
@@ -430,7 +532,9 @@ export function executeTableOps(text: string, ops: TableOp[]): ExecuteResult {
 }
 
 /**
- * 生成给 LLM 的表格概览（表头 + 每列前 2 个样本值），控制 token 且不泄漏全表数据。
+ * 生成给 LLM 的表格概览：表头 + 每列前 2 个样本行 + 每列去重取值示例（≤5 个）。
+ * 取值示例帮助 LLM 选对 where 条件值（如备注列的"重点客户"可能不在前 2 行里）；
+ * 不输出全表数据——省 token，且计算本来就不归 LLM 管。
  * 供 parse.ts 构造提示词用。
  */
 export function buildSheetOverview(text: string): string {
@@ -440,9 +544,24 @@ export function buildSheetOverview(text: string): string {
       const name = sheet.name || '(未命名)';
       const sampleRows = sheet.rows.slice(0, 2);
       const lines = [
-        `工作表「${name}」表头：${sheet.headers.join('、')}`,
+        `工作表「${name}」共 ${sheet.rows.length} 行，表头：${sheet.headers.join('、')}`,
         ...sampleRows.map((r) => `  样例行：${sheet.headers.map((h, i) => `${h}=${r[i] ?? ''}`).join('，')}`),
       ];
+      // 每列去重取值（≤5 个、每个截断 20 字符）：条件过滤/定位行时值必须逐字匹配
+      const colCount = Math.max(sheet.headers.length, ...sheet.rows.map((r) => r.length), 0);
+      const distinctLines: string[] = [];
+      for (let c = 0; c < colCount; c++) {
+        const colName = sheet.headers[c]?.trim() || `第${c + 1}列`;
+        const seen: string[] = [];
+        for (const r of sheet.rows) {
+          const v = (r[c] ?? '').trim().slice(0, 20);
+          if (!v || seen.includes(v)) continue;
+          seen.push(v);
+          if (seen.length >= 5) break;
+        }
+        if (seen.length > 0) distinctLines.push(`${colName}={${seen.join('|')}}`);
+      }
+      if (distinctLines.length > 0) lines.push(`  取值示例：${distinctLines.join(' ')}`);
       return lines.join('\n');
     })
     .join('\n\n');

@@ -48,17 +48,66 @@ export const AppendRowOpSchema = z.object({
   cells: z.record(z.string(), z.string()).describe('键为表头名称，值为该列单元格内容'),
 }).extend(TargetSheetField);
 
-/** 聚合后把结果追加为新行（求和/平均/计数/最值） */
+/**
+ * 聚合后写入一行（求和/平均/计数/最值）。
+ * 支持跨表：从 sourceSheet 聚合，把结果行写入 targetSheet（省略 sourceSheet 时同表）。
+ */
 export const AggregateAppendRowOpSchema = z.object({
   type: z.literal('aggregateAppendRow'),
-  /** 聚合哪一列（数字列） */
-  column: z.string().describe('要聚合的数字列的表头名称'),
+  /** 聚合哪一列（数字列，位于来源工作表） */
+  column: z.string().describe('要聚合的数字列的表头名称（位于来源工作表）'),
   /** 聚合方式：sum 求和 / avg 平均 / count 计数（非空格数）/ min 最小 / max 最大 */
   fn: z.enum(['sum', 'avg', 'count', 'min', 'max']).describe('聚合方式'),
-  /** 结果行的标签文字（如 "销售员3号合计"） */
+  /** 结果行的标签文字（如 "重点客户合计"） */
   label: z.string().describe('结果行的标签文字'),
-  /** 标签写入哪一列（省略时写入第一列） */
-  labelColumn: z.string().optional().describe('标签写入的列，省略时写入第一列'),
+  /** 标签写入哪一列（位于目标工作表，省略时写入第一列） */
+  labelColumn: z.string().optional().describe('标签写入的列（位于目标工作表），省略时写入第一列'),
+  /** 数值写入哪一列（位于目标工作表；省略时写入与 column 同名的列，找不到则需指定） */
+  valueColumn: z
+    .string()
+    .optional()
+    .describe('数值写入的列（位于目标工作表）；省略时写入与 column 同名的列'),
+  /** 聚合来源工作表（省略时聚合目标工作表自身） */
+  sourceSheet: z
+    .string()
+    .optional()
+    .describe('聚合数据来源的工作表名称；跨表聚合时必填，省略时聚合目标工作表自身'),
+  /** 聚合前对来源行做条件过滤 */
+  where: RowConditionSchema.optional().describe(
+    '聚合前的行过滤条件（如只统计某类客户）；省略时统计全部行',
+  ),
+  /** 插入位置锚点：新行插到目标表中第一列文字等于该值的行之前（如"总计"）；省略时追加到末尾 */
+  beforeRow: z
+    .string()
+    .optional()
+    .describe('插入位置：目标工作表中某行第一列的文字（如"总计"），新行插到该行之前；省略时追加到表末尾'),
+}).extend(TargetSheetField);
+
+/**
+ * 聚合结果写入已有单元格（用于"重算总计/合计"行）。
+ * 省略 sourceSheet 时聚合同表目标行上方的所有行（典型重算语义）；指定时从其他表聚合。
+ */
+export const AggregateUpdateCellOpSchema = z.object({
+  type: z.literal('aggregateUpdateCell'),
+  /** 要更新的行：目标表中某行第一列（或标签列）文字等于/包含该值，如"总计" */
+  rowLabel: z
+    .string()
+    .describe('要更新的行的标签文字（如"总计"），按第一列文字匹配该行'),
+  /** 标签所在列（省略时用第一列） */
+  labelColumn: z.string().optional().describe('行标签所在的列，省略时用第一列'),
+  /** 写入聚合结果的列（位于目标工作表） */
+  column: z.string().describe('要写入聚合结果的列的表头名称（位于目标工作表）'),
+  /** 聚合来源工作表（省略时聚合同表目标行上方的所有行） */
+  sourceSheet: z
+    .string()
+    .optional()
+    .describe('聚合数据来源的工作表；重算同表合计时省略（聚合同列上方所有行）'),
+  /** 来源工作表中要聚合的列（省略时使用与 column 同名的列） */
+  sourceColumn: z.string().optional().describe('来源工作表中要聚合的列，省略时与 column 同名'),
+  /** 聚合前对来源行做条件过滤（仅指定 sourceSheet 时有效） */
+  where: RowConditionSchema.optional().describe('聚合前的行过滤条件，仅指定 sourceSheet 时有效'),
+  /** 聚合方式：sum 求和 / avg 平均 / count 计数 / min 最小 / max 最大 */
+  fn: z.enum(['sum', 'avg', 'count', 'min', 'max']).describe('聚合方式'),
 }).extend(TargetSheetField);
 
 /** 条件更新单元格：匹配到的行的目标列改为新值 */
@@ -117,6 +166,7 @@ export const RenameColumnOpSchema = z.object({
 export const TableOpSchema = z.discriminatedUnion('type', [
   AppendRowOpSchema,
   AggregateAppendRowOpSchema,
+  AggregateUpdateCellOpSchema,
   UpdateCellsOpSchema,
   DeleteRowsOpSchema,
   DeleteColumnOpSchema,
