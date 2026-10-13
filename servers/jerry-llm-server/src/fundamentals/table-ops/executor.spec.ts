@@ -190,6 +190,26 @@ describe('executeTableOps - 先校验后执行（整体性）', () => {
       executeTableOps(text, [{ type: 'addColumn', header: '名称' }]),
     ).toThrow(/已存在/);
   });
+
+  it('依赖前序 op：删除列后再新增同名列 → 合法（顺序校验）', () => {
+    // 本 describe 的 text 是 2 列表（名称,数量）
+    const { sheetText, report } = executeTableOps(text, [
+      { type: 'deleteColumn', column: '数量' },
+      { type: 'addColumn', header: '数量', value: '0' },
+    ]);
+    expect(report).toHaveLength(2);
+    expect(sheetText).toContain('名称,数量');
+    expect(sheetText).toContain('a,0');
+  });
+
+  it('第 2 步失败 → 报错带步骤编号，且整体不返回结果', () => {
+    expect(() =>
+      executeTableOps(text, [
+        { type: 'renameColumn', from: '名称', to: '品名' },
+        { type: 'deleteColumn', column: '名称' }, // 第 1 步已改名，此引用失效
+      ]),
+    ).toThrow(/第 2 步失败/);
+  });
 });
 
 describe('executeTableOps - 护栏与边界', () => {

@@ -79,7 +79,21 @@ export async function parseTableOpsInstruction(
     new HumanMessage('请严格只输出一个 JSON 对象，不要任何解释、markdown 围栏或多余文字。'),
   ];
   const raw = await llm.invoke(fallbackMessages);
-  const rawText = typeof raw.content === 'string' ? raw.content : String(raw.content ?? '');
+  // content 可能是 string，也可能是 content-block 数组（部分 provider 如
+  // qwen/deepseek 在多模态消息结构下返回 [{type:'text',text:'...'}]）
+  const rawContent: unknown = raw.content;
+  const rawText =
+    typeof rawContent === 'string'
+      ? rawContent
+      : Array.isArray(rawContent)
+        ? rawContent
+            .map((block) =>
+              typeof block === 'object' && block !== null && 'text' in block
+                ? String((block as { text: unknown }).text ?? '')
+                : '',
+            )
+            .join('')
+        : String(rawContent ?? '');
 
   const jsonText = extractJsonText(rawText);
   if (!jsonText) {

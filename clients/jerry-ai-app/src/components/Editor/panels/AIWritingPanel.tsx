@@ -16,7 +16,7 @@
  *   - 与 KnowledgePanel 共用右侧面板区域，通过 Tabs 切换
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Sparkles, PenLine, FileText, Languages, ListTree,
   Square, Copy, CheckCircle2, AlertCircle, Loader2,
@@ -29,6 +29,7 @@ import { Input } from '@/components/ui/input';
 import { requestCompletionStream, runTableOps, type CompletionMode, type TableOpsReportItem } from '@/lib/api';
 import {
   docContainsTable,
+  isSheetStructuredText,
   sheetTextToTableDoc,
   tableDocToSheetText,
 } from '@/lib/table-convert';
@@ -90,12 +91,28 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
   const [copied, setCopied] = useState(false);
 
   // ==================== AI 表格指令状态（M2 指令下推） ====================
-  /** 当前文档是否含表格（决定自定义指令走普通写作还是表格指令路径） */
-  const hasTable = useMemo(() => (editor ? docContainsTable(editor.getJSON()) : false), [editor]);
+  /**
+   * 当前文档是否含表格（决定自定义指令走普通写作还是表格指令路径 + 提示条显隐）。
+   * 用 state + editor 'update' 订阅而非 useMemo([editor])——memo 只在 editor
+   * 实例变化时重算，用户手动插入/删除表格后 hint 与路由判定会停留在旧值。
+   */
+  const [hasTable, setHasTable] = useState(false);
+  useEffect(() => {
+    if (!editor) {
+      setHasTable(false);
+      return;
+    }
+    const update = () => setHasTable(docContainsTable(editor.getJSON()));
+    update();
+    editor.on('update', update);
+    return () => {
+      editor.off('update', update);
+    };
+  }, [editor]);
   /** 表格指令执行中 */
   const [tableRunning, setTableRunning] = useState(false);
-  /** 表格指令执行结果（待用户确认应用） */
-  const [tableResult, setTableResult] = useState<{ sheetText: string; report: TableOpsReportItem[] } | null>(null);
+  /** 表格指令执行结果（待用户确认应用）；baseSheetText 为执行时的表格快照，用于并发编辑守卫 */
+  const [tableResult, setTableResult] = useState<{ sheetText: string; baseSheetText: string; report: TableOpsReportItem[] } | null>(null);
   /** 表格指令失败信息 */
   const [tableError, setTableError] = useState('');
 
@@ -263,6 +280,17 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
       return;
     }
 
+    // 结构守卫（宁可不执行，不可执行坏）：
+    //   1. apply 路径（sheetTextToTableDoc）只认 `Sheet:` 标题结构——手动插入的
+    //      散表（无标题）转回时会被降级为段落，表格结构被破坏，必须拦截；
+    //   2. 混合文档中表格之间的散文行会被执行器当作数据行读写，语义不符
+    //      （与 M1 xlsx 导出"散行归 Sheet1"一致，但 AI 指令会真正改动它们）
+    if (!isSheetStructuredText(sheetText)) {
+      console.warn('[AIWritingPanel] 非 sheet 结构化文本，拦截表格指令', { length: sheetText.length });
+      showToast(false, 'AI 表格指令仅支持 Excel 上传生成的表格文档，当前文档结构不符合');
+      return;
+    }
+
     console.log('[AIWritingPanel] 执行 AI 表格指令', {
       instructionLength: trimmed.length,
       sheetTextLength: sheetText.length,
@@ -289,7 +317,7 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
         showToast(false, '服务端返回内容为空，请重试');
         return;
       }
-      setTableResult({ sheetText: nextText, report: result.report ?? [] });
+      setTableResult({ sheetText: nextText, baseSheetText: sheetText, report: result.report ?? [] });
       showToast(true, '执行完成，请确认后应用');
     } catch (err) {
       const msg = (err as Error)?.message || '表格指令执行失败';
@@ -305,6 +333,16 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
   const handleApplyTableOps = useCallback(() => {
     if (!editor || !tableResult) return;
     try {
+      // 并发编辑守卫：执行结果基于执行时的表格快照，若用户在等待确认期间
+      // 又改了表格，直接应用会覆盖那些修改——需二次确认
+      const currentText = tableDocToSheetText(editor.getJSON());
+      if (currentText !== null && currentText !== tableResult.baseSheetText) {
+        const confirmed = window.confirm(
+          '表格在指令执行后又被手动修改过，应用结果将覆盖这些修改。\n\n确定要应用吗？',
+        );
+        if (!confirmed) return;
+      }
+
       const { doc: newDoc, degraded } = sheetTextToTableDoc(tableResult.sheetText);
       if (degraded) {
         // 转换层自检失败降级为纯文本——不强写进编辑器，避免用户表格被降级
@@ -342,6 +380,8 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
    * 执行自定义指令——按文档类型智能分流：
    *   - 含表格文档 → AI 表格指令（LLM 解析意图 + 代码精确执行，报告确认后应用）
    *   - 普通文档   → 原有 rewrite 流式改写
+   * 路由用实时判定（非 hasTable state）——state 靠 editor 'update' 事件刷新，
+   * 极端时序下可能滞后一拍，路由判定以执行瞬间的文档内容为准
    */
   const handleCustomExecute = useCallback(() => {
     const trimmed = customInstruction.trim();
@@ -349,7 +389,7 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
       console.warn('[AIWritingPanel] 自定义指令为空，跳过');
       return;
     }
-    if (hasTable) {
+    if (editor && docContainsTable(editor.getJSON())) {
       console.log('[AIWritingPanel] 文档含表格，走表格指令路径');
       void handleTableOpsExecute();
       return;
@@ -357,7 +397,7 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
     console.log('[AIWritingPanel] 执行自定义指令', { instructionLength: trimmed.length });
     setActiveAction(null);
     void runGeneration('rewrite', trimmed, '自定义指令');
-  }, [customInstruction, hasTable, handleTableOpsExecute, runGeneration]);
+  }, [customInstruction, editor, handleTableOpsExecute, runGeneration]);
 
   /** 将文本按换行拆分为 Tiptap 段落数组 */
   const textToParagraphs = useCallback((text: string): JSONContent[] => {
