@@ -76,11 +76,11 @@ export const AggregateAppendRowOpSchema = z.object({
   where: RowConditionSchema.optional().describe(
     '聚合前的行过滤条件（如只统计某类客户）；省略时统计全部行',
   ),
-  /** 插入位置锚点：新行插到目标表中第一列文字等于该值的行之前（如"总计"）；省略时追加到末尾 */
+  /** 插入位置锚点：新行插到目标表中 labelColumn 列（省略时第一列）文字等于该值的行之前（如"总计"）；省略时追加到末尾 */
   beforeRow: z
     .string()
     .optional()
-    .describe('插入位置：目标工作表中某行第一列的文字（如"总计"），新行插到该行之前；省略时追加到表末尾'),
+    .describe('插入位置：目标工作表中某行（labelColumn 列，省略时第一列）的文字（如"总计"），新行插到该行之前；省略时追加到表末尾'),
 }).extend(TargetSheetField);
 
 /**

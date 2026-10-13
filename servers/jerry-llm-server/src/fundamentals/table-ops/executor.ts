@@ -323,7 +323,12 @@ function padRow(row: string[], width: number): string[] {
 function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
   switch (op.type) {
     case 'appendRow': {
-      const row = sheet.headers.map((h) => op.cells[h] ?? '');
+      // 逐个单元格用 findColumn 定位（两级查找）——合并单元格标题表的列名
+      // 在数据行里而非表头里，按 headers.map 取值会静默丢数据（校验能过、执行全空）
+      const row = padRow([], sheet.headers.length);
+      for (const [key, value] of Object.entries(op.cells)) {
+        row[findColumn(sheet, key)] = value;
+      }
       sheet.rows.push(row);
       return `已追加 1 行（${Object.keys(op.cells).length} 个单元格有值）`;
     }
@@ -352,6 +357,16 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       );
       const labelColIdx = op.labelColumn ? findColumn(sheet, op.labelColumn) : 0;
       const valueColIdx = op.valueColumn ? findColumn(sheet, op.valueColumn) : findColumn(sheet, op.column);
+      // 幂等守卫：目标表中已存在同标签行（精确匹配）→ 就地更新数值，不重复插入。
+      // 否则用户重复执行同一条聚合指令会插出多行同名合计，且后续"重算总计"
+      // 会把旧合计行也累计进去，数值静默翻倍
+      const exactRows = sheet.rows.map((r) => padRow(r, sheet.headers.length));
+      const existIdx = exactRows.findIndex((r) => (r[labelColIdx] ?? '').trim() === op.label.trim());
+      if (existIdx !== -1) {
+        sheet.rows[existIdx] = exactRows[existIdx];
+        sheet.rows[existIdx][valueColIdx] = formatAggregate(result);
+        return `已存在标签为「${op.label}」的行，就地更新其数值为 ${formatAggregate(result)}（${op.fn}，${matchedDesc}）`;
+      }
       const row = padRow([], sheet.headers.length);
       row[labelColIdx] = op.label;
       row[valueColIdx] = formatAggregate(result);
@@ -416,12 +431,14 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
 
     case 'updateCells': {
       const targetIdx = findColumn(sheet, op.targetColumn);
+      // 条件列定位提到循环外（大表逐行 findColumn 是纯浪费）
+      const where = op.where;
+      const whereIdx = where ? findColumn(sheet, where.column) : -1;
       let affected = 0;
       for (const row of sheet.rows) {
         const padded = padRow(row, sheet.headers.length);
-        const where = op.where;
         const matched = where
-          ? matchCondition(padded, findColumn(sheet, where.column), where.op, where.value)
+          ? matchCondition(padded, whereIdx, where.op, where.value)
           : true;
         if (matched) {
           padded[targetIdx] = op.newValue;

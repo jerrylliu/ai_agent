@@ -358,6 +358,36 @@ describe('executeTableOps - 跨表聚合与重算（真实用户场景）', () =
     ).toThrow(/没有满足条件/);
   });
 
+  it('appendRow 兼容合并单元格标题表（列名在数据行中，不丢值）', () => {
+    // 回归：旧实现执行时按表头取值，"产品类别"只在数据行里 → 追加全空行静默丢数据
+    const { sheetText } = executeTableOps(multi, [
+      { type: 'appendRow', targetSheet: '汇总', cells: { 产品类别: '测试类别', 金额小计: '123' } },
+    ]);
+    expect(sheetText).toContain('测试类别,123');
+  });
+
+  it('重复执行同一条聚合指令 → 幂等（不重复插入、数值不翻倍）', () => {
+    // 回归：重复执行会插出多行同名合计，重算总计把旧合计也累计进去
+    const op = {
+      type: 'aggregateAppendRow' as const,
+      targetSheet: '汇总',
+      sourceSheet: '大表压力测试',
+      column: '销售额',
+      where: { column: '备注', op: 'eq' as const, value: '重点客户' },
+      fn: 'sum' as const,
+      label: '重点客户合计',
+      valueColumn: '金额小计',
+      beforeRow: '总计',
+    };
+    const first = executeTableOps(multi, [op]);
+    const second = executeTableOps(first.sheetText, [op]);
+    expect(second.report[0].message).toContain('就地更新');
+    expect(
+      second.sheetText.split('\n').filter((l) => l.startsWith('重点客户合计')),
+    ).toHaveLength(1);
+    expect(second.sheetText).toBe(first.sheetText);
+  });
+
   it('beforeRow 锚点不存在 → 报错', () => {
     expect(() =>
       executeTableOps(multi, [
