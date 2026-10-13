@@ -19,6 +19,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { config, runtimePaths } from '../fundamentals/config';
 import { parseDocument, getMimeType } from '../fundamentals/document-parser';
+import { getUploadExtractLimits } from '../fundamentals/runtime-config';
+import { getModelCapabilities } from '../fundamentals/model-provider';
 import { logger } from '../fundamentals/logger';
 
 // @Controller('upload') 声明该类为 NestJS 控制器，路由前缀为 /upload
@@ -110,18 +112,27 @@ export class UploadController {
       const parsed = await parseDocument(tempFilePath, mimeType);
       const text = parsed.text;
 
-      // 超长文档截断（避免 token 爆炸），保留前 5 万字符
-      const MAX_CHARS = 50000;
-      const truncated = text.length > MAX_CHARS;
-      const safeText = truncated ? text.slice(0, MAX_CHARS) : text;
+      // 截断上限从运行时配置读取（设置界面可调，0 = 不人为限制），段数上限按比例放宽
+      const { maxChars, maxParagraphs } = getUploadExtractLimits();
+      const truncated = maxChars > 0 && text.length > maxChars;
+      const safeText = truncated ? text.slice(0, maxChars) : text;
 
       // 将纯文本转换为 Tiptap JSONContent 结构
       // 按段落拆分，每段一个 paragraph 节点
-      const paragraphs = safeText
+      const allParagraphs = safeText
         .split(/\n{2,}/)
         .map((p) => p.trim())
-        .filter((p) => p.length > 0)
-        .slice(0, 500); // 最多 500 段，防止恶意大文档
+        .filter((p) => p.length > 0);
+      // maxParagraphs = 0（不限）时不再截段；该上限只影响编辑器预览，
+      // AI 实际读到的是 safeText 全文（受 maxChars 控制）
+      const paragraphs =
+        maxParagraphs > 0 ? allParagraphs.slice(0, maxParagraphs) : allParagraphs;
+
+      // 模型窗口物理天花板（功能 6）：上下文窗口 token 数按 ≈4 字符/token 估算，
+      // 前端据此在发送前判断文档是否超出模型可读范围（真"无限"不存在）
+      const modelWindowChars = Math.floor(
+        getModelCapabilities().contextLength * 4,
+      );
 
       const contentJson = {
         type: 'doc',
@@ -155,8 +166,10 @@ export class UploadController {
         sizeBytes,
         fileUrl,
         truncated,
-        maxChars: MAX_CHARS,
+        // 截断上限元数据（功能 6）：limit=0 表示未人为截断（仅受模型窗口约束）
+        limit: maxChars,
         totalChars: text.length,
+        modelWindowChars,
         // Excel 来源标记：前端编辑器据此把 sheet 文本二次转换为网格表格；
         // 非Excel 文档该字段为 undefined，JSON 序列化时自动省略，旧前端不受影响
         sourceFormat: parsed.sourceFormat,

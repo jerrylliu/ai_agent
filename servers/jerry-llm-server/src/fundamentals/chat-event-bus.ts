@@ -119,8 +119,8 @@ export interface KnowledgeSourceChangedEvent {
  */
 export interface SettingsChangedEvent {
   kind: 'settings_changed';
-  /** 变更区块：model=当前对话模型切换 / features=功能开关全局默认 */
-  section: 'model' | 'features';
+  /** 变更区块：model=当前对话模型切换 / features=功能开关全局默认 / uploadExtract=聊天直传解析上限 */
+  section: 'model' | 'features' | 'uploadExtract';
   /** 事件时间戳（毫秒） */
   at: number;
 }
@@ -233,7 +233,7 @@ export function publishKnowledgeSourceChangedEvent(event: {
  * 失败只 warn，绝不影响主链路。
  */
 export function publishSettingsChangedEvent(event: {
-  section: 'model' | 'features';
+  section: 'model' | 'features' | 'uploadExtract';
 }): void {
   try {
     emitter.emit(CHANNEL, {

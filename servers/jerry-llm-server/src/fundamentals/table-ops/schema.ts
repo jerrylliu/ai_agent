@@ -33,6 +33,28 @@ export const RowConditionSchema = z.object({
   value: z.string().describe('比较值'),
 });
 
+/**
+ * 条件组合（多条件 AND/OR）：功能 3。
+ * deleteRows / updateCells / aggregate 系的 where 字段既可给单个条件（RowConditionSchema，
+ * 向后兼容），也可给一个组合（conditions 数组 + mode 组合方式）。
+ */
+export const ConditionGroupSchema = z.object({
+  /** 组合方式：and 全部满足 / or 满足其一 */
+  mode: z.enum(['and', 'or']).describe('组合方式：and 所有条件都满足 / or 任一条件满足'),
+  /** 条件列表（1~5 个），每个条件结构与单条件相同 */
+  conditions: z
+    .array(RowConditionSchema)
+    .min(1)
+    .max(5)
+    .describe('条件列表，每项为 {column, op, value}'),
+});
+
+/** where 子句：单条件或多条件组合的二选一（zod union，按字段形状区分） */
+export const WhereClauseSchema = z.union([RowConditionSchema, ConditionGroupSchema]);
+export type RowCondition = z.infer<typeof RowConditionSchema>;
+export type ConditionGroup = z.infer<typeof ConditionGroupSchema>;
+export type WhereClause = z.infer<typeof WhereClauseSchema>;
+
 /** 全部操作共有的可选字段：目标工作表（多 sheet 场景指定操作哪张表） */
 const TargetSheetField = {
   targetSheet: z
@@ -72,8 +94,8 @@ export const AggregateAppendRowOpSchema = z.object({
     .string()
     .optional()
     .describe('聚合数据来源的工作表名称；跨表聚合时必填，省略时聚合目标工作表自身'),
-  /** 聚合前对来源行做条件过滤 */
-  where: RowConditionSchema.optional().describe(
+  /** 聚合前对来源行做条件过滤（单条件或多条件 and/or 组合） */
+  where: WhereClauseSchema.optional().describe(
     '聚合前的行过滤条件（如只统计某类客户）；省略时统计全部行',
   ),
   /** 插入位置锚点：新行插到目标表中 labelColumn 列（省略时第一列）文字等于该值的行之前（如"总计"）；省略时追加到末尾 */
@@ -104,8 +126,8 @@ export const AggregateUpdateCellOpSchema = z.object({
     .describe('聚合数据来源的工作表；重算同表合计时省略（聚合同列上方所有行）'),
   /** 来源工作表中要聚合的列（省略时使用与 column 同名的列） */
   sourceColumn: z.string().optional().describe('来源工作表中要聚合的列，省略时与 column 同名'),
-  /** 聚合前对来源行做条件过滤（仅指定 sourceSheet 时有效） */
-  where: RowConditionSchema.optional().describe('聚合前的行过滤条件，仅指定 sourceSheet 时有效'),
+  /** 聚合前对来源行做条件过滤（仅指定 sourceSheet 时有效；单条件或多条件组合） */
+  where: WhereClauseSchema.optional().describe('聚合前的行过滤条件，仅指定 sourceSheet 时有效'),
   /** 聚合方式：sum 求和 / avg 平均 / count 计数 / min 最小 / max 最大 */
   fn: z.enum(['sum', 'avg', 'count', 'min', 'max']).describe('聚合方式'),
 }).extend(TargetSheetField);
@@ -115,8 +137,8 @@ export const UpdateCellsOpSchema = z.object({
   type: z.literal('updateCells'),
   /** 要改写的目标列表头名称 */
   targetColumn: z.string().describe('要改写的目标列的表头名称'),
-  /** 行匹配条件；省略时更新全部行 */
-  where: RowConditionSchema.optional().describe('行匹配条件，省略时更新全部行'),
+  /** 行匹配条件（单条件或多条件 and/or 组合）；省略时更新全部行 */
+  where: WhereClauseSchema.optional().describe('行匹配条件，省略时更新全部行'),
   /** 新值（覆盖写入） */
   newValue: z.string().describe('写入的新值'),
 }).extend(TargetSheetField);
@@ -124,8 +146,8 @@ export const UpdateCellsOpSchema = z.object({
 /** 条件删行 */
 export const DeleteRowsOpSchema = z.object({
   type: z.literal('deleteRows'),
-  /** 满足条件的行删除 */
-  where: RowConditionSchema.describe('删除条件'),
+  /** 满足条件的行删除（单条件或多条件 and/or 组合） */
+  where: WhereClauseSchema.describe('删除条件'),
 }).extend(TargetSheetField);
 
 /** 删除整列 */
@@ -162,6 +184,72 @@ export const RenameColumnOpSchema = z.object({
   to: z.string().describe('新表头名称'),
 }).extend(TargetSheetField);
 
+/**
+ * 分组建表（功能 1）：按某列分组统计另一列，结果生成一张新工作表。
+ * 如"把所有销售员的销售额按人统计，做成一张新表"。
+ */
+export const GroupCreateSheetOpSchema = z.object({
+  type: z.literal('groupCreateSheet'),
+  /** 数据来源工作表（省略时用第一个工作表） */
+  sourceSheet: z
+    .string()
+    .optional()
+    .describe('数据来源的工作表名称；省略时用第一个工作表'),
+  /** 分组列（位于来源工作表），每个不同取值生成结果表的一行 */
+  groupBy: z.string().describe('分组依据列的表头名称（位于来源工作表）'),
+  /** 要统计的数字列（位于来源工作表） */
+  valueColumn: z.string().describe('要统计的数字列的表头名称（位于来源工作表）'),
+  /** 聚合方式：sum 求和 / avg 平均 / count 计数 / min 最小 / max 最大 */
+  fn: z.enum(['sum', 'avg', 'count', 'min', 'max']).describe('聚合方式'),
+  /** 结果表中数值列的列名（如"销售额合计"）；省略时用统计列原名 */
+  resultLabel: z
+    .string()
+    .optional()
+    .describe('结果表中数值列的列名（如"销售额合计"），省略时用统计列原名'),
+  /** 新建工作表的名称（不可与现有工作表重名，重名则整表重建） */
+  newSheetName: z.string().describe('新建工作表的名称'),
+  /** 统计前对来源行做条件过滤（单条件或多条件组合）；省略时统计全部行 */
+  where: WhereClauseSchema.optional().describe('统计前的行过滤条件，省略时统计全部行'),
+});
+
+/**
+ * 公式补数（功能 2）：用表达式逐行计算写入目标列。
+ * 如"销售额为空的行按 数量×单价 补上"→ expression="[数量]*[单价]"，where 限定销售额为空。
+ */
+export const DeriveColumnOpSchema = z.object({
+  type: z.literal('deriveColumn'),
+  /** 结果写入列：列已存在时只覆写满足条件的行（其余行保留原值），不存在时先新增该列 */
+  targetColumn: z.string().describe('计算结果写入的列；列已存在时只覆写匹配行，不存在时新增该列'),
+  /** 计算表达式：用 [列名] 引用列，支持 + - * / ( ) 和数字，如 "[数量]*[单价]+[运费]" */
+  expression: z
+    .string()
+    .describe(
+      '计算表达式：用 [列名] 引用其他列，支持数字和 + - * / ( ) 运算，例如 "[数量]*[单价]"',
+    ),
+  /** 只计算满足条件的行（单条件或多条件组合）；省略时计算全部行 */
+  where: WhereClauseSchema.optional().describe('只计算满足条件的行，省略时计算全部行'),
+}).extend(TargetSheetField);
+
+/**
+ * 语义填充（功能 4）：目标列的空缺单元格按依据列取值的语义规律推断填充。
+ *
+ * 特殊性：这是 LLM 推断型操作（要真正调用模型产出填充值），不进
+ * executeTableOps 的纯函数执行器——由 TableOpsService 检测到该类型后
+ * 分流给 SemanticFillService（映射路径同步完成 / 分批路径出报价走任务）。
+ * executor 入口对混入本类型的计划显式拒绝（防御纵深）。
+ */
+export const SemanticFillOpSchema = z.object({
+  type: z.literal('semanticFill'),
+  /** 要填充的目标列（该列存在空缺单元格） */
+  targetColumn: z.string().describe('要填充的目标列的表头名称（该列有空缺）'),
+  /** 推断依据列：如"根据城市和门店补全区域"给 ["城市","门店"]；省略时自动取前 3 个非目标列 */
+  hintColumns: z
+    .array(z.string().min(1).max(200))
+    .max(10)
+    .optional()
+    .describe('用于推断的依据列表头名称清单（1~10 个，从表头中逐字选取）；省略时自动选取'),
+}).extend(TargetSheetField);
+
 /** 全部支持的操作（discriminatedUnion：按 type 字段分发校验） */
 export const TableOpSchema = z.discriminatedUnion('type', [
   AppendRowOpSchema,
@@ -173,6 +261,9 @@ export const TableOpSchema = z.discriminatedUnion('type', [
   AddColumnOpSchema,
   SortRowsOpSchema,
   RenameColumnOpSchema,
+  GroupCreateSheetOpSchema,
+  DeriveColumnOpSchema,
+  SemanticFillOpSchema,
 ]);
 export type TableOp = z.infer<typeof TableOpSchema>;
 

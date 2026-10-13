@@ -31,6 +31,7 @@ import {
   VectorOpStatus,
 } from '../entities/pending-vector-op.entity.js';
 import { ImageDescription } from '../entities/image-description.entity.js';
+import { TableRule } from '../entities/table-rule.entity.js';
 import { logger } from '../fundamentals/logger';
 import { publishDocumentChangedEvent } from '../fundamentals/chat-event-bus';
 import {
@@ -1318,6 +1319,19 @@ export class DocumentService implements OnApplicationBootstrap {
       });
     } catch (err: any) {
       logger.warn('清理图片描述记录失败（不影响文档删除）', {
+        module: 'DocumentService',
+        documentId: id,
+        error: err.message,
+      });
+    }
+
+    // 清理表格规则（功能 5：删除文档时级联删除其规则，不留孤儿数据）
+    try {
+      await this.dataSource
+        .getRepository(TableRule)
+        .delete({ documentId: id });
+    } catch (err: any) {
+      logger.warn('清理表格规则失败（不影响文档删除）', {
         module: 'DocumentService',
         documentId: id,
         error: err.message,
