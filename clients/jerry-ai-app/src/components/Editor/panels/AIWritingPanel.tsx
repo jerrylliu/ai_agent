@@ -20,13 +20,26 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Sparkles, PenLine, FileText, Languages, ListTree,
   Square, Copy, CheckCircle2, AlertCircle, Loader2,
-  Table2, RotateCcw,
+  Table2, RotateCcw, Wand2, Lightbulb,
 } from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import type { JSONContent } from '@tiptap/react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { requestCompletionStream, runTableOps, type CompletionMode, type TableOpsReportItem } from '@/lib/api';
+import {
+  requestCompletionStream,
+  runTableOps,
+  startSemanticFillTask,
+  getSemanticFillStatus,
+  cancelSemanticFillTask,
+  batchCreateTableRules,
+  type CompletionMode,
+  type TableOpsReportItem,
+  type SemanticFillMappingResult,
+  type SemanticFillBatchQuote,
+  type SemanticFillTaskStatus,
+  type SemanticFillSuggestRule,
+} from '@/lib/api';
 import {
   docContainsTable,
   isSheetStructuredText,
@@ -39,6 +52,12 @@ import { cn } from '@/utils/index';
 export interface AIWritingPanelProps {
   /** 编辑器实例 */
   editor: Editor | null;
+  /**
+   * 已保存文档的 ID（可选）：传入后 AI 表格指令/语义填充的执行结果
+   * 先过该文档的启用表格规则（功能 5 规则门禁），违规整体拒绝；
+   * 同时语义填充的规则提议才能入库（未保存文档没有规则归属）
+   */
+  documentId?: number;
 }
 
 /** 快捷指令类型 */
@@ -82,7 +101,10 @@ const QUICK_ACTION_ORDER: QuickAction[] = ['polish', 'summarize', 'translate', '
 /** 生成状态 */
 type GenStatus = 'idle' | 'generating' | 'done' | 'error';
 
-export function AIWritingPanel({ editor }: AIWritingPanelProps) {
+/** 分批填充任务 ID 本地持久化 key：刷新页面后凭此重连任务进度（方案定稿；服务重启任务作废） */
+const SEMANTIC_FILL_TASK_KEY = 'miaoma_semantic_fill_task';
+
+export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
   const [output, setOutput] = useState('');
   const [status, setStatus] = useState<GenStatus>('idle');
   const [activeAction, setActiveAction] = useState<QuickAction | null>(null);
@@ -111,10 +133,42 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
   }, [editor]);
   /** 表格指令执行中 */
   const [tableRunning, setTableRunning] = useState(false);
-  /** 表格指令执行结果（待用户确认应用）；baseSheetText 为执行时的表格快照，用于并发编辑守卫 */
-  const [tableResult, setTableResult] = useState<{ sheetText: string; baseSheetText: string; report: TableOpsReportItem[] } | null>(null);
+  /**
+   * 表格指令执行结果（待用户确认应用）。
+   * baseSheetText 为执行时的表格快照，用于并发编辑守卫；null = 刷新重连等
+   * 拿不到快照的场景（应用时直接走二次确认）。
+   * semanticFill 为语义填充映射路径结果（有值时展示映射明细与规则提议卡片）。
+   */
+  const [tableResult, setTableResult] = useState<{
+    sheetText: string;
+    baseSheetText: string | null;
+    report: TableOpsReportItem[];
+    semanticFill?: SemanticFillMappingResult;
+  } | null>(null);
   /** 表格指令失败信息 */
   const [tableError, setTableError] = useState('');
+
+  // ==================== 语义填充分批任务状态（功能 4） ====================
+  /** 分批报价（path=batch，待用户确认后创建任务）；baseSheetText/instruction 供 start 复用 */
+  const [fillQuote, setFillQuote] = useState<{
+    quote: SemanticFillBatchQuote;
+    baseSheetText: string;
+    instruction: string;
+  } | null>(null);
+  /** 分批任务信息（running 展示进度；终态由 consumeTerminalFillTask 转入确认流后清空） */
+  const [fillTask, setFillTask] = useState<SemanticFillTaskStatus | null>(null);
+  /** 任务发起时的表格快照（应用守卫用）；刷新重连时为 null */
+  const fillBaseRef = useRef<string | null>(null);
+  /** 进度轮询定时器（终态/卸载时清理） */
+  const fillPollTimerRef = useRef<number | null>(null);
+  /** 轮询函数自引用句柄（setTimeout 递归轮询用） */
+  const pollFillTaskRef = useRef<(taskId: string) => void>(() => {});
+  /** 轮询会话令牌：新轮询开始即递增，旧会话不再续期（防重复定时器） */
+  const pollSessionRef = useRef(0);
+  /** 刷新重连 effect 只执行一次的守卫（deps 回调意外变化时避免重复拉取） */
+  const fillReconnectDoneRef = useRef(false);
+  /** AI 规则提议入库中（防重复提交） */
+  const [suggestRuleSaving, setSuggestRuleSaving] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -127,14 +181,15 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
   });
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = (success: boolean, message: string) => {
+  // 用 useCallback 固定引用：语义填充的轮询/重连回调依赖它做依赖稳定性（避免 effect 反复重跑）
+  const showToast = useCallback((success: boolean, message: string) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast({ show: true, success, message });
     toastTimerRef.current = setTimeout(() => {
-      setToast({ show: false, success: false, message: '' });
+      setToast({ show: false, success, message: '' });
       toastTimerRef.current = null;
     }, 2500);
-  };
+  }, []);
 
   /**
    * 从编辑器提取全文纯文本
@@ -272,6 +327,12 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
     const trimmed = customInstruction.trim();
     if (!trimmed) return;
 
+    // 分批填充任务进行中时不接受新表格指令（服务端也有并发上限，这里提前拦截给明确提示）
+    if (fillTask && fillTask.status === 'running') {
+      showToast(false, '有填充任务进行中，请等待完成或取消后再执行新指令');
+      return;
+    }
+
     // 序列化当前表格数据（含未保存编辑，与用户所见一致）
     const sheetText = tableDocToSheetText(editor.getJSON());
     if (!sheetText) {
@@ -299,17 +360,31 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
     setTableRunning(true);
     setTableError('');
     setTableResult(null);
+    setFillQuote(null);
 
     try {
-      const result = await runTableOps({ instruction: trimmed, sheetText });
+      const result = await runTableOps({
+        instruction: trimmed,
+        sheetText,
+        // 已保存文档传入后执行结果过规则门禁（功能 5）；未保存文档无规则可查
+        ...(documentId !== undefined ? { documentId } : {}),
+      });
       if (!result.ok) {
-        // 业务级失败（指令无法理解/引用不存在/护栏拦截）：服务端已返回可读原因
+        // 业务级失败（指令无法理解/引用不存在/护栏拦截/规则门禁拒绝）：服务端已返回可读原因
         const msg = result.message ?? '表格指令执行失败';
         console.warn('[AIWritingPanel] 表格指令被拒绝', { message: msg });
         setTableError(msg);
         showToast(false, msg);
         return;
       }
+
+      // 语义填充分批报价：服务端未执行，转入报价确认态——用户确认后才创建任务
+      if (result.semanticFill && result.semanticFill.path === 'batch') {
+        setFillQuote({ quote: result.semanticFill, baseSheetText: sheetText, instruction: trimmed });
+        showToast(true, '该列取值较杂，请确认分批填充方案');
+        return;
+      }
+
       // ok 必有 sheetText 与 report（类型上 optional，运行时由后端保证，仍做兜底）
       const nextText = result.sheetText ?? '';
       if (!nextText) {
@@ -317,7 +392,15 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
         showToast(false, '服务端返回内容为空，请重试');
         return;
       }
-      setTableResult({ sheetText: nextText, baseSheetText: sheetText, report: result.report ?? [] });
+      setTableResult({
+        sheetText: nextText,
+        baseSheetText: sheetText,
+        report: result.report ?? [],
+        semanticFill:
+          result.semanticFill && result.semanticFill.path === 'mapping'
+            ? result.semanticFill
+            : undefined,
+      });
       showToast(true, '执行完成，请确认后应用');
     } catch (err) {
       const msg = (err as Error)?.message || '表格指令执行失败';
@@ -327,14 +410,15 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
     } finally {
       setTableRunning(false);
     }
-  }, [editor, customInstruction]);
+  }, [editor, customInstruction, documentId, fillTask]);
 
   /** 应用表格指令结果：新文本转回表格节点替换编辑器内容（Ctrl+Z 可撤销） */
   const handleApplyTableOps = useCallback(() => {
     if (!editor || !tableResult) return;
     try {
       // 并发编辑守卫：执行结果基于执行时的表格快照，若用户在等待确认期间
-      // 又改了表格，直接应用会覆盖那些修改——需二次确认
+      // 又改了表格，直接应用会覆盖那些修改——需二次确认。
+      // baseSheetText 为 null（刷新重连拿不到快照）时无法比对，一律走二次确认
       const currentText = tableDocToSheetText(editor.getJSON());
       if (currentText !== null && currentText !== tableResult.baseSheetText) {
         const confirmed = window.confirm(
@@ -365,6 +449,231 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
     setTableResult(null);
     setTableError('');
   }, []);
+
+  // ==================== 语义填充分批任务（功能 4） ====================
+
+  /** 停止进度轮询（清定时器） */
+  const stopFillPolling = useCallback(() => {
+    if (fillPollTimerRef.current !== null) {
+      clearTimeout(fillPollTimerRef.current);
+      fillPollTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * 消费终态任务：清理轮询与本地持久化，转入确认应用流或报错。
+   * 有 filledText（done，或 failed/cancelled 但已有部分完成批次）→ 进 tableResult 确认流；
+   * 无 filledText → 仅展示错误/取消提示
+   */
+  const consumeTerminalFillTask = useCallback(
+    (t: SemanticFillTaskStatus) => {
+      stopFillPolling();
+      localStorage.removeItem(SEMANTIC_FILL_TASK_KEY);
+      setFillTask(null);
+      if (t.filledText) {
+        const report: TableOpsReportItem[] = [
+          {
+            type: 'semanticFill',
+            targetSheet: '',
+            message:
+              t.status === 'done'
+                ? `分批填充完成：${t.completedBatches}/${t.batchCount} 批，共填充 ${t.appliedRows} 个单元格`
+                : `任务${t.status === 'cancelled' ? '已取消' : '失败'}：已完成 ${t.completedBatches}/${t.batchCount} 批、填充 ${t.appliedRows} 个单元格，可应用已完成的部分`,
+          },
+        ];
+        if (t.error) {
+          report.push({ type: 'semanticFill', targetSheet: '', message: `原因：${t.error}` });
+        }
+        setTableResult({
+          sheetText: t.filledText,
+          // fillBaseRef 为任务发起时的快照；刷新重连场景为 null → 应用守卫走二次确认
+          baseSheetText: fillBaseRef.current,
+          report,
+        });
+        showToast(true, '填充完成，请确认后应用');
+      } else if (t.status === 'cancelled') {
+        setTableError('任务已取消，未产生可应用的填充结果');
+        showToast(false, '任务已取消，未产生可应用的填充结果');
+      } else {
+        const msg = t.error || '填充任务失败';
+        setTableError(msg);
+        showToast(false, msg);
+      }
+    },
+    [showToast, stopFillPolling],
+  );
+
+  /**
+   * 轮询填充任务进度：running 则 2s 后续轮；终态转 consumeTerminalFillTask；
+   * 网络抖动 3s 后重试（任务仍在服务端执行，不轻易终止轮询）。
+   * 任务不存在（found:false）= 服务已重启/任务过期 → 清本地 key 并提示重新发起
+   */
+  const pollFillTask = useCallback(
+    (taskId: string) => {
+      // 会话令牌：新轮询开始即作废旧会话，旧会话的续期定时器全部失效（防重复轮询）
+      const session = ++pollSessionRef.current;
+      stopFillPolling();
+      void (async () => {
+        try {
+          const res = await getSemanticFillStatus(taskId);
+          if (!res.found || !res.task) {
+            localStorage.removeItem(SEMANTIC_FILL_TASK_KEY);
+            setFillTask(null);
+            showToast(false, '填充任务已失效（服务可能已重启），请重新发起填充');
+            return;
+          }
+          const t = res.task;
+          if (t.status === 'running') {
+            setFillTask({ ...t });
+            if (pollSessionRef.current === session) {
+              fillPollTimerRef.current = window.setTimeout(() => pollFillTaskRef.current(taskId), 2000);
+            }
+            return;
+          }
+          consumeTerminalFillTask(t);
+        } catch (err) {
+          console.error('[AIWritingPanel] 轮询填充任务失败，稍后重试', err);
+          if (pollSessionRef.current === session) {
+            fillPollTimerRef.current = window.setTimeout(() => pollFillTaskRef.current(taskId), 3000);
+          }
+        }
+      })();
+    },
+    [consumeTerminalFillTask, showToast, stopFillPolling],
+  );
+
+  // 轮询函数自引用（setTimeout 递归轮询用）
+  useEffect(() => {
+    pollFillTaskRef.current = pollFillTask;
+  }, [pollFillTask]);
+
+  /** 确认分批报价 → 创建填充任务并开始轮询 */
+  const handleStartFillTask = useCallback(async () => {
+    if (!fillQuote) return;
+    // 兜底：已有任务在跑时不重复创建（服务端也有并发上限）
+    if (fillTask && fillTask.status === 'running') {
+      showToast(false, '有填充任务进行中，请等待完成或取消后再发起新任务');
+      return;
+    }
+    try {
+      const res = await startSemanticFillTask({
+        instruction: fillQuote.instruction,
+        sheetText: fillQuote.baseSheetText,
+        targetColumn: fillQuote.quote.targetColumn,
+        hintColumns: fillQuote.quote.hintColumns,
+        // 已保存文档传入后任务终态结果过规则门禁（功能 5）；未保存文档无规则可查
+        ...(documentId !== undefined ? { documentId } : {}),
+      });
+      // 记录任务发起时的表格快照供应用守卫比对；刷新重连场景拿不到即为 null
+      fillBaseRef.current = fillQuote.baseSheetText;
+      setFillQuote(null);
+      setFillTask({
+        taskId: res.taskId,
+        status: 'running',
+        targetColumn: res.targetColumn,
+        hintColumns: res.hintColumns,
+        emptyCount: res.emptyCount,
+        batchCount: res.batchCount,
+        completedBatches: 0,
+        progress: 0,
+        appliedRows: 0,
+        cancelRequested: false,
+      });
+      // 持久化任务 ID：刷新页面后凭此重连进度（服务重启任务作废）
+      localStorage.setItem(SEMANTIC_FILL_TASK_KEY, res.taskId);
+      pollFillTask(res.taskId);
+      showToast(true, `填充任务已开始，共 ${res.batchCount} 批`);
+    } catch (err) {
+      const msg = (err as Error)?.message || '创建填充任务失败';
+      console.error('[AIWritingPanel] 创建分批填充任务失败', err);
+      setTableError(msg);
+      showToast(false, msg);
+    }
+  }, [fillQuote, fillTask, documentId, pollFillTask, showToast]);
+
+  /** 请求取消任务（协作式：当前批完成后停止，已完成批次结果保留可应用） */
+  const handleCancelFillTask = useCallback(async () => {
+    if (!fillTask || fillTask.status !== 'running') return;
+    try {
+      await cancelSemanticFillTask(fillTask.taskId);
+      setFillTask((prev) => (prev ? { ...prev, cancelRequested: true } : prev));
+      showToast(true, '已请求取消，当前批完成后停止');
+    } catch (err) {
+      const msg = (err as Error)?.message || '取消填充任务失败';
+      console.error('[AIWritingPanel] 请求取消填充任务失败', err);
+      showToast(false, msg);
+    }
+  }, [fillTask, showToast]);
+
+  /**
+   * 确认 AI 规则提议：入库为 allowedValues 校验规则（source=ai），
+   * 成功后从当前结果中移除提议（防重复入库），映射明细保留
+   */
+  const handleSaveSuggestRule = useCallback(async () => {
+    const suggestRule: SemanticFillSuggestRule | undefined = tableResult?.semanticFill?.suggestRule;
+    if (!suggestRule || !documentId) return;
+    setSuggestRuleSaving(true);
+    try {
+      const res = await batchCreateTableRules(documentId, [
+        {
+          name: suggestRule.name,
+          type: 'allowedValues',
+          params: { column: suggestRule.column, values: suggestRule.values },
+        },
+      ]);
+      if (res.failed.length > 0) {
+        const first = res.failed[0];
+        showToast(false, `规则入库失败：${first.name}（${first.reason}）`);
+        return;
+      }
+      setTableResult((prev) =>
+        prev && prev.semanticFill
+          ? { ...prev, semanticFill: { ...prev.semanticFill, suggestRule: undefined } }
+          : prev,
+      );
+      showToast(true, '已存为表格规则，今后违反该白名单的 AI 结果将被拒绝');
+    } catch (err) {
+      const msg = (err as Error)?.message || '规则入库失败';
+      console.error('[AIWritingPanel] AI 规则提议入库失败', err);
+      showToast(false, msg);
+    } finally {
+      setSuggestRuleSaving(false);
+    }
+  }, [tableResult, documentId, showToast]);
+
+  /**
+   * 刷新重连：凭本地持久化的任务 ID 尝试恢复填充任务进度（只执行一次）。
+   * running → 恢复轮询（快照丢失，应用时走二次确认）；
+   * 终态有结果 → 直接转入确认流；查询失败保留 key 下次再试
+   */
+  useEffect(() => {
+    if (fillReconnectDoneRef.current) return;
+    fillReconnectDoneRef.current = true;
+    const savedTaskId = localStorage.getItem(SEMANTIC_FILL_TASK_KEY);
+    if (!savedTaskId) return;
+    void (async () => {
+      try {
+        const res = await getSemanticFillStatus(savedTaskId);
+        if (res.found && res.task) {
+          const t = res.task;
+          if (t.status === 'running') {
+            fillBaseRef.current = null;
+            setFillTask({ ...t });
+            // 1s 后恢复轮询（错开挂载高峰）
+            fillPollTimerRef.current = window.setTimeout(() => pollFillTaskRef.current(savedTaskId), 1000);
+            return;
+          }
+          consumeTerminalFillTask(t);
+          return;
+        }
+        // 任务已不存在（过期清理/服务重启）：清 key
+        localStorage.removeItem(SEMANTIC_FILL_TASK_KEY);
+      } catch (err) {
+        // 查询失败（网络问题等）：保留 key，下次刷新再试，不打扰用户
+        console.warn('[AIWritingPanel] 重连填充任务失败，保留任务 ID 下次重试', err);
+      }
+    })();
+  }, [consumeTerminalFillTask]);
 
   // ==================== 指令入口 ====================
 
@@ -465,15 +774,18 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
     }
   }, [output]);
 
-  // 组件卸载时清理
+  // 组件卸载时清理（填充任务不中断：服务端继续跑，taskId 留在本地刷新后重连）
   useEffect(() => {
     return () => {
       if (abortRef.current) abortRef.current.abort();
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      if (fillPollTimerRef.current !== null) clearTimeout(fillPollTimerRef.current);
     };
   }, []);
 
   const isGenerating = status === 'generating';
+  /** 分批填充任务进行中（禁用新指令输入，避免并发编辑冲突） */
+  const fillTaskRunning = fillTask?.status === 'running';
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -527,7 +839,7 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
                 : '例如：把全文改成口语化'
             }
             className="h-8 text-sm"
-            disabled={isGenerating || tableRunning}
+            disabled={isGenerating || tableRunning || fillTaskRunning}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleCustomExecute();
             }}
@@ -536,7 +848,7 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
             variant="default"
             size="sm"
             className="h-8 shrink-0"
-            disabled={isGenerating || tableRunning || !customInstruction.trim()}
+            disabled={isGenerating || tableRunning || fillTaskRunning || !customInstruction.trim()}
             onClick={handleCustomExecute}
           >
             {tableRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '执行'}
@@ -551,6 +863,64 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-8">
             <Loader2 className="h-6 w-6 animate-spin" />
             <span className="text-xs">正在解析指令并计算表格数据…</span>
+          </div>
+        )}
+
+        {/* 语义填充：分批任务进度（功能 4；终态由 consumeTerminalFillTask 转入确认流后消失） */}
+        {fillTask && (
+          <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2">
+            <div className="flex items-start gap-2">
+              <Wand2 className="h-4 w-4 text-violet-500 shrink-0 mt-0.5" />
+              <div className="space-y-1 text-xs leading-relaxed">
+                <div className="font-medium text-foreground">
+                  语义填充进行中：目标列「{fillTask.targetColumn}」
+                </div>
+                <div className="text-muted-foreground">
+                  第 {fillTask.completedBatches}/{fillTask.batchCount} 批 · 已填充 {fillTask.appliedRows}/{fillTask.emptyCount} 个单元格
+                </div>
+              </div>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full rounded-full bg-violet-500 transition-all"
+                style={{ width: `${Math.round(fillTask.progress * 100)}%` }}
+              />
+            </div>
+            {fillTask.cancelRequested ? (
+              <div className="text-xs text-muted-foreground">正在取消…当前批完成后停止，已完成部分可应用</div>
+            ) : (
+              <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => void handleCancelFillTask()}>
+                <Square className="h-3 w-3" />
+                取消任务
+              </Button>
+            )}
+          </div>
+        )}
+
+        {/* 语义填充：分批报价确认（功能 4；用户确认后才创建任务） */}
+        {fillQuote && !fillTask && (
+          <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2">
+            <div className="flex items-start gap-2">
+              <Wand2 className="h-4 w-4 text-violet-500 shrink-0 mt-0.5" />
+              <div className="space-y-1 text-xs leading-relaxed">
+                <div className="font-medium text-foreground">该列取值较杂，建议分批填充</div>
+                <div className="text-muted-foreground">
+                  目标列「{fillQuote.quote.targetColumn}」共 {fillQuote.quote.emptyCount} 个空缺单元格，
+                  依据列（{fillQuote.quote.hintColumns.join('、')}）去重后有 {fillQuote.quote.distinctCount} 个取值，
+                  超出单次映射上限，将分 {fillQuote.quote.batchCount} 批（每批 {fillQuote.quote.batchRows} 行）调用 AI 推断填充。
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button variant="default" size="sm" className="h-7 gap-1 text-xs" onClick={() => void handleStartFillTask()}>
+                <Wand2 className="h-3 w-3" />
+                开始填充
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setFillQuote(null)}>
+                <RotateCcw className="h-3 w-3" />
+                放弃
+              </Button>
+            </div>
           </div>
         )}
 
@@ -586,6 +956,60 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
                 <div className="text-xs text-muted-foreground">操作已执行（无明细报告）</div>
               )}
             </div>
+
+            {/* 语义填充映射明细 + AI 规则提议（功能 4 映射路径） */}
+            {tableResult.semanticFill && (
+              <div className="space-y-2">
+                <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-1.5 max-h-[40vh] overflow-y-auto">
+                  <div className="text-xs font-medium text-foreground">
+                    填充映射明细（依据值 → 填充值，共 {tableResult.semanticFill.mapping.length} 条，已刷全表 {tableResult.semanticFill.appliedRows} 行）
+                  </div>
+                  {tableResult.semanticFill.mapping.slice(0, 50).map((m, idx) => (
+                    <div key={`${m.from}-${idx}`} className="text-xs text-muted-foreground">
+                      「{m.from || '(空)'}」→「{m.to}」
+                    </div>
+                  ))}
+                  {tableResult.semanticFill.mapping.length > 50 && (
+                    <div className="text-xs text-muted-foreground">
+                      …其余 {tableResult.semanticFill.mapping.length - 50} 条略
+                    </div>
+                  )}
+                </div>
+                {tableResult.semanticFill.suggestRule && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <Lightbulb className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+                      <div className="space-y-1 text-xs leading-relaxed">
+                        <div className="font-medium text-foreground">AI 规则提议</div>
+                        <div className="text-muted-foreground">
+                          「{tableResult.semanticFill.suggestRule.name}」：列「{tableResult.semanticFill.suggestRule.column}」的取值限定为
+                          {tableResult.semanticFill.suggestRule.values.join('、')}。存为规则后，AI 表格指令的结果若违反该白名单将被整体拒绝。
+                        </div>
+                      </div>
+                    </div>
+                    {documentId ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 text-xs"
+                        disabled={suggestRuleSaving}
+                        onClick={() => void handleSaveSuggestRule()}
+                      >
+                        {suggestRuleSaving ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Lightbulb className="h-3 w-3" />
+                        )}
+                        存为规则
+                      </Button>
+                    ) : (
+                      <div className="text-xs text-muted-foreground">文档保存后才能将提议存为规则</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center gap-1.5">
               <Button variant="default" size="sm" className="h-7 gap-1 text-xs" onClick={handleApplyTableOps} disabled={!editor}>
                 <CheckCircle2 className="h-3 w-3" />
@@ -599,7 +1023,7 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
           </div>
         )}
 
-        {status === 'idle' && !output && !tableRunning && !tableError && !tableResult && (
+        {status === 'idle' && !output && !tableRunning && !tableError && !tableResult && !fillQuote && !fillTask && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-8">
             <Sparkles className="h-8 w-8 opacity-40" />
             <span className="text-xs">{hasTable ? '输入指令操作表格数据' : '选择快捷指令或输入自定义指令'}</span>

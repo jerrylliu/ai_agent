@@ -25,6 +25,8 @@ export const API_ENDPOINTS = {
   KNOWLEDGE_SOURCES: `${API_BASE_URL}/knowledge-sources`,
   // 功能开关全局默认（服务端 runtime-config，AI 工具可改，未自定义设备跟随）
   SETTINGS_FEATURES: `${API_BASE_URL}/settings/features`,
+  // 聊天直传解析上限（服务端 runtime-config，设置界面可调）
+  SETTINGS_UPLOAD_EXTRACT: `${API_BASE_URL}/settings/upload-extract`,
   CACHE_STATS: `${API_BASE_URL}/cache/stats`,
   CACHE_CONFIG: `${API_BASE_URL}/cache/config`,
   CACHE_CLEAR: `${API_BASE_URL}/cache/clear`,

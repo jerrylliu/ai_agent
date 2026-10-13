@@ -37,10 +37,20 @@ interface SettingsState extends AppSettings {
    * 保持本地值（每设备独立）。从未改过的设备跟随全局默认。
    */
   customizedFeatures: string[];
+  /**
+   * 聊天直传解析上限（功能 6，服务端配置的本地缓存）
+   * 供发送消息前预检（防旧文档在调低上限后继续发送）；0 = 不人为限制。
+   * 真值以服务端 runtime-config 为准，这里只是缓存（启动/设置变更时同步）。
+   */
+  uploadExtractMaxChars: number;
+  /** 当前模型上下文窗口按 ≈4 字符/token 估算的字符数（本地缓存，发送前预检用） */
+  uploadExtractModelWindowChars: number;
   updateSettings: (settings: AppSettings) => void;
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
   /** 用服务端全局默认覆盖本设备未自定义的功能键（启动 / SSE settings_changed 时调用） */
   applyServerDefaults: (defaults: FeatureDefaults) => void;
+  /** 更新聊天直传上限的本地缓存（启动 / 设置面板保存 / SSE settings_changed 时调用） */
+  setUploadExtractCache: (maxChars: number, modelWindowChars: number) => void;
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -52,6 +62,10 @@ export const useSettingsStore = create<SettingsState>()(
       imageModel: 'wan2.7-image-pro',
       autoCompleteEnabled: true,
       customizedFeatures: [],
+      // 聊天直传上限本地缓存：初始值与历史基线一致（5 万），启动后由服务端配置覆盖
+      uploadExtractMaxChars: 50000,
+      // 模型窗口估算本地缓存：初始 0 = 未知（发送预检跳过该项），启动后由服务端覆盖
+      uploadExtractModelWindowChars: 0,
 
       updateSettings: (settings) =>
         set((state) => {
@@ -90,6 +104,9 @@ export const useSettingsStore = create<SettingsState>()(
         }
         if (Object.keys(patch).length > 0) set(patch);
       },
+
+      setUploadExtractCache: (maxChars, modelWindowChars) =>
+        set({ uploadExtractMaxChars: maxChars, uploadExtractModelWindowChars: modelWindowChars }),
     }),
     {
       name: 'app-settings',

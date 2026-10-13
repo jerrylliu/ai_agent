@@ -270,8 +270,12 @@ function UserDocumentCard({ card }: { card: MessageDocumentCard }) {
               {card.truncated && (
                 <>
                   <span>·</span>
-                  <span className="text-amber-500" title="文档过长，仅发送前 5 万字给 AI。建议上传到文档管理并发布到知识库以获得全文检索能力。">
-                    已截取前 5 万字（原文共 {card.totalChars ?? '未知'} 字）
+                  {/* 解析上限已可配置（功能 6）：有 limit 显示实际上限，历史旧消息兜底"未知" */}
+                  <span
+                    className="text-amber-500"
+                    title="文档过长，仅发送截取后的部分给 AI。建议上传到文档管理并发布到知识库以获得全文检索能力。"
+                  >
+                    已按解析上限（{card.limit != null ? `${card.limit} 字` : '未知'}）截取（原文共 {card.totalChars ?? '未知'} 字）
                   </span>
                 </>
               )}

@@ -113,6 +113,8 @@ export interface MessageDocumentCard {
   truncated: boolean;
   /** 文档原始总字符数（截断前） */
   totalChars?: number;
+  /** 发送时生效的解析上限（0=不限制）；历史旧消息无此字段，显示兜底文案 */
+  limit?: number;
   /** 文件下载 URL */
   fileUrl: string;
   /** Tiptap JSONContent，用于"在编辑器中打开" */

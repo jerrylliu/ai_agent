@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from "react";
-import { Send, X, Plus, Image, FileText, ImageIcon, Mic, MicOff, Loader2, CloudOff } from "lucide-react";
+import { Send, X, Plus, Image, FileText, ImageIcon, Mic, MicOff, Loader2, CloudOff, AlertTriangle } from "lucide-react";
 import { Button } from "../ui/button";
 import { useSettingsStore } from "../../stores/settings-store";
 import { useSpeechRecognition, type RecordingStatus } from "../../hooks/useSpeechRecognition";
@@ -332,9 +332,18 @@ const ChatInput: React.FC<ChatInputProps> = ({
                     <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
                       <span>{sizeText}</span>
                       {doc.text && <span>· {doc.text.length} 字</span>}
-                      {doc.truncated && <span className="text-amber-500">· 已截取前 5 万字（原文共 {doc.totalChars ?? '未知'} 字）</span>}
                       {!doc.text && <span className="text-amber-500">· 仅链接（解析失败）</span>}
                     </div>
+                    {/* 截断警告条（功能 6）：上限已可配置，文案动态展示提取时生效的上限，
+                        让用户明确"AI 只能看到截取后的部分"，避免误以为全文可达 */}
+                    {doc.truncated && (
+                      <div className="mt-1.5 flex items-start gap-1.5 px-2 py-1.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700/60 rounded-md text-xs text-amber-700 dark:text-amber-300">
+                        <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                        <span>
+                          内容超出解析上限（{doc.limit ?? '未知'} 字），已截取前 {doc.text.length} 字，原文共 {doc.totalChars ?? '未知'} 字。AI 只能看到截取后的部分，如需完整内容请上传到文档管理并发布到知识库。
+                        </span>
+                      </div>
+                    )}
                   </div>
                   <button
                     onClick={() => onRemovePendingDocument(doc.id)}

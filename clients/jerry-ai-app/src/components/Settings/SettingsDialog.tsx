@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Moon, Sun, Zap, Brain, FileText, MessageSquare, Database, Gauge, Trash2, RefreshCw, PenLine, Cpu } from 'lucide-react';
+import { X, Moon, Sun, Zap, Brain, FileText, MessageSquare, Database, Gauge, Trash2, RefreshCw, PenLine, Cpu, Upload } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
 import { Input } from '../ui/input';
@@ -25,6 +25,8 @@ import {
   getMineruConfig,
   updateMineruConfig,
   fetchFeatureDefaults,
+  fetchUploadExtractSettings,
+  updateUploadExtractSettings,
 } from '../../lib/api';
 import type {
   CacheConfig,
@@ -38,6 +40,7 @@ import type {
   ReindexProgress,
   MineruConfigResponse,
   FeatureDefaults,
+  UploadExtractSettings,
 } from '../../lib/api';
 
 interface SettingsDialogProps {
@@ -76,6 +79,20 @@ const openBeianSite = async (): Promise<void> => {
     window.open(url, '_blank', 'noopener,noreferrer');
   }
 };
+
+// ==================== 聊天直传解析上限（功能 6） ====================
+
+/**
+ * 预设档位（value 为字符串便于与档位选择状态比较；'custom' 表示走自定义输入框）
+ * 区间与后端 UploadExtractConfigUpdateSchema 对齐：0 ~ 2000 万整数，0 表示不人为限制
+ */
+const UPLOAD_EXTRACT_PRESETS: { value: string; label: string }[] = [
+  { value: '50000', label: '5 万字' },
+  { value: '200000', label: '20 万字' },
+  { value: '500000', label: '50 万字' },
+  { value: '0', label: '不限制' },
+  { value: 'custom', label: '自定义' },
+];
 
 // ==================== 缓存 / 限流配置的输入校验 ====================
 
@@ -180,6 +197,15 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
   const [globalDefaults, setGlobalDefaults] = useState<FeatureDefaults | null>(null);
   // 本设备手动改过的功能键（自定义过的开关保持本地值，不显示跟随标记）
   const customizedFeatures = useSettingsStore((s) => s.customizedFeatures);
+
+  // ==================== 聊天直传解析上限（功能 6） ====================
+  // 服务端 runtime-config 全局配置：拉取缓存 + 档位编辑状态
+  const [uploadExtractCfg, setUploadExtractCfg] = useState<UploadExtractSettings | null>(null);
+  const [uploadExtractSaving, setUploadExtractSaving] = useState(false);
+  const [uploadExtractNotice, setUploadExtractNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  // 档位选择：预设值的字符串形式或 'custom'（自定义时用下方输入框）
+  const [uploadExtractPreset, setUploadExtractPreset] = useState('50000');
+  const [uploadExtractCustom, setUploadExtractCustom] = useState('');
 
   // 加载缓存和限流配置
   const loadConfig = useCallback(async () => {
@@ -345,6 +371,73 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
       window.removeEventListener('jerryai:settings-changed', onSettingsChanged);
     };
   }, [open]);
+
+  // 聊天直传解析上限（功能 6）：面板打开时拉取一次；面板开着时若本端或其他端改了配置
+  // （SSE settings_changed → window 事件），重新拉取并把档位选择对齐到服务端当前值
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const loadUploadExtract = async () => {
+      const cfg = await fetchUploadExtractSettings();
+      if (cancelled || !cfg) return;
+      setUploadExtractCfg(cfg);
+      // 按服务端当前值初始化档位选择（不匹配任何预设时落到自定义并回填数值）
+      const matched = UPLOAD_EXTRACT_PRESETS.find((p) => p.value === String(cfg.maxChars));
+      if (matched) {
+        setUploadExtractPreset(matched.value);
+      } else {
+        setUploadExtractPreset('custom');
+        setUploadExtractCustom(String(cfg.maxChars));
+      }
+    };
+    void loadUploadExtract().catch(() => { /* 后端未启动时静默 */ });
+    const onSettingsChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ section: string }>).detail;
+      if (detail?.section === 'uploadExtract') {
+        void loadUploadExtract().catch(() => { /* 后端未启动时静默 */ });
+      }
+    };
+    window.addEventListener('jerryai:settings-changed', onSettingsChanged);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('jerryai:settings-changed', onSettingsChanged);
+    };
+  }, [open]);
+
+  // 保存聊天直传解析上限：本地预校验（与后端 zod 区间一致）→ 写服务端 → 同步本地缓存
+  const handleSaveUploadExtract = async () => {
+    const raw = uploadExtractPreset === 'custom' ? uploadExtractCustom : uploadExtractPreset;
+    const value = Number(raw);
+    // 输入框被清空时 Number('') === 0，会伪装成"不限制"提交，必须显式判整数与区间
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > 20_000_000) {
+      setUploadExtractNotice({ ok: false, text: '请输入 0 ~ 2000 万之间的整数，0 表示不限制' });
+      return;
+    }
+    setUploadExtractSaving(true);
+    setUploadExtractNotice(null);
+    try {
+      const updated = await updateUploadExtractSettings(value);
+      setUploadExtractCfg(updated);
+      // 同步本地缓存：useChat 发送前预检读这份缓存，保存后必须立即生效
+      useSettingsStore.getState().setUploadExtractCache(updated.maxChars, updated.modelWindowChars);
+      // 档位选择对齐服务端回读值（自定义值被规范化后可能落到预设档位）
+      const matched = UPLOAD_EXTRACT_PRESETS.find((p) => p.value === String(updated.maxChars));
+      if (matched) {
+        setUploadExtractPreset(matched.value);
+      } else {
+        setUploadExtractPreset('custom');
+        setUploadExtractCustom(String(updated.maxChars));
+      }
+      setUploadExtractNotice({ ok: true, text: '已保存，所有在线设备将实时同步' });
+    } catch (err) {
+      setUploadExtractNotice({
+        ok: false,
+        text: err instanceof Error ? err.message : '保存失败，请稍后重试',
+      });
+    } finally {
+      setUploadExtractSaving(false);
+    }
+  };
 
   if (!open) return null;
 
@@ -777,6 +870,73 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 onCheckedChange={(v) => handleSettingChange('autoCompleteEnabled', v)}
               />
             </div>
+          </div>
+
+          {/* 分隔线 */}
+          <div className="border-t border-border" />
+
+          {/* 聊天直传解析上限（功能 6：服务端 runtime-config 全局配置，所有设备实时同步） */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Upload className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <h3 className="text-sm font-medium text-foreground cyberpunk-ms-text">聊天直传解析上限</h3>
+                <p className="text-xs text-muted-foreground cyberpunk-ms-subtext">
+                  直接发送给 AI 的文档最大字符数
+                  {uploadExtractCfg
+                    ? `，当前：${uploadExtractCfg.maxChars === 0 ? '不限制' : `${uploadExtractCfg.maxChars} 字`}（模型可读约 ${uploadExtractCfg.modelWindowChars > 0 ? `${uploadExtractCfg.modelWindowChars} 字` : '未知'}）`
+                    : '（加载中...）'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {UPLOAD_EXTRACT_PRESETS.map(({ value, label }) => (
+                <Button
+                  key={value}
+                  variant={uploadExtractPreset === value ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setUploadExtractPreset(value)}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+
+            {uploadExtractPreset === 'custom' && (
+              <div className="space-y-1">
+                <Input
+                  type="number"
+                  min={0}
+                  max={20000000}
+                  value={uploadExtractCustom}
+                  onChange={(e) => setUploadExtractCustom(e.target.value)}
+                  placeholder="自定义字符数上限，0 表示不限制"
+                />
+                <p className="text-xs text-muted-foreground">范围 0 ~ 2000 万的整数，0 表示不人为限制（仍受模型窗口约束）</p>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3">
+              <Button
+                size="sm"
+                disabled={uploadExtractSaving || !uploadExtractCfg}
+                onClick={handleSaveUploadExtract}
+              >
+                {uploadExtractSaving ? '保存中...' : '保存'}
+              </Button>
+              {uploadExtractNotice && (
+                <p
+                  className={`text-xs ${uploadExtractNotice.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'}`}
+                >
+                  {uploadExtractNotice.text}
+                </p>
+              )}
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              超上限文档会在聊天里截断并在发送前提示；超过模型窗口的文档会被阻止发送。段数上限（当前 {uploadExtractCfg ? (uploadExtractCfg.maxParagraphs > 0 ? `${uploadExtractCfg.maxParagraphs} 段` : '不限制') : '—'}）仅影响编辑器预览，不影响 AI 读到的内容。
+            </p>
           </div>
 
           {/* 分隔线 */}
