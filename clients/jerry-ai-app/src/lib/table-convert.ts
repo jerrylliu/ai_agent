@@ -241,6 +241,13 @@ export function sheetTextToTableDoc(text: string): {
     }
   }
 
+  // 文档以 table 结尾时，Tiptap 中光标无法点击到表格下方（经典光标陷阱：
+  // 表格后没有可放置光标的节点）。补一个空段落兜底；反向序列化会跳过
+  // 空段落（text.trim() 为假），不影响 contentText 与 xlsx 导出
+  if (content[content.length - 1]?.type === 'table') {
+    content.push({ type: 'paragraph' });
+  }
+
   return {
     doc: { type: 'doc', content: content.length > 0 ? content : [{ type: 'paragraph' }] },
     degraded,
