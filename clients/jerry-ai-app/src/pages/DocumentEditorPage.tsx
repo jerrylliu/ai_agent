@@ -42,6 +42,7 @@ import { ANCHOR_NOT_FOUND, findAnchorBlockIndex, normalizeAnchorText } from '@/l
 import { highlightAnchor } from '@/components/Editor/extensions/AnchorHighlight';
 import {
   docContainsTable,
+  flattenDocText,
   isSheetStructuredText,
   maxTableRowCount,
   sheetTextToTableDoc,
@@ -67,12 +68,6 @@ const EMPTY_DOC: JSONContent = {
   content: [{ type: 'paragraph' }],
 };
 
-/** 递归提取节点内全部文本（供 sheet 结构判定用，不注入块级分隔符） */
-function flattenDocPlainText(node: JSONContent): string {
-  if (node.type === 'text') return node.text ?? '';
-  return (node.content ?? []).map(flattenDocPlainText).join('');
-}
-
 /**
  * xlsx 来源内容表格化：把"sheet 结构化文本段落"转换为 heading + table 节点。
  *
@@ -89,7 +84,8 @@ function flattenDocPlainText(node: JSONContent): string {
 function tryConvertSheetContent(json: JSONContent, xlsxHint = false): JSONContent | null {
   try {
     if (docContainsTable(json)) return null;
-    const text = flattenDocPlainText(json);
+    // 带换行恢复的提取：块级边界补 '\n'，否则 sheet 边界行会与下一个 Sheet 标题粘连
+    const text = flattenDocText(json);
     if (!text.trim()) return null;
     // 无明确信号时要求内容能识别出 sheet 结构，避免把普通文档误转成表格
     if (!xlsxHint && !isSheetStructuredText(text)) return null;
