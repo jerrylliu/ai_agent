@@ -395,6 +395,9 @@ export function AIWritingPanel({ editor }: AIWritingPanelProps) {
       return;
     }
     console.log('[AIWritingPanel] 执行自定义指令', { instructionLength: trimmed.length });
+    // 走普通改写路径前清掉可能残留的表格指令结果/错误，避免面板显示过期状态
+    setTableResult(null);
+    setTableError('');
     setActiveAction(null);
     void runGeneration('rewrite', trimmed, '自定义指令');
   }, [customInstruction, editor, handleTableOpsExecute, runGeneration]);
