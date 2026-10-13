@@ -100,9 +100,9 @@ describe('settings-ops 工具', () => {
       const modelProvider = require('../model-provider');
       const eventBus = require('../chat-event-bus');
 
-      const r = await fresh.executeSwitchModel({ modelId: 'zhipu:glm-4.7' });
+      const r = await fresh.executeSwitchModel({ modelId: 'zhipu:glm-5.3' });
       expect(r.success).toBe(true);
-      expect(modelProvider.switchModel).toHaveBeenCalledWith('zhipu:glm-4.7');
+      expect(modelProvider.switchModel).toHaveBeenCalledWith('zhipu:glm-5.3');
       expect(eventBus.publishSettingsChangedEvent).toHaveBeenCalledWith({
         section: 'model',
       });

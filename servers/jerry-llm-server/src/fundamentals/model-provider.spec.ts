@@ -210,7 +210,7 @@ describe('createRateLimitedLLM', () => {
       const llm = createRateLimitedLLM(
         {
           provider: 'zhipu',
-          model: 'glm-4.7',
+          model: 'glm-5.3',
           apiKey: 'test-key',
           baseUrl: 'https://open.bigmodel.cn/api/paas',
         },

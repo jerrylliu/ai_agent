@@ -14,7 +14,7 @@
  *   - judge-report.json：聚合报告（机器可读）
  *   - judge-report.md：人读报告（含幻觉明细、低分题清单、人工抽查指引）
  *
- * 🔴 judge 模型独立于被评模型：默认 zhipu:glm-4.7（与被评的 deepseek 系错开厂商，
+ * 🔴 judge 模型独立于被评模型：默认 zhipu:glm-5.3（与被评的 deepseek 系错开厂商，
  *    避免同源自评偏置），可用 --judge-model 覆盖。断点续传：--resume 跳过已判题。
  *
  * 用法：
@@ -53,7 +53,7 @@ import {
 const MODULE = 'BenchJudge';
 
 /** 默认 judge 模型：与被评模型错开厂商（防同源自评偏置） */
-const DEFAULT_JUDGE_MODEL = 'zhipu:glm-4.7';
+const DEFAULT_JUDGE_MODEL = 'zhipu:glm-5.3';
 
 /** judge 并发默认/上限（judge 是轻量调用，可比题目并发略高） */
 const DEFAULT_CONCURRENCY = 5;
@@ -81,7 +81,7 @@ async function gracefulExit(code: number): Promise<never> {
 interface JudgeCliOptions {
   /** answers.jsonl 路径（必填） */
   answers: string;
-  /** judge 模型 id（缺省 zhipu:glm-4.7） */
+  /** judge 模型 id（缺省 zhipu:glm-5.3） */
   judgeModel: string;
   /** 并发数 */
   concurrency: number;
@@ -151,7 +151,7 @@ function parseArgs(argv: string[]): JudgeCliOptions {
           [
             '用法：pnpm bench:judge -- [options]',
             '  --answers <path>        answers.jsonl 路径（必填）',
-            '  --judge-model <modelId> judge 模型（缺省 zhipu:glm-4.7，建议与被评模型错开厂商）',
+            '  --judge-model <modelId> judge 模型（缺省 zhipu:glm-5.3，建议与被评模型错开厂商）',
             '  --concurrency <n>       并发数（默认 5，上限 10）',
             '  --type <t1,t2>          限定题型（如 --type semantic）',
             '  --limit <n>             最多判 n 题（调试用）',
