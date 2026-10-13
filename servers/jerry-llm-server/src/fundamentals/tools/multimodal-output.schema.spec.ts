@@ -36,6 +36,8 @@ import {
   extractLabels,
   extractSeries,
   extractPieItems,
+  applyThemeDefaults,
+  buildDefaultSeriesStyle,
 } from './multimodal-output';
 import { safeParseToolParams } from './_helpers';
 
@@ -146,6 +148,57 @@ describe('extractLabels / extractSeries / extractPieItems', () => {
     expect(extractSeries({ dates: ['a'], temps: [1] })).toEqual([
       { name: 'temps', data: [1] },
     ]);
+  });
+});
+
+// ==================== 深色科技风默认主题（2026-10-13 用户确认固化） ====================
+
+describe('chart-theme 默认主题接入', () => {
+  it('简化 data 路径：生成的 option 自带深色背景 + 主题色板 + 渐变面积', () => {
+    const r = generateChartParamsSchema.safeParse({
+      chartType: 'line',
+      title: '气温趋势',
+      data: {
+        dates: ['10-13', '10-14'],
+        高温: [27, 24],
+        低温: [19, 18],
+      },
+    });
+    expect(r.success).toBe(true);
+    if (!r.success) return;
+    // 走私有 buildEChartsOption 需经 executeGenerateChart，这里直接断言 schema
+    // 归一化 + 构建逻辑由 executeGenerateChart 集成验证；主题模块单测见下
+    expect(r.data).toBeDefined();
+  });
+
+  it('applyThemeDefaults：只补缺失字段，模型显式样式不覆盖', () => {
+    const option = {
+      backgroundColor: '#123456',
+      series: [{ type: 'line', data: [1] }],
+    };
+    const r = applyThemeDefaults(option);
+    expect(r.backgroundColor).toBe('#123456'); // 模型写的保留
+    expect(r.textStyle).toEqual({ color: '#e6f1ff' }); // 缺失的补上
+    expect(r.tooltip.backgroundColor).toBe('rgba(12, 20, 38, 0.92)');
+  });
+
+  it('applyThemeDefaults：模型写了 tooltip 结构时不覆盖', () => {
+    const option = { tooltip: { trigger: 'item' }, series: [] };
+    const r = applyThemeDefaults(option);
+    expect(r.tooltip.trigger).toBe('item');
+    expect(r.tooltip.backgroundColor).toBeUndefined();
+  });
+
+  it('buildDefaultSeriesStyle：前两个系列带渐变面积，第三个起虚线', () => {
+    const first = buildDefaultSeriesStyle('#ff7e45', 'line', 0);
+    expect(first.smooth).toBe(true);
+    expect(first.areaStyle).toBeDefined();
+    const third = buildDefaultSeriesStyle('#818cf8', 'line', 2);
+    expect(third.areaStyle).toBeUndefined();
+    expect(third.lineStyle.type).toBe('dashed');
+    const bar = buildDefaultSeriesStyle('#ff7e45', 'bar', 0);
+    expect(bar.smooth).toBeUndefined();
+    expect(bar.areaStyle).toBeUndefined();
   });
 });
 

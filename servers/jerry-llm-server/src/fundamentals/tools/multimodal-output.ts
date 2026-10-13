@@ -17,6 +17,13 @@ import { config } from '../config';
 import { launchBrowser } from '../web-crawler';
 import type { Browser } from 'puppeteer';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import {
+  buildThemeBaseOption,
+  buildDefaultSeriesStyle,
+  applyThemeDefaults,
+} from './chart-theme';
+// re-export 仅供单测使用，业务方请直接 import chart-theme
+export { applyThemeDefaults, buildDefaultSeriesStyle };
 import { parseToolResultJson } from '../llm-json-parser';
 import { MultiLevelCache } from '../multi-level-cache';
 import { metrics } from '../metrics';
@@ -192,7 +199,8 @@ export function normalizeEChartsOption(
  * 根据简化的数据和图表类型构建 ECharts option
  */
 function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
-  // 如果直接提供了完整的 ECharts option，归一化后返回
+  // echartsOption 路径：模型手写配置归一化后，仅补缺失的主题字段
+  //（backgroundColor/tooltip 深色弹层等），模型显式写的样式一律不碰
   if (params.echartsOption) {
     const option = normalizeEChartsOption(params.echartsOption, params.chartType);
     // 归一化后仍无任何 series 数据，但 data 参数带了结构化数据 →
@@ -202,7 +210,7 @@ function buildEChartsOption(params: GenerateChartParams): Record<string, any> {
         return buildOptionFromData(params);
       }
     }
-    return option;
+    return applyThemeDefaults(option);
   }
   return buildOptionFromData(params);
 }
@@ -304,15 +312,12 @@ function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
 
   const data = params.data as any;
 
-  // 基础配置
-  const option: Record<string, any> = {
-    title: { text: title, left: 'center' },
-    tooltip: { trigger: chartType === 'pie' ? 'item' : 'axis' },
-    toolbox: {
-      feature: { saveAsImage: {} },
-      right: 10,
-    },
-  };
+  // 深色科技风主题基础层（生产案例 2026-10-13：用户确认模型自写配置的观感后
+  // 固化为默认主题，不再赌模型每次自觉写样式）
+  const option: Record<string, any> = buildThemeBaseOption({
+    title,
+    chartType: chartType ?? 'line',
+  });
 
   if (!data) {
     option.xAxis = { type: 'category', data: [] };
@@ -325,17 +330,40 @@ function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
   switch (chartType) {
     case 'line':
     case 'bar': {
-      option.xAxis = { type: 'category', data: extractLabels(data) };
-      option.yAxis = { type: 'value' };
-      option.legend = { top: 30 };
-      option.series = extractSeries(data).map((s) => ({
+      option.xAxis = {
+        type: 'category',
+        data: extractLabels(data),
+        axisLine: { lineStyle: { color: '#7a8ba8' } },
+        axisLabel: { color: '#e6f1ff' },
+      };
+      option.yAxis = {
+        type: 'value',
+        axisLabel: { color: '#e6f1ff' },
+        splitLine: { lineStyle: { color: 'rgba(122, 139, 168, 0.15)' } },
+      };
+      option.legend = {
+        top: 36,
+        textStyle: { color: '#e6f1ff' },
+        type: 'scroll',
+      };
+      option.series = extractSeries(data).map((s, i) => ({
         name: s.name,
         type: chartType,
         data: s.data,
+        ...buildDefaultSeriesStyle(
+          option.color[i % option.color.length],
+          chartType,
+          i,
+        ),
       }));
       break;
     }
     case 'pie': {
+      option.legend = {
+        top: 36,
+        textStyle: { color: '#e6f1ff' },
+        type: 'scroll',
+      };
       option.series = [
         {
           type: 'pie',
@@ -344,6 +372,7 @@ function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
             name: item.name,
             value: item.value,
           })),
+          label: { color: '#e6f1ff' },
           emphasis: {
             itemStyle: {
               shadowBlur: 10,
@@ -358,12 +387,21 @@ function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
     case 'scatter': {
       const scatterData =
         data.values ?? data.points ?? data.data ?? [];
-      option.xAxis = { type: 'value' };
-      option.yAxis = { type: 'value' };
+      option.xAxis = {
+        type: 'value',
+        axisLabel: { color: '#e6f1ff' },
+        splitLine: { lineStyle: { color: 'rgba(122, 139, 168, 0.15)' } },
+      };
+      option.yAxis = {
+        type: 'value',
+        axisLabel: { color: '#e6f1ff' },
+        splitLine: { lineStyle: { color: 'rgba(122, 139, 168, 0.15)' } },
+      };
       option.series = [
         {
           type: 'scatter',
           data: scatterData,
+          itemStyle: { opacity: 0.85 },
         },
       ];
       break;
@@ -371,18 +409,36 @@ function buildOptionFromData(params: GenerateChartParams): Record<string, any> {
     case 'radar': {
       const indicators = data.indicators || [];
       const radarValues = data.values || [];
-      option.radar = { indicator: indicators };
+      option.radar = {
+        indicator: indicators,
+        axisName: { color: '#e6f1ff' },
+        splitLine: { lineStyle: { color: 'rgba(122, 139, 168, 0.15)' } },
+      };
+      option.legend = {
+        top: 36,
+        textStyle: { color: '#e6f1ff' },
+        type: 'scroll',
+      };
       option.series = [
         {
           type: 'radar',
           data: radarValues,
+          areaStyle: { opacity: 0.2 },
         },
       ];
       break;
     }
     default: {
-      option.xAxis = { type: 'category', data: extractLabels(data) };
-      option.yAxis = { type: 'value' };
+      option.xAxis = {
+        type: 'category',
+        data: extractLabels(data),
+        axisLabel: { color: '#e6f1ff' },
+      };
+      option.yAxis = {
+        type: 'value',
+        axisLabel: { color: '#e6f1ff' },
+        splitLine: { lineStyle: { color: 'rgba(122, 139, 168, 0.15)' } },
+      };
       option.series = [{ type: chartType, data: data.values || [] }];
     }
   }
