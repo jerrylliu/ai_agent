@@ -557,8 +557,11 @@ export default function DocumentEditorPage({
 
   /**
    * 下载 Excel：取最新版本导出 .xlsx（编辑后的内容随保存进入最新版本）。
-   * 服务端把版本的 sheet 结构化文本还原为工作簿；用临时 <a> 触发 Blob 下载
-   * （Tauri WebView 与浏览器通用，无需插件）。
+   * 服务端把版本的 sheet 结构化文本还原为工作簿。
+   * 下载方式按环境分流（与 DocumentManager.handleExportVersion 同一模式）：
+   *   - Tauri：系统保存对话框 + fs 写文件（WebView 默认拒绝 <a download>，
+   *     纯浏览器方案在桌面端点击无反应）；
+   *   - 浏览器：Blob URL + 临时 <a> 触发下载。
    */
   const handleDownloadXlsx = useCallback(async () => {
     if (!currentDocId) return;
@@ -573,11 +576,26 @@ export default function DocumentEditorPage({
         a.versionNumber > b.versionNumber ? a : b,
       );
       const blob = await exportVersion(currentDocId, latestVersion.id, 'xlsx');
+      // 文件名兜底：title 若带扩展名（老数据）先去掉，避免 xxx.xlsx.xlsx
+      const fileName = `${title.replace(/\.(xlsx|xls)$/i, '')}.xlsx`;
+
+      if (isTauri()) {
+        const { save } = await import('@tauri-apps/plugin-dialog');
+        const { writeFile } = await import('@tauri-apps/plugin-fs');
+        const filePath = await save({
+          defaultPath: fileName,
+          filters: [{ name: 'Excel 工作簿', extensions: ['xlsx'] }],
+        });
+        if (!filePath) return; // 用户取消保存
+        const buf = new Uint8Array(await blob.arrayBuffer());
+        await writeFile(filePath, buf);
+        return;
+      }
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      // 文件名兜底：title 若带扩展名（老数据）先去掉，避免 xxx.xlsx.xlsx
-      a.download = `${title.replace(/\.(xlsx|xls)$/i, '')}.xlsx`;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       a.remove();
