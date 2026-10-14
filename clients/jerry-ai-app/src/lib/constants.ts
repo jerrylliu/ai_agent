@@ -22,6 +22,8 @@ export const API_ENDPOINTS = {
   AUTH_AVATAR: `${API_BASE_URL}/auth/avatar`,
   DOCUMENTS: `${API_BASE_URL}/documents`,
   MINERU_CONFIG: `${API_BASE_URL}/documents/mineru-config`,
+  // 表格规则单条操作（更新/删除，后端路由无 documents 前缀）
+  TABLE_RULES: `${API_BASE_URL}/table-rules`,
   KNOWLEDGE_SOURCES: `${API_BASE_URL}/knowledge-sources`,
   // 功能开关全局默认（服务端 runtime-config，AI 工具可改，未自定义设备跟随）
   SETTINGS_FEATURES: `${API_BASE_URL}/settings/features`,

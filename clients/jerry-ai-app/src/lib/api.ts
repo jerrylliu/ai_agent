@@ -1911,26 +1911,239 @@ export interface TableOpsRunResponse {
   message?: string;
   /** 语义填充（功能 4）：命中填充意图时携带映射结果或分批报价 */
   semanticFill?: SemanticFillInfo;
+  /** ReAct 循环的整体结果总结（模型产出，面向用户一句话）；降级旧路径时省略 */
+  summary?: string;
+  /**
+   * clarify 反问载荷（两阶段交互第一阶段结果）：存在时表示指令的数据依赖
+   * 参数不明（填充来源/关联键/更新条件/公式影响面/删除范围），**未修改任何
+   * 数据**——渲染确认卡，用户选定策略后调 confirmTableOps 完成第二阶段
+   */
+  clarify?: ClarifyPayload;
+}
+
+// ==================== clarify 反问确认（两阶段交互） ====================
+
+/** clarify 场景类型（与后端 ClarifyKindSchema 同构） */
+export type ClarifyKind =
+  | "fill-source"
+  | "join-key"
+  | "condition"
+  | "aggregate-scope"
+  | "formula-preview"
+  | "destructive-preview";
+
+/**
+ * 用户选定策略（与后端 StrategySchema 同构）。选项自带的 strategy 原样回传；
+ * 需要用户补充输入的策略（固定值自定义/键候选选择）由确认卡按此形状构造
+ */
+export type ClarifyStrategy =
+  | {
+      type: "cross-sheet-lookup";
+      targetSheet?: string;
+      targetColumn: string;
+      targetKeyColumn: string;
+      sourceSheet: string;
+      sourceKeyColumn: string;
+      sourceValueColumn: string;
+      keyMappings?: Array<{ targetKeyColumn: string; sourceKeyColumn: string }>;
+    }
+  | {
+      type: "ai-mapping-preview";
+      targetSheet?: string;
+      targetColumn: string;
+      basisColumns?: string[];
+    }
+  | {
+      type: "fill-constant";
+      targetSheet?: string;
+      targetColumn: string;
+      value: string;
+    }
+  | { type: "keep-empty" }
+  | {
+      type: "condition-op" | "aggregate-op" | "formula-confirm" | "confirm-pending";
+      /** 后端编译/内嵌的确定性操作（前端不修改，原样回传） */
+      op: Record<string, unknown>;
+    };
+
+/** 反问选项（选项内容由后端确定性分析器产出，前端展示 label/description 并回传 strategy） */
+export interface ClarifyStrategyOption {
+  id: string;
+  label: string;
+  description?: string;
+  strategy: ClarifyStrategy;
+}
+
+/** fill-source 的单列空缺分组（多列空缺场景，每列独立选策略） */
+export interface ClarifyColumnGroup {
+  column: string;
+  gapCount: number;
+  candidates: ClarifyStrategyOption[];
+}
+
+/** join-key 的候选键对（附重合率，降序） */
+export interface ClarifyKeyCandidate {
+  label: string;
+  targetKeyColumn: string;
+  sourceKeyColumn: string;
+  /** 0~1：目标表键值在来源表中的覆盖率，低于阈值时后端才转反问 */
+  overlapRate: number;
 }
 
 /**
- * 执行 AI 表格指令：自然语言指令 + 当前表格数据 → 服务端 LLM 解析意图、
- * 代码级精确执行 → 返回新文本 + 执行报告。无副作用，确认应用由前端负责。
- *
- * documentId 传入后（已保存文档），执行结果先过该文档的启用表格规则（功能 5
- * 规则门禁）：违规整体拒绝并附原因。未保存文档省略（无规则可查）。
+ * clarify 反问载荷：后端确定性分析器产出（选项内容不含 LLM 意见），
+ * 前端渲染确认卡；confirm 时原样回传 clarify + 选定的 strategy
  */
-export async function runTableOps(params: {
-  instruction: string;
-  sheetText: string;
-  documentId?: number;
-}): Promise<TableOpsRunResponse> {
+export interface ClarifyPayload {
+  kind: ClarifyKind;
+  question: string;
+  /** fill-source：按列分组的候选（每列独立选策略） */
+  columns?: ClarifyColumnGroup[];
+  /** 单列/非填充场景的顶层选项 */
+  options?: ClarifyStrategyOption[];
+  /** join-key：候选键对 */
+  keyCandidates?: ClarifyKeyCandidate[];
+  /** condition：目标列值分布（值 + 行数） */
+  valueDistribution?: Array<{ value: string; count: number }>;
+  /** formula-preview / destructive-preview：确定性预览 */
+  previewHeaders?: string[];
+  previewRows?: string[][];
+  /** destructive-preview / formula-preview：预计影响行数/覆盖格数 */
+  affectedCount?: number;
+  /** ReAct 中途反问时的执行基底（前端不应用到编辑器，confirm 原样回传） */
+  baseSheetText?: string;
+  baseSheetTextHash?: string;
+  /**
+   * 发起指令时原文的 sha1（仅 ReAct 中途反问且已执行前缀时与 baseSheetTextHash
+   * 不同）。confirm 时服务端凭它校验 liveSheetText——检测卡片停留期间的编辑。
+   */
+  originSheetTextHash?: string;
+  /** 多 op 计划被 clarify 切分的前/后段（confirm 时服务端拼回） */
+  baseOps?: Record<string, unknown>[];
+  pendingOps?: Record<string, unknown>[];
+}
+
+/** 表格指令实时进度事件（ReAct 循环逐轮推送，SSE） */
+export interface TableOpsProgressEvent {
+  seq: number;
+  /** thought=模型的判断打算 / action=正在执行的操作 / observation=执行结果观察 */
+  phase: "thought" | "action" | "observation";
+  text: string;
+}
+
+/**
+ * 消费表格指令类 SSE 流（table-ops / table-ops/confirm 共用）：
+ * progress 事件转 onProgress，result 事件聚合为最终响应。
+ * 非流式响应（后端旧版本/网关降级为 JSON）由调用方先行处理。
+ */
+async function consumeTableOpsStream(
+  response: Response,
+  onProgress?: (event: TableOpsProgressEvent) => void,
+): Promise<TableOpsRunResponse> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return { ok: false, message: "当前环境不支持流式响应，请更新应用" };
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalResult: TableOpsRunResponse | null = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const { events, remainingBuffer } = parseSSEFrames(buffer);
+    buffer = remainingBuffer;
+    for (const ev of events) {
+      if (ev.eventType === "progress") {
+        try {
+          onProgress?.(JSON.parse(ev.eventData) as TableOpsProgressEvent);
+        } catch (e) {
+          console.warn("[api] 表格指令进度事件解析失败:", e);
+        }
+      } else if (ev.eventType === "result") {
+        try {
+          finalResult = JSON.parse(ev.eventData) as TableOpsRunResponse;
+        } catch (e) {
+          console.warn("[api] 表格指令结果事件解析失败:", e);
+        }
+      }
+      // [DONE] 帧无 eventType（裸 data），parseSSEFrames 已跳过，循环靠 reader.done 收尾
+    }
+  }
+  return (
+    finalResult ?? { ok: false, message: "连接中断，未收到执行结果，请重试" }
+  );
+}
+
+/**
+ * 执行 AI 表格指令（SSE 流式）：自然语言指令 + 当前表格数据 → 服务端 ReAct
+ * 工具循环（LLM 逐轮选操作，执行器精确执行）→ onProgress 实时收到每轮进度
+ * （"正在使用加法求和计算……"），最终返回新文本 + 执行报告。
+ * 无副作用，确认应用由前端负责。
+ *
+ * 响应可能携带 clarify（数据依赖参数不明，未修改数据）——此时渲染确认卡，
+ * 用户选定策略后调 confirmTableOps 完成第二阶段。
+ *
+ * documentId 传入后（已保存文档），每个操作执行后过该文档的启用表格规则
+ * （功能 5 规则门禁，违规即回滚该步）。未保存文档省略（无规则可查）。
+ */
+export async function runTableOps(
+  params: {
+    instruction: string;
+    sheetText: string;
+    documentId?: number;
+  },
+  onProgress?: (event: TableOpsProgressEvent) => void,
+): Promise<TableOpsRunResponse> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-ops`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(params),
   });
-  return handleResponse<TableOpsRunResponse>(response);
+
+  // 双保险：非 SSE 响应（后端旧版本 / 网关降级为 JSON）按旧协议解析
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    return handleResponse<TableOpsRunResponse>(response);
+  }
+  return consumeTableOpsStream(response, onProgress);
+}
+
+/**
+ * clarify 确认（两阶段交互第二阶段，SSE 流式）：用户在确认卡选定策略后回传 →
+ * 服务端编译为确定性 ops（全程无 LLM）→ 执行 → 返回新文本 + 报告。
+ *
+ * TOCTOU 校验基于**编辑器实时文本**（tableDocToSheetText 实时序列化，未保存的
+ * 手改也参与比对）：
+ *   - 无前缀 op（baseOps 空）：sheetText = 实时文本，服务端 hash 校验直接拦截
+ *     卡片停留期间的任何编辑（保存与否无关）；
+ *   - 有前缀 op：执行基底必须是 clarify.baseSheetText（中间态，编辑器里没有），
+ *     实时文本经 liveSheetText 附带，服务端凭 originSheetTextHash 校验原文未变。
+ */
+export async function confirmTableOps(
+  params: {
+    sheetText: string;
+    sheetTextHash: string;
+    /** 编辑器实时文本：clarify.originSheetTextHash 存在（有前缀 op）时必传 */
+    liveSheetText?: string;
+    clarify: ClarifyPayload;
+    strategies: ClarifyStrategy[];
+    instruction?: string;
+    documentId?: number;
+  },
+  onProgress?: (event: TableOpsProgressEvent) => void,
+): Promise<TableOpsRunResponse> {
+  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-ops/confirm`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(params),
+  });
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    return handleResponse<TableOpsRunResponse>(response);
+  }
+  return consumeTableOpsStream(response, onProgress);
 }
 
 // ==================== 语义填充（功能 4） ====================
@@ -1940,6 +2153,8 @@ export interface SemanticFillSuggestRule {
   name: string;
   column: string;
   values: string[];
+  /** 规则绑定的目标工作表（多 sheet 文档里列可能在第二个 sheet；缺省 = 第一个工作表） */
+  targetSheet?: string;
 }
 
 /**
@@ -1972,6 +2187,10 @@ export interface SemanticFillBatchQuote {
   batchCount: number;
   /** 每批行数 */
   batchRows: number;
+  /** 目标工作表名（start 时原样回传，多 sheet 不落到第一张表） */
+  targetSheet?: string;
+  /** 参照工作表名（跨表填充时 start 时原样回传） */
+  referenceSheet?: string;
 }
 
 export type SemanticFillInfo = SemanticFillMappingResult | SemanticFillBatchQuote;
@@ -2023,6 +2242,8 @@ export async function startSemanticFillTask(params: {
   targetColumn: string;
   hintColumns: string[];
   targetSheet?: string;
+  /** 参照工作表名（跨表填充："按 B 表内容补 A 表"） */
+  referenceSheet?: string;
   documentId?: number;
 }): Promise<SemanticFillStartResult> {
   const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-ops/semantic-fill/start`, {
@@ -2063,11 +2284,11 @@ export type TableRuleFixAction =
 
 /** 规则定义（与后端 TableRuleSchema discriminatedUnion 同构，type 与 params 联动） */
 export type TableRuleInput =
-  | { name: string; type: "notEmpty"; params: { column: string }; fixAction?: TableRuleFixAction }
-  | { name: string; type: "allowedValues"; params: { column: string; values: string[] }; fixAction?: TableRuleFixAction }
-  | { name: string; type: "numericRange"; params: { column: string; min?: number; max?: number }; fixAction?: TableRuleFixAction }
-  | { name: string; type: "unique"; params: { column: string }; fixAction?: TableRuleFixAction }
-  | { name: string; type: "formula"; params: { targetColumn: string; expression: string }; fixAction?: TableRuleFixAction };
+  | { name: string; type: "notEmpty"; params: { column: string }; fixAction?: TableRuleFixAction; targetSheet?: string }
+  | { name: string; type: "allowedValues"; params: { column: string; values: string[] }; fixAction?: TableRuleFixAction; targetSheet?: string }
+  | { name: string; type: "numericRange"; params: { column: string; min?: number; max?: number }; fixAction?: TableRuleFixAction; targetSheet?: string }
+  | { name: string; type: "unique"; params: { column: string }; fixAction?: TableRuleFixAction; targetSheet?: string }
+  | { name: string; type: "formula"; params: { targetColumn: string; expression: string }; fixAction?: TableRuleFixAction; targetSheet?: string };
 
 /** 后端返回的规则（含元数据；脏数据兜底时 params 可能回显原始 JSON） */
 export type TableRuleDto = TableRuleInput & {
@@ -2085,6 +2306,8 @@ export interface TableRuleViolation {
   ruleId: number;
   ruleName: string;
   ruleType: TableRuleInput["type"];
+  /** 违规所在工作表名（规则绑定了 targetSheet 时前端据此区分展示） */
+  sheetName: string;
   /** 数据行号（1 起，不含表头），与编辑器"第 N 行"口径一致 */
   rowIndex: number;
   column: string;
@@ -2207,7 +2430,7 @@ export async function updateTableRule(
   ruleId: number,
   patch: TableRuleUpdatePatch,
 ): Promise<TableRuleDto> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-rules/${ruleId}`, {
+  const response = await fetch(`${API_ENDPOINTS.TABLE_RULES}/${ruleId}`, {
     method: "PUT",
     headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(patch),
@@ -2217,7 +2440,7 @@ export async function updateTableRule(
 
 /** 删除单条规则 */
 export async function deleteTableRule(ruleId: number): Promise<{ success: boolean }> {
-  const response = await fetch(`${API_ENDPOINTS.DOCUMENTS}/table-rules/${ruleId}`, {
+  const response = await fetch(`${API_ENDPOINTS.TABLE_RULES}/${ruleId}`, {
     method: "DELETE",
     headers: getAuthHeaders(),
   });

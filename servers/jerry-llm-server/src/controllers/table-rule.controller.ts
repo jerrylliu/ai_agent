@@ -66,12 +66,13 @@ const BatchCreateRulesSchema = z.object({
 });
 type BatchCreateRulesDto = z.infer<typeof BatchCreateRulesSchema>;
 
-/** 规则更新入参：params 需为对象；fixAction 传 null 表示清除修复动作 */
+/** 规则更新入参：params 需为对象；fixAction 传 null 表示清除修复动作；targetSheet 传 null 表示清除绑定 */
 const UpdateRuleSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   enabled: z.boolean().optional(),
   params: z.record(z.string(), z.unknown()).optional(),
   fixAction: z.union([z.record(z.string(), z.unknown()), z.null()]).optional(),
+  targetSheet: z.string().min(1).max(200).nullable().optional(),
 });
 type UpdateRuleDto = z.infer<typeof UpdateRuleSchema>;
 

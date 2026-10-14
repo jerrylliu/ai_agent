@@ -23,6 +23,7 @@ import {
   collectExpressionColumnRefs,
   evaluateSheetExpression,
   findColumn,
+  findSheet,
   formatExpressionNumber,
   parseLooseNumber,
   parseSheetData,
@@ -31,6 +32,20 @@ import {
 } from './executor.js';
 
 // ==================== Zod Schema（规则定义） ====================
+
+/**
+ * 规则作用的工作表（可选公共字段，5 类规则共用）。
+ * 省略 = 第一个工作表（向后兼容旧规则）；AI 提议多 sheet 文档的规则时必须带上，
+ * 否则提议一入库就会因"列不在第一个工作表"而全部失效。
+ */
+const TargetSheetField = {
+  targetSheet: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('规则作用的工作表名；省略时作用于文档的第一个工作表（多 sheet 文档必填）'),
+};
 
 /** 非空：校验列内空单元格 */
 export const NotEmptyParamsSchema = z.object({
@@ -89,36 +104,46 @@ export const FixActionSchema = z.discriminatedUnion('kind', [
 ]);
 
 /** 单条规则（type + params 联动校验；API 入参与 AI 提议输出共用） */
-export const NotEmptyRuleSchema = z.object({
-  name: z.string().min(1).max(200).describe('规则名（如"区域不能留空"）'),
-  type: z.literal('notEmpty'),
-  params: NotEmptyParamsSchema,
-  fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
-});
-export const AllowedValuesRuleSchema = z.object({
-  name: z.string().min(1).max(200).describe('规则名'),
-  type: z.literal('allowedValues'),
-  params: AllowedValuesParamsSchema,
-  fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
-});
-export const NumericRangeRuleSchema = z.object({
-  name: z.string().min(1).max(200).describe('规则名'),
-  type: z.literal('numericRange'),
-  params: NumericRangeParamsSchema,
-  fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
-});
-export const UniqueRuleSchema = z.object({
-  name: z.string().min(1).max(200).describe('规则名'),
-  type: z.literal('unique'),
-  params: UniqueParamsSchema,
-  fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
-});
-export const FormulaRuleSchema = z.object({
-  name: z.string().min(1).max(200).describe('规则名'),
-  type: z.literal('formula'),
-  params: FormulaParamsSchema,
-  fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
-});
+export const NotEmptyRuleSchema = z
+  .object({
+    name: z.string().min(1).max(200).describe('规则名（如"区域不能留空"）'),
+    type: z.literal('notEmpty'),
+    params: NotEmptyParamsSchema,
+    fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
+  })
+  .extend(TargetSheetField);
+export const AllowedValuesRuleSchema = z
+  .object({
+    name: z.string().min(1).max(200).describe('规则名'),
+    type: z.literal('allowedValues'),
+    params: AllowedValuesParamsSchema,
+    fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
+  })
+  .extend(TargetSheetField);
+export const NumericRangeRuleSchema = z
+  .object({
+    name: z.string().min(1).max(200).describe('规则名'),
+    type: z.literal('numericRange'),
+    params: NumericRangeParamsSchema,
+    fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
+  })
+  .extend(TargetSheetField);
+export const UniqueRuleSchema = z
+  .object({
+    name: z.string().min(1).max(200).describe('规则名'),
+    type: z.literal('unique'),
+    params: UniqueParamsSchema,
+    fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
+  })
+  .extend(TargetSheetField);
+export const FormulaRuleSchema = z
+  .object({
+    name: z.string().min(1).max(200).describe('规则名'),
+    type: z.literal('formula'),
+    params: FormulaParamsSchema,
+    fixAction: FixActionSchema.optional().describe('可选修复动作；省略则只标记不修复'),
+  })
+  .extend(TargetSheetField);
 
 /** 规则定义总 schema（discriminatedUnion：按 type 分发校验 params 形状） */
 export const TableRuleSchema = z.discriminatedUnion('type', [
@@ -146,6 +171,8 @@ export interface RuleViolation {
   ruleId: number;
   ruleName: string;
   ruleType: TableRuleInput['type'];
+  /** 违规所在工作表名（规则绑定了 targetSheet 时前端据此区分展示） */
+  sheetName: string;
   /** 数据行号（1 起，不含表头行），与编辑器"第 N 行"展示口径一致 */
   rowIndex: number;
   /** 违规列名 */
@@ -197,7 +224,8 @@ function numericRangeExpectation(min?: number, max?: number): string {
 /**
  * 对 sheet 文本执行全部规则检查（干跑，不改文本）。
  *
- * 规则绑列失效（列不存在/公式引用列不存在/表达式语法错误）时不中断整体检查，
+ * 规则可绑定工作表（targetSheet）：绑定了就检查那张表，未绑定检查第一个工作表。
+ * 绑定的 sheet 不存在 / 列不存在 / 表达式语法错误时规则不中断整体检查，
  * 归入 invalidRules 交给面板标红处理——这正是方案要求的"改表头/删列后规则
  * 状态机转为失效，标红提示处理，不静默失灵"。
  */
@@ -213,18 +241,16 @@ export function checkRules(text: string, rules: TableRuleRuntime[]): RuleCheckRe
       truncated = true;
       break;
     }
-    // 规则作用于哪张表：规则定义当前不绑 sheet 名，作用于第一个工作表
-    // （多 sheet 绑定留待后续扩展；编辑器场景主表即第一个 sheet）
-    const sheet = sheets[0];
-    if (!sheet) break;
-
     try {
+      // 规则作用于哪张表：绑定 targetSheet 用 findSheet 解析（找不到抛错转失效），
+      // 未绑定作用于第一个工作表（编辑器场景主表即第一个 sheet）
+      const sheet = findSheet(sheets, rule.targetSheet);
       const res = checkSingleRule(sheet, rule, violations);
       checkedRules += 1;
       // 有违规被丢弃 = 清单不完整，必须标记截断（用户不得误以为清单完整）
       if (res.dropped > 0) truncated = true;
     } catch (err) {
-      // 列不存在 / 表达式语法错误 / 引用列缺失 → 规则失效（不静默跳过）
+      // 绑定的工作表不存在 / 列不存在 / 表达式语法错误 / 引用列缺失 → 规则失效
       invalidRules.push({
         ruleId: rule.id,
         ruleName: rule.name,
@@ -245,6 +271,10 @@ function checkSingleRule(
 ): { count: number; dropped: number } {
   let count = 0;
   let dropped = 0;
+  const sheetName = sheet.name || '(未命名)';
+  // 汇总行声明式跳过（totalRowIndexes）：聚合结果行不是明细数据——总行的销售额
+  // 天然不满足明细公式、总行的明细列本就允许留空，任何规则都不该对它报违规
+  const totalSet = new Set(sheet.totalRowIndexes);
   const push = (rowIndex: number, colIdx: number, expectation: string): void => {
     if (violations.length >= MAX_VIOLATIONS) {
       dropped += 1;
@@ -254,6 +284,7 @@ function checkSingleRule(
       ruleId: rule.id,
       ruleName: rule.name,
       ruleType: rule.type,
+      sheetName,
       rowIndex,
       column: sheet.headers[colIdx]?.trim() || `第${colIdx + 1}列`,
       currentValue: (sheet.rows[rowIndex - 1]?.[colIdx] ?? '').slice(0, 100),
@@ -267,6 +298,7 @@ function checkSingleRule(
     case 'notEmpty': {
       const colIdx = resolveColumnOrInvalid(sheet, rule.params.column);
       sheet.rows.forEach((row, i) => {
+        if (totalSet.has(i)) return; // 汇总行不参与规则校验
         if ((row[colIdx] ?? '').trim() === '') push(i + 1, colIdx, '不能留空');
       });
       break;
@@ -275,6 +307,7 @@ function checkSingleRule(
       const colIdx = resolveColumnOrInvalid(sheet, rule.params.column);
       const allowed = rule.params.values;
       sheet.rows.forEach((row, i) => {
+        if (totalSet.has(i)) return; // 汇总行不参与规则校验
         const cell = (row[colIdx] ?? '').trim();
         // 空值跳过：空值是否允许由"非空"规则独立管理，避免一条规则两头管
         if (!cell) return;
@@ -288,6 +321,7 @@ function checkSingleRule(
       const colIdx = resolveColumnOrInvalid(sheet, rule.params.column);
       const { min, max } = rule.params;
       sheet.rows.forEach((row, i) => {
+        if (totalSet.has(i)) return; // 汇总行不参与规则校验
         const cell = (row[colIdx] ?? '').trim();
         if (!cell) return; // 空值跳过（归非空规则管）
         const n = parseLooseNumber(cell);
@@ -305,6 +339,7 @@ function checkSingleRule(
       const colIdx = resolveColumnOrInvalid(sheet, rule.params.column);
       const firstSeen = new Map<string, number>();
       sheet.rows.forEach((row, i) => {
+        if (totalSet.has(i)) return; // 汇总行不参与规则校验（多张小计行同标签不算重复）
         const cell = (row[colIdx] ?? '').trim();
         if (!cell) return; // 空值不参与唯一性比对（空不等于重复）
         const first = firstSeen.get(cell);
@@ -322,6 +357,7 @@ function checkSingleRule(
       const refs = collectExpressionColumnRefs(rule.params.expression);
       const refColIdx = refs.map((name) => resolveColumnOrInvalid(sheet, name));
       sheet.rows.forEach((row, i) => {
+        if (totalSet.has(i)) return; // 汇总行不参与规则校验（总行=明细合计，天然不满足明细公式）
         const expected = evaluateSheetExpression(rule.params.expression, (name) => {
           const idx = refColIdx[refs.indexOf(name)] ?? -1;
           return idx >= 0 ? parseLooseNumber(row[idx] ?? '') : null;
@@ -344,6 +380,41 @@ function checkSingleRule(
   return { count, dropped };
 }
 
+// ==================== 违规差集（门禁"只拒绝新增违规"的基础） ====================
+
+/** 违规内容键：刻意不含 rowIndex——删行会让后续行整体位移，按行号比对会把
+ * "既有违规移了位"误判成"新增违规"；按内容（规则+列+当前值+期望）比对才稳定 */
+function violationKey(v: RuleViolation): string {
+  return `${v.ruleId}|${v.column}|${v.currentValue}|${v.expectation}`;
+}
+
+/**
+ * 多重集差集：返回 after 中相对 before **新增**的违规。
+ *
+ * 用途（门禁根治语义）：文档既有违规不应拦截与它无关的操作——用户填 A 列
+ * 不该被 B 列的历史脏数据连坐。所以门禁对比执行前基线，只拒绝本次真正引入
+ * 的违规。用内容键计数（多重集）而非集合：同内容多处违规的增减也能感知
+ * （before 2 处 → after 3 处 = 新增 1 处）。
+ */
+export function diffViolations(before: RuleViolation[], after: RuleViolation[]): RuleViolation[] {
+  const counts = new Map<string, number>();
+  for (const v of before) {
+    const key = violationKey(v);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const fresh: RuleViolation[] = [];
+  for (const v of after) {
+    const key = violationKey(v);
+    const left = counts.get(key) ?? 0;
+    if (left > 0) {
+      counts.set(key, left - 1);
+    } else {
+      fresh.push(v);
+    }
+  }
+  return fresh;
+}
+
 // ==================== 修复引擎 ====================
 
 /** 单条规则的修复报告 */
@@ -364,8 +435,11 @@ export interface RuleFixResult {
  *
  * 行号安全设计：
  *   - 单元格改写类修复（固定值/公式）不改变行数，可按检查时的行号直接改；
- *   - 删行类修复统一放最后，按行号从大到小删除，避免前面的删除使后面失效。
- *   - 多条规则的违规清单都来自同一次检查快照，行号基准一致。
+ *   - 删行类修复统一放最后，按行号从大到小删除，避免前面的删除使后面失效；
+ *     删行按工作表分组执行（多 sheet 文档里不同规则的行号属于各自的表）；
+ *   - 多条规则的违规清单都来自同一次检查快照，行号基准一致；
+ *   - 修复目标工作表按规则绑定解析（targetSheet，未绑定 = 第一个工作表），
+ *     与 checkRules 同一解析口径，行号才对得上。
  */
 export function applyRuleFixes(
   text: string,
@@ -373,12 +447,11 @@ export function applyRuleFixes(
   violations: RuleViolation[],
 ): RuleFixResult {
   const sheets = parseSheetData(text);
-  const sheet = sheets[0];
-  if (!sheet) {
+  if (sheets.length === 0) {
     return { sheetText: text, report: [] };
   }
   const report: RuleFixReportItem[] = [];
-  const deleteRowIndexes = new Set<number>();
+  const deleteRowBySheet = new Map<SheetData, Set<number>>();
 
   // 按规则分组违规（保持规则顺序）
   const byRule = new Map<number, RuleViolation[]>();
@@ -396,8 +469,13 @@ export function applyRuleFixes(
       continue;
     }
     try {
+      // 修复目标工作表与检查同一解析口径（绑定 targetSheet → findSheet，未绑定 → 第一个）
+      const sheet = findSheet(sheets, rule.targetSheet);
+
       if (rule.fixAction.kind === 'deleteRow') {
-        for (const v of ruleViolations) deleteRowIndexes.add(v.rowIndex);
+        const set = deleteRowBySheet.get(sheet) ?? new Set<number>();
+        for (const v of ruleViolations) set.add(v.rowIndex);
+        deleteRowBySheet.set(sheet, set);
         report.push({
           ruleId: rule.id,
           ruleName: rule.name,
@@ -454,7 +532,7 @@ export function applyRuleFixes(
         });
       }
     } catch (err) {
-      // 修复期列定位失败（检查后表又被改了）：报告原因，不中断其他规则
+      // 修复期绑定工作表/列定位失败（检查后表又被改了）：报告原因，不中断其他规则
       report.push({
         ruleId: rule.id,
         ruleName: rule.name,
@@ -463,9 +541,9 @@ export function applyRuleFixes(
     }
   }
 
-  // 删行类修复统一最后执行：行号从大到小删除，避免索引位移
-  if (deleteRowIndexes.size > 0) {
-    const sorted = [...deleteRowIndexes].sort((a, b) => b - a);
+  // 删行类修复统一最后执行：各工作表内按行号从大到小删除，避免索引位移
+  for (const [sheet, indexes] of deleteRowBySheet) {
+    const sorted = [...indexes].sort((a, b) => b - a);
     for (const rowIndex of sorted) {
       sheet.rows.splice(rowIndex - 1, 1);
     }
@@ -506,6 +584,10 @@ export function buildColumnStats(text: string): SheetColumnStats[] {
   const sheets = parseSheetData(text);
   return sheets.map((sheet) => {
     const colCount = Math.max(sheet.headers.length, ...sheet.rows.map((r) => r.length), 0);
+    // 汇总行声明式排除：统计是 AI 提议规则的原料——总行的大数值会污染 min/max，
+    // 总行的空明细格会虚高空值率（导致误提议"销售员不能留空"这类规则）
+    const totalSet = new Set(sheet.totalRowIndexes);
+    const dataRowCount = sheet.rows.length - totalSet.size;
     const columns: ColumnStats[] = [];
     for (let c = 0; c < colCount; c++) {
       const column = sheet.headers[c]?.trim() || `第${c + 1}列`;
@@ -514,7 +596,9 @@ export function buildColumnStats(text: string): SheetColumnStats[] {
       let numericCount = 0;
       let min = Number.POSITIVE_INFINITY;
       let max = Number.NEGATIVE_INFINITY;
-      for (const row of sheet.rows) {
+      for (let i = 0; i < sheet.rows.length; i++) {
+        if (totalSet.has(i)) continue;
+        const row = sheet.rows[i];
         const raw = (row[c] ?? '').trim();
         if (!raw) {
           emptyCount += 1;
@@ -534,7 +618,7 @@ export function buildColumnStats(text: string): SheetColumnStats[] {
         .map((v) => v.slice(0, 30));
       columns.push({
         column,
-        totalRows: sheet.rows.length,
+        totalRows: dataRowCount,
         emptyCount,
         distinctValues,
         distinctCount: seen.size,
@@ -586,6 +670,8 @@ export function formatViolationsByRule(check: RuleCheckResult): string {
  *
  * 读取侧兜底：paramsJson / fixActionJson 解析失败或 zod 校验不过（历史脏数据、
  * schema 演进）返回 null，调用方跳过该条并计入"失效规则"，绝不抛错中断检查。
+ *
+ * @param targetSheet 规则绑定的工作表名（DB 列，NULL = 未绑定 → 第一个工作表）
  */
 export function parseTableRuleJson(
   id: number,
@@ -593,6 +679,7 @@ export function parseTableRuleJson(
   type: string,
   paramsJson: string,
   fixActionJson: string | null,
+  targetSheet?: string | null,
 ): TableRuleRuntime | null {
   try {
     const parsed = TableRuleSchema.safeParse({
@@ -600,6 +687,7 @@ export function parseTableRuleJson(
       type,
       params: paramsJson ? JSON.parse(paramsJson) : {},
       ...(fixActionJson ? { fixAction: JSON.parse(fixActionJson) } : {}),
+      ...(targetSheet ? { targetSheet } : {}),
     });
     if (!parsed.success) return null;
     return { id, ...parsed.data };

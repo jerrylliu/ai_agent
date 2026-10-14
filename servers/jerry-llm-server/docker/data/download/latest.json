@@ -1,11 +1,11 @@
 {
-  "version": "0.1.16",
-  "pub_date": "2026-10-12T08:00:00Z",
-  "notes": "1. 记忆全面升级：AI 能按语义想起你的任何记忆，不再受条数限制（重要记忆永远优先）\n2. 记忆管理增强：每条记忆显示同步状态，支持单条补传与全部同步\n3. 携带 0.1.15 全部修复：手机端图表显示、AI 图表稳定性、服务端自检加固",
+  "version": "0.1.17",
+  "pub_date": "2026-10-14T22:40:00Z",
+  "notes": "1. AI 表格操作重大升级：模糊指令不再猜着做，AI 先反问确认策略再执行，杜绝填错数据\n2. 跨表关联填充：可让 AI 按另一张表的关键列关联取数，导出 Excel 带真实公式可验证\n3. 表头识别增强：报表大标题/日期行不再被误认成表头，识别错了可一键纠正\n4. 界面优化：下载 Excel、发布知识库收进更多操作菜单，手机端不再拥挤",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUFiWU11dHNmUWNISzYrNk5VVXVIaGdQSTJDNkh5UDFNb0ZGbHFPT2llQlYrZmRLSDk3bXhha0lGYVFiTWVkUGtWOFhWQjk4V0hDcDlvZEJOQUs2MFEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxNzk3NjUzCWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xNl94NjQtc2V0dXAuZXhlCmpHV3N4UmJpNG1pWEltNHQ3dzlzVFkzUTUrL0EyQWF6YjYyK3E4N0prZ2RzeUNOd1Y3Vys5ODJ5bjlvc2hYMVFLYmFKK0JyY2lsQU5KRGNmQnZIR0RBPT0K",
-      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.16_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRcjNPOXNIbmVDZUVDOFUwR3pGZ1FERzZ1Mmp4ZnFwUm16a1JuUFdDUmQ0WmVqTEdUUjNOT3ZCQ1l3MGhNUk1DOVNqeTZHZVFGa1hNdFIzNjVzQkpaN3phVEJNYWtwQkFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxOTg4NDAxCWZpbGU65Lul5aSq5b+G5qC4XzAuMS4xN194NjQtc2V0dXAuZXhlClREcWFFM0lYeHk0b1BSaW84Q2djUDJrRTUrVGFKcWo3UEEweVlRT2VSTVRxSjhNbU5GcnJ4UzJGY1JTcjlKd2VsMnpiU1VOVUR6UTdiYmVFTWVBWER3PT0K",
+      "url": "https://xn--5-fs8a810ixgul5n.online/download/%E4%BB%A5%E5%A4%AA%E5%BF%86%E6%A0%B8_0.1.17_x64-setup.exe"
     }
   }
 }

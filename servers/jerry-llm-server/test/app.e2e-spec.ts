@@ -11,7 +11,8 @@
  */
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import * as request from 'supertest';
+// 新版 @types/supertest 的命名空间导入不可调用（TS2349），改用默认导入
+import request from 'supertest';
 
 // 必须放在 import AppModule 之前：让 fundamentals/redis-client 看到 REDIS_ENABLED=false
 process.env.REDIS_ENABLED = 'false';

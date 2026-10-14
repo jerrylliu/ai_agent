@@ -22,6 +22,31 @@ import type { JSONContent } from '@tiptap/react';
 const SHEET_HEADING_RE = /^#{0,4}\s*Sheet\s*[:：]\s*(.+)$/;
 
 /**
+ * 表头行指令（报表式表格锚点，与服务端 document-parser.ts 的同名正则对齐）：
+ * 出现在 `Sheet: 名称` 后第一个非空行，值 N = 表头所在内容行号（1 起，含说明行）。
+ * 指令后第 1..N-1 个非空行是说明行（标题/日期等，渲染为普通行），第 N 行渲染为
+ * tableHeader（真表头），其后是数据行。缺省 = 1（首行为表头，旧格式兼容）。
+ */
+const HEADER_ROW_RE = /^HeaderRow\s*[:：]\s*(\d+)$/i;
+
+/**
+ * 汇总行指令（与服务端 document-parser.ts 的同名正则对齐，三方对齐勿单侧改）：
+ * 与 HeaderRow 同在块首结构指令区（顺序不限、各至多一条），值 = 汇总行所在
+ * 内容行号（1 起，含说明行），逗号分隔多个（分组小计场景）。
+ * 渲染载体：TipTap 无"汇总行"节点类型，以整行 bold 标记为载体（Excel 惯例）。
+ */
+const TOTAL_ROW_RE = /^TotalRow\s*[:：]\s*(\d+(?:\s*[,，]\s*\d+)*)$/i;
+
+/**
+ * 跨表关联填充指令（与服务端 document-parser.ts 的同名正则对齐，三方对齐勿单侧改）：
+ * `LookupFill: 目标列|目标键列|源表|源键列|源值列`（executor.lookupFill 的溯源声明，
+ * clarify 协议 cross-sheet-lookup 策略执行后写入，导出 xlsx 时改写为 INDEX/MATCH 公式）。
+ * 与 HeaderRow/TotalRow 同在块首结构指令区；渲染载体：普通段落文本（位于 sheet
+ * 标题后、表格前），反向序列化时自然落回块首指令区。
+ */
+const LOOKUP_FILL_RE = /^LookupFill\s*[:：]\s*(.+)$/i;
+
+/**
  * 表格化判定阈值（对应方案"大表性能"保险丝）：
  * - 超过 SOFT_LIMIT 行仅提示性能警告，完全可编辑；
  * - 超过 HARD_LIMIT 行放弃表格化降级纯文本（防编辑器卡死）。
@@ -105,8 +130,16 @@ export function isSheetStructuredText(text: string): boolean {
 interface SheetBlock {
   /** sheet 名称（heading 展示用）；空串表示标题前的普通文本块 */
   name: string;
-  /** 原始行（未过滤空行，降级时需原样保留） */
+  /** 原始行（未过滤空行，降级时需原样保留；不含 HeaderRow/TotalRow/LookupFill 指令行） */
   rows: string[];
+  /** 表头行号（1 起按内容行序）；1 = 首行为表头（默认） */
+  headerRowIndex: number;
+  /** 指令只认块首第一个非空行：无论其值是否为 1，消费过后不再识别第二条 */
+  headerDirectiveSeen: boolean;
+  /** TotalRow 指令解析出的内容行号（1 起含说明行）；null = 无指令 */
+  totalRowLines: number[] | null;
+  /** LookupFill 指令原文（原样保留，序列化时回写块首指令区；无则空数组） */
+  lookupFills: string[];
 }
 
 /** 把完整文本拆成 sheet 块序列（非 sheet 区域归为 name='' 的普通段落块） */
@@ -116,33 +149,101 @@ function splitSheetBlocks(text: string): SheetBlock[] {
   for (const line of text.split(/\r?\n/)) {
     const m = line.trim().match(SHEET_HEADING_RE);
     if (m) {
-      current = { name: m[1].trim(), rows: [] };
+      current = {
+        name: m[1].trim(),
+        rows: [],
+        headerRowIndex: 1,
+        headerDirectiveSeen: false,
+        totalRowLines: null,
+        lookupFills: [],
+      };
       blocks.push(current);
     } else if (current) {
+      // 块首结构指令区：HeaderRow / TotalRow / LookupFill 顺序不限（与后端
+      // parseSheetData 的解析位置约束对齐）；数据行开始后不再识别指令
+      if (current.rows.every((r) => !r.trim())) {
+        const headerDirective = line.trim().match(HEADER_ROW_RE);
+        if (headerDirective && !current.headerDirectiveSeen) {
+          current.headerRowIndex = Number.parseInt(headerDirective[1], 10);
+          current.headerDirectiveSeen = true;
+          continue;
+        }
+        const totalDirective = line.trim().match(TOTAL_ROW_RE);
+        if (totalDirective && current.totalRowLines === null) {
+          current.totalRowLines = totalDirective[1]
+            .split(/[,，]/)
+            .map((s) => Number.parseInt(s.trim(), 10))
+            .filter((n) => Number.isInteger(n) && n >= 1);
+          continue;
+        }
+        const lookupDirective = line.trim().match(LOOKUP_FILL_RE);
+        if (lookupDirective) {
+          // 原文入块（含分隔符与空格——序列化原样回写，字段语义由服务端解释）
+          current.lookupFills.push(line.trim());
+          continue;
+        }
+      }
       current.rows.push(line);
     } else if (line.trim()) {
       // 标题前的普通文本（首个 Sheet 标题之前），保留为独立块
-      blocks.push({ name: '', rows: [line] });
+      blocks.push({
+        name: '',
+        rows: [line],
+        headerRowIndex: 1,
+        headerDirectiveSeen: true,
+        totalRowLines: null,
+        lookupFills: [],
+      });
     }
     // current 内的空行保留（空 CSV 行 = 表格空行，解析时跳过）
   }
   return blocks;
 }
 
-/** CSV 行数组 → table 节点（首行为 headerRow）。空表返回 null */
-function rowsToTableNode(rows: string[]): JSONContent | null {
+/**
+ * CSV 行数组 → table 节点。空表返回 null。
+ * headerRowIndex（1 起，含说明行的内容行序）：该行渲染为 tableHeader（真表头），
+ * 上方说明行与其下数据行均为 tableCell；缺省 1 = 首行为表头（旧格式）。
+ * totalRowLines：汇总行的内容行号（与 HeaderRow 同口径），换算为数据行下标后
+ * 整行打 bold 标记（TipTap 无汇总行节点类型，bold 是持久化载体，Excel 惯例）。
+ * 越界/落在说明行或表头上的标记丢弃（与后端 parseSheetData 收敛口径一致）。
+ */
+function rowsToTableNode(
+  rows: string[],
+  headerRowIndex: number = 1,
+  totalRowLines: number[] | null = null,
+): JSONContent | null {
   const parsed = rows
     .map((r) => r.trim())
     .filter((r) => r.length > 0)
     .map((r) => parseCsvLine(r));
   if (parsed.length === 0) return null;
 
+  // 指令 N 收敛到 [1, 内容行数]（与后端 parseSheetData 口径一致）：脏指令
+  // （超界/0）若不收敛会导致无任何 tableHeader，保存时锚定信息悄悄丢失
+  const headerIdx = Math.min(Math.max(headerRowIndex, 1), parsed.length);
+
+  // 汇总行标记：内容行号 → parsed 下标。parsed 含说明行与表头，内容行 n =
+  // parsed[n-1]；必须落在数据行区（表头之后），越界/说明行/表头上的标记丢弃
+  //（与后端 parseSheetData 收敛口径一致。注意不能用后端"纯数据行数组"的
+  // n - headerIdx - 1 公式——那是对 rows（不含说明行与表头）的下标）
+  const totalSet = new Set<number>();
+  if (totalRowLines) {
+    for (const n of totalRowLines) {
+      const parsedIdx = n - 1;
+      if (parsedIdx >= headerIdx && parsedIdx < parsed.length) {
+        totalSet.add(parsedIdx);
+      }
+    }
+  }
+
   // 列数取全表最大值，短行补空单元格（CSV 行列参差时保证表格矩形完整）
   const colCount = Math.max(...parsed.map((r) => r.length));
   const tableRows: JSONContent[] = parsed.map((cells, rowIdx) => {
     const padded = [...cells];
     while (padded.length < colCount) padded.push('');
-    const cellType = rowIdx === 0 ? 'tableHeader' : 'tableCell';
+    const cellType = rowIdx === headerIdx - 1 ? 'tableHeader' : 'tableCell';
+    const isTotal = totalSet.has(rowIdx);
     return {
       type: 'tableRow',
       content: padded.map((cellText) => ({
@@ -150,7 +251,19 @@ function rowsToTableNode(rows: string[]): JSONContent | null {
         content:
           cellText === ''
             ? []
-            : [{ type: 'paragraph', content: [{ type: 'text', text: cellText }] }],
+            : [
+                {
+                  type: 'paragraph',
+                  content: [
+                    {
+                      type: 'text',
+                      text: cellText,
+                      // 汇总行整行加粗：正向渲染载体（反向序列化据此还原指令）
+                      ...(isTotal ? { marks: [{ type: 'bold' }] } : {}),
+                    },
+                  ],
+                },
+              ],
       })),
     };
   });
@@ -190,6 +303,14 @@ export function sheetTextToTableDoc(text: string): {
     // sheet 名称保留为 heading（导出时按它拆回 sheet）
     content.push({ type: 'heading', attrs: { level: 3 }, content: [{ type: 'text', text: block.name }] });
 
+    // LookupFill 指令 → 普通段落（指令的编辑器载体）：放在标题后、表格前，
+    // 与后端 sheetToText 的指令区位置一致；反向序列化按普通文本行输出，
+    // 自然落回 sheet 块首指令区被 splitSheetBlocks 收回（round-trip 闭环）。
+    // 用户可见可删——删掉即放弃溯源声明，与文本块的编辑自由度一致
+    for (const directive of block.lookupFills) {
+      content.push({ type: 'paragraph', content: [{ type: 'text', text: directive }] });
+    }
+
     const csvRows = block.rows.filter((r) => r.trim().length > 0);
     const hardLimitExceeded = csvRows.length > TABLE_HARD_ROW_LIMIT;
 
@@ -207,7 +328,7 @@ export function sheetTextToTableDoc(text: string): {
       continue;
     }
 
-    const tableNode = rowsToTableNode(block.rows);
+    const tableNode = rowsToTableNode(block.rows, block.headerRowIndex, block.totalRowLines);
     if (!tableNode) continue;
 
     // 双向自检：序列化回 CSV 与原文比对。
@@ -275,6 +396,61 @@ function tableNodeToCsvRows(table: JSONContent): string[][] {
     rows.push(cells);
   }
   return rows;
+}
+
+/**
+ * 判断表格行是否"整行加粗"（汇总行反向检测的载体判据）：
+ * 行内至少有一个非空文本，且所有非空 text 节点都带 bold 标记。
+ * 空单元格（无 text 节点）不参与判定——汇总行的明细列常为空。
+ */
+function tableRowIsAllBold(row: JSONContent): boolean {
+  let hasText = false;
+  let allBold = true;
+  const visit = (node: JSONContent): void => {
+    if (node.type === 'text' && node.text !== undefined && node.text.trim() !== '') {
+      hasText = true;
+      if (!(node.marks ?? []).some((m) => m.type === 'bold')) allBold = false;
+    }
+    for (const child of node.content ?? []) visit(child);
+  };
+  for (const cell of row.content ?? []) visit(cell);
+  return hasText && allBold;
+}
+
+/**
+ * 序列单个 table 节点为 CSV 文本（contentText 持久化用）。
+ * 与 tableNodeToCsv 的差异：
+ *   - 检测 tableHeader 单元格所在行（真表头锚点），不在第 1 行时输出
+ *     `HeaderRow: N` 指令行——后端 parseSheetData 与前端 splitSheetBlocks
+ *     据此锚定表头，说明行（标题/日期）不被当成数据；
+ *   - 表头之后"整行加粗"的数据行判为汇总行，输出 `TotalRow: a,b` 指令行
+ *     （与正向 rowsToTableNode 的 bold 载体互为逆操作；用户手动整行加粗的
+ *     普通数据行也会被声明为汇总行——bold 即语义，与 Excel 加粗惯例一致）。
+ */
+function tableNodeToCsvWithHeader(table: JSONContent): string {
+  const rows = table.content ?? [];
+  let headerRowIndex = 1;
+  let found = false;
+  const totalLineNums: number[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].type !== 'tableRow') continue;
+    // 首个含 tableHeader 的行 = 表头锚点（整表无 tableHeader 时保持默认 1）
+    if (!found && (rows[i].content ?? []).some((c) => c.type === 'tableHeader')) {
+      headerRowIndex = i + 1;
+      found = true;
+      continue;
+    }
+    // 汇总行检测：表头之后的整行加粗行（行号按节点序 = 内容行号，同口径）
+    if (found && tableRowIsAllBold(rows[i])) {
+      totalLineNums.push(i + 1);
+    }
+  }
+  const csv = tableNodeToCsv(table);
+  // 指令行顺序与后端 sheetToText 对齐：HeaderRow 在前、TotalRow 在后
+  const directives: string[] = [];
+  if (headerRowIndex > 1) directives.push(`HeaderRow: ${headerRowIndex}`);
+  if (totalLineNums.length > 0) directives.push(`TotalRow: ${totalLineNums.join(',')}`);
+  return directives.length > 0 ? `${directives.join('\n')}\n${csv}` : csv;
 }
 
 /**
@@ -347,6 +523,85 @@ export function docContainsTable(doc: JSONContent): boolean {
   return (doc.content ?? []).some((n) => n.type === 'table');
 }
 
+// ==================== 表头确认条（自动识别纠错） ====================
+
+/** sheet 表格摘要（表头确认条的数据源） */
+export interface SheetTableInfo {
+  /** sheet 名称（heading 文本；散表归 "Sheet1"） */
+  sheetName: string;
+  /** 该 table 在 doc 顶层 content 中的下标（retypeSheetHeaderRow 的定位键） */
+  tableIndex: number;
+  /** 当前表头行号（1 起内容行序，与 HeaderRow 指令口径一致） */
+  headerRowNumber: number;
+  /** 表格总行数 */
+  rowCount: number;
+}
+
+/**
+ * 收集 doc 中 sheet 表格摘要：h3 heading 开 sheet、紧随其后的 table 归它
+ * （与 tableDocToSheets 的归属口径一致）。表头行 = 首个含 tableHeader
+ * 单元格的行；整表无 tableHeader 时按默认 1。
+ */
+export function collectSheetTables(doc: JSONContent): SheetTableInfo[] {
+  const result: SheetTableInfo[] = [];
+  let currentName = 'Sheet1';
+  (doc.content ?? []).forEach((node, index) => {
+    if (node.type === 'heading' && (node.attrs?.level ?? 0) <= 3) {
+      currentName = flattenNodeText(node).trim() || 'Sheet1';
+      return;
+    }
+    if (node.type !== 'table') return;
+    const rows = (node.content ?? []).filter((r) => r.type === 'tableRow');
+    const headerIdx = rows.findIndex((row) =>
+      (row.content ?? []).some((c) => c.type === 'tableHeader'),
+    );
+    result.push({
+      sheetName: currentName,
+      tableIndex: index,
+      headerRowNumber: headerIdx >= 0 ? headerIdx + 1 : 1,
+      rowCount: rows.length,
+    });
+  });
+  return result;
+}
+
+/**
+ * 重标某张 sheet 表格的表头行（表头确认条的纠错动作，不可变更新）：
+ *   - 新表头行整行 cell 改为 tableHeader；
+ *   - 原表头行整行改回 tableCell；
+ *   - 其余节点与单元格原样保留（含 TotalRow 的 bold 载体）。
+ * 保存时 tableDocToSheetText 检测 tableHeader 所在行自动写出
+ * `HeaderRow: N` 指令——序列化侧闭环，本函数不手动维护指令。
+ * 行号越界时收敛到 [1, rowCount]（与后端指令消费的收敛口径一致）。
+ */
+export function retypeSheetHeaderRow(
+  doc: JSONContent,
+  tableIndex: number,
+  newHeaderRowNumber: number,
+): JSONContent {
+  const content = (doc.content ?? []).map((node, index) => {
+    if (index !== tableIndex || node.type !== 'table') return node;
+    const rows = node.content ?? [];
+    const newRowIdx = Math.min(Math.max(newHeaderRowNumber, 1), rows.length) - 1;
+    return {
+      ...node,
+      content: rows.map((row, rowIdx) => ({
+        ...row,
+        content: (row.content ?? []).map((cell) => ({
+          ...cell,
+          type:
+            rowIdx === newRowIdx
+              ? 'tableHeader'
+              : cell.type === 'tableHeader'
+                ? 'tableCell'
+                : cell.type,
+        })),
+      })),
+    };
+  });
+  return { ...doc, content };
+}
+
 /** 递归提取节点内全部文本（不含块级换行，供表格单元格取纯文本） */
 function flattenNodeText(node: JSONContent): string {
   if (node.type === 'text') return node.text ?? '';
@@ -383,7 +638,7 @@ export function tableDocToSheetText(doc: JSONContent): string | null {
         lines.push(text);
       }
     } else if (node.type === 'table') {
-      lines.push(tableNodeToCsv(node));
+      lines.push(tableNodeToCsvWithHeader(node));
     } else {
       const text = flattenNodeText(node);
       if (text.trim()) lines.push(text);

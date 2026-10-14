@@ -576,7 +576,10 @@ async function parseExcelFile(filePath: string): Promise<ParsedDocument> {
     for (const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
       const csv = XLSX.utils.sheet_to_csv(sheet);
-      sheets.push(`Sheet: ${sheetName}\n${csv}`);
+      // 上传时结构识别（保守启发式落成声明指令，声明优于推断）：
+      // HeaderRow 锚定报表式表头（说明行不进数据）、TotalRow 锚定汇总行
+      // （聚合结果行不参与填充/规则/条件）——后端解析器与前端网格据此对齐
+      sheets.push(buildSheetBlockText(sheetName, csv));
     }
     return {
       text: sheets.join('\n\n'),
@@ -633,6 +636,150 @@ export function parseCsvLine(line: string): string[] {
 /** sheet 标题行格式（与 parseExcelFile 产物、前端 table-convert.ts 三方对齐） */
 export const SHEET_HEADING_RE = /^#{0,4}\s*Sheet\s*[:：]\s*(.+)$/;
 
+/**
+ * 表头行指令（报表式表格锚点）：出现在 `Sheet: 名称` 行之后的第一个非空行，
+ * 值 N = 表头所在的内容行号（1 起，按含说明行的完整行序数）。
+ * 指令之后的第 1..N-1 个非空行是说明行（标题/日期范围等，不当数据），
+ * 第 N 个非空行是表头，其后是数据行。缺省 = 1（首行为表头，旧格式完全兼容）。
+ * 与前端 table-convert.ts 的同名正则保持一致（三方对齐，勿单侧修改）。
+ */
+export const HEADER_ROW_RE = /^HeaderRow\s*[:：]\s*(\d+)$/i;
+
+/**
+ * 汇总行指令（聚合结果行锚点）：出现在 `Sheet: 名称` 行之后、与 HeaderRow
+ * 同处的块首结构指令区，值 = 汇总行内容行号列表（逗号分隔，1 起按含说明行
+ * 的完整行序数，与 HeaderRow 同口径），支持分组小计多个行号。
+ * 汇总行不是明细数据：语义填充/规则校验/条件匹配/派生列自动跳过。
+ * 与前端 table-convert.ts 的同名正则保持一致（三方对齐，勿单侧修改）。
+ */
+export const TOTAL_ROW_RE = /^TotalRow\s*[:：]\s*(\d+(?:\s*[,，]\s*\d+)*)$/i;
+
+/**
+ * 跨表关联填充溯源指令（三方对齐勿单侧改：executor.parseSheetData /
+ * sheetTextToXlsx / 前端 table-convert）：
+ * `LookupFill: 目标列|目标键列|源表|源键列|源值列`——记录某列最近一次由哪张表
+ * 按哪个键关联填充。与 HeaderRow/TotalRow 同在块首结构指令区（顺序不限、可多条）。
+ * 导出 xlsx 时（withFormulas 开启）据此把目标列数据格改写为 INDEX/MATCH 公式；
+ * 目标列被其他操作改写时声明自动失效（executor invalidateLookupFills）。
+ * 单元格值含竖线会破坏分隔——写入侧过滤含竖线的部分（宁可不声明，不可声明错）。
+ */
+export const LOOKUP_FILL_RE = /^LookupFill\s*[:：]\s*(.+)$/i;
+
+/**
+ * 汇总行标签正则（行首单元格整格匹配）：总计/合计/小计/汇总（可带冒号）。
+ * 仅用于上传时的保守自动检测；运行期一律以声明的 TotalRow 指令 /
+ * setTotalRows 操作为准（声明优于推断，与 HeaderRow 同架构）。
+ */
+export const TOTAL_LABEL_RE = /^(?:总计|合计|小计|汇总)[:：]?$/;
+
+/** 该行首格是否命中汇总行标签（检测用；消费方请用声明的汇总行标记） */
+export function isTotalLabelRow(cells: string[]): boolean {
+  const first = cells.find((c) => c.trim() !== '');
+  return first !== undefined && TOTAL_LABEL_RE.test(first.trim());
+}
+
+/**
+ * 汇总行保守自动识别（上传时启发式，宁可漏判不可误判）：
+ * 数据区中首格恰为 总计/合计/小计/汇总 单词（可带冒号）的行判为汇总行。
+ * 标签必须整格精确命中（"合计（含税）"这类不触发），误判可由
+ * setTotalRows 操作纠正；未命中的非标准标签可手动声明。
+ *
+ * @param csv              sheet 的 CSV 文本
+ * @param headerRowContent 表头内容行号（detectReportHeaderRow 的产出；null 按 1）
+ * @returns 汇总行内容行号列表（升序）；无则空数组
+ */
+export function detectTotalRowIndexes(csv: string, headerRowContent: number | null): number[] {
+  const headerIdx = headerRowContent ?? 1;
+  const lines = csv
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const results: number[] = [];
+  for (let i = headerIdx; i < lines.length; i++) {
+    const cells = parseCsvLine(lines[i]);
+    const first = cells.find((c) => c.trim() !== '');
+    if (first !== undefined && TOTAL_LABEL_RE.test(first.trim())) {
+      results.push(i + 1);
+    }
+  }
+  return results;
+}
+
+/**
+ * 由 sheet 名 + CSV 组装"sheet 结构化文本"块（parseExcelFile 的产出单元）。
+ * 上传时在此完成两项保守结构识别并落成指令（声明优于推断，运行期一律
+ * 以指令声明的结构为准）：报表式表头锚定（HeaderRow）+ 汇总行锚定（TotalRow）。
+ */
+export function buildSheetBlockText(sheetName: string, csv: string): string {
+  const headerRow = detectReportHeaderRow(csv);
+  const totalRows = detectTotalRowIndexes(csv, headerRow);
+  const directiveLines: string[] = [];
+  if (headerRow !== null) directiveLines.push(`HeaderRow: ${headerRow}`);
+  if (totalRows.length > 0) directiveLines.push(`TotalRow: ${totalRows.join(',')}`);
+  const directiveText = directiveLines.length > 0 ? `${directiveLines.join('\n')}\n` : '';
+  return `Sheet: ${sheetName}\n${directiveText}${csv}`;
+}
+
+/**
+ * 说明行格子判定（键值对特征）：格子形如 "制表人:张三" / "日期：2026-10-01"
+ * （短键 + 全/半角冒号）即视为说明性内容——报表顶部的制表人/审核人/单位等
+ * 落款行即使占多个格子也不是表头。键必须含非数字字符：时间值 "10:30"/"9:00"
+ * 的键是纯数字，不算键值对（否则无表头排班表的首行时间数据会被误跳过，
+ * 导致下一行数据被误锚定为表头）。
+ */
+function isKeyValueCell(cell: string): boolean {
+  // (?![\d]{1,20}[:：])：键全为数字（如 "10:"）不算键值对
+  return /^(?![\d]{1,20}[:：])[^:：]{1,20}[:：]\S/.test(cell.trim());
+}
+
+/**
+ * 表头特征校验（防把数据行误判成表头）：真表头的格子几乎都是
+ * 短文本、不含纯数字、列名互不重复。候选行任一特征不满足 → 放弃猜测
+ * （宁可漏判维持默认，不可安错表头）。
+ */
+function looksLikeHeaderRow(cells: string[]): boolean {
+  const trimmed = cells.map((c) => c.trim());
+  // 表头不会是纯数字（"序号"可以，"1"不行）
+  if (trimmed.some((c) => /^-?\d+(?:[.,]\d+)?$/.test(c))) return false;
+  // 列名都是短文本
+  if (trimmed.some((c) => c.length > 30)) return false;
+  // 列名不重复
+  if (new Set(trimmed).size !== trimmed.length) return false;
+  return true;
+}
+
+/**
+ * 报表式表头保守自动识别（上传时启发式，宁可漏判不可误判）：
+ * 从上往下找首个"非说明行"：说明行 = 单非空格行（大标题/日期等合并单元格
+ * 特征）或全键值对行（"制表人:张三,审核人:李四"落款特征）；候选行还需通过
+ * 表头特征校验（短文本/无纯数字/不重复）。支持任意行数的连续说明行
+ * （如"销售汇总报告 / 2026-10-01~11 / 产品类别,金额小计"→ 表头在第 3 行）。
+ * 无表头候选或候选不像表头 → 返回 null（不产生指令行，维持默认）。
+ * 说明：SheetJS 产出的 CSV 中含逗号的单元格必然带引号包裹，因此单列表
+ * 不会被误判出"≥2 非空格"的行。
+ *
+ * @returns 表头行号（1 起）；无法识别返回 null（不产生指令行，维持默认）
+ */
+export function detectReportHeaderRow(csv: string): number | null {
+  const rows = csv
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .map(parseCsvLine);
+  if (rows.length < 3) return null;
+  for (let i = 0; i < rows.length; i++) {
+    const cells = rows[i].filter((c) => c.trim().length > 0);
+    if (cells.length === 0) continue;
+    if (cells.length === 1) continue; // 单格说明行
+    if (cells.every(isKeyValueCell)) continue; // 键值对落款行
+    // 首个非说明行 = 表头候选；特征不符 → 放弃（不继续向下找，防把数据行当表头）
+    if (!looksLikeHeaderRow(cells)) return null;
+    // i=0 即第 1 行就是表头（常规表，不产生指令）；否则锚定 i+1（上方全是说明行）
+    return i === 0 ? null : i + 1;
+  }
+  return null;
+}
+
 /** Excel sheet 名的非法字符（Excel 规范禁止 : \ / ? * [ ]） */
 const SHEET_NAME_INVALID_CHARS = /[:\\/?*[\]]/g;
 
@@ -670,28 +817,81 @@ function dedupeSheetName(rawName: string, used: Set<string>): string {
  *   - 无任何数据行时返回 null，调用方给业务错误提示。
  *
  * @param text sheet 结构化文本
+ * @param options.withFormulas 为 true 时把块首 LookupFill 声明改写为 INDEX/MATCH
+ *   真实公式（只写空格、不覆盖已有值，与 executor.lookupFill 同语义）；声明引用的
+ *   源表/列不可定位时跳过该声明（宁缺勿错）。缺省 false 保持纯值导出
  * @returns xlsx 文件 Buffer；无表格数据时返回 null
  */
-export function sheetTextToXlsx(text: string): Buffer | null {
+export function sheetTextToXlsx(
+  text: string,
+  options?: { withFormulas?: boolean },
+): Buffer | null {
+  interface LookupFillDirective {
+    targetColumn: string;
+    targetKeyColumn: string;
+    sourceSheet: string;
+    sourceKeyColumn: string;
+    sourceValueColumn: string;
+  }
   interface OutSheet {
     name: string;
     rows: string[][];
+    /** 块首指令区捕获的 TotalRow 内容行号（1 起含说明行；rows[n-1] 即内容行 n）。
+     *  指令本身不写进 Excel，但公式导出需要它跳过汇总行（与 executor.lookupFill 同语义） */
+    totalLines: number[];
+    /** 块首指令区捕获的 LookupFill 声明（withFormulas 时改写为 INDEX/MATCH 公式） */
+    lookupFills: LookupFillDirective[];
   }
   const sheets: OutSheet[] = [];
   let current: OutSheet | null = null;
+  // 当前 sheet 块是否仍处于块首结构指令区（与 parseSheetData 口径一致：
+  // HeaderRow / TotalRow / LookupFill 指令是元数据不是数据，跳过不写进 Excel，
+  // 否则导出产物混入指令行，再上传还会造成二次错位）
+  let directiveZone = true;
 
   for (const rawLine of text.split(/\r?\n/)) {
     const m = rawLine.trim().match(SHEET_HEADING_RE);
     if (m) {
-      current = { name: m[1].trim(), rows: [] };
+      current = { name: m[1].trim(), rows: [], totalLines: [], lookupFills: [] };
+      directiveZone = true;
       sheets.push(current);
       continue;
     }
     if (!rawLine.trim()) continue;
     // 标题前的散行（无所属 sheet）归入默认 sheet
     if (!current) {
-      current = { name: 'Sheet1', rows: [] };
+      current = { name: 'Sheet1', rows: [], totalLines: [], lookupFills: [] };
+      directiveZone = true;
       sheets.push(current);
+    }
+    if (directiveZone) {
+      const trimmed = rawLine.trim();
+      const tr = trimmed.match(TOTAL_ROW_RE);
+      if (tr && current) {
+        // 汇总行号只用于公式导出时跳行：段数/范围容错（非法段丢弃，宁缺勿错）
+        for (const seg of tr[1].split(/[,，]/)) {
+          const n = Number(seg.trim());
+          if (Number.isInteger(n) && n >= 1) current.totalLines.push(n);
+        }
+        continue;
+      }
+      if (HEADER_ROW_RE.test(trimmed)) continue;
+      const lf = trimmed.match(LOOKUP_FILL_RE);
+      if (lf) {
+        // 与 executor.parseSheetData 同口径：5 段齐全且非空才收，脏标记丢弃（宁可不声明不可声明错）
+        const parts = lf[1].split('|').map((p) => p.trim());
+        if (parts.length === 5 && parts.every((p) => p.length > 0) && current) {
+          current.lookupFills.push({
+            targetColumn: parts[0],
+            targetKeyColumn: parts[1],
+            sourceSheet: parts[2],
+            sourceKeyColumn: parts[3],
+            sourceValueColumn: parts[4],
+          });
+        }
+        continue;
+      }
+      directiveZone = false; // 第一个非指令行：结构区结束
     }
     current.rows.push(parseCsvLine(rawLine));
   }
@@ -703,6 +903,69 @@ export function sheetTextToXlsx(text: string): Buffer | null {
   const workbook = XLSX.utils.book_new();
   for (const sheet of validSheets) {
     const ws = XLSX.utils.aoa_to_sheet(sheet.rows);
+    // withFormulas（opt-in）：把 LookupFill 声明改写为真实 Excel 公式——
+    // 用户在 Excel 中可验证、可续算，公式与数据不分离（决策 4：本期做公式导出）
+    if (options?.withFormulas && sheet.lookupFills.length > 0) {
+      const header = sheet.rows[0] ?? [];
+      for (const d of sheet.lookupFills) {
+        const targetColIdx = header.indexOf(d.targetColumn);
+        const targetKeyIdx = header.indexOf(d.targetKeyColumn);
+        // 源表必须在同一工作簿中且列可定位；任一条件不满足就跳过该声明（宁缺勿错）
+        const src =
+          d.sourceSheet === sheet.name
+            ? sheet
+            : validSheets.find((s) => s.name === d.sourceSheet);
+        if (!src || targetColIdx < 0 || targetKeyIdx < 0) continue;
+        const srcHeader = src.rows[0] ?? [];
+        const srcKeyIdx = srcHeader.indexOf(d.sourceKeyColumn);
+        const srcValIdx = srcHeader.indexOf(d.sourceValueColumn);
+        if (srcKeyIdx < 0 || srcValIdx < 0) continue;
+
+        // Excel 引用（1-based，含表头行）：数据区 = 第 2 行 ~ 第 rows.length 行
+        const srcRef = `'${src.name.replace(/'/g, "''")}'`;
+        const valueRange = `${srcRef}!$${XLSX.utils.encode_col(srcValIdx)}$2:$${XLSX.utils.encode_col(srcValIdx)}$${src.rows.length}`;
+        const keyRange = `${srcRef}!$${XLSX.utils.encode_col(srcKeyIdx)}$2:$${XLSX.utils.encode_col(srcKeyIdx)}$${src.rows.length}`;
+        const keyCol = XLSX.utils.encode_col(targetKeyIdx);
+        let written = 0;
+        for (let r = 1; r < sheet.rows.length; r++) {
+          // 与 executor.lookupFill 同语义：目标表已声明汇总行不填公式
+          //（TotalRow 指令导出时已消费、行留在数据区；内容行 n ↔ rows[n-1]）
+          if (sheet.totalLines.includes(r + 1)) continue;
+          const row = sheet.rows[r] ?? [];
+          const targetCell = row[targetColIdx];
+          const keyCell = row[targetKeyIdx];
+          // 与 executor.lookupFill 同语义：只给空格写公式（不覆盖已有值），键为空的行跳过
+          if (targetCell && targetCell.trim()) continue;
+          const keyVal = (keyCell ?? '').trim();
+          if (!keyVal) continue;
+          // 首个命中行（与 executor 关联语义一致）；未命中留空——不写必然 #N/A 的公式
+          const hitRow = src.rows
+            .slice(1)
+            .find((r2) => ((r2[srcKeyIdx] ?? '') as string).trim() === keyVal);
+          if (!hitRow) continue;
+          const rawVal = ((hitRow[srcValIdx] ?? '') as string).trim();
+          if (!rawVal) continue;
+          // 缓存值必须随公式一起写：SheetJS 会丢弃无 v 的公式单元格（round-trip 丢失），
+          // 且不重算公式的预览工具也能直接读到值；Excel 打开后可重算验证
+          const addr = XLSX.utils.encode_cell({ r, c: targetColIdx });
+          const formula = `INDEX(${valueRange},MATCH(${keyCol}${r + 1},${keyRange},0))`;
+          const num = Number(rawVal.replace(/,/g, ''));
+          ws[addr] =
+            Number.isFinite(num)
+              ? { t: 'n', v: num, f: formula }
+              : { t: 's', v: rawVal, f: formula };
+          written++;
+        }
+        if (written > 0) {
+          logger.info('导出 xlsx 写入 INDEX/MATCH 公式', {
+            module: 'DocumentParser',
+            sheet: sheet.name,
+            targetColumn: d.targetColumn,
+            formulaCount: written,
+          });
+        }
+      }
+    }
     XLSX.utils.book_append_sheet(workbook, ws, dedupeSheetName(sheet.name, usedNames));
   }
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;

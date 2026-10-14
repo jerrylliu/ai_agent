@@ -35,6 +35,7 @@ import {
   buildBatchRowsText,
   batchFillMissingRows,
   applyBatchFills,
+  buildCrossSheetReference,
   MAX_DISTINCT_FOR_MAPPING,
   BATCH_ROWS,
   type FillGapStats,
@@ -52,7 +53,11 @@ import {
   TableOpsError,
   type SheetData,
 } from '../fundamentals/table-ops/executor.js';
-import { checkRules, formatViolationsByRule } from '../fundamentals/table-ops/rules.js';
+import {
+  checkRules,
+  diffViolations,
+  formatViolationsByRule,
+} from '../fundamentals/table-ops/rules.js';
 import type { RuleCheckResult, TableRuleRuntime } from '../fundamentals/table-ops/rules.js';
 import { TableRuleService } from './table-rule.service.js';
 
@@ -93,6 +98,10 @@ export interface SemanticFillBatchQuote {
   batchCount: number;
   /** 每批行数（前端报价展示用） */
   batchRows: number;
+  /** 目标工作表名（前端 start 时原样回传；省略 = 第一个工作表） */
+  targetSheet?: string;
+  /** 参照工作表名（跨表填充时前端 start 时原样回传） */
+  referenceSheet?: string;
 }
 
 /** 映射路径被规则门禁拒绝（前端展示违规明细） */
@@ -181,6 +190,8 @@ export interface SemanticFillParams {
   targetColumn: string;
   hintColumns: string[];
   targetSheet?: string;
+  /** 参照工作表名（跨表填充："按 B 表内容补 A 表"时 B 表） */
+  referenceSheet?: string;
   documentId?: number;
 }
 
@@ -210,11 +221,13 @@ export class SemanticFillService {
 
     // 去重值少 → 映射路径：一次 LLM 调用推断全部去重值，代码刷全表
     if (stats.distinctCount <= MAX_DISTINCT_FOR_MAPPING) {
-      return this.runMappingPath(sheets, sheet, stats, params);
+      const constraints = await this.buildFillConstraints(params.documentId, params.targetColumn);
+      return this.runMappingPath(sheets, sheet, stats, params, constraints);
     }
 
     // 去重值太杂 → 分批报价（distinctCount > 上限时 distinctBasisValues 已截断，
-    // 逐值校验无法覆盖全部 → 映射路径不可用）
+    // 逐值校验无法覆盖全部 → 映射路径不可用）；targetSheet/referenceSheet 回传，
+    // 前端确认报价后 start 时原样带回（否则多 sheet 会落到第一张表）
     const quote: SemanticFillBatchQuote = {
       path: 'batch',
       ok: true,
@@ -224,6 +237,8 @@ export class SemanticFillService {
       distinctCount: stats.distinctCount,
       batchCount: countBatches(stats.emptyRowIndexes.length),
       batchRows: BATCH_ROWS,
+      ...(params.targetSheet !== undefined ? { targetSheet: params.targetSheet } : {}),
+      ...(params.referenceSheet !== undefined ? { referenceSheet: params.referenceSheet } : {}),
     };
     logger.info('语义填充判定为分批路径', {
       module: 'SemanticFillService',
@@ -241,8 +256,10 @@ export class SemanticFillService {
     sheet: SheetData,
     stats: FillGapStats,
     params: SemanticFillParams,
+    constraints: string | undefined,
   ): Promise<SemanticFillPreview> {
-    const inferred = await inferFillMapping(stats, params.instruction);
+    const crossReference = this.resolveCrossReference(sheets, sheet, stats, params.referenceSheet);
+    const inferred = await inferFillMapping(stats, params.instruction, constraints, crossReference);
 
     // 逐值校验（方案："逐值校验，缺失即整体拒绝"）：LLM 漏掉任何一个去重值都不可信，
     // 静默跳过会让部分行永远填不上且用户无感知
@@ -255,21 +272,31 @@ export class SemanticFillService {
     }
 
     const mapping = new Map(inferred.mapping.map((m) => [m.from, m.to]));
+    // 基线文本必须在应用填充前截取（applyFillMapping 会原地改写 sheet）
+    const baselineText = serializeSheetData(sheets);
     const appliedRows = applyFillMapping(sheet, params.targetColumn, stats.hintColumns, mapping);
     const filledText = serializeSheetData(sheets);
 
-    // 规则门禁（功能 5）：填充结果同样必须过文档规则，违规整体拒绝
-    const gate = await this.ruleGate(params.documentId, filledText);
+    // 规则门禁（功能 5，根治语义）：只拒绝本次填充**新增**的违规——文档既有
+    // 违规不拦截与它无关的填充（填 A 列不该被 B 列的历史脏数据连坐）
+    const gate = await this.ruleGate(params.documentId, filledText, baselineText);
     if (!gate.passed) {
-      logger.info('语义填充（映射路径）被规则门禁整体拒绝', {
+      logger.info('语义填充（映射路径）被规则门禁整体拒绝（新增违规）', {
         module: 'SemanticFillService',
         documentId: params.documentId,
-        violationCount: gate.check.violations.length,
+        freshViolations: gate.freshCheck.violations.length,
+        preExistingViolations: gate.preExistingCount,
       });
       return {
         ok: false,
-        message: `填充结果会违反表格规则，已整体拒绝（${gate.check.violations.length} 处违规）：${formatViolationsByRule(gate.check)}。请调整指令，或先在规则面板处理这些规则。`,
-        ruleViolations: gate.check,
+        message:
+          `本次填充会新增违反表格规则的内容（${gate.freshCheck.violations.length} 处）：` +
+          `${formatViolationsByRule(gate.freshCheck)}，已整体拒绝。请调整指令，或在规则面板处理这些规则` +
+          (gate.preExistingCount > 0
+            ? `（文档另有 ${gate.preExistingCount} 处既有违规与本次填充无关，未被拦截）`
+            : '') +
+          '。',
+        ruleViolations: gate.freshCheck,
       };
     }
 
@@ -294,7 +321,16 @@ export class SemanticFillService {
       filledText,
       mapping: inferred.mapping,
       appliedRows,
-      ...(inferred.suggestRule ? { suggestRule: inferred.suggestRule } : {}),
+      // 提议的规则绑定到本次填充的目标工作表——多 sheet 文档里列可能在第二个
+      // sheet，不绑定的话规则一入库检查就"找不到列"而失效
+      ...(inferred.suggestRule
+        ? {
+            suggestRule: {
+              ...inferred.suggestRule,
+              ...(sheet.name ? { targetSheet: sheet.name } : {}),
+            },
+          }
+        : {}),
     };
   }
 
@@ -354,7 +390,17 @@ export class SemanticFillService {
     // 这里再挂 catch 兜底防未处理 Promise 拒绝；
     // finalizeTask 无条件调用——即使 runTask 内部 finalizeWithGate 意外抛错，
     // 也保证清理定时器被挂上（正常路径重复调用只是多挂一个幂等的 setTimeout）
-    void this.runTask(task, sheets, sheet, stats, batches, params.instruction).catch(
+    const crossReference = this.resolveCrossReference(sheets, sheet, stats, params.referenceSheet);
+    void this.runTask(
+      task,
+      sheets,
+      sheet,
+      stats,
+      batches,
+      params.instruction,
+      params.sheetText,
+      crossReference,
+    ).catch(
       (err: unknown) => {
         logger.error('语义填充任务执行循环出现未捕获异常', {
           module: 'SemanticFillService',
@@ -438,8 +484,13 @@ export class SemanticFillService {
     stats: FillGapStats,
     batches: number[][],
     instruction: string,
+    baselineText: string,
+    crossReference: string | undefined,
   ): Promise<void> {
     try {
+      // 生成期规则约束（根治语义的"事前遵守"半边）：白名单/数值范围/公式
+      // 约束注入提示词，让 LLM 在源头按规则取值，而不是只靠终态门禁拦截
+      const constraints = await this.buildFillConstraints(task.documentId, task.targetColumn);
       for (let bi = 0; bi < batches.length; bi++) {
         // 协作式取消：当前批完整落表后、下一批开始前停止
         if (task.cancelRequested) {
@@ -450,7 +501,7 @@ export class SemanticFillService {
             completedBatches: task.completedBatches,
             appliedRows: task.appliedRows,
           });
-          await this.finalizeWithGate(task, sheets);
+          await this.finalizeWithGate(task, sheets, baselineText);
           this.finalizeTask(task);
           return;
         }
@@ -467,6 +518,8 @@ export class SemanticFillService {
             task.targetColumn,
             batches[bi].length,
             instruction,
+            constraints,
+            crossReference,
           );
           // 批级校验（方案："批内缺一值则该批整体失败"）：
           // 缺行说明 LLM 输出不完整，静默跳过会留下永远填不上的行
@@ -499,7 +552,7 @@ export class SemanticFillService {
             completedBatches: task.completedBatches,
             error: task.error,
           });
-          await this.finalizeWithGate(task, sheets);
+          await this.finalizeWithGate(task, sheets, baselineText);
           this.finalizeTask(task);
           return;
         }
@@ -507,7 +560,7 @@ export class SemanticFillService {
 
       // 全部批次成功 → 终态门禁（见类注释：不做批间中途检查的理由）；
       // finalizeWithGate 拒绝时内部已把任务置 failed 并写明原因
-      const passed = await this.finalizeWithGate(task, sheets);
+      const passed = await this.finalizeWithGate(task, sheets, baselineText);
       if (!passed) {
         this.finalizeTask(task);
         return;
@@ -533,17 +586,27 @@ export class SemanticFillService {
   /**
    * 任务终态统一收尾：若已有填充内容，过规则门禁后把文本挂到任务上。
    *
+   * @param baselineText 任务开始时的表格文本——门禁用它做基线对比，
+   *                     只拒绝本次填充**新增**的违规（既有违规不连坐）
    * @returns true = 门禁通过（或无门禁/无内容），任务可按原计划置 done；
    *          false = 门禁拒绝，内部已把任务置 failed 并写明原因
    */
-  private async finalizeWithGate(task: SemanticFillTask, sheets: SheetData[]): Promise<boolean> {
+  private async finalizeWithGate(
+    task: SemanticFillTask,
+    sheets: SheetData[],
+    baselineText: string,
+  ): Promise<boolean> {
     if (task.appliedRows <= 0) return true; // 没填任何内容，无需门禁也无需挂结果
     const text = serializeSheetData(sheets);
-    const gate = await this.ruleGate(task.documentId, text);
+    const gate = await this.ruleGate(task.documentId, text, baselineText);
     if (!gate.passed) {
       task.status = 'failed';
       const violationMsg =
-        `已填充部分违反表格规则（${gate.check.violations.length} 处违规：${formatViolationsByRule(gate.check)}），结果已整体拒绝`;
+        `已填充部分新增违反表格规则内容（${gate.freshCheck.violations.length} 处：` +
+        `${formatViolationsByRule(gate.freshCheck)}），结果已整体拒绝` +
+        (gate.preExistingCount > 0
+          ? `；文档另有 ${gate.preExistingCount} 处既有违规与本次填充无关，未被拦截`
+          : '');
       task.error = task.error ? `${task.error}；${violationMsg}` : violationMsg;
       // 违规结果绝不挂给前端（与 table-ops 门禁同一不变量：违规数据不进编辑器）
       return false;
@@ -553,21 +616,35 @@ export class SemanticFillService {
   }
 
   /**
-   * 规则门禁（映射路径用）：加载文档启用规则并全查。
+   * 规则门禁（映射路径 / 分批终态共用）：加载文档启用规则做检查。
+   *
+   * 根治语义：只拒绝**新增**违规——传入 baselineText（执行前文本）时，
+   * 以多重集差集算出本次真正引入的违规作为判定依据；文档既有违规不拦截
+   * 与它无关的填充（填 A 列不该被 B 列的历史脏数据连坐），只在文案里提示数量。
    * 规则加载失败只记日志放行——规则器是增强护栏，不拖垮填充主链路
    * （与 table-ops.service 的门禁容错语义一致）。
    */
   private async ruleGate(
     documentId: number | undefined,
     text: string,
-  ): Promise<{ passed: boolean; check: RuleCheckResult }> {
+    baselineText?: string,
+  ): Promise<{
+    passed: boolean;
+    check: RuleCheckResult;
+    /** 仅含"相对基线新增"的违规（无基线时即全量） */
+    freshCheck: RuleCheckResult;
+    /** 文档既有违规数（基线里就有、非本次填充造成） */
+    preExistingCount: number;
+  }> {
     const emptyCheck: RuleCheckResult = {
       checkedRules: 0,
       violations: [],
       invalidRules: [],
       truncated: false,
     };
-    if (documentId === undefined) return { passed: true, check: emptyCheck };
+    if (documentId === undefined) {
+      return { passed: true, check: emptyCheck, freshCheck: emptyCheck, preExistingCount: 0 };
+    }
 
     let rules: TableRuleRuntime[] = [];
     try {
@@ -578,12 +655,97 @@ export class SemanticFillService {
         documentId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return { passed: true, check: emptyCheck };
+      return { passed: true, check: emptyCheck, freshCheck: emptyCheck, preExistingCount: 0 };
     }
-    if (rules.length === 0) return { passed: true, check: emptyCheck };
+    if (rules.length === 0) {
+      return { passed: true, check: emptyCheck, freshCheck: emptyCheck, preExistingCount: 0 };
+    }
 
     const check = checkRules(text, rules);
-    return { passed: check.violations.length === 0, check };
+    if (baselineText === undefined) {
+      return {
+        passed: check.violations.length === 0,
+        check,
+        freshCheck: check,
+        preExistingCount: 0,
+      };
+    }
+    const baselineCheck = checkRules(baselineText, rules);
+    const fresh = diffViolations(baselineCheck.violations, check.violations);
+    return {
+      passed: fresh.length === 0,
+      check,
+      freshCheck: { ...check, violations: fresh },
+      preExistingCount: check.violations.length - fresh.length,
+    };
+  }
+
+  /**
+   * 解析参照工作表并生成跨表对照文本（"按 B 表内容补 A 表"）。
+   * 未指定参照表返回 undefined；指定的表不存在抛 TableOpsError（用户明确要求
+   * 参照，静默忽略会变成凭空编造——这正是要根治的行为）。
+   */
+  private resolveCrossReference(
+    sheets: SheetData[],
+    sheet: SheetData,
+    stats: FillGapStats,
+    referenceSheetName?: string,
+  ): string | undefined {
+    if (referenceSheetName === undefined) return undefined;
+    const ref = sheets.find((s) => s.name === referenceSheetName);
+    if (!ref) {
+      throw new TableOpsError(`找不到参照工作表「${referenceSheetName}」`);
+    }
+    return buildCrossSheetReference(sheet, ref, stats.hintColumns);
+  }
+
+  /**
+   * 生成期规则约束：从文档启用规则中提取与目标列相关的约束，注入填充提示词。
+   *
+   * 根治语义的"事前遵守"半边：白名单/数值范围/公式约束让 LLM 在源头就按规则
+   * 取值（如白名单列只能填白名单值），把门禁从"事后拦截"前移为"事前遵守"，
+   * 大幅减少填充被整体拒绝的概率。规则加载失败返回 undefined（与门禁同款容错：
+   * 规则器不拖垮填充主链路）。
+   */
+  private async buildFillConstraints(
+    documentId: number | undefined,
+    targetColumn: string,
+  ): Promise<string | undefined> {
+    if (documentId === undefined) return undefined;
+    let rules: TableRuleRuntime[] = [];
+    try {
+      rules = await this.tableRuleService.getEnabledRules(documentId);
+    } catch (err) {
+      logger.warn('加载表格规则失败，本次填充不带规则约束', {
+        module: 'SemanticFillService',
+        documentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+
+    const parts: string[] = [];
+    for (const rule of rules) {
+      if (rule.type === 'allowedValues' && rule.params.column === targetColumn) {
+        parts.push(`「${targetColumn}」只能填这些值之一：${rule.params.values.join('、')}`);
+      } else if (rule.type === 'numericRange' && rule.params.column === targetColumn) {
+        const { min, max } = rule.params;
+        const desc =
+          min !== undefined && max !== undefined
+            ? `${min} ~ ${max} 之间`
+            : min !== undefined
+              ? `≥ ${min}`
+              : max !== undefined
+                ? `≤ ${max}`
+                : '数字';
+        parts.push(`「${targetColumn}」必须填数字且在 ${desc}`);
+      } else if (rule.type === 'formula' && rule.params.targetColumn === targetColumn) {
+        parts.push(
+          `「${targetColumn}」应等于表达式 ${rule.params.expression} 的计算结果（按每行的数值精确计算）`,
+        );
+      }
+    }
+    return parts.length > 0 ? `填充值必须满足以下规则约束：${parts.join('；')}。` : undefined;
   }
 
   /** 任务置终态后的统一动作：记录完成时间 + 延迟清理内存（防泄漏） */

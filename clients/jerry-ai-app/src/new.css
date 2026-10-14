@@ -1244,6 +1244,8 @@ button.decorum-tb-btn {
   background-color: var(--muted);
   font-weight: 600;
   text-align: left;
+  /* 表头锚定（HeaderRow）的视觉确认线：任何主题下都与数据行明确区分 */
+  border-bottom: 2px solid var(--border);
 }
 
 /* 单元格选中态（Tiptap 通过 .selectedCell 类标记） */
@@ -1262,9 +1264,12 @@ button.decorum-tb-btn {
 }
 
 .cyberpunk .cyberpunk-editor-content .ProseMirror table th {
-  background-color: #5FF6FF10;
+  /* 6% 透明度（原 #5FF6FF10）叠在深紫黑底上肉眼不可见——提到 12% 并加青色
+     粗底线，保证 HeaderRow 锚定的表头行在赛博朋克主题下可辨识 */
+  background-color: #5FF6FF1F;
   color: #5FF6FF;
   text-shadow: none;
+  border-bottom: 2px solid #5FF6FF66;
 }
 
 /* ==================== 全局基础样式 ==================== */

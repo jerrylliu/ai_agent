@@ -20,7 +20,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Sparkles, PenLine, FileText, Languages, ListTree,
   Square, Copy, CheckCircle2, AlertCircle, Loader2,
-  Table2, RotateCcw, Wand2, Lightbulb,
+  Table2, RotateCcw, Wand2, Lightbulb, Brain, Zap, ArrowRight, HelpCircle,
 } from 'lucide-react';
 import type { Editor } from '@tiptap/react';
 import type { JSONContent } from '@tiptap/react';
@@ -29,16 +29,21 @@ import { Input } from '@/components/ui/input';
 import {
   requestCompletionStream,
   runTableOps,
+  confirmTableOps,
   startSemanticFillTask,
   getSemanticFillStatus,
   cancelSemanticFillTask,
   batchCreateTableRules,
   type CompletionMode,
   type TableOpsReportItem,
+  type TableOpsProgressEvent,
   type SemanticFillMappingResult,
   type SemanticFillBatchQuote,
   type SemanticFillTaskStatus,
   type SemanticFillSuggestRule,
+  type ClarifyPayload,
+  type ClarifyStrategy,
+  type ClarifyStrategyOption,
 } from '@/lib/api';
 import {
   docContainsTable,
@@ -144,9 +149,31 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
     baseSheetText: string | null;
     report: TableOpsReportItem[];
     semanticFill?: SemanticFillMappingResult;
+    /** ReAct 循环的整体结果总结（模型产出，展示在报告顶部） */
+    summary?: string;
   } | null>(null);
   /** 表格指令失败信息 */
   const [tableError, setTableError] = useState('');
+  /**
+   * ReAct 循环实时过程（SSE progress 事件累积）：模型判断 / 正在执行的操作 /
+   * 执行观察。执行中实时滚动，完成后保留在报告上方（用户能看到 AI 用了哪些命令）
+   */
+  const [tableSteps, setTableSteps] = useState<TableOpsProgressEvent[]>([]);
+
+  // ==================== clarify 反问确认状态（两阶段交互） ====================
+  /**
+   * 待确认的反问载荷（null = 无）。confirm 时必须原样回传（含 baseSheetText
+   * 执行基底与 hash），服务端据此 TOCTOU 校验与确定性编译
+   */
+  const [clarify, setClarify] = useState<ClarifyPayload | null>(null);
+  /** clarify 确认执行中（SSE 过程复用 tableSteps 展示） */
+  const [clarifyRunning, setClarifyRunning] = useState(false);
+  /** 每列用户选定的策略（fill-source 多列分组按列单选；其他场景单组） */
+  const [clarifySelections, setClarifySelections] = useState<Record<string, ClarifyStrategy | null>>({});
+  /** fill-constant 自定义值输入（column → 用户输入，空时回落到策略自带 value） */
+  const [constantInputs, setConstantInputs] = useState<Record<string, string>>({});
+  /** 最近一次表格指令原文（confirm 转 AI 映射预览时作映射提示） */
+  const lastTableInstructionRef = useRef('');
 
   // ==================== 语义填充分批任务状态（功能 4） ====================
   /** 分批报价（path=batch，待用户确认后创建任务）；baseSheetText/instruction 供 start 复用 */
@@ -360,21 +387,40 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
     setTableRunning(true);
     setTableError('');
     setTableResult(null);
+    setTableSteps([]);
     setFillQuote(null);
+    setClarify(null);
+    setClarifySelections({});
+    setConstantInputs({});
+    lastTableInstructionRef.current = trimmed;
 
     try {
-      const result = await runTableOps({
-        instruction: trimmed,
-        sheetText,
-        // 已保存文档传入后执行结果过规则门禁（功能 5）；未保存文档无规则可查
-        ...(documentId !== undefined ? { documentId } : {}),
-      });
+      const result = await runTableOps(
+        {
+          instruction: trimmed,
+          sheetText,
+          // 已保存文档传入后执行结果过规则门禁（功能 5）；未保存文档无规则可查
+          ...(documentId !== undefined ? { documentId } : {}),
+        },
+        // ReAct 循环逐轮进度（"正在使用加法求和计算……"）实时上屏
+        (event) => setTableSteps((prev) => [...prev, event]),
+      );
       if (!result.ok) {
         // 业务级失败（指令无法理解/引用不存在/护栏拦截/规则门禁拒绝）：服务端已返回可读原因
         const msg = result.message ?? '表格指令执行失败';
         console.warn('[AIWritingPanel] 表格指令被拒绝', { message: msg });
         setTableError(msg);
         showToast(false, msg);
+        return;
+      }
+
+      // clarify 反问（两阶段交互第一阶段）：指令的数据依赖参数不明，服务端
+      // 未修改任何数据——渲染确认卡，用户选定策略后走 confirmTableOps
+      if (result.clarify) {
+        setClarify(result.clarify);
+        setClarifySelections({});
+        setConstantInputs({});
+        showToast(true, 'AI 需要你确认处理策略，请在下方选择');
         return;
       }
 
@@ -400,6 +446,7 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
           result.semanticFill && result.semanticFill.path === 'mapping'
             ? result.semanticFill
             : undefined,
+        summary: result.summary,
       });
       showToast(true, '执行完成，请确认后应用');
     } catch (err) {
@@ -449,6 +496,131 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
     setTableResult(null);
     setTableError('');
   }, []);
+
+  // ==================== clarify 反问确认（两阶段交互第二阶段入口） ====================
+
+  /** 放弃 clarify 反问（不执行任何操作，表格保持不变） */
+  const handleClarifyDismiss = useCallback(() => {
+    setClarify(null);
+    setClarifySelections({});
+    setConstantInputs({});
+  }, []);
+
+  /**
+   * 提交 clarify 确认：收集各列选定的策略 → confirmTableOps（服务端编译为
+   * 确定性 ops，全程无 LLM）→ 结果转回表格指令确认流（tableResult）。
+   * AI 映射策略会二次返回 clarify（语义填充预览），此时更新载荷再走一轮确认。
+   */
+  const handleClarifyConfirm = useCallback(async () => {
+    if (!clarify) return;
+
+    // 渲染分组：fill-source 多列按列分组；其余场景顶层选项合并为一组
+    const groups = clarify.columns?.length
+      ? clarify.columns
+      : clarify.options?.length
+        ? [{ column: clarify.kind, gapCount: clarify.affectedCount ?? 0, candidates: clarify.options }]
+        : [];
+
+    // 收集策略：每列已选项；fill-constant 用输入框的值覆盖策略自带 value
+    const strategies: ClarifyStrategy[] = [];
+    for (const g of groups) {
+      const s = clarifySelections[g.column];
+      if (!s) continue;
+      if (s.type === 'fill-constant') {
+        const value = (constantInputs[g.column] ?? s.value ?? '').trim();
+        if (!value) {
+          showToast(false, `列「${g.column}」选择了固定值填充，请先填写要填充的值`);
+          return;
+        }
+        strategies.push({ ...s, value });
+      } else {
+        strategies.push(s);
+      }
+    }
+    if (strategies.length === 0) {
+      showToast(false, '请先选择处理策略');
+      return;
+    }
+
+    // TOCTOU 校验基于编辑器**实时文本**（含未保存的手改）：
+    //   - 无前缀 op（baseOps 空）：实时文本就是执行基底，服务端 hash 比对直接
+    //     拦截卡片停留期间的编辑（与是否保存无关）；
+    //   - 有前缀 op（ReAct 中途反问）：执行基底必须是中间态 baseSheetText
+    //     （编辑器里没有），实时文本经 liveSheetText 附带，服务端凭
+    //     originSheetTextHash 校验原文未变。
+    const liveText = tableDocToSheetText(editor?.getJSON() ?? { type: 'doc', content: [] }) ?? '';
+    const hasPrefixOps = (clarify.baseOps?.length ?? 0) > 0;
+    const baseText = hasPrefixOps ? (clarify.baseSheetText ?? '') : liveText;
+    if (!baseText) {
+      showToast(false, hasPrefixOps ? '执行基底丢失，请重新发起指令' : '未能读取表格内容，请重新发起指令');
+      return;
+    }
+
+    setClarifyRunning(true);
+    setTableError('');
+    setTableResult(null);
+    setTableSteps([]);
+
+    try {
+      const result = await confirmTableOps(
+        {
+          sheetText: baseText,
+          sheetTextHash: clarify.baseSheetTextHash ?? '',
+          // 实时文本：服务端凭 originSheetTextHash 检测卡片停留期间的编辑
+          ...(clarify.originSheetTextHash !== undefined ? { liveSheetText: liveText } : {}),
+          clarify,
+          strategies,
+          // 原始指令（AI 映射策略转语义填充预览时作映射提示）
+          instruction: lastTableInstructionRef.current || clarify.question,
+          ...(documentId !== undefined ? { documentId } : {}),
+        },
+        (event) => setTableSteps((prev) => [...prev, event]),
+      );
+      if (!result.ok) {
+        const msg = result.message ?? '确认执行失败';
+        console.warn('[AIWritingPanel] clarify 确认被拒绝', { message: msg });
+        setTableError(msg);
+        showToast(false, msg);
+        return;
+      }
+
+      // AI 映射策略 → 语义填充预览（二次确认）：更新载荷再走一轮确认
+      if (result.clarify) {
+        setClarify(result.clarify);
+        setClarifySelections({});
+        setConstantInputs({});
+        showToast(true, '已生成 AI 映射预览，请确认后继续');
+        return;
+      }
+
+      const nextText = result.sheetText ?? '';
+      // 全部选择"跳过/保留空缺"：表格不变，直接收尾
+      if (!nextText || nextText === baseText) {
+        setClarify(null);
+        setClarifySelections({});
+        setConstantInputs({});
+        showToast(true, result.message ?? '已按你的选择跳过，表格保持不变');
+        return;
+      }
+      setClarify(null);
+      setClarifySelections({});
+      setConstantInputs({});
+      setTableResult({
+        sheetText: nextText,
+        baseSheetText: baseText,
+        report: result.report ?? [],
+        summary: result.summary,
+      });
+      showToast(true, '执行完成，请确认后应用');
+    } catch (err) {
+      const msg = (err as Error)?.message || '确认执行失败';
+      console.error('[AIWritingPanel] clarify 确认请求失败', err);
+      setTableError(msg);
+      showToast(false, msg);
+    } finally {
+      setClarifyRunning(false);
+    }
+  }, [clarify, clarifySelections, constantInputs, documentId, editor, showToast]);
 
   // ==================== 语义填充分批任务（功能 4） ====================
 
@@ -561,6 +733,13 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
         sheetText: fillQuote.baseSheetText,
         targetColumn: fillQuote.quote.targetColumn,
         hintColumns: fillQuote.quote.hintColumns,
+        // 多 sheet/跨表场景原样回传（报价时后端已带出），否则任务会落到第一张表
+        ...(fillQuote.quote.targetSheet !== undefined
+          ? { targetSheet: fillQuote.quote.targetSheet }
+          : {}),
+        ...(fillQuote.quote.referenceSheet !== undefined
+          ? { referenceSheet: fillQuote.quote.referenceSheet }
+          : {}),
         // 已保存文档传入后任务终态结果过规则门禁（功能 5）；未保存文档无规则可查
         ...(documentId !== undefined ? { documentId } : {}),
       });
@@ -619,6 +798,8 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
           name: suggestRule.name,
           type: 'allowedValues',
           params: { column: suggestRule.column, values: suggestRule.values },
+          // 绑定本次填充的目标工作表（多 sheet 文档里列可能在第二个 sheet）
+          ...(suggestRule.targetSheet ? { targetSheet: suggestRule.targetSheet } : {}),
         },
       ]);
       if (res.failed.length > 0) {
@@ -787,6 +968,46 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
   /** 分批填充任务进行中（禁用新指令输入，避免并发编辑冲突） */
   const fillTaskRunning = fillTask?.status === 'running';
 
+  // ==================== clarify 反问卡渲染分组 ====================
+  /** fill-source 多列按列分组；其余场景顶层选项合并为一组（列名用场景 kind 占位） */
+  const clarifyGroups: Array<{ column: string; gapCount: number; candidates: ClarifyStrategyOption[] }> =
+    clarify
+      ? clarify.columns?.length
+        ? clarify.columns
+        : clarify.options?.length
+          ? [{ column: clarify.kind, gapCount: clarify.affectedCount ?? 0, candidates: clarify.options }]
+          : []
+      : [];
+
+  // ==================== ReAct 过程行（执行中实时 / 失败与完成后保留展示共用） ====================
+  const tableStepsList =
+    tableSteps.length > 0 ? (
+      <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-1.5 max-h-56 overflow-y-auto">
+        <div className="text-xs font-medium text-foreground flex items-center gap-1.5">
+          执行过程
+          {tableRunning && (
+            <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+          )}
+        </div>
+        {tableSteps.map((step) => (
+          <div key={step.seq} className="flex items-start gap-2 text-xs leading-relaxed">
+            {step.phase === 'thought' && (
+              <Brain className="h-3.5 w-3.5 text-violet-500 shrink-0 mt-0.5" />
+            )}
+            {step.phase === 'action' && (
+              <Zap className="h-3.5 w-3.5 text-amber-500 shrink-0 mt-0.5" />
+            )}
+            {step.phase === 'observation' && (
+              <ArrowRight className="h-3.5 w-3.5 text-green-500 shrink-0 mt-0.5" />
+            )}
+            <span className={step.phase === 'action' ? 'text-foreground' : 'text-muted-foreground'}>
+              {step.text}
+            </span>
+          </div>
+        ))}
+      </div>
+    ) : null;
+
   return (
     <div className="flex h-full flex-col bg-background">
       {/* 标题 */}
@@ -839,7 +1060,7 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
                 : '例如：把全文改成口语化'
             }
             className="h-8 text-sm"
-            disabled={isGenerating || tableRunning || fillTaskRunning}
+            disabled={isGenerating || tableRunning || fillTaskRunning || clarifyRunning}
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleCustomExecute();
             }}
@@ -848,7 +1069,7 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
             variant="default"
             size="sm"
             className="h-8 shrink-0"
-            disabled={isGenerating || tableRunning || fillTaskRunning || !customInstruction.trim()}
+            disabled={isGenerating || tableRunning || fillTaskRunning || clarifyRunning || !customInstruction.trim()}
             onClick={handleCustomExecute}
           >
             {tableRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : '执行'}
@@ -858,14 +1079,17 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
 
       {/* 生成结果区 */}
       <div className="flex-1 overflow-y-auto p-3">
-        {/* AI 表格指令：执行中 */}
-        {tableRunning && (
-          <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-8">
+        {/* AI 表格指令：执行中（收到首个进度事件前显示转圈，之后实时滚动过程行） */}
+        {tableRunning && tableStepsList}
+        {tableRunning && tableSteps.length === 0 && (
+          <div className="flex flex-col items-center justify-center text-muted-foreground gap-2 py-8">
             <Loader2 className="h-6 w-6 animate-spin" />
             <span className="text-xs">正在解析指令并计算表格数据…</span>
           </div>
         )}
 
+        {/* 语义填充：过程行保留（报价阶段的"正在构建语义填充方案……"等步骤） */}
+        {fillTask && tableStepsList}
         {/* 语义填充：分批任务进度（功能 4；终态由 consumeTerminalFillTask 转入确认流后消失） */}
         {fillTask && (
           <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2">
@@ -897,6 +1121,8 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
           </div>
         )}
 
+        {/* 语义填充：报价确认态保留过程行（任务创建后由上方 fillTask 分支接管） */}
+        {fillQuote && !fillTask && tableStepsList}
         {/* 语义填充：分批报价确认（功能 4；用户确认后才创建任务） */}
         {fillQuote && !fillTask && (
           <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3 space-y-2">
@@ -924,7 +1150,134 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
           </div>
         )}
 
-        {/* AI 表格指令：执行失败 */}
+        {/* AI 表格指令：clarify 反问确认（两阶段交互；确认执行中实时滚动过程行） */}
+        {(clarify || clarifyRunning) && tableStepsList}
+        {clarify && !clarifyRunning && (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+            <div className="flex items-start gap-2">
+              <HelpCircle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+              <div className="text-xs font-medium text-foreground leading-relaxed">{clarify.question}</div>
+            </div>
+
+            {/* join-key：候选键对信息（重合率越高关联越可靠；具体策略在下方选项卡选择） */}
+            {clarify.kind === 'join-key' && clarify.keyCandidates && clarify.keyCandidates.length > 0 && (
+              <div className="rounded-md border border-border bg-background/60 p-2 space-y-1">
+                <div className="text-xs text-muted-foreground">候选关联键（百分比 = 目标表键值在来源表中的覆盖率）</div>
+                {clarify.keyCandidates.map((c) => (
+                  <div key={c.targetKeyColumn} className="flex items-center justify-between text-xs">
+                    <span className="text-foreground">{c.label}</span>
+                    <span className={cn('font-medium', c.overlapRate >= 0.6 ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400')}>
+                      {Math.round(c.overlapRate * 100)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* condition：目标列值分布（帮助理解全列更新的影响面） */}
+            {clarify.kind === 'condition' && clarify.valueDistribution && clarify.valueDistribution.length > 0 && (
+              <div className="rounded-md border border-border bg-background/60 p-2 space-y-1">
+                <div className="text-xs text-muted-foreground">该列取值分布</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {clarify.valueDistribution.map((v) => (
+                    <span key={v.value} className="rounded bg-muted px-1.5 py-0.5 text-xs text-foreground">
+                      {v.value || '(空)'} × {v.count}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* formula-preview / destructive-preview：确定性预览表（数据已由后端算好，非 AI 猜测） */}
+            {clarify.previewHeaders && clarify.previewHeaders.length > 0 && clarify.previewRows && clarify.previewRows.length > 0 && (
+              <div className="rounded-md border border-border bg-background/60 p-2 space-y-1 overflow-x-auto">
+                <div className="text-xs text-muted-foreground">
+                  预览（前 {clarify.previewRows.length} 行{clarify.affectedCount !== undefined ? `，预计影响 ${clarify.affectedCount} 处` : ''}）
+                </div>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-muted-foreground border-b border-border">
+                      {clarify.previewHeaders.map((h) => (
+                        <th key={h} className="px-1.5 py-1 text-left font-medium">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {clarify.previewRows.map((row, ri) => (
+                      <tr key={ri} className="border-b border-border/40 last:border-0">
+                        {row.map((cell, ci) => (
+                          <td key={ci} className="px-1.5 py-1 text-foreground whitespace-nowrap">{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* 策略选项：fill-source 多列按列单选；其余场景单组（选项由后端分析器确定性产出） */}
+            {clarifyGroups.length > 0 && (
+              <div className="space-y-2">
+                {clarifyGroups.map((g) => {
+                  const selected = clarifySelections[g.column] ?? null;
+                  return (
+                    <div key={g.column} className="rounded-md border border-border bg-background/60 p-2 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-foreground">
+                          {clarify.columns?.length ? `列「${g.column}」` : '处理策略'}
+                        </span>
+                        {g.gapCount > 0 && <span className="text-xs text-muted-foreground">{g.gapCount} 个空缺</span>}
+                      </div>
+                      <div className="space-y-1">
+                        {g.candidates.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick={() => setClarifySelections((prev) => ({ ...prev, [g.column]: opt.strategy }))}
+                            className={cn(
+                              'w-full rounded-md border px-2 py-1.5 text-left text-xs transition-colors',
+                              selected === opt.strategy
+                                ? 'border-amber-500 bg-amber-500/10'
+                                : 'border-border hover:border-amber-500/50 hover:bg-muted/40',
+                            )}
+                          >
+                            <span className="font-medium text-foreground">{opt.label}</span>
+                            {opt.description && (
+                              <span className="block text-muted-foreground">{opt.description}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      {/* 固定值填充：选中后显示输入框（预填策略建议值，可改） */}
+                      {selected?.type === 'fill-constant' && (
+                        <Input
+                          value={constantInputs[g.column] ?? selected.value ?? ''}
+                          onChange={(e) => setConstantInputs((prev) => ({ ...prev, [g.column]: e.target.value }))}
+                          placeholder="填写要统一填充的值"
+                          className="h-7 text-xs"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex items-center gap-1.5">
+              <Button variant="default" size="sm" className="h-7 gap-1 text-xs" onClick={() => void handleClarifyConfirm()}>
+                <CheckCircle2 className="h-3 w-3" />
+                确认执行
+              </Button>
+              <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={handleClarifyDismiss}>
+                <RotateCcw className="h-3 w-3" />
+                放弃
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* AI 表格指令：执行失败（过程行保留，便于看清 AI 做了什么失败在哪） */}
+        {!tableRunning && tableError && tableStepsList}
         {!tableRunning && tableError && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-2">
             <div className="flex items-start gap-2">
@@ -938,10 +1291,17 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
           </div>
         )}
 
-        {/* AI 表格指令：执行报告 + 确认应用 */}
+        {/* AI 表格指令：执行过程 + 执行报告 + 确认应用 */}
         {!tableRunning && tableResult && (
           <div className="space-y-3">
+            {tableStepsList}
             <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2 max-h-[50vh] overflow-y-auto">
+              {tableResult.summary && (
+                <div className="flex items-start gap-2 text-xs leading-relaxed pb-1 border-b border-border/60">
+                  <Sparkles className="h-3.5 w-3.5 text-violet-500 shrink-0 mt-0.5" />
+                  <span className="text-foreground">{tableResult.summary}</span>
+                </div>
+              )}
               <div className="text-xs font-medium text-foreground">执行报告</div>
               {tableResult.report.map((item, idx) => (
                 <div key={idx} className="flex items-start gap-2 text-xs leading-relaxed">
@@ -1023,7 +1383,7 @@ export function AIWritingPanel({ editor, documentId }: AIWritingPanelProps) {
           </div>
         )}
 
-        {status === 'idle' && !output && !tableRunning && !tableError && !tableResult && !fillQuote && !fillTask && (
+        {status === 'idle' && !output && !tableRunning && !tableError && !tableResult && !fillQuote && !fillTask && !clarify && !clarifyRunning && (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2 py-8">
             <Sparkles className="h-8 w-8 opacity-40" />
             <span className="text-xs">{hasTable ? '输入指令操作表格数据' : '选择快捷指令或输入自定义指令'}</span>

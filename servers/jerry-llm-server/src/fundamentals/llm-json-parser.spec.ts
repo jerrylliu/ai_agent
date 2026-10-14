@@ -43,6 +43,20 @@ describe('extractJsonText', () => {
     expect(extractJsonText('hello world')).toBeNull();
     expect(extractJsonText('')).toBeNull();
   });
+
+  it('应剥离 <think> 推理块后再抽取（草稿里的 JSON 碎片不干扰）', () => {
+    expect(extractJsonText('<think>草稿：{"ops": [{"type": 9}</think>最终答案：{"a":1}')).toBe(
+      '{"a":1}',
+    );
+  });
+
+  it('think 块里含完整围栏 JSON 时取块外的最终答案', () => {
+    expect(extractJsonText('<think>```json\n{"x":1}\n```</think>答案：{"a":2}')).toBe('{"a":2}');
+  });
+
+  it('无 think 块的普通输出不受影响', () => {
+    expect(extractJsonText('{"a":1}')).toBe('{"a":1}');
+  });
 });
 
 describe('parseLlmJson', () => {

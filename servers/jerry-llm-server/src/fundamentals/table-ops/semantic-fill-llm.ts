@@ -16,6 +16,7 @@ import {
   buildModelConfig,
   createRateLimitedLLM,
   getCurrentModelId,
+  getModelCapabilities,
 } from '../model-provider.js';
 import { extractJsonText } from '../llm-json-parser.js';
 import { logger } from '../logger.js';
@@ -131,6 +132,8 @@ async function invokeWithFallback<T extends z.ZodTypeAny>(
 export async function inferFillMapping(
   stats: FillGapStats,
   instruction: string,
+  constraints?: string,
+  crossReference?: string,
 ): Promise<FillMappingOutput & { suggestRule?: FillRuleSuggestion }> {
   const modelId = getCurrentModelId();
   const modelConfig = buildModelConfig(modelId);
@@ -151,7 +154,8 @@ export async function inferFillMapping(
 - 填充值应与表格中该列已有的取值风格一致（如已有"华南/华北"就用同类词）
 - 推断不出时给出最合理的猜测，不要留空
 - ${stats.hintColumns.join('、')} 是可用的参考信息列
-
+${crossReference ? `\n参照表对照关系（填充值必须优先遵循对照关系推断，不要凭空编造）：\n${crossReference}\n` : ''}
+${constraints ? `\n${constraints}\n` : ''}
 输出 JSON：{"mapping":[{"from":"依据值","to":"填充值"}]${stats.distinctCount <= 20 ? ',"suggestRule":{"name":"规则名","column":"依据列名","values":["取值1","取值2"]}' : ''}}
 ${stats.distinctCount <= 20 ? '若填充规律非常稳定（依据列取值就固定这几种），可额外给 suggestRule 提议把取值白名单存为校验规则；拿不准就省略该字段。' : '取值种类较多，不要输出 suggestRule。'}`;
 
@@ -160,8 +164,18 @@ ${stats.distinctCount <= 20 ? '若填充规律非常稳定（依据列取值就�
     new HumanMessage(`去重值清单（共 ${stats.distinctCount} 个）：\n${valueLines}`),
   ];
 
-  // 主路径
-  if (structuredOutputUnavailableModelId !== modelId) {
+  // 主路径。前置能力检查：静态标注不支持 tool_choice 的模型（thinking 模式端点会
+  // 拒绝 tool_choice 返回 400）主路径必然失败，直接跳过走兜底（能力探测可能测不出
+  // thinking 限制）；运行时命中后另有按模型 ID 的进程级记忆
+  if (
+    structuredOutputUnavailableModelId === modelId ||
+    !getModelCapabilities(modelId).supportsToolChoice
+  ) {
+    logger.info('当前模型不支持强制结构化输出，语义填充映射推断直接走提示词抽取路径', {
+      module: 'SemanticFillLlm',
+      modelId,
+    });
+  } else {
     try {
       const structured = llm.withStructuredOutput(MappingInferOutputSchema, {
         method: 'functionCalling',
@@ -205,6 +219,8 @@ export async function inferBatchFill(
   targetColumn: string,
   batchRowCount: number,
   instruction: string,
+  constraints?: string,
+  crossReference?: string,
 ): Promise<BatchFillOutput> {
   const modelId = getCurrentModelId();
   const modelConfig = buildModelConfig(modelId);
@@ -220,7 +236,8 @@ export async function inferBatchFill(
 - row 字段填输入中"第 N 行"的 N
 - 填充值应与该列已有取值风格一致
 - 推断不出时给出最合理的猜测，不要留空
-
+${crossReference ? `\n参照表对照关系（填充值必须优先遵循对照关系推断，不要凭空编造）：\n${crossReference}\n` : ''}
+${constraints ? `\n${constraints}\n` : ''}
 输出 JSON：{"fills":[{"row":行号,"value":"填充值"}]}`;
 
   const messages: BaseMessage[] = [
@@ -228,7 +245,16 @@ export async function inferBatchFill(
     new HumanMessage(batchRowsText),
   ];
 
-  if (structuredOutputUnavailableModelId !== modelId) {
+  // 主路径。前置能力检查与映射推断同款：不支持 tool_choice 的模型直接走兜底
+  if (
+    structuredOutputUnavailableModelId === modelId ||
+    !getModelCapabilities(modelId).supportsToolChoice
+  ) {
+    logger.info('当前模型不支持强制结构化输出，语义填充批处理直接走提示词抽取路径', {
+      module: 'SemanticFillLlm',
+      modelId,
+    });
+  } else {
     try {
       const structured = llm.withStructuredOutput(BatchFillOutputSchema, {
         method: 'functionCalling',

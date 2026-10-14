@@ -19,9 +19,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Save, Loader2, CheckCircle2, UploadCloud, BookOpen, Sparkles, PanelRightClose, Download, ShieldCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PopupMenu } from '@/components/ui/popup-menu';
 import { DocumentEditor, type Editor, type JSONContent } from '@/components/Editor/DocumentEditor';
 import { EditorToolbar } from '@/components/Editor/EditorToolbar';
 import { SelectionToolbar } from '@/components/Editor/SelectionToolbar';
+import { SheetHeaderBar } from '@/components/Editor/SheetHeaderBar';
 import { KnowledgePanel } from '@/components/Editor/panels/KnowledgePanel';
 import { AIWritingPanel } from '@/components/Editor/panels/AIWritingPanel';
 import { TableRulesPanel } from '@/components/Editor/panels/TableRulesPanel';
@@ -733,40 +735,40 @@ export default function DocumentEditorPage({
             )}
             保存
           </Button>
-          {/* 下载 Excel：文档含表格时提供（导出最新版本的编辑后内容） */}
-          {currentDocId && hasTable && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void handleDownloadXlsx()}
-              disabled={downloading || saving}
-              className="gap-1.5"
-              title="将当前表格内容导出为 .xlsx 文件（保存后生效）"
-            >
-              {downloading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              {downloading ? '导出中...' : '下载 Excel'}
-            </Button>
-          )}
-          {/* 发布到知识库：已有文档时显示（含草稿保存后创建的文档） */}
+          {/* 更多操作下拉：低频动作（下载 Excel / 发布知识库）收纳进 ⋮ 菜单，
+              避免移动端与"保存"并排过挤；进行中任务以禁用项展示 */}
           {currentDocId && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void handlePublish()}
-              disabled={publishing || saving}
-              className="gap-1.5"
-            >
-              {publishing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <UploadCloud className="h-4 w-4" />
-              )}
-              {publishing ? '发布中...' : '发布到知识库'}
-            </Button>
+            <PopupMenu
+              label="更多操作"
+              items={[
+                ...(hasTable
+                  ? [
+                      {
+                        id: 'download-xlsx',
+                        label: downloading ? '导出中...' : '下载 Excel',
+                        icon: downloading ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4" />
+                        ),
+                        disabled: downloading || saving,
+                        onClick: () => void handleDownloadXlsx(),
+                      },
+                    ]
+                  : []),
+                {
+                  id: 'publish-knowledge',
+                  label: publishing ? '发布中...' : '发布到知识库',
+                  icon: publishing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <UploadCloud className="h-4 w-4" />
+                  ),
+                  disabled: publishing || saving,
+                  onClick: () => void handlePublish(),
+                },
+              ]}
+            />
           )}
         </div>
       </header>
@@ -810,6 +812,10 @@ export default function DocumentEditorPage({
           </button>
         </div>
       )}
+
+      {/* 表头行确认条：显示自动识别的表头行号，一键纠正（改 doc 的 tableHeader 标记，
+          保存时序列化自动写出 HeaderRow 指令）；关闭后本次会话不再打扰 */}
+      {!loading && <SheetHeaderBar content={content} onChange={handleChange} />}
 
       {/* 选中文字浮动工具栏（润色/翻译/改写）— 浮动定位，不受面板布局影响 */}
       {!loading && <SelectionToolbar editor={editorInstance} />}

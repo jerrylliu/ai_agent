@@ -28,6 +28,7 @@ import { DocumentService } from '../services/document.service';
 import { DocumentScanService } from '../services/document-scan.service';
 import { DocumentSchedulerService } from '../services/document-scheduler.service';
 import { TableOpsService } from '../services/table-ops.service';
+import { ConfirmRequestSchema } from '../fundamentals/table-ops/clarify';
 import {
   VersionStatus,
   DocumentVersion,
@@ -72,6 +73,18 @@ const RunTableOpsSchema = z.object({
 });
 type RunTableOpsDto = z.infer<typeof RunTableOpsSchema>;
 
+/**
+ * clarify 确认入参 schema（两阶段交互第二阶段）：在 clarify 协议的
+ * ConfirmRequestSchema（执行基底 + 反问载荷回传 + 用户选定策略）基础上
+ * 扩展原始指令与规则门禁用的 documentId
+ */
+const ConfirmTableOpsSchema = ConfirmRequestSchema.extend({
+  // 原始指令（AI 映射策略转语义填充时作映射提示）
+  instruction: z.string().max(2000).optional(),
+  documentId: z.number().int().positive().optional(),
+});
+type ConfirmTableOpsDto = z.infer<typeof ConfirmTableOpsSchema>;
+
 // ==================== MinerU 解析配置（运行时可配） ====================
 
 /**
@@ -105,21 +118,122 @@ export class DocumentController {
 
   /**
    * POST /documents/table-ops
-   * AI 表格指令：自然语言 → 结构化操作（LLM）→ 代码级精确执行 → 返回新文本+报告。
+   * AI 表格指令（SSE 流式响应）：自然语言 → ReAct 工具循环（LLM 逐轮决策操作，
+   * 执行器精确执行，结果实时推送）→ 最终 result 事件携带新文本+报告。
+   *
+   * SSE 事件流：
+   *   event: progress  data: {seq, phase:'thought'|'action'|'observation', text}  —— 逐轮实时进度
+   *   event: result    data: TableOpsRunResult（与旧 REST 响应体形状一致，另含 summary）
+   *   data: [DONE]     —— 流结束标记
+   *
    * 无副作用：不写库，前端确认应用后由用户保存走既有版本链。
+   * 前端兼容：非 text/event-stream 响应（旧后端/网关降级）按 JSON 解析（api.ts 兜底）。
    */
   @Post('table-ops')
   @Throttle(WRITE_THROTTLE)
   async runTableOps(
     @Body(new ZodValidationPipe(RunTableOpsSchema, { label: 'RunTableOps' }))
     body: RunTableOpsDto,
-  ) {
+    @Res() res: Response,
+  ): Promise<void> {
     logger.info('收到 AI 表格指令请求', {
       module: 'DocumentController',
       instructionLength: body.instruction.length,
       sheetTextLength: body.sheetText.length,
     });
-    return this.tableOpsService.run(body.instruction, body.sheetText, body.documentId);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    // 禁用 Nginx 等反向代理的响应缓冲，保证进度事件实时到达
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (event: string, data: unknown): void => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      const result = await this.tableOpsService.run(
+        body.instruction,
+        body.sheetText,
+        body.documentId,
+        (progressEvent) => send('progress', progressEvent),
+      );
+      send('result', result);
+    } catch (err) {
+      // SSE 已开始，不能改状态码——错误作为 result 事件下发（前端按失败展示）
+      logger.error('AI 表格指令 SSE 执行异常', {
+        module: 'DocumentController',
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      send('result', {
+        ok: false,
+        message: err instanceof Error ? err.message : '表格指令执行失败',
+      });
+    } finally {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }
+
+  /**
+   * POST /documents/table-ops/confirm
+   * clarify 确认（两阶段交互第二阶段）：用户在确认卡选定策略后回传 →
+   * 编译为确定性 ops（无 LLM）→ 执行器精确执行 → 规则门禁。
+   *
+   * SSE 事件流与 table-ops 一致（progress + result + [DONE]）；clarify 反问
+   * 通过 result 事件的 clarify 字段下发（ok=true 但未修改数据），无独立事件类型。
+   *
+   * TOCTOU 防护：sheetTextHash 必须与反问时一致，表格被编辑过则拒绝。
+   */
+  @Post('table-ops/confirm')
+  @Throttle(WRITE_THROTTLE)
+  async confirmTableOps(
+    @Body(new ZodValidationPipe(ConfirmTableOpsSchema, { label: 'ConfirmTableOps' }))
+    body: ConfirmTableOpsDto,
+    @Res() res: Response,
+  ): Promise<void> {
+    logger.info('收到 clarify 确认请求', {
+      module: 'DocumentController',
+      clarifyKind: body.clarify.kind,
+      strategyTypes: body.strategies.map((s) => s.type).join(','),
+      sheetTextLength: body.sheetText.length,
+    });
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (event: string, data: unknown): void => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      const result = await this.tableOpsService.confirm({
+        sheetText: body.sheetText,
+        sheetTextHash: body.sheetTextHash,
+        liveSheetText: body.liveSheetText,
+        clarify: body.clarify,
+        strategies: body.strategies,
+        instruction: body.instruction,
+        documentId: body.documentId,
+        onProgress: (progressEvent) => send('progress', progressEvent),
+      });
+      send('result', result);
+    } catch (err) {
+      logger.error('clarify 确认 SSE 执行异常', {
+        module: 'DocumentController',
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      send('result', {
+        ok: false,
+        message: err instanceof Error ? err.message : '确认执行失败',
+      });
+    } finally {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
   }
 
   /**
@@ -787,14 +901,16 @@ export class DocumentController {
   }
 
   /**
-   * GET /documents/:id/versions/:versionId/export?format=md|txt|docx|xlsx
-   * 导出指定版本内容到指定格式（包含编辑后的最新内容）
+   * GET /documents/:id/versions/:versionId/export?format=md|txt|docx|xlsx&withFormulas=1
+   * 导出指定版本内容到指定格式（包含编辑后的最新内容）。
+   * xlsx 专用 withFormulas=1：LookupFill 关联填充改写为 INDEX/MATCH 真实公式
    */
   @Get(':id/versions/:versionId/export')
   async exportVersion(
     @Param('id', ParseIntPipe) id: number,
     @Param('versionId', ParseIntPipe) versionId: number,
     @Query('format') format: 'md' | 'txt' | 'docx' | 'xlsx',
+    @Query('withFormulas') withFormulas: string | undefined,
     @Res() res: Response,
   ) {
     try {
@@ -804,10 +920,9 @@ export class DocumentController {
           .json({ success: false, message: 'format 仅支持 md / txt / docx / xlsx' });
       }
 
-      const result = await this.documentService.exportVersion(
-        versionId,
-        format,
-      );
+      const result = await this.documentService.exportVersion(versionId, format, {
+        withFormulas: withFormulas === '1' || withFormulas === 'true',
+      });
       res.setHeader('Content-Type', result.mimeType);
       const encodedName = encodeURIComponent(result.fileName);
       res.setHeader(

@@ -2140,6 +2140,9 @@ export class DocumentService implements OnApplicationBootstrap {
   async exportVersion(
     versionId: number,
     format: 'md' | 'txt' | 'docx' | 'xlsx',
+    // xlsx 专用 opt-in：表格含 LookupFill 关联填充声明时，导出改写为 INDEX/MATCH
+    // 真实公式（Excel 中可验证/续算）；缺省 false 保持纯值导出
+    options?: { withFormulas?: boolean },
   ): Promise<{ buffer: Buffer; fileName: string; mimeType: string }> {
     const version = await this.versionRepo.findOne({
       where: { id: versionId },
@@ -2160,7 +2163,9 @@ export class DocumentService implements OnApplicationBootstrap {
 
     if (format === 'xlsx') {
       // sheet 结构化文本 → Excel 工作簿；无表格数据时给业务错误（不静默返回空文件）
-      const workbookBuffer = sheetTextToXlsx(text);
+      const workbookBuffer = sheetTextToXlsx(text, {
+        withFormulas: options?.withFormulas === true,
+      });
       if (!workbookBuffer) {
         throw new Error('该版本没有可导出的表格数据');
       }

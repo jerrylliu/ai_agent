@@ -36,6 +36,13 @@ import {
   updateProfile,
   changePassword,
   uploadAvatar,
+  runTableOps,
+  confirmTableOps,
+} from './api';
+import type {
+  ClarifyPayload,
+  ClarifyStrategy,
+  TableOpsProgressEvent,
 } from './api';
 
 /* =====================================================================
@@ -716,6 +723,201 @@ describe('lib/api', () => {
       );
 
       await expect(getSessionMessages('sess-x')).rejects.toThrow('字段A不能为空; 字段B无效');
+    });
+  });
+
+  /* ====================================================================
+   * AI 表格指令（两阶段 clarify 反问确认协议）
+   * ==================================================================*/
+  describe('AI 表格指令（clarify 两阶段）', () => {
+    /** 构造 SSE 帧（与 sse-parser 约定一致：event + data + 空行） */
+    const sseFrame = (event: string, data: unknown): string =>
+      `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+    /**
+     * 构造 SSE 流式 Response mock：chunks 按序作为 reader 分片吐出，
+     * 切分点任意（可模拟帧被网络分包截断的场景）。
+     * 必须用 TextEncoder 编码——charCodeAt 会截断中文等多字节字符，
+     * 破坏 UTF-8 导致 JSON.parse 失败。
+     */
+    const textEncoder = new TextEncoder();
+    function mockSSEResponse(chunks: string[]): Response {
+      let idx = 0;
+      const reader = {
+        read: async (): Promise<{ done: boolean; value?: Uint8Array }> =>
+          idx < chunks.length
+            ? { done: false, value: textEncoder.encode(chunks[idx++]) }
+            : { done: true },
+      };
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string): string | null =>
+            name.toLowerCase() === 'content-type' ? 'text/event-stream' : null,
+        },
+        body: { getReader: () => reader },
+      } as unknown as Response;
+    }
+
+    /** 非流式 JSON Response mock（后端旧版本 / 网关降级场景） */
+    function mockJsonResponse(response: unknown): Response {
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string): string | null =>
+            name.toLowerCase() === 'content-type' ? 'application/json' : null,
+        },
+        json: vi.fn().mockResolvedValue(response),
+      } as unknown as Response;
+    }
+
+    /** 后端确定性分析器产出的 fill-source 反问载荷（最小样本） */
+    const CLARIFY_FIXTURE: ClarifyPayload = {
+      kind: 'fill-source',
+      question: '数量a 列有 3 个空格，请选择填充策略',
+      columns: [
+        {
+          column: '数量a',
+          gapCount: 3,
+          candidates: [
+            {
+              id: 'const:0',
+              label: '填充固定值 0',
+              strategy: { type: 'fill-constant', targetColumn: '数量a', value: '0' },
+            },
+            { id: 'skip:empty', label: '保留空格', strategy: { type: 'keep-empty' } },
+          ],
+        },
+      ],
+    };
+
+    it('runTableOps：SSE result 携带 clarify → 返回反问载荷（未修改数据），progress 逐轮回调', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue(
+        mockSSEResponse([
+          sseFrame('progress', { seq: 1, phase: 'thought', text: '检测到填充意图，需确认策略' }),
+          sseFrame('result', { ok: true, clarify: CLARIFY_FIXTURE }),
+          'data: [DONE]\n\n',
+        ]),
+      );
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const events: TableOpsProgressEvent[] = [];
+      const result = await runTableOps(
+        { instruction: '把空缺内容补充齐全', sheetText: 'Sheet: 表二\n名称,数量a\n椅子,' },
+        (ev) => events.push(ev),
+      );
+
+      expect(result.ok).toBe(true);
+      expect(result.sheetText).toBeUndefined(); // 第一阶段不修改数据
+      expect(result.clarify?.kind).toBe('fill-source');
+      expect(result.clarify?.columns?.[0]?.column).toBe('数量a');
+      expect(events.map((e) => e.phase)).toEqual(['thought']);
+
+      const { url, init } = lastFetchCall(fetchSpy);
+      expect(url).toContain('/documents/table-ops');
+      expect(JSON.parse(init!.body as string)).toMatchObject({
+        instruction: '把空缺内容补充齐全',
+      });
+    });
+
+    it('runTableOps：SSE 帧跨 chunk 切分也能缓冲解析', async () => {
+      // 切点落在 result 帧 JSON 中间，模拟网络分包
+      const stream =
+        sseFrame('progress', { seq: 1, phase: 'action', text: 'x' }) +
+        sseFrame('result', { ok: true, summary: '已完成' });
+      const cut = stream.indexOf('"summary"');
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(mockSSEResponse([stream.slice(0, cut), stream.slice(cut)])),
+      );
+
+      const result = await runTableOps({ instruction: '加一列', sheetText: 'Sheet: t\na,b' });
+      expect(result.ok).toBe(true);
+      expect(result.summary).toBe('已完成');
+    });
+
+    it('runTableOps：非 SSE 响应（content-type JSON）走 handleResponse 兼容路径', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          mockJsonResponse({ ok: true, sheetText: 'Sheet: t\na,b\n1,2' }),
+        ),
+      );
+
+      const result = await runTableOps({ instruction: '加一列', sheetText: 'Sheet: t\na,b' });
+      expect(result.ok).toBe(true);
+      expect(result.sheetText).toContain('1,2');
+    });
+
+    it('confirmTableOps：clarify/strategies 原样回传，SSE result 返回执行结果', async () => {
+      const fetchSpy = vi.fn().mockResolvedValue(
+        mockSSEResponse([
+          sseFrame('progress', { seq: 1, phase: 'observation', text: '关联填充 2 格' }),
+          sseFrame('result', {
+            ok: true,
+            sheetText: 'Sheet: 表二\n名称,数量a\n椅子,10\n桌子,5',
+            report: [{ message: '填充 2 格' }],
+          }),
+          'data: [DONE]\n\n',
+        ]),
+      );
+      vi.stubGlobal('fetch', fetchSpy);
+
+      const strategies: ClarifyStrategy[] = [
+        {
+          type: 'cross-sheet-lookup',
+          targetColumn: '数量a',
+          targetKeyColumn: '名称',
+          sourceSheet: '表1',
+          sourceKeyColumn: '名称',
+          sourceValueColumn: '数量',
+        },
+      ];
+      const result = await confirmTableOps({
+        sheetText: 'Sheet: 表二\n名称,数量a\n椅子,',
+        sheetTextHash: 'abc123',
+        clarify: CLARIFY_FIXTURE,
+        strategies,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.sheetText).toContain('椅子,10');
+
+      const { url, init } = lastFetchCall(fetchSpy);
+      expect(url).toContain('/documents/table-ops/confirm');
+      const body = JSON.parse(init!.body as string) as {
+        sheetTextHash: string;
+        clarify: ClarifyPayload;
+        strategies: ClarifyStrategy[];
+      };
+      expect(body.sheetTextHash).toBe('abc123'); // TOCTOU hash 原样回传
+      expect(body.clarify).toEqual(CLARIFY_FIXTURE); // 载荷原样回传（服务端二次校验）
+      expect(body.strategies).toEqual(strategies); // 选项 strategy 前端不修改
+    });
+
+    it('流被中断（无 result 事件）→ 返回连接中断提示', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(
+          mockSSEResponse([sseFrame('progress', { seq: 1, phase: 'thought', text: 'x' })]),
+        ),
+      );
+
+      const result = await runTableOps({ instruction: 'x', sheetText: 'y' });
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain('连接中断');
+    });
+
+    it('响应无 body（不支持流式）→ 返回环境不支持提示', async () => {
+      const resp = mockSSEResponse([]);
+      (resp as { body: unknown }).body = null;
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(resp));
+
+      const result = await runTableOps({ instruction: 'x', sheetText: 'y' });
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain('不支持流式响应');
     });
   });
 });

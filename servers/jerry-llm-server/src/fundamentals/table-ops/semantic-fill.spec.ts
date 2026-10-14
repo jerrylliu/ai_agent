@@ -3,6 +3,7 @@
  *
  * 覆盖：空缺统计（依据列自动兜底/全空依据行跳过/去重截断但总数真实）、
  *       映射校验与应用（多列拼接键/非空行保留/应用计数）、
+ *       跨表参照（同名列对照/缺列跳过/无匹配返回 undefined/行数上限）、
  *       分批切分与报价、批输入文本格式、批级校验（缺行即失败）、
  *       批结果应用（行号越界抛错）。
  */
@@ -15,6 +16,7 @@ import {
   buildBatchRowsText,
   batchFillMissingRows,
   applyBatchFills,
+  buildCrossSheetReference,
   MAX_DISTINCT_FOR_MAPPING,
   MAX_MAPPING_ENTRIES,
   type FillMappingOutput,
@@ -29,8 +31,64 @@ function singleSheetText(headers: string, ...rows: string[]): string {
 
 /** 快捷构造：直接构建 SheetData（单元测试精确控制，不经过文本解析） */
 function makeSheet(headers: string[], rows: string[][]): SheetData {
-  return { name: '测试', headers, rows };
+  return {
+    name: '测试',
+    headerRowIndex: 1,
+    totalRowIndexes: [],
+    preambleRows: [],
+    headers,
+    rows,
+    lookupFills: [],
+  };
 }
+
+// ==================== 汇总行声明式排除 ====================
+
+describe('汇总行声明式排除（totalRowIndexes）', () => {
+  /** 带已声明汇总行的表：总计在第 4 数据行（内容行 5），目标列销售员空缺 */
+  function makeTotalSheet(): SheetData {
+    return parseSheetData(
+      [
+        'Sheet: 测试',
+        'TotalRow: 5',
+        '产品,销售员,销售额',
+        '办公椅,,1400',
+        '办公桌,,800',
+        '显示器,,3600',
+        '总计,,5800',
+      ].join('\n'),
+    )[0];
+  }
+
+  it('analyzeFillGaps：总行空缺不进统计（即使它的依据列有值）', () => {
+    const sheet = makeTotalSheet();
+    const stats = analyzeFillGaps(sheet, '销售员', ['产品']);
+    expect(stats.emptyRowIndexes).toEqual([1, 2, 3]);
+    expect(stats.distinctBasisValues).toEqual(['办公椅', '办公桌', '显示器']);
+    expect(stats.distinctCount).toBe(3);
+  });
+
+  it('applyFillMapping：总行依据值在映射中也不写入（应用阶段二次拦截）', () => {
+    const sheet = makeTotalSheet();
+    const mapping = new Map<string, string>([
+      ['办公椅', '张三'],
+      ['办公桌', '李四'],
+      ['显示器', '王五'],
+      ['总计', '赵六'], // 总行的依据值——声明式闸门必须拦下它
+    ]);
+    const applied = applyFillMapping(sheet, '销售员', ['产品'], mapping);
+    expect(applied).toBe(3);
+    expect(sheet.rows[3]).toEqual(['总计', '', '5800']); // 总行原样（销售员仍空缺）
+  });
+
+  it('buildCrossSheetReference：总行不作为跨表参照样本', () => {
+    const target = parseSheetData('Sheet: 目标\nTotalRow: 3\n产品,销售员\n办公椅,\n总计,6\n')[0];
+    const ref = parseSheetData('Sheet: 参照\n产品,类型\n办公椅,家电\n总计,6\n')[0];
+    const text = buildCrossSheetReference(target, ref, ['产品']);
+    // 若总行未排除会多出 "产品=总计 → 类型=6"
+    expect(text).toBe('产品=办公椅 → 类型=家电');
+  });
+});
 
 // ==================== analyzeFillGaps 空缺统计 ====================
 
@@ -404,5 +462,61 @@ describe('常量与冒烟', () => {
     expect(sheet.rows[0][1]).toBe('华北');
     expect(sheet.rows[2][1]).toBe('华南');
     expect(sheet.rows[3][1]).toBe('华南'); // 原有值保留
+  });
+});
+
+// ==================== buildCrossSheetReference 跨表参照 ====================
+
+describe('buildCrossSheetReference - 跨表对照文本', () => {
+  const target = makeSheet(
+    ['产品', '类型'],
+    [
+      ['冰箱', ''],
+      ['洗衣机', ''],
+      ['冰箱', ''], // 重复值去重
+    ],
+  );
+  const reference = makeSheet(
+    ['产品', '类型', '单价'],
+    [
+      ['冰箱', '家电', '1200'],
+      ['洗衣机', '家电', '800'],
+      ['电视', '家电', '3000'],
+    ],
+  );
+
+  it('同名列逐值对照，输出 "列=值 → 其他列样本" 行', () => {
+    const text = buildCrossSheetReference(target, reference, ['产品']);
+    expect(text).toContain('产品=冰箱 → 类型=家电，单价=1200');
+    expect(text).toContain('产品=洗衣机 → 类型=家电，单价=800');
+    expect(text).not.toContain('电视'); // 目标表没有的值不出对照
+  });
+
+  it('重复取值去重（同一依据值只出一行对照）', () => {
+    const text = buildCrossSheetReference(target, reference, ['产品']);
+    expect((text ?? '').split('\n')).toHaveLength(2);
+  });
+
+  it('依据列在参照表缺同名列时跳过；全部缺列返回 undefined', () => {
+    const noMatch = buildCrossSheetReference(target, reference, ['城市']);
+    expect(noMatch).toBeUndefined();
+  });
+
+  it('参照表存在该列但值都对不上 → 返回 undefined（无参照价值）', () => {
+    const emptyRef = makeSheet(['产品', '类型'], [['空调', '家电']]);
+    expect(buildCrossSheetReference(target, emptyRef, ['产品'])).toBeUndefined();
+  });
+
+  it('maxLines 截断对照行数', () => {
+    const bigTarget = makeSheet(
+      ['产品', '类型'],
+      Array.from({ length: 60 }, (_, i) => [`P${i}`, '']),
+    );
+    const bigRef = makeSheet(
+      ['产品', '类型'],
+      Array.from({ length: 60 }, (_, i) => [`P${i}`, 'T']),
+    );
+    const text = buildCrossSheetReference(bigTarget, bigRef, ['产品'], 5);
+    expect((text ?? '').split('\n')).toHaveLength(5);
   });
 });
