@@ -16,7 +16,7 @@
  */
 
 import { z } from 'zod';
-import { TableOpsError, findColumn, parseSheetData, type SheetData } from './executor.js';
+import { TableOpsError, findColumn, type SheetData } from './executor.js';
 
 // ==================== Zod Schema（LLM 输出校验） ====================
 
@@ -53,6 +53,8 @@ export const FillRuleSuggestionSchema = z.object({
   name: z.string().min(1).max(200),
   column: z.string().min(1).max(200),
   values: z.array(z.string().min(1).max(200)).min(1).max(50),
+  // 服务层在返回前会把本次填充的目标工作表名回填到这里（多 sheet 文档规则才能查对表）
+  targetSheet: z.string().min(1).max(200).optional(),
 });
 export type FillRuleSuggestion = z.infer<typeof FillRuleSuggestionSchema>;
 
@@ -116,10 +118,14 @@ export function analyzeFillGaps(
   }
 
   // 空缺行扫描：目标列为空的行；依据值 = 依据列值拼接（单依据列直接用值，多列用 "a | b"）
+  // 汇总行是声明式排除（totalRowIndexes），不再靠首格文字猜测——聚合结果行不是
+  // 明细数据，即使目标列为空也不填充（补数值应走 aggregateUpdateCell 重算）
+  const totalSet = new Set(sheet.totalRowIndexes);
   const emptyRowIndexes: number[] = [];
   const distinct = new Set<string>();
   const rowSamples = new Map<string, string>();
   for (let i = 0; i < sheet.rows.length; i++) {
+    if (totalSet.has(i)) continue;
     const row = sheet.rows[i];
     const targetCell = (row[targetIdx] ?? '').trim();
     if (targetCell !== '') continue;
@@ -176,8 +182,13 @@ export function applyFillMapping(
 ): number {
   const targetIdx = findColumn(sheet, targetColumn);
   const basisCols = hintColumns.map((name) => findColumn(sheet, name));
+  // 汇总行声明式跳过：空缺统计虽然已排除，但总行的依据值可能与数据行巧合同值，
+  // 应用阶段二次拦截（声明优于推断，两道闸都用同一份声明）
+  const totalSet = new Set(sheet.totalRowIndexes);
   let applied = 0;
-  for (const row of sheet.rows) {
+  for (let i = 0; i < sheet.rows.length; i++) {
+    if (totalSet.has(i)) continue;
+    const row = sheet.rows[i];
     const targetCell = (row[targetIdx] ?? '').trim();
     if (targetCell !== '') continue;
     const basisKey = basisCols.map((idx) => (row[idx] ?? '').trim()).join(' | ');
@@ -188,6 +199,67 @@ export function applyFillMapping(
     applied += 1;
   }
   return applied;
+}
+
+// ==================== 跨表参照（"按 B 表内容补 A 表"） ====================
+
+/** 对照样本行数上限（防参照表巨大时 prompt 爆炸） */
+const MAX_CROSS_REF_LINES = 40;
+
+/**
+ * 生成跨表对照文本：对目标表依据列的每个取值，到参照表的同名列找匹配行，
+ * 收集该行其他列的取值作为对照样本（如 产品=冰箱 → 类型=家电，单价=1200）。
+ *
+ * 依据列在目标表或参照表中不存在同名列时该列跳过（不中断——可能只有部分
+ * 依据列能跨表对照）；一条对照都产不出返回 undefined（无参照价值）。
+ * 供 LLM 填充提示词注入，让"按照销售明细表补汇总表"这类跨表意图有数据依据。
+ */
+export function buildCrossSheetReference(
+  sheet: SheetData,
+  referenceSheet: SheetData,
+  hintColumns: string[],
+  maxLines: number = MAX_CROSS_REF_LINES,
+): string | undefined {
+  const pairs: Array<{ name: string; sheetIdx: number; refIdx: number }> = [];
+  for (const name of hintColumns) {
+    try {
+      pairs.push({
+        name,
+        sheetIdx: findColumn(sheet, name),
+        refIdx: findColumn(referenceSheet, name),
+      });
+    } catch {
+      // 目标表或参照表缺该列：该列无法跨表对照，跳过
+    }
+  }
+  if (pairs.length === 0) return undefined;
+
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  // 汇总行声明式跳过：聚合结果行不作为跨表参照样本（它不是明细数据）
+  const totalSet = new Set(sheet.totalRowIndexes);
+  for (const pair of pairs) {
+    for (let i = 0; i < sheet.rows.length && lines.length < maxLines; i++) {
+      if (totalSet.has(i)) continue;
+      const row = sheet.rows[i];
+      const value = (row[pair.sheetIdx] ?? '').trim();
+      if (!value || seen.has(value)) continue;
+      seen.add(value);
+      // 参照表中该值的行 → 其他列取值样本（≤4 列，单元格截断 30 字符）
+      const refRow = referenceSheet.rows.find((r) => (r[pair.refIdx] ?? '').trim() === value);
+      if (!refRow) continue;
+      const samples: string[] = [];
+      for (let c = 0; c < referenceSheet.headers.length && samples.length < 4; c++) {
+        if (c === pair.refIdx) continue;
+        const v = (refRow[c] ?? '').trim();
+        if (v) samples.push(`${referenceSheet.headers[c]?.trim() || `第${c + 1}列`}=${v.slice(0, 30)}`);
+      }
+      if (samples.length > 0) {
+        lines.push(`${pair.name}=${value} → ${samples.join('，')}`);
+      }
+    }
+  }
+  return lines.length > 0 ? lines.join('\n') : undefined;
 }
 
 // ==================== 分批（路径 2） ====================

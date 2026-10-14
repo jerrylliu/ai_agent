@@ -4,7 +4,8 @@
  * 语义填充编排服务测试（Jest，LLM 层整体 mock，纯函数层用真实实现）：
  *   1. preview 路径决策：无空缺抛错 / 去重 ≤100 走映射路径 / 去重 >100 出分批报价（不调 LLM）
  *   2. 映射路径：全量映射成功刷全表 / LLM 缺值整体拒绝 / suggestRule 透传 / targetSheet 定位
- *   3. 规则门禁（功能 5）：映射结果违规整体拒绝 / 规则加载失败放行 / 分批终态门禁拒绝置 failed
+ *   3. 规则门禁（功能 5）：新增违规整体拒绝 / 文档既有违规不连坐（只拒绝新增） /
+ *      规则约束注入填充提示词 / 规则加载失败放行 / 分批终态门禁拒绝置 failed
  *   4. 分批任务：start→done 全链路 / 多批进度 / 批失败保留已完成部分 / 协作式取消 / 并发上限
  *   5. 任务查询与取消：不存在返回 null / 终态无需取消
  */
@@ -273,6 +274,88 @@ describe('SemanticFillService', () => {
       expect(result).toMatchObject({ path: 'mapping', ok: true, appliedRows: 3 });
     });
 
+    it('文档既有违规不拦截无关填充（门禁只拒绝新增违规）', async () => {
+      // 区域列在填充前就有白名单违规（华北/华南 ∉ [华东]），但本次填充只动
+      // 负责人列——既有违规不该连坐，填充应正常放行
+      const svc = new SemanticFillService(
+        makeRuleService([
+          {
+            id: 1,
+            name: '区域白名单',
+            type: 'allowedValues',
+            params: { column: '区域', values: ['华东'] },
+          },
+        ]),
+      );
+      mockInferFillMapping.mockResolvedValueOnce(FULL_MAPPING);
+      const result = await svc.preview({
+        instruction: '',
+        sheetText: MAPPING_SHEET,
+        targetColumn: '负责人',
+        hintColumns: ['区域'],
+        documentId: 42,
+      });
+      expect(result).toMatchObject({ path: 'mapping', ok: true, appliedRows: 3 });
+    });
+
+    it('既有违规之外又新增违规 → 拒绝，文案区分新增明细与既有数量', async () => {
+      const svc = new SemanticFillService(
+        makeRuleService([
+          {
+            id: 1,
+            name: '区域白名单',
+            type: 'allowedValues',
+            params: { column: '区域', values: ['华东'] },
+          },
+          {
+            id: 2,
+            name: '负责人白名单',
+            type: 'allowedValues',
+            params: { column: '负责人', values: ['张三'] },
+          },
+        ]),
+      );
+      mockInferFillMapping.mockResolvedValueOnce(FULL_MAPPING);
+      const result = await svc.preview({
+        instruction: '',
+        sheetText: MAPPING_SHEET,
+        targetColumn: '负责人',
+        hintColumns: ['区域'],
+        documentId: 42,
+      });
+      if (result.ok !== false) throw new Error('应当被门禁拒绝');
+      expect(result.message).toContain('新增');
+      expect(result.message).toContain('既有违规');
+      // 拒绝清单只含本次填充引入的违规（负责人列），不含区域列的既有违规
+      expect(result.ruleViolations.violations.length).toBeGreaterThan(0);
+      expect(result.ruleViolations.violations.every((v) => v.column === '负责人')).toBe(true);
+    });
+
+    it('目标列命中取值白名单规则 → 约束注入填充提示词（事前遵守）', async () => {
+      const svc = new SemanticFillService(
+        makeRuleService([
+          {
+            id: 1,
+            name: '负责人白名单',
+            type: 'allowedValues',
+            params: { column: '负责人', values: ['张三', '李四'] },
+          },
+        ]),
+      );
+      mockInferFillMapping.mockResolvedValueOnce(FULL_MAPPING);
+      await svc.preview({
+        instruction: '',
+        sheetText: MAPPING_SHEET,
+        targetColumn: '负责人',
+        hintColumns: ['区域'],
+        documentId: 42,
+      });
+      const constraints = mockInferFillMapping.mock.calls[0][2] as string | undefined;
+      expect(constraints).toBeDefined();
+      expect(constraints).toContain('只能填');
+      expect(constraints).toContain('张三');
+    });
+
     it('规则加载失败 → 记日志放行（规则器不拖垮填充主链路）', async () => {
       const svc = new SemanticFillService(makeRuleService(new Error('db down')));
       mockInferFillMapping.mockResolvedValueOnce(FULL_MAPPING);
@@ -427,7 +510,17 @@ describe('SemanticFillService', () => {
           hintColumns: ['地区'],
         }),
       ).toThrow('填充任务在进行中');
-      // 放行全部挂起的批次，确认任务都能正常收尾（不悬挂测试进程）
+      // 放行全部挂起的批次，确认任务都能正常收尾（不悬挂测试进程）。
+      // 不依赖微任务时序：runTask 异步启动，startBatchTask 返回时 inferBatchFill
+      // 未必已被调用——等 3 个 deferred 都挂上再放行
+      const waitUntil = async (cond: () => boolean): Promise<void> => {
+        const deadline = Date.now() + 2000;
+        while (!cond()) {
+          if (Date.now() > deadline) throw new Error('等待批次 LLM 调用发起超时');
+          await new Promise((r) => setTimeout(r, 5));
+        }
+      };
+      await waitUntil(() => deferreds.length === 3);
       for (const resolve of deferreds) resolve({ fills: [{ row: 1, value: 'x' }] });
       for (const id of ids) {
         const status = await waitForTerminal(service, id);
@@ -449,6 +542,74 @@ describe('SemanticFillService', () => {
       await waitForTerminal(service, res.taskId);
       expect(service.cancelTask(res.taskId).cancelled).toBe(false); // 已是终态
       expect(service.cancelTask(res.taskId).message).toContain('终态');
+    });
+  });
+
+  // ==================== 跨表参照（referenceSheet） ====================
+
+  describe('跨表填充 referenceSheet', () => {
+    /** 目标表 + 参照表的双 sheet 文档：汇总表类型列空缺，明细表有产品→类型对照 */
+    const CROSS_DOC = [
+      'Sheet: 销售汇总',
+      '产品,类型',
+      '冰箱,',
+      '洗衣机,',
+      'Sheet: 销售明细',
+      '产品,类型,单价',
+      '冰箱,家电,1200',
+      '洗衣机,家电,800',
+    ].join('\n');
+
+    it('preview 传 referenceSheet → 参照表对照文本注入 inferFillMapping', async () => {
+      mockInferFillMapping.mockResolvedValueOnce({
+        mapping: [
+          { from: '冰箱', to: '家电' },
+          { from: '洗衣机', to: '家电' },
+        ],
+      });
+      await service.preview({
+        instruction: '按销售明细补类型',
+        sheetText: CROSS_DOC,
+        targetColumn: '类型',
+        hintColumns: ['产品'],
+        targetSheet: '销售汇总',
+        referenceSheet: '销售明细',
+      });
+      const crossReference = mockInferFillMapping.mock.calls[0][3] as string | undefined;
+      expect(crossReference).toBeDefined();
+      expect(crossReference).toContain('产品=冰箱 → 类型=家电，单价=1200');
+      expect(crossReference).toContain('产品=洗衣机 → 类型=家电，单价=800');
+    });
+
+    it('参照工作表不存在 → 抛业务错误（不静默忽略参照要求）', async () => {
+      const err = await service
+        .preview({
+          instruction: '',
+          sheetText: CROSS_DOC,
+          targetColumn: '类型',
+          hintColumns: ['产品'],
+          targetSheet: '销售汇总',
+          referenceSheet: '不存在的表',
+        })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(TableOpsError);
+      expect((err as Error).message).toContain('找不到参照工作表');
+    });
+
+    it('分批报价回传 targetSheet/referenceSheet（前端 start 时原样带回）', async () => {
+      const result = await service.preview({
+        instruction: '',
+        sheetText: makeWideSheet(101),
+        targetColumn: '负责人',
+        hintColumns: ['地区'],
+        targetSheet: 't',
+        referenceSheet: '明细',
+      });
+      expect(result).toMatchObject({
+        path: 'batch',
+        targetSheet: 't',
+        referenceSheet: '明细',
+      });
     });
   });
 });

@@ -4,14 +4,17 @@
  * 覆盖：5 类规则检查（非空/白名单/数值范围/唯一/公式）、修复三类动作
  *       （固定值/公式重算/删行）、失效规则（列不存在/表达式错误不中断）、
  *       多规则修复的行号安全（改写先行、删行最后从大到小）、
- *       违规截断护栏、列级统计、parseTableRuleJson 脏数据兜底。
+ *       违规截断护栏、列级统计、parseTableRuleJson 脏数据兜底、
+ *       diffViolations（门禁"只拒绝新增违规"的多重集差集）。
  */
 import {
   checkRules,
   applyRuleFixes,
   buildColumnStats,
   columnStatsToOverview,
+  diffViolations,
   parseTableRuleJson,
+  type RuleViolation,
   type TableRuleRuntime,
 } from './rules';
 
@@ -19,6 +22,87 @@ import {
 function singleSheetText(headers: string, ...rows: string[]): string {
   return `Sheet: 测试\n${headers}\n${rows.join('\n')}`;
 }
+
+// ==================== 汇总行声明式跳过 ====================
+
+describe('checkRules / buildColumnStats - 汇总行跳过', () => {
+  // 表头第 3 行，明细 3 行，总计在第 7 行（声明 TotalRow: 7）；
+  // 总计行销售员留空、区域是"总计"（白名单外）、销售额 600（超明细上限）
+  const text = [
+    'Sheet: 测试',
+    'HeaderRow: 3',
+    'TotalRow: 7',
+    '销售汇总报告,',
+    '2026-10-01 ~ 2026-10-11,',
+    '区域,销售员,销售额',
+    '华南,甲,100',
+    '华北,乙,200',
+    '华南,丙,300',
+    '总计,,600',
+  ].join('\n');
+
+  it('notEmpty：总行留空的格不违规', () => {
+    const rules: TableRuleRuntime[] = [
+      { id: 1, name: '销售员不能留空', type: 'notEmpty', params: { column: '销售员' } },
+    ];
+    const result = checkRules(text, rules);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('allowedValues：总行"总计"标签不在白名单也不违规', () => {
+    const rules: TableRuleRuntime[] = [
+      { id: 2, name: '区域白名单', type: 'allowedValues', params: { column: '区域', values: ['华南', '华北'] } },
+    ];
+    const result = checkRules(text, rules);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('numericRange：总行 600 超上限不违规', () => {
+    const rules: TableRuleRuntime[] = [
+      { id: 3, name: '销售额上限', type: 'numericRange', params: { column: '销售额', max: 500 } },
+    ];
+    const result = checkRules(text, rules);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('unique：总行与明细行同值不算重复', () => {
+    const dupText = text.replace('总计,,600', '总计,甲,600');
+    const rules: TableRuleRuntime[] = [
+      { id: 4, name: '销售员唯一', type: 'unique', params: { column: '销售员' } },
+    ];
+    const result = checkRules(dupText, rules);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('formula：总行不满足明细公式不违规（总行=明细合计，天然不满足）', () => {
+    const fText = [
+      'Sheet: 测试',
+      'HeaderRow: 3',
+      'TotalRow: 7',
+      '销售汇总报告,',
+      '2026-10-01 ~ 2026-10-11,',
+      '产品,数量,单价,销售额',
+      'a,2,10,20',
+      'b,3,5,15',
+      'c,1,4,4',
+      '总计,6,5800,600',
+    ].join('\n');
+    const rules: TableRuleRuntime[] = [
+      { id: 5, name: '销售额公式', type: 'formula', params: { targetColumn: '销售额', expression: '[数量]*[单价]' } },
+    ];
+    const result = checkRules(fText, rules);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it('buildColumnStats：总行不计入行数/空值率/数值分布（防统计污染）', () => {
+    const stats = buildColumnStats(text);
+    const sales = stats[0].columns.find((c) => c.column === '销售额')!;
+    const seller = stats[0].columns.find((c) => c.column === '销售员')!;
+    expect(sales.totalRows).toBe(3);
+    expect(sales.numericMax).toBe(300); // 600 被排除
+    expect(seller.emptyCount).toBe(0); // 总行空格不算空值率
+  });
+});
 
 describe('checkRules - notEmpty 非空', () => {
   const rules: TableRuleRuntime[] = [
@@ -458,5 +542,194 @@ describe('parseTableRuleJson - 脏数据兜底', () => {
         JSON.stringify({ kind: 'noSuchKind' }),
       ),
     ).toBeNull();
+  });
+
+  it('带 targetSheet → 运行时规则携带绑定的工作表名', () => {
+    const rule = parseTableRuleJson(
+      7,
+      '明细区域不能留空',
+      'notEmpty',
+      JSON.stringify({ column: '区域' }),
+      null,
+      '销售明细',
+    );
+    expect(rule).toEqual({
+      id: 7,
+      name: '明细区域不能留空',
+      type: 'notEmpty',
+      params: { column: '区域' },
+      targetSheet: '销售明细',
+    });
+    // NULL/空串 → 未绑定（无 targetSheet 键，作用于第一个工作表）
+    expect(parseTableRuleJson(8, 'x', 'notEmpty', JSON.stringify({ column: '区域' }), null, null))
+      .not.toHaveProperty('targetSheet');
+  });
+});
+
+// ==================== 多 sheet 工作表绑定（targetSheet） ====================
+
+describe('checkRules - targetSheet 工作表绑定', () => {
+  /** 双 sheet 文本：第一个"目标"，第二个"销售明细"（列名与第一个 sheet 互不重叠） */
+  const multiText = [
+    'Sheet: 目标\n日期,金额\n2026-01-01,100',
+    'Sheet: 销售明细\n区域,销售额\n,100\n华南,200',
+  ].join('\n\n');
+
+  it('绑定第二个 sheet 的规则检查那张表；未绑定规则检查第一个 sheet', () => {
+    const rules: TableRuleRuntime[] = [
+      // 未绑定 → 第一个 sheet"目标"，金额 100 在范围内，无违规
+      { id: 1, name: '目标金额范围', type: 'numericRange', params: { column: '金额', min: 0, max: 10000 } },
+      // 绑定第二个 sheet"销售明细"，第 1 行区域为空
+      {
+        id: 2,
+        name: '明细区域不能留空',
+        type: 'notEmpty',
+        params: { column: '区域' },
+        targetSheet: '销售明细',
+      },
+    ];
+    const result = checkRules(multiText, rules);
+    expect(result.invalidRules).toHaveLength(0);
+    expect(result.checkedRules).toBe(2);
+    // 只有绑定规则产生违规，且违规行号/工作表名都来自"销售明细"
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]).toMatchObject({
+      ruleId: 2,
+      rowIndex: 1,
+      column: '区域',
+      sheetName: '销售明细',
+    });
+  });
+
+  it('绑定的工作表不存在 → 归入 invalidRules（不静默跳过）', () => {
+    const rules: TableRuleRuntime[] = [
+      {
+        id: 1,
+        name: '明细区域不能留空',
+        type: 'notEmpty',
+        params: { column: '区域' },
+        targetSheet: '不存在表',
+      },
+    ];
+    const result = checkRules(multiText, rules);
+    expect(result.checkedRules).toBe(0);
+    expect(result.violations).toHaveLength(0);
+    expect(result.invalidRules).toEqual([
+      { ruleId: 1, ruleName: '明细区域不能留空', reason: expect.stringContaining('找不到工作表') },
+    ]);
+  });
+
+  it('单 sheet 容错：targetSheet 名字记错仍命中唯一的工作表', () => {
+    const rules: TableRuleRuntime[] = [
+      {
+        id: 1,
+        name: '区域不能留空',
+        type: 'notEmpty',
+        params: { column: '区域' },
+        targetSheet: '销售明细表',
+      },
+    ];
+    // 第 2 行区域为空但销售额有值（纯空行会被解析器跳过，不能用空行测空缺）
+    const result = checkRules(singleSheetText('区域,销售额', '华南,100', ',200'), rules);
+    expect(result.invalidRules).toHaveLength(0);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0].rowIndex).toBe(2);
+  });
+});
+
+describe('applyRuleFixes - 多 sheet 修复', () => {
+  it('各规则修复各自绑定的工作表：固定值写对表、删行只删绑定表', () => {
+    const rules: TableRuleRuntime[] = [
+      // 绑定"目标"：金额越界 → 固定值修复（改写类，不删行）
+      {
+        id: 1,
+        name: '目标金额范围',
+        type: 'numericRange',
+        params: { column: '金额', min: 0, max: 10000 },
+        targetSheet: '目标',
+        fixAction: { kind: 'fixedValue', value: '0' },
+      },
+      // 绑定"销售明细"：区域为空 → 删行
+      {
+        id: 2,
+        name: '明细区域删行',
+        type: 'notEmpty',
+        params: { column: '区域' },
+        targetSheet: '销售明细',
+        fixAction: { kind: 'deleteRow' },
+      },
+    ];
+    const text = [
+      'Sheet: 目标\n日期,金额\n2026-01-01,-5',
+      'Sheet: 销售明细\n区域,销售额\n,100\n华南,200',
+    ].join('\n\n');
+
+    const check = checkRules(text, rules);
+    expect(check.violations).toHaveLength(2);
+    // 默认字符串排序：目(U+76EE) < 销(U+9500)
+    expect(check.violations.map((v) => v.sheetName).sort()).toEqual(['目标', '销售明细']);
+
+    const result = applyRuleFixes(text, rules, check.violations);
+    // 无修复失败报告
+    expect(result.report.every((r) => !r.message.startsWith('修复失败'))).toBe(true);
+    // 目标 sheet：-5 被固定值改写为 0，数据行数不变（删行没有波及第一个 sheet）
+    const blocks = result.sheetText.split('\n\n');
+    expect(blocks[0]).toContain('2026-01-01,0');
+    // 标题行 + 表头行 + 1 行数据
+    expect(blocks[0].trim().split('\n')).toHaveLength(3);
+    // 销售明细 sheet：空区域行被删除，只剩华南行
+    expect(blocks[1].trim().split('\n')).toEqual(['Sheet: 销售明细', '区域,销售额', '华南,200']);
+  });
+});
+
+// ==================== diffViolations（门禁"只拒绝新增违规"） ====================
+
+describe('diffViolations - 多重集差集', () => {
+  const mk = (over: Partial<RuleViolation>): RuleViolation => ({
+    ruleId: 1,
+    ruleName: '区域不能留空',
+    ruleType: 'notEmpty',
+    sheetName: '测试',
+    rowIndex: 1,
+    column: '区域',
+    currentValue: '',
+    expectation: '不能留空',
+    fixable: false,
+    ...over,
+  });
+
+  it('after 与 before 完全一致 → 无新增', () => {
+    const list = [mk({}), mk({ rowIndex: 2, currentValue: 'x', expectation: '应为 A/B 之一' })];
+    expect(diffViolations(list, list.map((v) => ({ ...v })))).toEqual([]);
+  });
+
+  it('after 多出的违规 → 报告为新增', () => {
+    const before = [mk({})];
+    const after = [mk({}), mk({ rowIndex: 3 })];
+    expect(diffViolations(before, after).map((v) => v.rowIndex)).toEqual([3]);
+  });
+
+  it('行号位移但内容相同（删行后整体上移）→ 不算新增（键不含行号）', () => {
+    const before = [mk({ rowIndex: 5, currentValue: '脏值' })];
+    const after = [mk({ rowIndex: 4, currentValue: '脏值' })];
+    expect(diffViolations(before, after)).toEqual([]);
+  });
+
+  it('同内容违规数量增加 → 增量部分报为新增（多重集而非集合）', () => {
+    const before = [mk({})];
+    const after = [mk({}), mk({ rowIndex: 9 })];
+    expect(diffViolations(before, after)).toHaveLength(1);
+  });
+
+  it('同内容违规数量减少 → 无新增（修好了不算坏事）', () => {
+    const before = [mk({}), mk({ rowIndex: 2 })];
+    const after = [mk({ rowIndex: 2 })];
+    expect(diffViolations(before, after)).toEqual([]);
+  });
+
+  it('不同规则/不同列的相似违规不互抵（键含 ruleId 与列名）', () => {
+    const before = [mk({ ruleId: 1, column: '区域' })];
+    const after = [mk({ ruleId: 2, column: '负责人', ruleName: '负责人不能留空' })];
+    expect(diffViolations(before, after)).toHaveLength(1);
   });
 });

@@ -26,13 +26,18 @@ import { logger } from './logger';
  * 从 LLM 自由文本中尽可能抽出 JSON 子串。
  *
  * 策略：
+ *   0. 先剥离 <think>...</think> 推理块（thinking 模型的草稿里常出现 JSON 碎片，
+ *      不剥离会让"第一个{到最后一个}"跨到草稿上抽出非法 JSON）
  *   1. 优先匹配 ```json ... ``` 或 ``` ... ``` 围栏内容
  *   2. 否则定位第一个 `{` 与最后一个 `}`，或 `[` 与 `]`
  *   3. 失败返回 null（让上层走降级，不要再去硬试）
  */
 export function extractJsonText(raw: string): string | null {
   if (!raw || typeof raw !== 'string') return null;
-  const text = raw.trim();
+  const text = raw
+    .trim()
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .trim();
 
   // 1) markdown 围栏
   const fenceMatch =

@@ -53,6 +53,13 @@ export class TableRule {
   @Column({ type: 'varchar', length: 10, default: 'manual' })
   source: string;
 
+  /**
+   * 规则作用的工作表名（可选；NULL = 文档第一个工作表，向后兼容旧规则）。
+   * 多 sheet 文档里 AI 提议的规则会绑定列所在的工作表，检查/修复据此定位。
+   */
+  @Column({ type: 'varchar', length: 200, nullable: true })
+  targetSheet: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

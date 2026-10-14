@@ -18,12 +18,20 @@ import {
   buildModelConfig,
   createRateLimitedLLM,
   getCurrentModelId,
+  getModelCapabilities,
 } from '../model-provider.js';
 import { extractJsonText } from '../llm-json-parser.js';
 import { logger } from '../logger.js';
 import { TableRuleSchema, columnStatsToOverview } from './rules.js';
 import type { SheetColumnStats, TableRuleInput } from './rules.js';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+
+/**
+ * "该模型不支持强制结构化输出"的进程级记忆（与 parse.ts 同款）：
+ * thinking 模型拒绝 tool_choice——运行时命中后同模型直接走兜底，
+ * 避免每次提议都白打一轮注定失败的 400。
+ */
+let structuredOutputUnavailableModelId: string | null = null;
 
 /** 提议的系统提示词（主/兜底路径共用） */
 const SUGGEST_PROMPT = `你是表格数据治理助手。根据表格的列级统计（空值率、去重值、数值分布），提议最多 8 条数据质量规则，输出 JSON 对象 {"rules":[...]}。
@@ -44,7 +52,8 @@ const SUGGEST_PROMPT = `你是表格数据治理助手。根据表格的列级�
 - name 用简短中文（如"区域不能留空"）
 - 只提议有统计依据的规则，宁缺毋滥；没有把握一条都不提就返回 {"rules":[]}
 - 列名必须从统计中逐字选取，不要编造
-- 数值范围的 min/max 参考统计给出的分布并留合理余量`;
+- 数值范围的 min/max 参考统计给出的分布并留合理余量
+- targetSheet 必须填该列所在工作表的名称（逐字取自统计里"工作表「××」"的名字）；统计只有一个工作表时可省略该字段`;
 
 /** LLM 产出包裹 schema：{"rules":[...]} */
 const SuggestPlanSchema = z.object({
@@ -90,17 +99,39 @@ export async function suggestRulesFromStats(
     new HumanMessage(`列级统计：\n${columnStatsToOverview(stats)}`),
   ];
 
-  // 主路径：function calling 结构化输出（jsonSchema 方法会被部分兼容端点拒绝，见 parse.ts 注释）
-  try {
-    const structured = llm.withStructuredOutput(SuggestPlanSchema, { method: 'functionCalling' });
-    const plan = await structured.invoke(messages);
-    return plan.rules;
-  } catch (err) {
-    logger.warn('规则提议 withStructuredOutput 失败，降级为提示词抽取路径', {
+  // 主路径：function calling 结构化输出（jsonSchema 方法会被部分兼容端点拒绝，见 parse.ts 注释）。
+  // 前置能力检查：静态标注不支持 tool_choice 的模型（如 thinking 模式）主路径必然
+  // 撞 400，直接跳过走兜底——省一次注定失败的请求（能力探测可能测不出 thinking 限制）
+  if (
+    structuredOutputUnavailableModelId === modelId ||
+    !getModelCapabilities(modelId).supportsToolChoice
+  ) {
+    logger.info('当前模型不支持强制结构化输出，规则提议直接走提示词抽取路径', {
       module: 'TableRulesSuggest',
       modelId,
-      error: err instanceof Error ? err.message : String(err),
     });
+  } else {
+    try {
+      const structured = llm.withStructuredOutput(SuggestPlanSchema, { method: 'functionCalling' });
+      const plan = await structured.invoke(messages);
+      return plan.rules;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/response_format|tool_choice|Thinking mode/i.test(msg)) {
+        structuredOutputUnavailableModelId = modelId;
+        logger.warn('当前模型不支持强制结构化输出，规则提议后续直接走提示词抽取路径', {
+          module: 'TableRulesSuggest',
+          modelId,
+          error: msg,
+        });
+      } else {
+        logger.warn('规则提议 withStructuredOutput 失败，降级为提示词抽取路径', {
+          module: 'TableRulesSuggest',
+          modelId,
+          error: msg,
+        });
+      }
+    }
   }
 
   // 兜底路径：普通调用 + extractJsonText + zod safeParse

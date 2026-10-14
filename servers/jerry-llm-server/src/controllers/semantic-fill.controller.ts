@@ -44,6 +44,8 @@ const StartSemanticFillSchema = z.object({
   hintColumns: z.array(z.string().min(1).max(200)).max(10).default([]),
   /** 目标工作表名（多 sheet 场景；省略时用第一个） */
   targetSheet: z.string().min(1).max(200).optional(),
+  /** 参照工作表名（跨表填充："按 B 表内容补 A 表"） */
+  referenceSheet: z.string().min(1).max(200).optional(),
   /** 已保存文档传入后，任务结果过该文档的表格规则门禁（功能 5） */
   documentId: z.number().int().positive().optional(),
 });
@@ -97,6 +99,7 @@ export class SemanticFillController {
         targetColumn: body.targetColumn,
         hintColumns: body.hintColumns,
         ...(body.targetSheet !== undefined ? { targetSheet: body.targetSheet } : {}),
+        ...(body.referenceSheet !== undefined ? { referenceSheet: body.referenceSheet } : {}),
         ...(body.documentId !== undefined ? { documentId: body.documentId } : {}),
       });
     } catch (error: unknown) {

@@ -16,7 +16,13 @@
  *   - 全函数无副作用，异常时调用方持有的原文本天然完好。
  */
 
-import { parseCsvLine, SHEET_HEADING_RE } from '../document-parser.js';
+import {
+  HEADER_ROW_RE,
+  LOOKUP_FILL_RE,
+  TOTAL_ROW_RE,
+  parseCsvLine,
+  SHEET_HEADING_RE,
+} from '../document-parser.js';
 import type {
   OpReport,
   RowCondition,
@@ -32,11 +38,45 @@ export const MAX_DATA_ROWS = 20000;
 // ==================== 数据结构 ====================
 
 /**
- * 解析后的单个 sheet：headers 为表头数组，rows 为数据行（不含表头）。
+ * 跨表关联填充溯源声明（LookupFill: 指令的结构化形态）。
+ * 指令格式：`LookupFill: 目标列|目标键列|源表|源键列|源值列`（5 段竖线分隔）。
+ * 仅单键场景落指令（复合键的溯源导出公式复杂，宁可不声明不可声明错）。
+ */
+export interface LookupFillDirective {
+  targetColumn: string;
+  targetKeyColumn: string;
+  sourceSheet: string;
+  sourceKeyColumn: string;
+  sourceValueColumn: string;
+}
+
+/**
+ * 解析后的单个 sheet：headers 为表头数组，rows 为数据行（不含表头与说明行）。
  * Sheet 解析中间结构（供同模块族的 rules.ts 复用，不对外泄露到模块族之外）
  */
 export interface SheetData {
   name: string;
+  /**
+   * 表头行号（1 起，按含说明行的完整内容行序数）。
+   * 1 = 第一内容行是表头（默认，旧格式）；>1 = 上方有说明行（报表式表格，
+   * 由 HeaderRow: N 指令或 setHeaderRow 操作锚定）。
+   */
+  headerRowIndex: number;
+  /** 表头行上方的说明行（标题/日期范围等），每行为原始 CSV 解析出的单元格 */
+  preambleRows: string[][];
+  /**
+   * 汇总行（总计/合计/小计等聚合结果行）的下标列表（0 起，相对 rows 数组，
+   * 升序去重）。声明式结构标记：由 TotalRow: N 指令 / setTotalRows 操作 /
+   * 聚合类操作自动标记产生。汇总行不是明细数据——语义填充、规则校验、
+   * 条件匹配、派生列都必须跳过它（排序时保持原位不参与）。
+   */
+  totalRowIndexes: number[];
+  /**
+   * 跨表关联填充溯源声明（LookupFill: 指令解析产物）：记录某列最近一次由哪张表
+   * 按哪个键关联填充。导出 xlsx（withFormulas）时据此改写为真实 Excel 公式供验证；
+   * 目标列被其他操作改写时声明自动失效删除（invalidateLookupFills）。
+   */
+  lookupFills: LookupFillDirective[];
   headers: string[];
   rows: string[][];
 }
@@ -63,7 +103,13 @@ export class TableOpsError extends Error {
  * sheet 结构化文本 → SheetData 数组。
  * 解析规则与 parseExcelFile 产物 / 前端 table-convert 对齐：
  *   - `Sheet: 名称` 行开新 sheet；标题前散行归入 name='' 的无名块；
- *   - 每块首个非空行为表头，其余为数据行；空行跳过。
+ *   - 块首的非空行若为结构指令（`HeaderRow: N` / `TotalRow: a,b`，顺序不限、
+ *     各至多一条）则消费掉作为结构锚定，不进内容；
+ *   - 表头锚定：指令后第 1..N-1 个非空行为说明行（preambleRows，不当数据），
+ *     第 N 个为表头，其余为数据行；空行跳过；
+ *   - 汇总行锚定：TotalRow 的行号按内容行序数（与 HeaderRow 同口径），
+ *     换算为 rows 下标存储；越界/落在说明行或表头上的标记丢弃（防脏数据）；
+ *   - 指令 N 超界时收敛到 [1, 内容行数]（防脏数据，绝不丢行）。
  */
 export function parseSheetData(text: string): SheetData[] {
   interface Block {
@@ -88,9 +134,73 @@ export function parseSheetData(text: string): SheetData[] {
   for (const block of blocks) {
     const nonEmpty = block.lines.map((l) => l.trim()).filter((l) => l.length > 0);
     if (nonEmpty.length === 0) continue;
-    const headers = parseCsvLine(nonEmpty[0]);
-    const rows = nonEmpty.slice(1).map((l) => parseCsvLine(l));
-    sheets.push({ name: block.name, headers, rows });
+    // 结构指令：只认块首连续的非空行（位置约束，避免把数据行误当指令）；
+    // HeaderRow / TotalRow 各至多消费一条，顺序不限
+    let headerRowIndex = 1;
+    let headerDirectiveSeen = false;
+    let totalDirective: number[] | null = null;
+    const lookupFills: LookupFillDirective[] = [];
+    let cursor = 0;
+    while (cursor < nonEmpty.length) {
+      const line = nonEmpty[cursor];
+      const headerMatch = !headerDirectiveSeen && line.match(HEADER_ROW_RE);
+      if (headerMatch) {
+        const n = Number.parseInt(headerMatch[1], 10);
+        // 收敛到合法区间：N 至少 1（表头必须是真实存在的一行，区间下界在
+        // 消费完 TotalRow 指令、确定内容行数后再统一收敛）
+        headerRowIndex = n;
+        headerDirectiveSeen = true;
+        cursor += 1;
+        continue;
+      }
+      const totalMatch = totalDirective === null && line.match(TOTAL_ROW_RE);
+      if (totalMatch) {
+        totalDirective = totalMatch[1]
+          .split(/[,，]/)
+          .map((s) => Number.parseInt(s.trim(), 10))
+          .filter((n) => Number.isInteger(n) && n >= 1);
+        cursor += 1;
+        continue;
+      }
+      // LookupFill 溯源指令：块首可多条；段数不对/含空段的脏标记整体丢弃
+      //（宁可不声明，不可声明错——它决定导出公式的正确性）
+      const lookupMatch = line.match(LOOKUP_FILL_RE);
+      if (lookupMatch) {
+        const parts = lookupMatch[1].split('|').map((s) => s.trim());
+        if (parts.length === 5 && parts.every((p) => p.length > 0)) {
+          lookupFills.push({
+            targetColumn: parts[0],
+            targetKeyColumn: parts[1],
+            sourceSheet: parts[2],
+            sourceKeyColumn: parts[3],
+            sourceValueColumn: parts[4],
+          });
+        }
+        cursor += 1;
+        continue;
+      }
+      break; // 第一个非指令行：结构区结束
+    }
+    const content = nonEmpty.slice(cursor);
+    if (content.length === 0) continue;
+    headerRowIndex = Math.min(Math.max(headerRowIndex, 1), content.length);
+    // 汇总行标记：内容行序数 → rows 下标；必须落在数据行区（表头之后）
+    const totalRowIndexes: number[] = [];
+    if (totalDirective) {
+      const seen = new Set<number>();
+      for (const n of totalDirective) {
+        const dataIdx = n - headerRowIndex - 1;
+        if (dataIdx >= 0 && dataIdx < content.length - headerRowIndex && !seen.has(dataIdx)) {
+          seen.add(dataIdx);
+          totalRowIndexes.push(dataIdx);
+        }
+      }
+      totalRowIndexes.sort((a, b) => a - b);
+    }
+    const preambleRows = content.slice(0, headerRowIndex - 1).map((l) => parseCsvLine(l));
+    const headers = parseCsvLine(content[headerRowIndex - 1]);
+    const rows = content.slice(headerRowIndex).map((l) => parseCsvLine(l));
+    sheets.push({ name: block.name, headerRowIndex, totalRowIndexes, lookupFills, preambleRows, headers, rows });
   }
   return sheets;
 }
@@ -106,15 +216,38 @@ function escapeCsvCell(value: string): string {
 }
 
 function sheetToText(sheet: SheetData): string {
-  const lines = [
-    sheet.headers.map(escapeCsvCell).join(','),
-    ...sheet.rows.map((row) => {
-      // 行短于表头补空、长于表头保留（序列化不丢数据）
-      const padded = [...row];
-      while (padded.length < sheet.headers.length) padded.push('');
-      return padded.map(escapeCsvCell).join(',');
-    }),
-  ];
+  const lines: string[] = [];
+  // 结构指令紧跟 Sheet 标题行（与 parseSheetData 的解析位置约束对齐）：
+  // HeaderRow 在前、TotalRow 在后；行号按内容行序数（rows 下标 → 内容行号）
+  if (sheet.headerRowIndex > 1) lines.push(`HeaderRow: ${sheet.headerRowIndex}`);
+  if (sheet.totalRowIndexes.length > 0) {
+    const contentNums = sheet.totalRowIndexes.map((i) => sheet.headerRowIndex + i + 1);
+    lines.push(`TotalRow: ${contentNums.join(',')}`);
+  }
+  // LookupFill 溯源指令回写：含竖线/空段的不落档（声明出错比不声明更糟）
+  for (const lf of sheet.lookupFills) {
+    const parts = [
+      lf.targetColumn,
+      lf.targetKeyColumn,
+      lf.sourceSheet,
+      lf.sourceKeyColumn,
+      lf.sourceValueColumn,
+    ];
+    if (parts.every((p) => p.trim().length > 0 && !p.includes('|'))) {
+      lines.push(`LookupFill: ${parts.map((p) => p.trim()).join('|')}`);
+    }
+  }
+  for (const preamble of sheet.preambleRows) {
+    const line = preamble.map(escapeCsvCell).join(',');
+    if (line.length > 0) lines.push(line);
+  }
+  lines.push(sheet.headers.map(escapeCsvCell).join(','));
+  for (const row of sheet.rows) {
+    // 行短于表头补空、长于表头保留（序列化不丢数据）
+    const padded = [...row];
+    while (padded.length < sheet.headers.length) padded.push('');
+    lines.push(padded.map(escapeCsvCell).join(','));
+  }
   // 无名块（标题前的散行）只输出行本身，不产生 Sheet 标题
   const body = lines.filter((l) => l.length > 0).join('\n');
   return sheet.name ? `Sheet: ${sheet.name}\n${body}` : body;
@@ -230,7 +363,7 @@ export function findSheet(sheets: SheetData[], targetSheet: string | undefined):
 }
 
 /** 行条件比较（数字感知） */
-function matchCondition(row: string[], colIdx: number, op: string, value: string): boolean {
+function matchCondition(row: string[], colIdx: number, op: string, value: string | undefined): boolean {
   const cell = (row[colIdx] ?? '').trim();
   switch (op) {
     case 'empty':
@@ -238,8 +371,10 @@ function matchCondition(row: string[], colIdx: number, op: string, value: string
     case 'notEmpty':
       return cell !== '';
     case 'contains':
-      return cell.includes(value);
+      return value !== undefined && cell.includes(value);
   }
+  // 比较类条件没有 value（zod superRefine 会拦，这里防御运行时直调）→ 不匹配
+  if (value === undefined) return false;
   // 数值优先比较：两侧都能解析为数字时用数值，避免 "10" > "9" 的字典序坑
   const cellNum = parseLooseNumber(cell);
   const valNum = parseLooseNumber(value);
@@ -312,8 +447,9 @@ function describeWhere(where: WhereClause): string {
 /**
  * where 子句行匹配：单条件直接比较；组合条件按 and（全满足）/ or（任一满足）聚合。
  * resolveColumn 由调用方注入（带缓存的列定位器），避免逐行重复 findColumn。
+ * 导出给 clarify.ts 复用（删除影响面预览必须与执行期同一套匹配语义，勿双实现漂移）。
  */
-function matchWhere(
+export function matchWhere(
   row: string[],
   where: WhereClause,
   resolveColumn: (name: string) => number,
@@ -567,6 +703,51 @@ function validateOp(op: TableOp, sheets: SheetData[]): void {
   const target = findSheet(sheets, op.targetSheet);
 
   switch (op.type) {
+    case 'noop':
+      // 无操作：无业务校验（targetSheet 存在性已在上方 findSheet 统一检查）
+      break;
+    case 'setHeaderRow': {
+      // 行号必须落在内容行范围内（说明行 + 表头 + 数据行）；目标行必须非空
+      const totalLines = target.preambleRows.length + 1 + target.rows.length;
+      if (op.headerRow > totalLines) {
+        throw new TableOpsError(
+          `第 ${op.headerRow} 行不存在（「${target.name || '未命名'}」共 ${totalLines} 行，含说明行与表头）`,
+        );
+      }
+      const cells =
+        op.headerRow <= target.preambleRows.length
+          ? target.preambleRows[op.headerRow - 1]
+          : op.headerRow === target.headerRowIndex
+            ? target.headers
+            : target.rows[op.headerRow - target.headerRowIndex - 1];
+      if (!cells || !cells.some((c) => (c ?? '').trim() !== '')) {
+        throw new TableOpsError(`第 ${op.headerRow} 行是空行，不能设为表头`);
+      }
+      break;
+    }
+    case 'setTotalRows': {
+      // 每个行号必须存在、非空，且不能是表头行本身（汇总行是数据行区的聚合行）
+      const totalLines = target.preambleRows.length + 1 + target.rows.length;
+      for (const n of op.rows) {
+        if (n > totalLines) {
+          throw new TableOpsError(
+            `第 ${n} 行不存在（「${target.name || '未命名'}」共 ${totalLines} 行，含说明行与表头）`,
+          );
+        }
+        if (n === target.headerRowIndex) {
+          throw new TableOpsError(`第 ${n} 行是表头行，不能标记为汇总行`);
+        }
+        if (n < target.headerRowIndex) {
+          // 与 parse 侧口径一致：说明行不是数据，更不是聚合结果行（否则标记换算出负下标）
+          throw new TableOpsError(`第 ${n} 行是说明行，不能标记为汇总行`);
+        }
+        const cells = target.rows[n - target.headerRowIndex - 1];
+        if (!cells || !cells.some((c) => (c ?? '').trim() !== '')) {
+          throw new TableOpsError(`第 ${n} 行是空行，不能标记为汇总行`);
+        }
+      }
+      break;
+    }
     case 'appendRow':
       // 追加行的列名必须能定位（避免 LLM 编造列名静默丢数据）
       for (const key of Object.keys(op.cells)) {
@@ -629,6 +810,30 @@ function validateOp(op: TableOp, sheets: SheetData[]): void {
       if (op.where) validateWhereColumns(op.where, target);
       break;
     }
+    case 'lookupFill': {
+      // 目标列必须已存在（不存在时应先 addColumn，避免静默建列）
+      findColumn(target, op.targetColumn);
+      const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : target;
+      findColumn(source, op.sourceValueColumn);
+      // 关联键：复合键或单键必须给一个，且涉及的键列全部必须存在
+      // 注意：sourceKeyColumn 只在单键分支校验——复合键场景该字段可省略，
+      // 无条件 findColumn 会把"缺键"误报成"找不到列 undefined"
+      if (op.keyMappings && op.keyMappings.length > 0) {
+        for (const m of op.keyMappings) {
+          findColumn(target, m.targetKeyColumn);
+          findColumn(source, m.sourceKeyColumn);
+        }
+      } else if (op.sourceKeyColumn) {
+        if (op.targetKeyColumn) findColumn(target, op.targetKeyColumn);
+        findColumn(source, op.sourceKeyColumn);
+      } else {
+        throw new TableOpsError('缺少关联键：请指明目标表与来源表各按哪一列关联');
+      }
+      break;
+    }
+    case 'fillConstant':
+      findColumn(target, op.targetColumn);
+      break;
   }
 }
 
@@ -643,6 +848,68 @@ function padRow(row: string[], width: number): string[] {
 
 function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
   switch (op.type) {
+    case 'noop':
+      // 不改表格任何内容，原因作为报告消息告知用户（确认卡可见、可放弃）
+      return op.reason;
+
+    case 'setHeaderRow': {
+      // 完整内容行序（说明行 + 表头 + 数据行）在第 N 行重新切分表头锚点。
+      // 只重划边界不丢数据：原表头与上方行降级为说明行，下方行升为数据行
+      const contentCells = [...sheet.preambleRows, sheet.headers, ...sheet.rows];
+      const n = op.headerRow;
+      const next: SheetData = {
+        ...sheet,
+        headerRowIndex: n,
+        preambleRows: contentCells.slice(0, n - 1),
+        headers: contentCells[n - 1],
+        rows: contentCells.slice(n),
+      };
+      // 汇总行标记跟物理行走：内容行号不变，重算 rows 下标；
+      // 重锚后落入说明行区的标记丢弃（说明行不是数据，更不是汇总行）
+      next.totalRowIndexes = sheet.totalRowIndexes
+        .map((idx) => sheet.headerRowIndex + idx + 1 - n - 1)
+        .filter((idx) => idx >= 0);
+      const changed =
+        next.headerRowIndex !== sheet.headerRowIndex ||
+        next.headers.some((h, i) => h !== sheet.headers[i]) ||
+        next.headers.length !== sheet.headers.length;
+      Object.assign(sheet, next);
+      if (!changed) {
+        return `第 ${n} 行已是表头行，表格未变化`;
+      }
+      const preambleDesc =
+        next.preambleRows.length > 0
+          ? `上方 ${next.preambleRows.length} 行归为说明行`
+          : '无说明行';
+      return `已将「${sheet.name || '未命名'}」的第 ${n} 行设为表头（${preambleDesc}），数据 ${next.rows.length} 行`;
+    }
+
+    case 'setTotalRows': {
+      // 行号（内容行序数）→ rows 下标；校验已保证存在/非空/非表头
+      const dataIdxs = [...new Set(op.rows.map((n) => n - sheet.headerRowIndex - 1))].sort(
+        (a, b) => a - b,
+      );
+      const sameSet =
+        dataIdxs.length === sheet.totalRowIndexes.length &&
+        dataIdxs.every((v, i) => v === sheet.totalRowIndexes[i]);
+      if (sameSet) {
+        return op.rows.length > 0
+          ? `第 ${op.rows.join('、')} 行已是汇总行，表格未变化`
+          : '该表没有汇总行标记，表格未变化';
+      }
+      sheet.totalRowIndexes = dataIdxs;
+      if (dataIdxs.length === 0) {
+        return `已清除「${sheet.name || '未命名'}」的全部汇总行标记`;
+      }
+      const labelDesc = dataIdxs
+        .map((idx) => {
+          const first = sheet.rows[idx]?.find((c) => (c ?? '').trim() !== '');
+          return `第 ${sheet.headerRowIndex + idx + 1} 行${first ? `（${first.trim()}）` : ''}`;
+        })
+        .join('、');
+      return `已将「${sheet.name || '未命名'}」的 ${labelDesc} 标记为汇总行（聚合结果行不参与填充/规则/条件）`;
+    }
+
     case 'appendRow': {
       // 逐个单元格用 findColumn 定位（两级查找）——合并单元格标题表的列名
       // 在数据行里而非表头里，按 headers.map 取值会静默丢数据（校验能过、执行全空）
@@ -659,7 +926,11 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : sheet;
       const resolveSource = makeColumnResolver(source);
       const srcColIdx = resolveSource(op.column);
-      let pool = source.rows.map((r) => padRow(r, source.headers.length));
+      // 已声明的汇总行不进聚合池：聚合结果行不是明细数据，混入会双重计数
+      const srcTotalSet = new Set(source.totalRowIndexes);
+      let pool = source.rows
+        .filter((_, idx) => !srcTotalSet.has(idx))
+        .map((r) => padRow(r, source.headers.length));
       let matchedDesc = `全部 ${pool.length} 行`;
       const where = op.where;
       if (where) {
@@ -687,6 +958,10 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       if (existIdx !== -1) {
         sheet.rows[existIdx] = exactRows[existIdx];
         sheet.rows[existIdx][valueColIdx] = formatAggregate(result);
+        // 就地更新的行也是聚合结果行：未声明时补标记（旧文档的合计行由此纳入契约）
+        if (!sheet.totalRowIndexes.includes(existIdx)) {
+          sheet.totalRowIndexes = [...sheet.totalRowIndexes, existIdx].sort((a, b) => a - b);
+        }
         return `已存在标签为「${op.label}」的行，就地更新其数值为 ${formatAggregate(result)}（${op.fn}，${matchedDesc}）`;
       }
       const row = padRow([], sheet.headers.length);
@@ -705,6 +980,11 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
         insertIdx = bi;
       }
       sheet.rows.splice(insertIdx, 0, row);
+      // 本行是聚合结果行：自动标记为汇总行；插入点之后的既有汇总行下标 +1
+      sheet.totalRowIndexes = sheet.totalRowIndexes
+        .map((idx) => (idx >= insertIdx ? idx + 1 : idx))
+        .concat(insertIdx)
+        .sort((a, b) => a - b);
       return `已聚合「${source.name || '未命名'}」列「${op.column}」（${op.fn}，${matchedDesc}），结果 ${formatAggregate(result)} 写入「${sheet.name}」第 ${insertIdx + 1} 行`;
     }
 
@@ -722,12 +1002,15 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       let result: number;
       let sourceDesc: string;
       if (op.sourceSheet) {
-        // 指定来源表：从其他表聚合（可带 where 过滤）
+        // 指定来源表：从其他表聚合（可带 where 过滤）；已声明的汇总行不进池
         const source = findSheet(sheets, op.sourceSheet);
         const srcColName = op.sourceColumn ?? op.column;
         const srcColIdx = findColumn(source, srcColName);
         const resolveSource = makeColumnResolver(source);
-        let pool = source.rows.map((r) => padRow(r, source.headers.length));
+        const srcTotalSet = new Set(source.totalRowIndexes);
+        let pool = source.rows
+          .filter((_, idx) => !srcTotalSet.has(idx))
+          .map((r) => padRow(r, source.headers.length));
         const where = op.where;
         if (where) {
           pool = pool.filter((r) => matchWhere(r, where, resolveSource));
@@ -738,13 +1021,17 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
         result = computeAggregate(pool.map((r) => r[srcColIdx] ?? ''), op.fn, srcColName);
         sourceDesc = `「${source.name || '未命名'}」列「${srcColName}」`;
       } else {
-        // 重算语义：同列、目标行上方的所有行（标题/文本行会被数字过滤自然跳过）
+        // 重算语义：同列、目标行上方的**所有行**求和（标题/文本行被数字过滤自然跳过）。
+        // 注意：这里刻意**不排除**其他汇总行——既定契约是"重算 = 上方全部行求和"，
+        // 例如先插入"重点客户合计"再重算"总计"，总计应包含它（见 executor.spec 端到端场景）；
+        // 列求和/跨表/分组池才排除汇总行（防止双重计数），两类操作语义不同
+        const aboveRows = paddedRows.slice(0, rowIdx);
         result = computeAggregate(
-          paddedRows.slice(0, rowIdx).map((r) => r[writeIdx] ?? ''),
+          aboveRows.map((r) => r[writeIdx] ?? ''),
           op.fn,
           op.column,
         );
-        sourceDesc = `同列上方 ${rowIdx} 行`;
+        sourceDesc = `同列上方 ${aboveRows.length} 行`;
       }
       sheet.rows[rowIdx] = paddedRows[rowIdx];
       sheet.rows[rowIdx][writeIdx] = formatAggregate(result);
@@ -772,9 +1059,19 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
     case 'deleteRows': {
       const resolve = makeColumnResolver(sheet);
       const before = sheet.rows.length;
-      sheet.rows = sheet.rows.filter(
-        (row) => !matchWhere(padRow(row, sheet.headers.length), op.where, resolve),
-      );
+      // 记录被删行的下标：汇总行标记随行删除同步收缩/前移（否则标记错位到别的行）
+      const removedIdx: number[] = [];
+      sheet.rows = sheet.rows.filter((row, idx) => {
+        const matched = matchWhere(padRow(row, sheet.headers.length), op.where, resolve);
+        if (matched) removedIdx.push(idx);
+        return !matched;
+      });
+      if (removedIdx.length > 0) {
+        const removedSet = new Set(removedIdx);
+        sheet.totalRowIndexes = sheet.totalRowIndexes
+          .filter((idx) => !removedSet.has(idx))
+          .map((idx) => idx - removedIdx.filter((r) => r < idx).length);
+      }
       return `已删除 ${before - sheet.rows.length} 行（条件：${describeWhere(op.where)}）`;
     }
 
@@ -798,13 +1095,25 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
 
     case 'sortRows': {
       const colIdx = findColumn(sheet, op.column);
+      // 汇总行不参与排序（聚合结果被排进明细中间会被用户当成脏数据）：
+      // 槽位保持——非汇总行排序后填回它们原来的槽位，汇总行原地不动
+      const isTotal = new Set(sheet.totalRowIndexes);
+      const totalSlots: number[] = [];
+      const sortable: Array<{ idx: number; row: string[] }> = [];
+      sheet.rows.forEach((row, idx) => {
+        if (isTotal.has(idx)) totalSlots.push(idx);
+        else sortable.push({ idx, row });
+      });
       const allNumeric =
-        sheet.rows.length > 0 &&
-        sheet.rows.every((r) => (r[colIdx] ?? '').trim() === '' || parseLooseNumber(r[colIdx]) !== null);
+        sortable.length > 0 &&
+        sortable.every(
+          (s) =>
+            (s.row[colIdx] ?? '').trim() === '' || parseLooseNumber(s.row[colIdx]) !== null,
+        );
       const dir = op.order === 'asc' ? 1 : -1;
-      sheet.rows.sort((a, b) => {
-        const av = (a[colIdx] ?? '').trim();
-        const bv = (b[colIdx] ?? '').trim();
+      sortable.sort((a, b) => {
+        const av = (a.row[colIdx] ?? '').trim();
+        const bv = (b.row[colIdx] ?? '').trim();
         if (av === '' && bv === '') return 0;
         if (av === '') return 1; // 空值沉底
         if (bv === '') return -1;
@@ -813,7 +1122,13 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
         }
         return av.localeCompare(bv, 'zh-CN') * dir;
       });
-      return `已按列「${op.column}」${op.order === 'asc' ? '升序' : '降序'}排序（${allNumeric ? '数值' : '文本'}）`;
+      // 排序后的非汇总行按原非汇总槽位顺序回填（槽位数不变，标记无需调整）
+      const sortedRows = sortable.map((s) => s.row);
+      sheet.rows = sheet.rows.map((_, slot) => {
+        const sortableSlot = slot - totalSlots.filter((t) => t < slot).length;
+        return totalSlots.includes(slot) ? sheet.rows[slot] : sortedRows[sortableSlot];
+      });
+      return `已按列「${op.column}」${op.order === 'asc' ? '升序' : '降序'}排序（${allNumeric ? '数值' : '文本'}）${totalSlots.length > 0 ? `，${totalSlots.length} 个汇总行保持原位` : ''}`;
     }
 
     case 'renameColumn': {
@@ -828,7 +1143,12 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       const resolveSource = makeColumnResolver(source);
       const groupIdx = resolveSource(op.groupBy);
       const valueIdx = resolveSource(op.valueColumn);
-      let pool = source.rows.map((r) => padRow(r, source.headers.length));
+      // 聚合池排除已声明的汇总行（与 aggregateAppendRow/aggregateUpdateCell 同口径）：
+      // 来源表自身的总行混进分组池会双重计数；未声明时 totalRowIndexes 为空、过滤无操作
+      const srcTotalSet = new Set(source.totalRowIndexes);
+      let pool = source.rows
+        .filter((_, idx) => !srcTotalSet.has(idx))
+        .map((r) => padRow(r, source.headers.length));
       const where = op.where;
       if (where) {
         pool = pool.filter((r) => matchWhere(r, where, resolveSource));
@@ -873,8 +1193,13 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       const name = sanitizeSheetName(op.newSheetName);
       const newSheet: SheetData = {
         name,
+        headerRowIndex: 1,
+        preambleRows: [],
+        // 末行"总计"是聚合结果行：创建即声明（声明优于推断）
+        totalRowIndexes: [resultRows.length],
         headers: [op.groupBy, label],
         rows: [...resultRows, ['总计', formatAggregate(total)]],
+        lookupFills: [],
       };
       // 幂等守卫：同名 sheet 已存在 → 整表重建（就地更新），避免重复执行插出多张同名表
       const existIdx = sheets.findIndex((s) => s.name === name);
@@ -912,7 +1237,11 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       const where = op.where;
       let ok = 0;
       let skipped = 0;
-      for (const row of sheet.rows) {
+      const totalSet = new Set(sheet.totalRowIndexes);
+      for (let rowIdx = 0; rowIdx < sheet.rows.length; rowIdx++) {
+        // 汇总行是聚合结果行：表达式（如 数量×单价）对它无意义，跳过不计算
+        if (totalSet.has(rowIdx)) continue;
+        const row = sheet.rows[rowIdx];
         const padded = padRow(row, sheet.headers.length);
         const matched = where ? matchWhere(padded, where, resolve) : true;
         if (matched) {
@@ -942,7 +1271,145 @@ function executeOp(op: TableOp, sheet: SheetData, sheets: SheetData[]): string {
       // 保留 case 是为了维持穷尽性检查——未来新增 op 类型时编译器会继续强制各 switch 处理
       throw new TableOpsError('语义填充不能由表格执行器处理，请单独发起填充指令');
     }
+    case 'lookupFill': {
+      const targetIdx = findColumn(sheet, op.targetColumn);
+      const source = op.sourceSheet ? findSheet(sheets, op.sourceSheet) : sheet;
+      const srcValIdx = findColumn(source, op.sourceValueColumn);
+      // 键映射：复合键优先，缺省单键（validateOp 已保证至少一种且列存在，
+      // 空 mappings 分支运行期不可达，仅为类型完备）
+      const mappings = (op.keyMappings && op.keyMappings.length > 0
+        ? op.keyMappings.map((m) => ({
+            t: findColumn(sheet, m.targetKeyColumn),
+            s: findColumn(source, m.sourceKeyColumn),
+          }))
+        : op.sourceKeyColumn
+          ? [
+              {
+                t: findColumn(sheet, op.targetKeyColumn ?? op.targetColumn),
+                s: findColumn(source, op.sourceKeyColumn),
+              },
+            ]
+          : []);
+      // 建键值映射：来源表跳过其已声明汇总行（总行不是明细数据，"总计→5800"入池
+      // 会把聚合值当业务值传染）；键全空行跳过；重复键取首个并计数
+      const srcTotalSet = new Set(source.totalRowIndexes);
+      const map = new Map<string, string>();
+      let duplicateKeys = 0;
+      for (let i = 0; i < source.rows.length; i++) {
+        if (srcTotalSet.has(i)) continue;
+        const row = padRow(source.rows[i], source.headers.length);
+        const key = mappings.map((m) => (row[m.s] ?? '').trim()).join('\u0001');
+        if (!key) continue;
+        if (!map.has(key)) {
+          map.set(key, (row[srcValIdx] ?? '').trim());
+        } else {
+          duplicateKeys += 1;
+        }
+      }
+      // 填充：只写明细行（跳过目标表已声明汇总行）的空格，未命中留空绝不发明
+      const tgtTotalSet = new Set(sheet.totalRowIndexes);
+      let filled = 0;
+      let missCount = 0;
+      const missSamples: string[] = [];
+      for (let i = 0; i < sheet.rows.length; i++) {
+        if (tgtTotalSet.has(i)) continue;
+        const row = padRow(sheet.rows[i], sheet.headers.length);
+        if ((row[targetIdx] ?? '').trim() !== '') continue; // 不覆盖非空格
+        const key = mappings.map((m) => (row[m.t] ?? '').trim()).join('\u0001');
+        const value = map.get(key);
+        if (value === undefined || value === '') {
+          missCount += 1;
+          if (missSamples.length < 5 && key) missSamples.push(key.replaceAll('\u0001', '+'));
+          continue;
+        }
+        row[targetIdx] = value;
+        sheet.rows[i] = row;
+        filled += 1;
+      }
+      // 溯源声明（仅单键）：目标列旧声明替换为本次（最后一次填充是权威溯源）
+      if (!op.keyMappings?.length && op.targetKeyColumn && op.sourceKeyColumn) {
+        const parts = [
+          op.targetColumn,
+          op.targetKeyColumn,
+          source.name,
+          op.sourceKeyColumn,
+          op.sourceValueColumn,
+        ];
+        if (parts.every((p) => p.trim().length > 0 && !p.includes('|'))) {
+          sheet.lookupFills = [
+            ...sheet.lookupFills.filter((lf) => lf.targetColumn.trim() !== op.targetColumn.trim()),
+            {
+              targetColumn: op.targetColumn.trim(),
+              targetKeyColumn: op.targetKeyColumn.trim(),
+              sourceSheet: source.name.trim(),
+              sourceKeyColumn: op.sourceKeyColumn.trim(),
+              sourceValueColumn: op.sourceValueColumn.trim(),
+            },
+          ];
+        }
+      }
+      let message = `已按「${source.name || '未命名'}」关联填充「${sheet.name || '未命名'}」的「${op.targetColumn}」共 ${filled} 格`;
+      if (missCount > 0) {
+        const samples = missSamples.join('、');
+        message += `；${missCount} 个键未在来源表命中（保持留空）${samples ? `，如：${samples}` : ''}`;
+      }
+      if (duplicateKeys > 0) message += `；来源表 ${duplicateKeys} 个重复键取首个值`;
+      return message;
+    }
+    case 'fillConstant': {
+      // 填充语义：只写明细行（跳过已声明汇总行）的空格，不覆盖非空格——
+      // 与 updateCells（显式条件语义、可命中汇总行）严格分离
+      const targetIdx = findColumn(sheet, op.targetColumn);
+      const totalSet = new Set(sheet.totalRowIndexes);
+      let filled = 0;
+      for (let i = 0; i < sheet.rows.length; i++) {
+        if (totalSet.has(i)) continue;
+        const row = padRow(sheet.rows[i], sheet.headers.length);
+        if ((row[targetIdx] ?? '').trim() !== '') continue;
+        row[targetIdx] = op.value;
+        sheet.rows[i] = row;
+        filled += 1;
+      }
+      return `已在「${sheet.name || '未命名'}」的「${op.targetColumn}」填充固定值「${op.value}」共 ${filled} 格（仅明细行空格）`;
+    }
   }
+}
+
+// ==================== LookupFill 溯源失效 ====================
+
+/**
+ * 返回某 op 在目标表写入了哪些列（用于 LookupFill 溯源失效判定）。
+ * 覆盖：条件更新/常量填充/派生列/聚合回填写值，追加行按 cells 键写值，
+ * 改名/删列改结构。排序与删行不失效——行内键值对随行整体移动/移除，
+ * 按键导出公式（INDEX/MATCH）逐格计算仍与存储值一致。
+ */
+function lookupWrittenColumns(op: TableOp): string[] {
+  switch (op.type) {
+    case 'updateCells':
+      return [op.targetColumn];
+    case 'fillConstant':
+      return [op.targetColumn];
+    case 'deriveColumn':
+      return [op.targetColumn];
+    case 'aggregateUpdateCell':
+      return [op.column];
+    case 'appendRow':
+      return Object.keys(op.cells);
+    case 'renameColumn':
+      return [op.from];
+    case 'deleteColumn':
+      return [op.column];
+    default:
+      return [];
+  }
+}
+
+/** 删除指向指定列的 LookupFill 溯源声明（列值被改写后声明过期，防导出公式与实际值不符） */
+function invalidateLookupFills(sheet: SheetData, columns: string[]): void {
+  if (sheet.lookupFills.length === 0) return;
+  const names = new Set(columns.map((c) => c.trim()).filter((c) => c.length > 0));
+  if (names.size === 0) return;
+  sheet.lookupFills = sheet.lookupFills.filter((lf) => !names.has(lf.targetColumn.trim()));
 }
 
 // ==================== 入口 ====================
@@ -986,6 +1453,12 @@ export function executeTableOps(text: string, ops: TableOp[]): ExecuteResult {
       const target =
         op.type === 'groupCreateSheet' ? sheets[0] : findSheet(sheets, op.targetSheet);
       const message = executeOp(op, target, sheets);
+      // 漏洞 7 防护：目标列被改写后其 LookupFill 溯源声明过期，自动失效删除；
+      // lookupFill 自身写声明（替换旧声明），跳过避免刚写入就被误删
+      if (op.type !== 'lookupFill') {
+        const written = lookupWrittenColumns(op);
+        if (written.length > 0) invalidateLookupFills(target, written);
+      }
       report.push({
         type: op.type,
         targetSheet:
@@ -1003,9 +1476,65 @@ export function executeTableOps(text: string, ops: TableOp[]): ExecuteResult {
   return { sheetText: serializeSheetData(sheets), report };
 }
 
+/** 单元格最大显示宽度（超出截断加省略号，防超宽值把框撑爆） */
+const OVERVIEW_CELL_MAX_WIDTH = 20;
+
+/** 字符显示宽度：CJK 全角算 2、其余算 1（框线对齐按显示宽度算，不是字符数） */
+function charDisplayWidth(ch: string): number {
+  const code = ch.codePointAt(0) ?? 0;
+  if (
+    (code >= 0x1100 && code <= 0x115f) || // Hangul Jamo
+    (code >= 0x2e80 && code <= 0xa4cf) || // CJK 部首/标点/日文假名
+    (code >= 0xac00 && code <= 0xd7a3) || // Hangul 音节
+    (code >= 0xf900 && code <= 0xfaff) || // CJK 兼容表意
+    (code >= 0xfe30 && code <= 0xfe4f) || // CJK 兼容形式
+    (code >= 0xff00 && code <= 0xff60) || // 全角形式
+    (code >= 0xffe0 && code <= 0xffe6) || // 全角符号
+    (code >= 0x4e00 && code <= 0x9fff) // CJK 统一表意
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+/** 字符串显示宽度（逐码点累加） */
+function displayWidth(s: string): number {
+  let w = 0;
+  for (const ch of s) w += charDisplayWidth(ch);
+  return w;
+}
+
+/** 按显示宽度截断（保留尾部省略号） */
+function truncateToWidth(s: string, maxWidth: number): string {
+  if (displayWidth(s) <= maxWidth) return s;
+  let w = 0;
+  let out = '';
+  for (const ch of s) {
+    const cw = charDisplayWidth(ch);
+    if (w + cw > maxWidth - 1) break;
+    out += ch;
+    w += cw;
+  }
+  return `${out}…`;
+}
+
+/** 单元格内容渲染：转义框线分隔符 + 截断；空单元格渲染为 ∅（显式可读，防误判为空列） */
+function renderCell(value: string, width: number): string {
+  const v = value.replace(/│/g, '｜');
+  const clipped = truncateToWidth(v, width);
+  const shown = clipped === '' ? '∅' : clipped;
+  return shown + ' '.repeat(Math.max(0, width - displayWidth(shown)));
+}
+
 /**
- * 生成给 LLM 的表格概览：表头 + 每列前 2 个样本行 + 每列去重取值示例（≤5 个）。
- * 取值示例帮助 LLM 选对 where 条件值（如备注列的"重点客户"可能不在前 2 行里）；
+ * 生成给 LLM 的表格概览：框线表格（终端数据库风格：表头 + 前 2 行样本）+
+ * 每列去重取值示例（≤5 个）+ 每列空缺单元格统计。
+ *
+ * 框线格式的健壮性收益：单元格值含 "，" "=" "|" 等分隔符时，键值对格式
+ * （列=值，列=值）的边界会模糊，框线每格独立无歧义；该格式也是 LLM
+ * 训练语料中极常见的终端表输出，解析可靠。
+ * 取值示例帮助 LLM 选对 where 条件值；空缺统计帮助 LLM 判断"补空/填充"
+ * 类意图是否可执行（不给空缺信息模型会误判"没有空的值"而拒绝执行）。
  * 不输出全表数据——省 token，且计算本来就不归 LLM 管。
  * 供 parse.ts 构造提示词用。
  */
@@ -1014,26 +1543,98 @@ export function buildSheetOverview(text: string): string {
   return sheets
     .map((sheet) => {
       const name = sheet.name || '(未命名)';
-      const sampleRows = sheet.rows.slice(0, 2);
-      const lines = [
-        `工作表「${name}」共 ${sheet.rows.length} 行，表头：${sheet.headers.join('、')}`,
-        ...sampleRows.map((r) => `  样例行：${sheet.headers.map((h, i) => `${h}=${r[i] ?? ''}`).join('，')}`),
-      ];
-      // 每列去重取值（≤5 个、每个截断 20 字符）：条件过滤/定位行时值必须逐字匹配
+      // 报表式表格：开头注明表头锚点与说明行内容——说明行不是数据，
+      // 不参与填充/条件/规则；其旁的空缺也不计入下方空缺统计
+      let firstLine: string;
+      if (sheet.headerRowIndex > 1) {
+        const preambleDesc = sheet.preambleRows
+          .map((r) => r.filter((c) => c.trim()).join(' '))
+          .filter((s) => s.length > 0)
+          .map((s) => truncateToWidth(s, 40))
+          .join('；');
+        firstLine =
+          `工作表「${name}」表头在第 ${sheet.headerRowIndex} 行` +
+          (preambleDesc ? `，上方为说明行：${preambleDesc}` : '，上方为说明行') +
+          `（说明行不是数据），数据共 ${sheet.rows.length} 行`;
+      } else {
+        firstLine = `工作表「${name}」共 ${sheet.rows.length} 行`;
+      }
+      const lines = [firstLine];
       const colCount = Math.max(sheet.headers.length, ...sheet.rows.map((r) => r.length), 0);
+      const headers = Array.from({ length: colCount }, (_, c) => {
+        const h = sheet.headers[c]?.trim();
+        return h && h !== '' ? h : `第${c + 1}列`;
+      });
+      const sampleRows = sheet.rows.slice(0, 2).map((r) =>
+        Array.from({ length: colCount }, (_, c) => (r[c] ?? '').trim()),
+      );
+
+      // 列宽 = 表头与样本单元格显示宽度的最大值（截到上限）
+      const widths = headers.map((h, c) => {
+        let w = displayWidth(h);
+        for (const row of sampleRows) w = Math.max(w, displayWidth(row[c]));
+        return Math.min(w, OVERVIEW_CELL_MAX_WIDTH);
+      });
+      const edge = (left: string, mid: string, right: string): string =>
+        left + widths.map((w) => '─'.repeat(w + 2)).join(mid) + right;
+      const renderRow = (row: string[]): string =>
+        `│ ${row.map((v, c) => renderCell(v, widths[c])).join(' │ ')} │`;
+
+      lines.push(edge('┌', '┬', '┐'));
+      lines.push(renderRow(headers));
+      lines.push(edge('├', '┼', '┤'));
+      for (const row of sampleRows) lines.push(renderRow(row));
+      lines.push(edge('└', '┴', '┘'));
+
+      // 每列去重取值（≤5 个、每个截断 20 字符）：条件过滤/定位行时值必须逐字匹配
       const distinctLines: string[] = [];
+      const emptyLines: string[] = [];
+      const totalSet = new Set(sheet.totalRowIndexes);
       for (let c = 0; c < colCount; c++) {
-        const colName = sheet.headers[c]?.trim() || `第${c + 1}列`;
         const seen: string[] = [];
-        for (const r of sheet.rows) {
-          const v = (r[c] ?? '').trim().slice(0, 20);
-          if (!v || seen.includes(v)) continue;
-          seen.push(v);
-          if (seen.length >= 5) break;
+        const emptyRowLabels: string[] = [];
+        for (let ri = 0; ri < sheet.rows.length; ri++) {
+          // 汇总行是聚合结果行：不进取值示例（不是过滤目标）、不进空缺统计
+          // （它的空缺不是数据缺失，该不该算由"汇总行"声明行告知 LLM）
+          if (totalSet.has(ri)) continue;
+          const r = sheet.rows[ri];
+          const v = (r[c] ?? '').trim();
+          if (!v) {
+            // 空缺位置用"该行第一个非空单元格"标注（如 日期行文本）：
+            // 只给格数时，说明行刻意留白与数据行真实缺失会混成一个数字，
+            // LLM 无法区分"该填"与"不该填"（实测：总计行空值被误判为留白而 noop）
+            const label =
+              r.find((cell) => (cell ?? '').trim())?.trim().slice(0, 20) ||
+              `第${ri + 1}行`;
+            emptyRowLabels.push(label);
+            continue;
+          }
+          const clipped = v.slice(0, 20);
+          if (seen.includes(clipped)) continue;
+          seen.push(clipped);
         }
-        if (seen.length > 0) distinctLines.push(`${colName}={${seen.join('|')}}`);
+        if (seen.length > 0) distinctLines.push(`${headers[c]}={${seen.slice(0, 5).join('|')}}`);
+        if (emptyRowLabels.length > 0) {
+          const shown = emptyRowLabels.slice(0, 5).join('、');
+          const more = emptyRowLabels.length > 5 ? ` 等${emptyRowLabels.length}行` : '';
+          emptyLines.push(`${headers[c]}=${emptyRowLabels.length}格（位于行：${shown}${more}）`);
+        }
+      }
+      // 已声明的汇总行：明确告知 LLM 这些行是聚合结果行（声明优于标签猜测）
+      if (sheet.totalRowIndexes.length > 0) {
+        const desc = sheet.totalRowIndexes
+          .map((idx) => {
+            const first = sheet.rows[idx]?.find((c2) => (c2 ?? '').trim() !== '');
+            return `第 ${sheet.headerRowIndex + idx + 1} 行${first ? `（${first.trim()}）` : ''}`;
+          })
+          .join('、');
+        lines.push(
+          `  汇总行：${desc}——聚合结果行不是明细数据，填充/条件/规则自动跳过；补全其数值用 aggregateUpdateCell 重算`,
+        );
       }
       if (distinctLines.length > 0) lines.push(`  取值示例：${distinctLines.join(' ')}`);
+      // 空缺统计（只列有空缺的列）：填充类意图的关键依据
+      if (emptyLines.length > 0) lines.push(`  空缺单元格：${emptyLines.join('、')}`);
       return lines.join('\n');
     })
     .join('\n\n');

@@ -17,21 +17,41 @@
 import { z } from 'zod';
 
 /** 行条件比较：deleteRows / updateCells 共用 */
-export const RowConditionSchema = z.object({
-  /** 条件列的表头名称，必须与表头逐字一致（可从表头清单中选择） */
-  column: z.string().describe('条件列的表头名称，必须与表头完全一致'),
-  /**
-   * 比较方式。数字感知：比较值与单元格都能解析为数字时按数值比较，
-   * 否则按字符串比较（gt/lt 对中文按字典序，慎用）
-   */
-  op: z
-    .enum(['eq', 'ne', 'contains', 'gt', 'lt', 'gte', 'lte', 'empty', 'notEmpty'])
-    .describe(
-      '比较方式：eq 等于 / ne 不等于 / contains 包含 / gt 大于 / lt 小于 / gte 大于等于 / lte 小于等于 / empty 为空 / notEmpty 不为空。empty 与 notEmpty 时忽略 value',
-    ),
-  /** 比较值（数字列请给纯数字字符串，如 "5000"；empty/notEmpty 时忽略） */
-  value: z.string().describe('比较值'),
-});
+export const RowConditionSchema = z
+  .object({
+    /** 条件列的表头名称，必须与表头逐字一致（可从表头清单中选择） */
+    column: z.string().describe('条件列的表头名称，必须与表头完全一致'),
+    /**
+     * 比较方式。数字感知：比较值与单元格都能解析为数字时按数值比较，
+     * 否则按字符串比较（gt/lt 对中文按字典序，慎用）
+     */
+    op: z
+      .enum(['eq', 'ne', 'contains', 'gt', 'lt', 'gte', 'lte', 'empty', 'notEmpty'])
+      .describe(
+        '比较方式：eq 等于 / ne 不等于 / contains 包含 / gt 大于 / lt 小于 / gte 大于等于 / lte 小于等于 / empty 为空 / notEmpty 不为空。empty 与 notEmpty 时省略 value',
+      ),
+    /** 比较值（比较类 op 必填；empty/notEmpty 省略。数字列请给纯数字字符串，如 "5000"） */
+    value: z
+      .string()
+      .optional()
+      .describe('比较值（eq/ne/contains/gt/lt/gte/lte 必填；empty/notEmpty 省略本字段）'),
+  })
+  .superRefine((cond, ctx) => {
+    // 比较类条件必须带比较值——机器强制（empty/notEmpty 不需要）。
+    // 之前 value 无条件必填，与描述"empty/notEmpty 时忽略 value"自相矛盾，
+    // LLM 照描述省略 value 反而整体校验失败；现在语义与类型一致
+    if (
+      cond.op !== 'empty' &&
+      cond.op !== 'notEmpty' &&
+      (cond.value === undefined || cond.value.trim() === '')
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['value'],
+        message: `比较方式 ${cond.op} 必须提供 value`,
+      });
+    }
+  });
 
 /**
  * 条件组合（多条件 AND/OR）：功能 3。
@@ -231,6 +251,52 @@ export const DeriveColumnOpSchema = z.object({
 }).extend(TargetSheetField);
 
 /**
+ * 跨表关联填充：按关联键从源表精确查值，填充目标列空格。
+ * VLOOKUP 语义的确定性执行：键精确匹配（trim 后相等）、未命中留空、不覆盖非空格、
+ * 跳过已声明汇总行——绝不发明值。
+ * 两个来源：① clarify 协议确认后的 cross-sheet-lookup 策略编译产物；
+ * ② ReAct 中 LLM 直接输出（完备性闸门会校验关联键——键缺失或重合率过低时
+ * 自动转用户确认，不会瞎填，因此 LLM 可以放心给出最有把握的键）。
+ */
+export const LookupFillOpSchema = z.object({
+  type: z.literal('lookupFill'),
+  /** 要填充的目标列表头名称（该列存在空缺；不存在时先由 addColumn 创建） */
+  targetColumn: z.string().describe('要填充的目标列的表头名称'),
+  /** 关联数据来源工作表名称 */
+  sourceSheet: z.string().describe('关联数据来源的工作表名称'),
+  /** 来源表中作为关联键的列（复合键 keyMappings 给出时可省略；两者都缺时执行器报缺关联键） */
+  sourceKeyColumn: z.string().optional().describe('来源表中作为关联键的列的表头名称'),
+  /** 来源表中要取值填充的列 */
+  sourceValueColumn: z.string().describe('来源表中要取值的列的表头名称'),
+  /** 目标表中作为关联键的列（单键场景省略时由编译器按同名/候选确定） */
+  targetKeyColumn: z.string().optional().describe('目标表中作为关联键的列的表头名称'),
+  /** 复合键（v1 UI 手动多选场景）：给出时覆盖单键参数 */
+  keyMappings: z
+    .array(
+      z.object({
+        targetKeyColumn: z.string().describe('目标表键列'),
+        sourceKeyColumn: z.string().describe('来源表键列'),
+      }),
+    )
+    .max(5)
+    .optional()
+    .describe('复合键映射列表（目标表键列 ↔ 来源表键列），单键场景省略'),
+}).extend(TargetSheetField);
+
+/**
+ * 常量填充（clarify 协议配套 op）：只填目标列的空格（明细行），跳过声明汇总行、
+ * 不覆盖非空格。独立于 updateCells——updateCells 是显式条件语义（可命中汇总行），
+ * 本操作是填充语义（与 semanticFill/lookupFill 同契约），两者严格分离勿合并。
+ */
+export const FillConstantOpSchema = z.object({
+  type: z.literal('fillConstant'),
+  /** 要填充的目标列表头名称 */
+  targetColumn: z.string().describe('要填充的目标列的表头名称'),
+  /** 填充的固定值（trim 后为空的格子才写入） */
+  value: z.string().describe('填充的固定值'),
+}).extend(TargetSheetField);
+
+/**
  * 语义填充（功能 4）：目标列的空缺单元格按依据列取值的语义规律推断填充。
  *
  * 特殊性：这是 LLM 推断型操作（要真正调用模型产出填充值），不进
@@ -240,14 +306,59 @@ export const DeriveColumnOpSchema = z.object({
  */
 export const SemanticFillOpSchema = z.object({
   type: z.literal('semanticFill'),
-  /** 要填充的目标列（该列存在空缺单元格） */
-  targetColumn: z.string().describe('要填充的目标列的表头名称（该列有空缺）'),
+  /** 要填充的目标列（该列存在空缺单元格）。强调"列名"：模型曾把工作表名误塞进来 */
+  targetColumn: z.string().describe('要填充的目标列的表头名称（填列名，不是工作表名；该列在目标表中存在空缺）'),
   /** 推断依据列：如"根据城市和门店补全区域"给 ["城市","门店"]；省略时自动取前 3 个非目标列 */
   hintColumns: z
     .array(z.string().min(1).max(200))
     .max(10)
     .optional()
     .describe('用于推断的依据列表头名称清单（1~10 个，从表头中逐字选取）；省略时自动选取'),
+  /** 参照工作表："按 B 表内容补 A 表"时 B 表的名字（对照关系交给填充推断） */
+  referenceSheet: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('参照工作表名（跨表填充用）：要从哪张表查找依据列的对照关系，如"把汇总表的空缺按销售明细表补上"填 销售明细；同一张表内推断时省略'),
+}).extend(TargetSheetField);
+
+/**
+ * 设置表头行（报表式表格根治）：把指定行设为表头，该行上方内容归为说明行
+ * （标题/日期范围等，不再当数据参与填充/条件/规则）。
+ * 行号 N 按用户在表格中看到的完整行序（含说明行、表头）从 1 数起；
+ * N=1 表示恢复默认（第一行为表头）。不丢数据——原表头与上方行只降级为说明行。
+ */
+export const SetHeaderRowOpSchema = z.object({
+  type: z.literal('setHeaderRow'),
+  headerRow: z
+    .number()
+    .int()
+    .min(1)
+    .max(100000)
+    .describe('设为表头的行号（从 1 开始，按含标题/说明行的完整行序数）；1 = 恢复第一行为表头'),
+}).extend(TargetSheetField);
+
+/** 汇总行标记：声明哪些行是聚合结果行（总计/合计/小计），汇总行不参与填充/规则/条件/排序 */
+export const SetTotalRowsOpSchema = z.object({
+  type: z.literal('setTotalRows'),
+  rows: z
+    .array(z.number().int().min(1).max(100000))
+    .max(200)
+    .describe(
+      '要标记为汇总行的行号列表（从 1 开始，按含标题/说明行的完整行序数，与 setHeaderRow 同口径）；空数组 = 清除全部汇总行标记',
+    ),
+}).extend(TargetSheetField);
+
+/** 无操作：模型确认表格已满足要求时不做事、只说明原因（契约出口，防止"必须输出操作"与
+ * "不该修改"两头挤压——典型场景：报表式布局中标题/日期/汇总行旁的刻意留白） */
+export const NoopOpSchema = z.object({
+  type: z.literal('noop'),
+  reason: z
+    .string()
+    .min(2)
+    .max(500)
+    .describe('判断依据：为什么无需执行（如"唯一的空缺是日期范围行旁的刻意留白，属于报表式布局"）'),
 }).extend(TargetSheetField);
 
 /** 全部支持的操作（discriminatedUnion：按 type 字段分发校验） */
@@ -263,17 +374,78 @@ export const TableOpSchema = z.discriminatedUnion('type', [
   RenameColumnOpSchema,
   GroupCreateSheetOpSchema,
   DeriveColumnOpSchema,
+  LookupFillOpSchema,
+  FillConstantOpSchema,
   SemanticFillOpSchema,
+  SetHeaderRowOpSchema,
+  SetTotalRowsOpSchema,
+  NoopOpSchema,
 ]);
 export type TableOp = z.infer<typeof TableOpSchema>;
 
-/** LLM 产出的完整计划：一次指令可包含多个顺序执行的操作 */
-export const TableOpsPlanSchema = z.object({
-  ops: z
-    .array(TableOpSchema)
-    .max(10)
-    .describe('按执行顺序排列的操作列表；一条指令拆解为 1~10 个操作，无法理解时给空数组'),
+/**
+ * clarify 场景类型枚举（schema 层定义：parse 计划、clarify 模块、react 决策
+ * 三处共用同一枚举，防漂移）。
+ */
+export const ClarifyKindSchema = z.enum([
+  'fill-source',
+  'join-key',
+  'condition',
+  'aggregate-scope',
+  'formula-preview',
+  'destructive-preview',
+]);
+export type ClarifyKind = z.infer<typeof ClarifyKindSchema>;
+
+/**
+ * LLM 自报的"参数不明需反问"提示。
+ * 意图层只给场景与措辞——选项内容由决策层（clarify.ts 分析器）确定性产出，
+ * 绝不让 LLM 提供选项（防选项幻觉）。
+ */
+export const ClarifyHintSchema = z.object({
+  kind: ClarifyKindSchema.describe(
+    '反问场景：fill-source 填充来源 / join-key 跨表关联键 / condition 更新条件 / aggregate-scope 聚合范围 / formula-preview 公式影响面 / destructive-preview 删除范围',
+  ),
+  question: z
+    .string()
+    .min(2)
+    .max(500)
+    .describe('一句中文向用户说明缺什么信息、需要确认什么（不要附带选项内容，选项由系统生成）'),
 });
+export type ClarifyHint = z.infer<typeof ClarifyHintSchema>;
+
+/**
+ * LLM 产出的完整计划：一次指令可包含多个顺序执行的操作。
+ *
+ * 契约（根治设计，勿回退）：解析器是"纯映射器"——只负责把指令映射为操作序列，
+ * 不负责判断"是否需要执行"。所有操作都是幂等的（同名 sheet 重建、已有列覆盖），
+ * 重复执行零副作用，"已经做过了"不构成返回空的理由。裸的空 ops 不是合法解析
+ * 结果（superRefine 机器强制），模型空手而归一律视为解析失败 → parse.ts 统一走纠正重问。
+ * 唯一的合法"不做事"出口是 noop 操作（必须带 reason，报告告知用户）——用于
+ * "表格确实无需修改"的场景（如报表式布局的刻意留白），与"没看清就偷懒"区分开。
+ * needsClarify 是"参数不明需反问"的合法出口（ops 为空）：模糊意图/数据依赖
+ * 不明时 LLM 只报场景与问题，选项由 clarify 协议的确定性分析器产出。
+ */
+export const TableOpsPlanSchema = z
+  .object({
+    ops: z
+      .array(TableOpSchema)
+      .max(10)
+      .describe('按执行顺序排列的操作列表；一条指令拆解为 1~10 个操作'),
+    needsClarify: ClarifyHintSchema.optional().describe(
+      '指令的关键参数存在数据依赖不明（填充来源、关联键、更新条件等）时填写；此时输出空 ops 数组，系统会向用户反问确认后再执行',
+    ),
+  })
+  .superRefine((plan, ctx) => {
+    if (!plan.needsClarify && plan.ops.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['ops'],
+        message:
+          '必须至少输出一个操作（参数不明需反问时用 needsClarify；表格确实无需修改时输出 noop）',
+      });
+    }
+  });
 export type TableOpsPlan = z.infer<typeof TableOpsPlanSchema>;
 
 /** 单个操作的执行报告（前端展示给用户确认用） */

@@ -45,6 +45,8 @@ export interface TableRuleDto {
   type: TableRuleInput['type'];
   params: TableRuleInput['params'];
   fixAction?: TableRuleInput['fixAction'];
+  /** 规则作用的工作表名（未绑定 = 文档第一个工作表） */
+  targetSheet?: string;
   enabled: boolean;
   source: string;
   createdAt: string;
@@ -93,6 +95,8 @@ export class TableRuleService {
       // schema 已通过 ZodValidationPipe 校验，这里序列化落库
       paramsJson: JSON.stringify(input.params),
       fixActionJson: input.fixAction ? JSON.stringify(input.fixAction) : null,
+      // 绑定工作表（AI 提议多 sheet 文档的规则时必带；未绑定 = 第一个工作表）
+      targetSheet: input.targetSheet ?? null,
       enabled: true,
       source,
     });
@@ -101,6 +105,7 @@ export class TableRuleService {
       ruleId: row.id,
       documentId,
       ruleType: input.type,
+      targetSheet: input.targetSheet ?? '(第一个工作表)',
       source,
     });
     return this.serializeRule(row);
@@ -130,12 +135,18 @@ export class TableRuleService {
   }
 
   /**
-   * 更新规则（改名 / 改参数 / 改修复动作 / 启停）。
+   * 更新规则（改名 / 改参数 / 改修复动作 / 启停 / 改绑定工作表）。
    * params 变更后整体重新走 zod 校验（类型+参数联动），不过就拒绝。
    */
   async updateRule(
     ruleId: number,
-    patch: { name?: string; enabled?: boolean; params?: unknown; fixAction?: unknown },
+    patch: {
+      name?: string;
+      enabled?: boolean;
+      params?: unknown;
+      fixAction?: unknown;
+      targetSheet?: string | null;
+    },
   ): Promise<TableRuleDto> {
     const row = await this.ruleRepo.findOne({ where: { id: ruleId } });
     if (!row) throw new Error(`规则不存在（id=${ruleId}）`);
@@ -167,12 +178,17 @@ export class TableRuleService {
     row.fixActionJson = candidate.data.fixAction
       ? JSON.stringify(candidate.data.fixAction)
       : null;
+    // 绑定工作表：显式传 null/空串 = 清除绑定（回到第一个工作表）
+    if (patch.targetSheet !== undefined) {
+      row.targetSheet = patch.targetSheet && patch.targetSheet.trim() ? patch.targetSheet.trim() : null;
+    }
     await this.ruleRepo.save(row);
     logger.info('更新表格规则', {
       module: 'TableRuleService',
       ruleId,
       documentId: row.documentId,
       enabled: row.enabled,
+      targetSheet: row.targetSheet ?? '(第一个工作表)',
     });
     return this.serializeRule(row);
   }
@@ -218,6 +234,7 @@ export class TableRuleService {
         row.type,
         row.paramsJson,
         row.fixActionJson,
+        row.targetSheet,
       );
       if (parsed) {
         rules.push(parsed);
@@ -348,6 +365,7 @@ export class TableRuleService {
       row.type,
       row.paramsJson,
       row.fixActionJson,
+      row.targetSheet,
     );
     // 历史脏数据兜底：解析失败时回显原始 JSON（面板可看到该条规则并手动修复/删除）
     let rawParams: unknown = {};
@@ -363,6 +381,7 @@ export class TableRuleService {
       type: runtime?.type ?? (row.type as TableRuleInput['type']),
       params: (runtime?.params ?? rawParams) as TableRuleInput['params'],
       fixAction: runtime?.fixAction,
+      targetSheet: runtime?.targetSheet ?? row.targetSheet ?? undefined,
       enabled: row.enabled,
       source: row.source,
       createdAt: row.createdAt.toISOString(),
