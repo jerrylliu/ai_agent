@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button';
 import { DocumentEditor, type Editor, type JSONContent } from '@/components/Editor/DocumentEditor';
 import { EditorToolbar } from '@/components/Editor/EditorToolbar';
 import { SelectionToolbar } from '@/components/Editor/SelectionToolbar';
+import { SheetHeaderBar } from '@/components/Editor/SheetHeaderBar';
 import { KnowledgePanel } from '@/components/Editor/panels/KnowledgePanel';
 import { AIWritingPanel } from '@/components/Editor/panels/AIWritingPanel';
 import { TableRulesPanel } from '@/components/Editor/panels/TableRulesPanel';
@@ -810,6 +811,10 @@ export default function DocumentEditorPage({
           </button>
         </div>
       )}
+
+      {/* 表头行确认条：显示自动识别的表头行号，一键纠正（改 doc 的 tableHeader 标记，
+          保存时序列化自动写出 HeaderRow 指令）；关闭后本次会话不再打扰 */}
+      {!loading && <SheetHeaderBar content={content} onChange={handleChange} />}
 
       {/* 选中文字浮动工具栏（润色/翻译/改写）— 浮动定位，不受面板布局影响 */}
       {!loading && <SelectionToolbar editor={editorInstance} />}

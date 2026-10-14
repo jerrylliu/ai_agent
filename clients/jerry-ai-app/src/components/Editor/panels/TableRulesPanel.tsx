@@ -39,6 +39,7 @@ import {
   isSheetStructuredText,
   sheetTextToTableDoc,
   tableDocToSheetText,
+  tableDocToSheets,
 } from '@/lib/table-convert';
 import { cn } from '@/utils/index';
 
@@ -106,11 +107,25 @@ function describeRule(rule: TableRuleDto): string {
 /**
  * 从 sheetText 提取第一个 sheet 的表头列名（供规则表单的列下拉选择）。
  * 简易 CSV 解析：支持引号包裹与 "" 转义，与后端 parseCsvLine 口径一致。
+ * 识别 HeaderRow: N 指令（报表式表格）：说明行跳过，取第 N 个非空行为表头。
  */
 function extractFirstSheetHeaders(sheetText: string): string[] {
   const lines = sheetText.split(/\r?\n/);
-  // 跳过 "Sheet: xxx" 标题行与空行，取第一个数据行作为表头
-  const headerLine = lines.find((l) => l.trim() && !/^sheet\s*:/i.test(l.trim()));
+  // 跳过 "Sheet: xxx" 标题行与空行
+  const contentLines = lines
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !/^sheet\s*:/i.test(l));
+  // 表头锚定指令：块首第一个非空行（与后端 parseSheetData / table-convert 口径一致）
+  let headerRowIndex = 1;
+  if (contentLines.length > 0) {
+    const directive = contentLines[0].match(/^HeaderRow\s*[:：]\s*(\d+)$/i);
+    if (directive) {
+      const n = Number.parseInt(directive[1], 10);
+      headerRowIndex = Math.min(Math.max(n, 1), contentLines.length - 1);
+      contentLines.shift();
+    }
+  }
+  const headerLine = contentLines[headerRowIndex - 1];
   if (!headerLine) return [];
   const cells: string[] = [];
   let cur = '';
@@ -163,6 +178,7 @@ export function TableRulesPanel({ editor, documentId }: TableRulesPanelProps) {
   const [formFixKind, setFormFixKind] = useState<'none' | 'fixedValue' | 'formula' | 'deleteRow'>('none');
   const [formFixValue, setFormFixValue] = useState('');
   const [formFixExpression, setFormFixExpression] = useState('');
+  const [formTargetSheet, setFormTargetSheet] = useState('');
 
   // 确认弹框
   const [fixConfirmOpen, setFixConfirmOpen] = useState(false);
@@ -237,6 +253,12 @@ export function TableRulesPanel({ editor, documentId }: TableRulesPanelProps) {
     if (!panelReady || !editor) return [];
     const text = tableDocToSheetText(editor.getJSON());
     return text ? extractFirstSheetHeaders(text) : [];
+  }, [panelReady, editor, contentVersion]);
+
+  /** 当前文档全部工作表名（"生效工作表"下拉选项；多 sheet 文档规则需绑定所在表） */
+  const sheetNames = useMemo(() => {
+    if (!panelReady || !editor) return [];
+    return (tableDocToSheets(editor.getJSON()) ?? []).map((s) => s.name);
   }, [panelReady, editor, contentVersion]);
 
   /** 失效规则 ID 集合（列表标红用） */
@@ -433,6 +455,7 @@ export function TableRulesPanel({ editor, documentId }: TableRulesPanelProps) {
     setFormFixKind('none');
     setFormFixValue('');
     setFormFixExpression('');
+    setFormTargetSheet('');
   }, []);
 
   /** 从表单构造规则输入（校验必填项；失败返回 null 并 toast） */
@@ -488,8 +511,15 @@ export function TableRulesPanel({ editor, documentId }: TableRulesPanelProps) {
       fixAction = { kind: 'deleteRow' };
     }
 
-    return { name, type: formType, params, ...(fixAction ? { fixAction } : {}) } as TableRuleInput;
-  }, [formName, formType, formColumn, formValues, formMin, formMax, formTargetColumn, formExpression, formFixKind, formFixValue, formFixExpression, showToast]);
+    return {
+      name,
+      type: formType,
+      params,
+      // 绑定工作表（未选 = 第一个工作表；多 sheet 文档里列在别的表时必须选）
+      ...(formTargetSheet ? { targetSheet: formTargetSheet } : {}),
+      ...(fixAction ? { fixAction } : {}),
+    } as TableRuleInput;
+  }, [formName, formType, formColumn, formValues, formMin, formMax, formTargetColumn, formExpression, formFixKind, formFixValue, formFixExpression, formTargetSheet, showToast]);
 
   /** 提交新增规则 */
   const handleCreate = useCallback(async () => {
@@ -753,7 +783,7 @@ export function TableRulesPanel({ editor, documentId }: TableRulesPanelProps) {
                       <div className="space-y-1 max-h-40 overflow-y-auto">
                         {violations.slice(0, 50).map((v, idx) => (
                           <div key={`${v.rowIndex}-${idx}`} className="text-xs leading-relaxed text-muted-foreground">
-                            第 {v.rowIndex} 行「{v.column}」：
+                            {rule?.targetSheet ? `「${v.sheetName}」` : ''}第 {v.rowIndex} 行「{v.column}」：
                             {v.currentValue ? `"${v.currentValue.slice(0, 50)}"` : '（空）'}
                             <span className="text-foreground/70"> → {v.expectation}</span>
                           </div>
@@ -798,7 +828,12 @@ export function TableRulesPanel({ editor, documentId }: TableRulesPanelProps) {
                       onChange={() => toggleCandidate(i)}
                     />
                     <span className="min-w-0">
-                      <span className="block text-xs font-medium text-foreground">{candidate.name}</span>
+                      <span className="block text-xs font-medium text-foreground">
+                        {candidate.name}
+                        {candidate.targetSheet ? (
+                          <span className="text-muted-foreground font-normal">（{candidate.targetSheet}）</span>
+                        ) : null}
+                      </span>
                       <span className="block text-xs text-muted-foreground leading-relaxed">
                         {describeRule(candidate as TableRuleDto)}
                         {candidate.fixAction ? `；${describeFixAction(candidate.fixAction)}` : '；仅标记'}
@@ -855,6 +890,20 @@ export function TableRulesPanel({ editor, documentId }: TableRulesPanelProps) {
                   >
                     {RULE_TYPE_ORDER.map((t) => (
                       <option key={t} value={t}>{RULE_TYPE_LABEL[t]}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs">生效工作表</Label>
+                  <select
+                    value={formTargetSheet}
+                    onChange={(e) => setFormTargetSheet(e.target.value)}
+                    className="w-full h-7 rounded-md border border-input bg-background px-2 text-xs"
+                  >
+                    <option value="">第一个工作表（默认）</option>
+                    {sheetNames.map((n) => (
+                      <option key={n} value={n}>{n}</option>
                     ))}
                   </select>
                 </div>
@@ -1024,6 +1073,11 @@ export function TableRulesPanel({ editor, documentId }: TableRulesPanelProps) {
                     <Badge variant="outline" className="text-[10px] px-1.5 shrink-0">
                       {RULE_TYPE_LABEL[rule.type]}
                     </Badge>
+                    {rule.targetSheet && (
+                      <Badge variant="outline" className="text-[10px] px-1.5 shrink-0 max-w-28 truncate">
+                        {rule.targetSheet}
+                      </Badge>
+                    )}
                     {rule.source === 'ai' && (
                       <Badge variant="secondary" className="text-[10px] px-1.5 shrink-0">AI</Badge>
                     )}
