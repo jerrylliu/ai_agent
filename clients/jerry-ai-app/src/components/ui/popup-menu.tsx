@@ -18,6 +18,8 @@ export interface PopupMenuItem {
   icon?: React.ReactNode;
   /** 是否为危险操作（红色文字） */
   danger?: boolean;
+  /** 是否禁用（如导出/发布进行中），禁用项点击无效果 */
+  disabled?: boolean;
   /** 点击回调 */
   onClick: () => void;
 }
@@ -99,6 +101,7 @@ export function PopupMenu({ items, label = '更多操作' }: PopupMenuProps) {
   }, []);
 
   const handleItemClick = useCallback((item: PopupMenuItem) => {
+    if (item.disabled) return;
     setOpen(false);
     item.onClick();
   }, []);
@@ -131,10 +134,13 @@ export function PopupMenu({ items, label = '更多操作' }: PopupMenuProps) {
                 key={item.id}
                 type="button"
                 role="menuitem"
+                aria-disabled={item.disabled || undefined}
                 onClick={() => handleItemClick(item)}
-                className={`flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-accent ${
-                  item.danger ? 'text-red-600 hover:text-red-700' : ''
-                }`}
+                className={`flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors ${
+                  item.disabled
+                    ? 'cursor-not-allowed text-muted-foreground'
+                    : 'hover:bg-accent'
+                } ${item.danger && !item.disabled ? 'text-red-600 hover:text-red-700' : ''}`}
               >
                 {item.icon}
                 <span>{item.label}</span>
