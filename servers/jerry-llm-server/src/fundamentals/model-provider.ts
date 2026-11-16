@@ -390,6 +390,9 @@ export function setZhipuApiKey(apiKey: string): void {
   }
 
   zhipuApiKey = encrypt(cleaned);
+  // 持久化到 Redis（fire-and-forget，重启后自动恢复）
+  // 与 setDeepseekApiKey 保持对称：否则应用内设置的智谱 Key 重启即丢
+  void persistApiKey(ZHIPU_KEY_REDIS, zhipuApiKey);
 }
 
 export function getZhipuApiKey(): string {
