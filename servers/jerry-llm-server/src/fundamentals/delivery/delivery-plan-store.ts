@@ -24,6 +24,7 @@ import {
   executeDeliveryPlans,
   type DeliveryWorkspace,
 } from './delivery-executor';
+import { resolveFcAssetFromStores } from './asset-resolver';
 
 const PLAN_KEY_PREFIX = 'delivery:plan:';
 
@@ -90,9 +91,10 @@ export async function clearPendingPlan(dedupeKey: string): Promise<void> {
  *
  * 补偿策略：
  *   - stale 超过 PLAN_STALE_MS 的计划视为"登记后进程未走到收口"
- *   - 用空 Workspace（resolveAsset 恒 null）执行：文档/图表类引用在本轮
- *     产物已随进程消失，强行发送必缺附件——Executor 会拒发并留下结构化
- *     回执（含 missingAttachments），用户可在后续对话中要求重发
+ *   - 用权威存储 Workspace（resolveFcAssetFromStores）执行：本轮内存产物虽已
+ *     随进程消失，但文档持久化（7 天）/ 图表导图 Redis 缓存（TTL 内）仍可解析，
+ *     有效期内的引用正常发送；真正过期/编造的引用由 Executor 拒发并留下
+ *     结构化回执（含 missingAttachments），用户可在后续对话中要求重发
  *   - 仍携带纯 http 外链附件或无附件的计划可正常发送（这类引用不依赖本轮内存）
  *
  * @returns 补偿执行的计划数
@@ -141,9 +143,14 @@ export async function compensateStalePlans(): Promise<number> {
         continue;
       }
 
-      // 空 Workspace：本轮内存产物已不可信，让 Executor 的校验闸门决定去留
-      const emptyWorkspace: DeliveryWorkspace = { resolveAsset: () => null };
-      const receipts = await executeDeliveryPlans([plan], emptyWorkspace);
+      // 补偿 Workspace：本轮内存产物已随进程丢失，改用权威存储解析——
+      // 文档持久化（7 天）/ 图表导图 Redis 缓存（TTL 内）在崩溃后仍可解析，
+      // 有效期内的引用不再被"恒 null"误杀；真正过期的引用仍由 Executor
+      // 校验闸门拒发并留下结构化回执
+      const storeWorkspace: DeliveryWorkspace = {
+        resolveAsset: (ref) => resolveFcAssetFromStores(ref),
+      };
+      const receipts = await executeDeliveryPlans([plan], storeWorkspace);
       compensated++;
 
       logger.info('交付补偿：挂起计划已补偿执行', {

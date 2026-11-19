@@ -43,6 +43,13 @@ jest.mock('./delivery-executor', () => ({
   executeDeliveryPlans: jest.fn(),
 }));
 
+// 阻断 asset-resolver 的重依赖链（generate-document / multimodal-output 含
+// puppeteer 等，jest 环境无法解析）——补偿 Workspace 的解析行为在
+// asset-resolver.spec.ts 中单独覆盖，这里只需桩化
+jest.mock('./asset-resolver', () => ({
+  resolveFcAssetFromStores: jest.fn(async () => null),
+}));
+
 import {
   persistPendingPlan,
   clearPendingPlan,
@@ -103,10 +110,11 @@ describe('compensateStalePlans', () => {
 
     expect(n).toBe(1);
     expect(mockedExecute).toHaveBeenCalledTimes(1);
-    // 补偿用空 Workspace（本轮内存产物已不可信）
+    // 补偿用权威存储 Workspace（本轮内存产物已丢，改由 asset-resolver 解析；
+    // 此处 asset-resolver 已被桩化为 async () => null）
     const [plansArg, wsArg] = mockedExecute.mock.calls[0];
     expect(plansArg[0].dedupeKey).toBe(plan.dedupeKey);
-    expect(wsArg.resolveAsset('fc://document/x')).toBeNull();
+    await expect(wsArg.resolveAsset('fc://document/x')).resolves.toBeNull();
     expect(redisStore.has(`delivery:plan:${plan.dedupeKey}`)).toBe(false);
   });
 
