@@ -103,7 +103,7 @@ export const generateDocumentParamsSchema = z.object({
     .string()
     .optional()
     .describe(
-      '文档正文内容，必须是 Markdown 格式。一般情况下不要传这个参数：请把文档正文直接写在你的回复正文里，系统会在本轮回复结束后自动取用正文生成文件。仅当需要生成的文档内容与你的回复正文不一致时，才在这里显式提供正文。',
+      '文档正文内容，必须是 Markdown 格式。一般情况下不要传这个参数：请把文档正文直接写在你的回复正文里，系统会在本轮回复结束后自动取用正文生成文件。仅当需要生成的文档内容与你的回复正文不一致时，才在这里显式提供正文。注意：禁止把搜索等工具返回的原始 JSON 数据直接作为 content——必须先用你的语言把工具结果总结成 Markdown 正文（分节标题 + 要点段落）再传入。',
     ),
   format: z
     .enum(['pdf', 'docx', 'html', 'md'])
@@ -263,6 +263,44 @@ export async function persistDocument(params: {
   }
 }
 
+// ==================== 原始工具输出守卫 ====================
+
+/**
+ * 检测 content 是否为搜索类工具的原始 JSON 输出（而非总结后的文档正文）
+ *
+ * 生产事故（2026-11-20）：plan-execute 工作流里模型把 $step.output（搜索工具
+ * 的原始 JSON）原样绑进 content 参数 → 生成的 PDF/Word 正文就是一坨 JSON，
+ * 用户拿到的是不可读的原始数据而非总结文档。
+ *
+ * 判据：能解析为对象，且同时具备——
+ * 1. results 数组，元素含 title/snippet/url 之一的搜索结果条目特征
+ * 2. 顶层 query / engine / total 之一的搜索元信息
+ * 这是本项目搜索工具输出格式的显著特征，正常 Markdown 文档正文不会命中。
+ */
+function looksLikeRawSearchToolOutput(body: string): boolean {
+  const trimmed = body.trim();
+  if (!trimmed.startsWith('{')) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return false;
+  }
+  const obj = parsed as Record<string, unknown>;
+  const results = obj.results;
+  if (!Array.isArray(results) || results.length === 0) return false;
+  const looksLikeSearchRecords = results.every((item): boolean => {
+    if (typeof item !== 'object' || item === null) return false;
+    const record = item as Record<string, unknown>;
+    return 'title' in record || 'snippet' in record || 'url' in record;
+  });
+  if (!looksLikeSearchRecords) return false;
+  return 'query' in obj || 'engine' in obj || 'total' in obj;
+}
+
 export async function executeGenerateDocument(
   rawParams: unknown,
   context?: ToolContext,
@@ -286,6 +324,25 @@ export async function executeGenerateDocument(
 
   const { title, content, format } = parsed.data;
   const body = (content ?? '').trim();
+
+  // 原始工具输出守卫：模型把搜索结果 JSON 原样绑进 content 时拒绝生成，
+  // 并给模型明确的自我纠正指令（先总结成 Markdown 再重调），而不是产出废文档
+  if (looksLikeRawSearchToolOutput(body)) {
+    logger.warn(
+      'FC工具 [generate_document] content 疑似搜索工具原始 JSON 输出，拒绝生成',
+      {
+        module: 'Tool:GenerateDocument',
+        title,
+        format,
+        bodyLength: body.length,
+      },
+    );
+    return {
+      success: false,
+      message:
+        'content 参数是搜索工具的原始 JSON 输出，不是文档正文，已拒绝生成。请先用你自己的语言把这些搜索结果总结成结构化的 Markdown 文档（分节标题 + 要点段落，例如按"国内新闻/国际新闻"分类归纳），再把总结后的正文放进 content 参数重新调用本工具。',
+    };
+  }
 
   // P1：模型没给正文 → 只登记导出意图，由调用方在流式结束后用本轮回复正文落盘，
   // 避免把整篇文档塞进工具参数（大 payload 拖慢响应、易被截断、也是文本协议泄漏的诱因）。

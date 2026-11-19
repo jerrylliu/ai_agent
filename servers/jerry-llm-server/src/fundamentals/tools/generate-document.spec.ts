@@ -222,6 +222,90 @@ describe('P1 文档导出意图登记（content 可选）', () => {
   });
 });
 
+// ==================== 原始工具输出守卫（2026-11-20 生产事故） ====================
+// 生产现象：plan-execute 工作流里模型把搜索工具的原始 JSON 原样绑进 content，
+// 生成的 PDF/Word 正文就是一坨 JSON。守卫必须拦截并引导模型先总结再重调。
+describe('原始 JSON content 守卫', () => {
+  const savedKey = 'guard-key';
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  let saveSpy: jest.Mock;
+
+  beforeEach(() => {
+    (docGen.markdownToMd as jest.Mock).mockClear();
+    (docGen.markdownToPdf as jest.Mock).mockClear();
+    saveSpy = jest.fn(async () => ({ key: savedKey, expiresAt }));
+    initGenerateDocumentTool({ save: saveSpy, read: jest.fn() });
+  });
+
+  // 与生产日志中搜索工具（engine=search_pro）输出结构一致的样本
+  const rawSearchOutput = JSON.stringify({
+    results: [
+      {
+        title: '要闻速览（11月19日）',
+        url: 'https://example.com/a',
+        snippet: '要闻正文摘要……',
+        source: '某媒体',
+      },
+      {
+        title: '新闻早班车',
+        url: 'https://example.com/b',
+        snippet: '早报正文摘要……',
+        source: 'search_pro',
+      },
+    ],
+    total: 10,
+    query: '最近国内新闻 本周要闻汇总',
+    engine: 'search_pro',
+  });
+
+  it('搜索工具原始 JSON 作 content：拒绝生成并给自我纠正提示', async () => {
+    const result = await executeGenerateDocument({
+      title: '最近国内新闻要闻汇总',
+      content: rawSearchOutput,
+      format: 'pdf',
+    });
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('原始 JSON');
+    expect(result.message).toContain('总结');
+    // 关键：不能落盘生成废文档
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(docGen.markdownToPdf).not.toHaveBeenCalled();
+  });
+
+  it('带 results 数组但缺搜索元信息（普通 JSON 数据）：不误伤', async () => {
+    const normalJson = JSON.stringify({ results: [{ title: '标题' }] });
+    const result = await executeGenerateDocument({
+      title: '数据报告',
+      content: normalJson,
+      format: 'md',
+    });
+    expect(result.success).toBe(true);
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('普通 Markdown 正文：正常生成（守卫不误伤）', async () => {
+    const result = await executeGenerateDocument({
+      title: '周报',
+      content: '# 周报\n\n本周要闻：……',
+      format: 'md',
+    });
+    expect(result.success).toBe(true);
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('含 results/query 关键字但 JSON 解析失败的字符串：不误伤', async () => {
+    // 不完整 JSON → JSON.parse 抛错 → 守卫放行，按普通正文处理
+    const broken = '{"results":[{"title":"x"}], "query":';
+    const result = await executeGenerateDocument({
+      title: '杂记',
+      content: broken,
+      format: 'md',
+    });
+    expect(result.success).toBe(true);
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('persistDocument —— 可复用落盘函数', () => {
   const savedKey = 'persist-key';
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);

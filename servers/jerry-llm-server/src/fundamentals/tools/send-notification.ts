@@ -38,6 +38,17 @@ import {
 } from './multimodal-output';
 import { isDocumentUrl, getCachedDocument } from './generate-document';
 import { buildToolJsonSchema, safeParseToolParams } from './_helpers';
+import type { ToolContext } from './index';
+import {
+  type DeliveryPlan,
+  buildDedupeKey,
+} from '../delivery/delivery-plan';
+import { persistPendingPlan } from '../delivery/delivery-plan-store';
+
+// ==================== 交付计划限制 ====================
+
+/** 单轮最多登记的交付计划数：防滥用上限，同时保留"给多人发不同内容"的真实场景 */
+const MAX_PLANS_PER_ITERATION = 3;
 import { metrics } from '../metrics';
 import {
   uploadImage as feishuUploadImage,
@@ -277,7 +288,7 @@ export type SendNotificationParams = z.infer<
 
 export const sendNotificationSchema = buildToolJsonSchema(
   'send_notification',
-  '发送通知到飞书/邮件/Webhook（钉钉、企业微信群机器人）。当用户要求"通知""提醒""把结果发给某人""任务完成后告诉我"等场景时使用。也可作为工作流末尾步骤，把搜索/分析结果主动推送出去。',
+  '发送通知到飞书/邮件/Webhook（钉钉、企业微信群机器人）。当用户要求"通知""提醒""把结果发给某人""任务完成后告诉我"等场景时使用。也可作为工作流末尾步骤，把搜索/分析结果主动推送出去。注意：调用后系统先登记交付计划，本轮回复结束时统一校验附件并真实发送，**一次对话轮次只能登记一次**，请把所有附件和收件人合并到一次调用中，不要重复调用。',
   sendNotificationParamsSchema,
 );
 
@@ -317,6 +328,13 @@ export interface SendNotificationResult {
     /** LLM 可直接据此构造下一次调用的参数提示 */
     hint: string;
   };
+  /**
+   * 两阶段交付：true 表示本次调用只是登记了交付计划（未真实发送），
+   * 真实发送由 DeliveryExecutor 在本轮工具循环结束后统一执行
+   * （附件完整性校验 + 幂等去重后发送）。
+   * 不填/false 表示本次已真实发送（工作流等无交付收集器的场景兼容直发）。
+   */
+  planRegistered?: boolean;
 }
 
 // ==================== 正文 Markdown 图片处理 ====================
@@ -1339,8 +1357,63 @@ async function sendWebhook(
  * 工具主执行函数
  * 根据 channel 路由到具体的实现，并统一记录日志
  */
+/**
+ * 纯发送函数：按通道路由真实发送（无任何登记/幂等逻辑）
+ *
+ * 为什么独立导出：两阶段交付架构中 DeliveryExecutor 在 LLM 循环外统一发送，
+ * 它需要的正是"纯发送"能力。若 Executor 调 executeSendNotification 会形成
+ * "登记套登记"死循环（生产设计审查 2026-11-19 发现）。
+ * 收件人归一化/正文图片合并等前置处理仍由 executeSendNotification 完成，
+ * Executor 消费 DeliveryPlan 时传出的已是归一化后的参数。
+ */
+export async function dispatchNotification(
+  params: SendNotificationParams,
+): Promise<SendNotificationResult> {
+  let result: SendNotificationResult;
+  switch (params.channel) {
+    case 'feishu':
+      result = await sendFeishuMessage(params);
+      break;
+    case 'email':
+      result = await sendEmail(params);
+      break;
+    case 'webhook':
+      result = await sendWebhook(params);
+      break;
+    default:
+      result = {
+        success: false,
+        channel: params.channel,
+        delivered: 0,
+        errors: [`不支持的通道：${params.channel}`],
+      };
+  }
+
+  logger.info('send_notification：发送完成', {
+    module: 'SendNotification',
+    channel: params.channel,
+    success: result.success,
+    delivered: result.delivered,
+    errors: result.errors,
+    // 方案 C：跳过附件数与明细一并落日志，便于排查"发送成功但附件缺失"类问题
+    skippedCount: result.skippedAttachments?.length || 0,
+    skipped: result.skippedAttachments,
+  });
+  return result;
+}
+
+/**
+ * send_notification 工具入口（两阶段交付·登记模式）
+ *
+ * 聊天链路（context.deliveryPlans 收集器存在）：只登记 DeliveryPlan，
+ *   真实发送由 DeliveryExecutor 在本轮工具循环结束后统一执行——
+ *   发送前完成附件引用完整性校验 + 幂等去重，根治"邮件缺图先发出去"
+ *   与"模型自愈补发重复邮件"两类生产问题（2026-11-19 案例）。
+ * 工作流等无收集器场景：保持旧行为立即发送（兼容，收集器缺失即直发）。
+ */
 export async function executeSendNotification(
   rawParams: unknown,
+  context?: ToolContext,
 ): Promise<SendNotificationResult> {
   const parsed = safeParseToolParams(sendNotificationParamsSchema, rawParams);
   if (!parsed.success) {
@@ -1392,35 +1465,82 @@ export async function executeSendNotification(
     recipientsCount: params.recipients?.length || 0,
   });
 
-  let result: SendNotificationResult;
-  switch (params.channel) {
-    case 'feishu':
-      result = await sendFeishuMessage(params);
-      break;
-    case 'email':
-      result = await sendEmail(params);
-      break;
-    case 'webhook':
-      result = await sendWebhook(params);
-      break;
-    default:
-      result = {
+  // ==================== 两阶段交付：登记模式（聊天链路） ====================
+  if (context?.deliveryPlans) {
+    const plans = context.deliveryPlans;
+    // 多计划限制：一轮最多 MAX_PLANS_PER_ITERATION 个。上限防滥用（垃圾邮件源），
+    // 但允许"给 A 发邮件 + 给 B 发邮件"这类真实多收件方场景（生产评审改进 3）。
+    // 模型自愈式"补发"（同内容重复调用）仍被幂等键拦截——见 buildDedupeKey 注释
+    if (plans.length >= MAX_PLANS_PER_ITERATION) {
+      logger.warn('send_notification：本轮交付计划数已达上限，拒绝登记', {
+        module: 'Tool:SendNotification',
+        sessionId: context.sessionId,
+        existingCount: plans.length,
+        max: MAX_PLANS_PER_ITERATION,
+      });
+      return {
         success: false,
         channel: params.channel,
         delivered: 0,
-        errors: [`不支持的通道：${params.channel}`],
+        errors: [
+          `本轮交付计划数已达上限（${MAX_PLANS_PER_ITERATION} 个），无法再登记`,
+        ],
+        suggestion: {
+          action: 'fix_params',
+          reason: '本轮已登记过多交付计划',
+          hint:
+            '如需发送多个通知，请在下一轮对话中操作；' +
+            '如需给多个接收人发送相同内容，请把所有接收人放进同一次调用的 recipients 数组（不要拆成多次调用）。',
+        },
       };
+    }
+
+    const plan: DeliveryPlan = {
+      channel: params.channel,
+      title: params.title,
+      content: params.content,
+      recipients: params.recipients,
+      webhookUrl: params.webhookUrl,
+      attachments: params.attachments?.filter(
+        (a): a is typeof a & { url: string } =>
+          typeof a.url === 'string' && a.url.length > 0,
+      ),
+      dedupeKey: buildDedupeKey(
+        context.sessionId || 'unknown-session',
+        context.iteration ?? 0,
+        plans.length,
+      ),
+      createdAt: Date.now(),
+      source: context.source === 'dsml-stream' ? 'dsml-stream' : 'fc-loop',
+    };
+    plans.push(plan);
+    // 计划落 Redis：进程在收口前崩溃时由 compensateStalePlans 定时补偿
+    //（Outbox 持久承诺语义；失败降级为内存计划，收口照常执行）
+    void persistPendingPlan(plan);
+
+    logger.info('send_notification：交付计划已登记（未发送）', {
+      module: 'Tool:SendNotification',
+      dedupeKey: plan.dedupeKey,
+      channel: plan.channel,
+      attachmentCount: plan.attachments?.length || 0,
+      source: plan.source,
+    });
+
+    return {
+      success: true,
+      channel: params.channel,
+      delivered: 0,
+      planRegistered: true,
+      // 模型看到的回执必须明确"未发送"：旧语义下模型看到 success 就对用户说
+      // "邮件已发送"，现在发送被推迟到循环收口，措辞错位会误导用户
+      errors: undefined,
+      message:
+        '交付计划已登记（尚未发送）。系统会在本轮回复结束后统一校验附件并发送，' +
+        '发送结果将以回执形式直接展示给用户。请对用户说"交付已安排"，' +
+        '不要说"已发送"',
+    } as SendNotificationResult & { message: string };
   }
 
-  logger.info('send_notification：发送完成', {
-    module: 'Tool:SendNotification',
-    channel: params.channel,
-    success: result.success,
-    delivered: result.delivered,
-    errors: result.errors,
-    // 方案 C：跳过附件数与明细一并落日志，便于排查"发送成功但附件缺失"类问题
-    skippedCount: result.skippedAttachments?.length || 0,
-    skipped: result.skippedAttachments,
-  });
-  return result;
+  // ==================== 兼容路径：无收集器（工作流等）立即发送 ====================
+  return dispatchNotification(params);
 }

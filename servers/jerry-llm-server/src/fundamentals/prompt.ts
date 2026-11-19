@@ -189,6 +189,14 @@ import {
   persistDocument,
   type GenerateDocumentIntent,
 } from './tools/generate-document';
+// 【两阶段交付】DeliveryPlan（send_notification 登记的交付草案）+ DeliveryExecutor
+// （循环收口统一发送：附件完整性校验 + 幂等去重）。见 fundamentals/delivery/ 模块注释
+import { type DeliveryPlan } from './delivery/delivery-plan';
+import {
+  type DeliveryWorkspace,
+  executeDeliveryPlans,
+} from './delivery/delivery-executor';
+import { clearPendingPlan } from './delivery/delivery-plan-store';
 // 【多模态产出辅助】mindmapImageUrl：把 mermaid 源码转成可访问的图片 URL（懒渲染）。
 import { mindmapImageUrl } from './tools/multimodal-output';
 // 【泛型缓存类】MultiLevelCache<T>：T 为缓存值类型，支持 L1（内存 LRU）+ L2（Redis）。
@@ -1807,16 +1815,19 @@ ${toolList}
 
   // ---------------- 外部 API 集成工具（方案 A） ----------------
   if (availableTools.includes('send_notification')) {
-    prompt += `\n\n通知发送规则：
+    prompt += `\n\n通知发送规则（两阶段交付架构）：
 - 当用户要求"通知/提醒/告诉/发邮件/发消息/推送/告知"等场景时，调用 send_notification
+- 【重要·新语义】调用 send_notification 只是"登记交付计划"，真实发送发生在本轮回复结束后由系统统一执行（附件完整性校验+幂等去重后发送）。因此：登记成功后**不要**对用户说"邮件已发送"，应说"交付已安排/正在发送"；真实的发送结果会由系统以回执形式直接展示给用户
 - 如果用户的请求中缺少必要参数（收件人、主题等），请一次性列出所有缺失信息让用户补充，不要逐条追问
 - channel 必须从 'feishu'（飞书）、'email'（邮件）、'webhook'（钉钉/企业微信群机器人）三选一
 - title 是通知标题（邮件主题/卡片标题），content 是通知正文（支持 Markdown）
 - recipients 是接收人列表：feishu 通道传 open_id 或邮箱地址；email 通道传邮箱地址；webhook 通道无需此字段
 - webhookUrl 仅 channel=webhook 时必填，必须是 https 开头的外网地址
+- 【重要】同一次回复最多登记 3 个交付计划。给多个接收人发相同内容时，把所有接收人放进同一次调用的 recipients 数组；只有"不同内容发给不同人"才需要多次调用
 - 也可作为工作流末尾步骤，把搜索/分析结果主动推送出去
 - 如果用户要求发图表/思维导图邮件：先调用 generate_chart 或 create_mindmap，拿到返回的 imageUrl 字段，再将 imageUrl 填入 send_notification.attachments。示例：先 generate_chart(...) 得到 { imageUrl: "<chart-url>" }，再 send_notification({ channel:"email", content:"分析结果", attachments:[{filename:"chart.png", url: imageUrl}] })。绝对不要把 ECharts 配置代码或 Mermaid 文本当正文发出去——图表必须作为附件图片嵌入邮件
 - 如果用户要求发图片邮件：先调用 generate_image 生成图片，拿到返回的 images[].url 后，再调用 send_notification，把图片 URL 填入 attachments 字段。示例：send_notification({channel:"email", title:"星空图片", content:"这是自动生成的星空图片", recipients:["用户邮箱"], attachments:[{filename:"star-sky.png", url:"<generate_image返回的url>", cid:"img1"}]})
+- 【重要·附件引用】attachments[].url 必须是工具在本轮真实返回的地址。引用不存在或已过期的附件会导致整封邮件被拒发（宁可不发也不发残缺邮件），请只引用真实 URL
 - attachments 支持所有常见文件格式：图片(png/jpg/gif/webp)自动内嵌正文，PDF/Word/Excel/Markdown/txt/zip 等作为附件附在邮件中。系统自动根据文件扩展名识别 MIME 类型`;
   }
 
@@ -2525,6 +2536,13 @@ async function promptWithFunctionCalling(
   // 模型调用 generate_document 只给 title + format 时登记在这里，流式结束后用本轮回复正文落盘。
   const docIntents: GenerateDocumentIntent[] = [];
 
+  // 两阶段交付：请求级交付计划收集器（与 docIntents 同理，每次请求独立创建）。
+  // send_notification 在聊天链路中只登记 DeliveryPlan（不真实发送），本函数末尾
+  // 统一交给 DeliveryExecutor 执行——发送前完成附件引用完整性校验 + 幂等去重。
+  // 根治（2026-11-19 生产案例）：① 同轮 Promise.all 并发导致邮件先于图片生成发出
+  // ② 模型自愈/DSML 再次调用外发导致重复邮件。
+  const deliveryPlans: DeliveryPlan[] = [];
+
   // 工具资产收集：把工具执行结果中的多模态产物推入对应收集数组（流式输出前/中统一发送）。
   // invoke 循环与流式期 DSML 解析执行两条路径共用，保证资产收集口径一致。
   const collectToolAssets = (toolName: string, result: any): void => {
@@ -2739,6 +2757,21 @@ async function promptWithFunctionCalling(
       return;
     }
 
+    // 已登记但未发送的交付计划直接丢弃：连接已断，Executor 的回执无处推送，
+    // 且取消路径保序原则是"宁可不发"（用户回来后会看到回复交代文本）。
+    // 不在这里发送的原因：附件 Workspace 状态在取消路径上不可信，盲发可能缺附件
+    if (deliveryPlans.length > 0) {
+      logger.warn('取消路径：丢弃未发送的交付计划', {
+        module: 'PromptService',
+        count: deliveryPlans.length,
+        dedupeKeys: deliveryPlans.map((p) => p.dedupeKey),
+      });
+      for (const p of deliveryPlans) {
+        void clearPendingPlan(p.dedupeKey);
+      }
+      deliveryPlans.length = 0;
+    }
+
     // ② headless 生成执行结果交代文本（不传已 abort 的 signal，用硬超时兜底）
     try {
       const cancelStart = Date.now();
@@ -2854,6 +2887,19 @@ async function promptWithFunctionCalling(
         logger.info('FC模式：LLM调用被中断', { module: 'PromptService' });
         stopHeartbeat(heartbeatTimer);
         if (res && !res.writableEnded) res.end();
+        // 计划清理：中断路径不走循环收口，丢弃已登记计划（宁可不发）+
+        // 删除 Redis 挂起记录（防补偿扫描发送一个用户从未见过回执的邮件）
+        if (deliveryPlans.length > 0) {
+          logger.warn('LLM中断：丢弃未发送的交付计划（宁可不发）', {
+            module: 'PromptService',
+            count: deliveryPlans.length,
+            dedupeKeys: deliveryPlans.map((p) => p.dedupeKey),
+          });
+          for (const p of deliveryPlans) {
+            void clearPendingPlan(p.dedupeKey);
+          }
+          deliveryPlans.length = 0;
+        }
         return;
       }
 
@@ -3148,6 +3194,10 @@ async function promptWithFunctionCalling(
             imageModel,
             originalQuery: promptText,
             docIntents,
+            // 两阶段交付：send_notification 登记交付计划，循环收口统一发送
+            deliveryPlans,
+            iteration,
+            source: 'fc-loop',
           });
           const resultStr =
             typeof result === 'string' ? result : JSON.stringify(result);
@@ -3528,6 +3578,10 @@ async function promptWithFunctionCalling(
         // 声明提升到 try 之外：AbortError catch 需要读取已流出的部分文本落库
         //（断开 ≠ 丢成果：流式中途断开时部分回复也要进入历史记录）
         let fcFullResponse = '';
+        // 流式异常回退时丢弃交付计划的交代文本（改进 2）：
+        // fallback 路径的发送与落库基于 aiMessage.content 重构的 fallbackContent，
+        // 不走 fcFullResponse，需要单独携带该说明；catch 作用域可见所以提升到 try 外
+        let deliveryPlansFallbackNote = '';
         try {
           // 先发送 metadata 和 session_action 事件
           sendMetadata(res, ragMetadata);
@@ -3709,6 +3763,11 @@ async function promptWithFunctionCalling(
                     imageModel,
                     originalQuery: promptText,
                     docIntents,
+                    // 两阶段交付：流式阶段的 send_notification 同样只登记，
+                    // 与 FC 循环共用同一收集器，由循环收口统一发送
+                    deliveryPlans,
+                    iteration: streamRound,
+                    source: 'dsml-stream',
                   });
                   const resultStr =
                     typeof result === 'string'
@@ -3801,7 +3860,18 @@ async function promptWithFunctionCalling(
               });
               docIntents.length = 0;
             } else {
-            const docBody = fcFullResponse.trim();
+            // 资产剥离：fcFullResponse 开头注入了图片 Markdown/echarts/mermaid 资产块，
+            // 且 AI 正文也可能复述这些块。直接落盘会把整个回复塞进 PDF
+            // （2026-11-19 生产案例：PDF 里混入 2 张春天图与图表 JSON）。
+            // 剥离规则：整段围栏块（echarts/mermaid）删除；独立成行的图片 Markdown
+            // 删除（内联在文字中的图片链接保留，属于正文语义的一部分）
+            const docBody = fcFullResponse
+              .replace(/```(?:echarts|mermaid)\n[\s\S]*?\n```/g, '')
+              .split('\n')
+              .filter((line) => !/^!\[[^\]]*\]\([^)]+\)\s*$/.test(line.trim()))
+              .join('\n')
+              .replace(/\n{3,}/g, '\n\n')
+              .trim();
             if (!docBody) {
               logger.warn('延迟文档：本轮回复正文为空，放弃落盘', {
                 module: 'PromptService',
@@ -3851,6 +3921,82 @@ async function promptWithFunctionCalling(
                 }
               }
             }
+            }
+          }
+
+          // ==================== 两阶段交付：循环收口统一发送 ====================
+          // 位置约束：必须在延迟文档落盘之后（交付计划可能引用本轮生成的
+          // fc://document/{key} 附件，先落盘才有产物可解析）；
+          // 必须在 DSML 轮次循环结束之后（流式阶段也可能登记计划）。
+          if (deliveryPlans.length > 0) {
+            if (dsmlStreamCancelled || (isCancelled && isCancelled())) {
+              // 取消守卫：与延迟文档同一口径——连接已断宁可不发
+              logger.warn('交付收口：客户端已断开，丢弃交付计划（宁可不发）', {
+                module: 'PromptService',
+                count: deliveryPlans.length,
+                dedupeKeys: deliveryPlans.map((p) => p.dedupeKey),
+              });
+              for (const p of deliveryPlans) {
+                void clearPendingPlan(p.dedupeKey);
+              }
+              deliveryPlans.length = 0;
+            } else {
+              // DeliveryWorkspace 实现：从本轮收集数组解析 fc:// 引用。
+              // 文档/图表引用直接透传原 fc:// 地址（发送层已有该协议的下载/渲染逻辑），
+              // Workspace 只负责"存在性校验"——引用在本轮产物中不存在即拒发
+              const workspace: DeliveryWorkspace = {
+                resolveAsset: (ref: string) => {
+                  if (ref.startsWith('fc://document/')) {
+                    const key = ref.slice('fc://document/'.length);
+                    return collectedFileCards.some((c) => c.key === key)
+                      ? { url: ref }
+                      : null;
+                  }
+                  if (
+                    ref.startsWith('fc://chart/') ||
+                    ref.startsWith('fc://mindmap/')
+                  ) {
+                    return collectedChartOptions.some(
+                      (c) => c.imageUrl === ref,
+                    )
+                      ? { url: ref }
+                      : null;
+                  }
+                  // fc://image/ 目前无产生方（generate_image 返回 http 直链），
+                  // 收集数组中找不到对应产物，返回 null 触发拒发
+                  return null;
+                },
+              };
+
+              const receipts = await executeDeliveryPlans(
+                deliveryPlans,
+                workspace,
+              );
+              // 已执行（成功/拒发均算）：删除 Redis 挂起记录，避免补偿扫描重复处理
+              for (const p of deliveryPlans) {
+                void clearPendingPlan(p.dedupeKey);
+              }
+              deliveryPlans.length = 0;
+
+              // 回执以正文形式推给用户：模型只知道"已登记"，真实发送结果
+              // 只在这里产生，必须显式告知（发送成功/拒发原因）
+              for (const r of receipts) {
+                const summary = r.success
+                  ? `📨 已完成交付（${r.channel}，送达 ${r.delivered} 个接收人${r.refIds?.length ? `，回执 ${r.refIds.join('/')}` : ''}）`
+                  : `⚠️ 交付未完成（${r.channel}）：${(r.errors || ['未知原因']).join('; ')}`;
+                sendContent(res, `\n\n${summary}`);
+                fcFullResponse += `\n\n${summary}`;
+              }
+
+              logger.info('交付收口：本轮交付计划执行完毕', {
+                module: 'PromptService',
+                receipts: receipts.map((r) => ({
+                  dedupeKey: r.dedupeKey,
+                  success: r.success,
+                  idempotentHit: r.idempotentHit,
+                  delivered: r.delivered,
+                })),
+              });
             }
           }
 
@@ -3936,6 +4082,26 @@ async function promptWithFunctionCalling(
               module: 'PromptService',
             });
             if (!res.writableEnded) res.end();
+            // 已登记未发送的交付计划直接丢弃：中断路径不走循环收口，
+            // 计划若不显式清理会静默消失（模型已告知用户"已登记"，邮件却永不到达）。
+            // 按宁可不发原则丢弃——附件 Workspace 状态在中断路径上不可信
+            if (deliveryPlans.length > 0) {
+              logger.warn('流式中断：丢弃未发送的交付计划（宁可不发）', {
+                module: 'PromptService',
+                count: deliveryPlans.length,
+                dedupeKeys: deliveryPlans.map((p) => p.dedupeKey),
+              });
+              // 交付失败交代：中断路径已流出的部分回复会经下方落库进历史记录，
+              // 追加一句说明让用户回来后知道"邮件没发出去，可要求重发"，
+              // 而不是被模型的"已登记"误导（改进 2，2026-11-19 评审）
+              for (const p of deliveryPlans) {
+                void clearPendingPlan(p.dedupeKey);
+              }
+              const dropNote = `\n\n⚠️ 你要求的${deliveryPlans.map((p) => p.channel).join('/')}交付因会话中断未发送。如仍需要，请回到会话后告诉我重新发送。`;
+              fcFullResponse += dropNote;
+              if (!res.writableEnded) sendContent(res, dropNote);
+              deliveryPlans.length = 0;
+            }
             // 断开时已流出的部分文本不丢弃：落库 + 资产入缓存，保证历史记录
             // 完整（与取消路径成果保全同族：断开 ≠ 丢成果）
             try {
@@ -3976,10 +4142,37 @@ async function promptWithFunctionCalling(
               module: 'PromptService',
               error: streamError.message,
             });
+            // fallback 路径不走循环收口：计划同样丢弃（宁可不发原则，理由同中断路径）。
+            // 不在 fallback 中执行发送的原因：fallback 本身是异常恢复流程，
+            // 再叠加数秒的附件下载+SMTP 发送会放大失败面，且回执无法可靠送达
+            if (deliveryPlans.length > 0) {
+              logger.warn('流式回退：丢弃未发送的交付计划（宁可不发）', {
+                module: 'PromptService',
+                count: deliveryPlans.length,
+                dedupeKeys: deliveryPlans.map((p) => p.dedupeKey),
+              });
+            // dropNote 同时进 fcFullResponse 与 fallbackContent：
+            // 前者保证中断时部分落库可见，后者保证 fallback 发送与落库路径可见
+            //（复查 2026-11-19 发现：只写 fcFullResponse 的话 fallback 用户看不到）
+            const droppedChannels = deliveryPlans
+              .map((p) => p.channel)
+              .join('/');
+            for (const p of deliveryPlans) {
+              void clearPendingPlan(p.dedupeKey);
+            }
+            const dropNote = `\n\n⚠️ 你要求的${droppedChannels}交付因响应异常未发送。如仍需要，请告诉我重新发送。`;
+            fcFullResponse += dropNote;
+            if (!res.writableEnded) sendContent(res, dropNote);
+            deliveryPlansFallbackNote = dropNote;
+            deliveryPlans.length = 0;
+            }
             let fallbackContent =
               typeof aiMessage.content === 'string'
                 ? aiMessage.content
                 : JSON.stringify(aiMessage.content);
+            if (deliveryPlansFallbackNote) {
+              fallbackContent += deliveryPlansFallbackNote;
+            }
             fallbackContent = fallbackContent.replace(
               /<think[\s\S]*?<\/think>/gs,
               '',

@@ -39,6 +39,7 @@ import {
 import {
   handleConfirmationResponse,
   listPendingConfirmationsForUser,
+  listRecentlyResolvedForUser,
 } from '../fundamentals/human-in-the-loop.js';
 import { logger } from '../fundamentals/logger';
 import {
@@ -328,6 +329,17 @@ export class ChatController {
       if (res.writableEnded) break;
       res.write(
         `event: confirmation_request\ndata: ${JSON.stringify(pending)}\n\n`,
+      );
+    }
+
+    // HITL resolved 回放：把最近已解决的确认也补推一遍。只回放 pending 不够——
+    // 飞书侧确认的请求已从 pending 移除，错过 resolved 广播的端重连后旧弹框
+    // 永远挂着（生产案例 2026-11-20：手机弹框 → 切飞书确认 → 回 App 弹框仍在）。
+    // 前端对 confirmation_resolved 按 id 关闭弹窗（幂等，不存在的 id 静默忽略）。
+    for (const resolved of listRecentlyResolvedForUser(ownerUserId)) {
+      if (res.writableEnded) break;
+      res.write(
+        `event: confirmation_resolved\ndata: ${JSON.stringify(resolved)}\n\n`,
       );
     }
 

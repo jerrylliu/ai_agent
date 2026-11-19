@@ -54,6 +54,7 @@ import { TableOpsService } from './services/table-ops.service.js';
 import { SemanticFillService } from './services/semantic-fill.service.js';
 import { DocumentSchedulerService } from './services/document-scheduler.service.js';
 import { ImageRetrySchedulerService } from './services/image-retry-scheduler.service.js';
+import { DeliveryCompensationSchedulerService } from './services/delivery-compensation.scheduler.js';
 import { KnowledgeSourceService } from './services/knowledge-source.service.js';
 import { KnowledgeSourceSchedulerService } from './services/knowledge-source-scheduler.service.js';
 import { SessionService } from './services/session.service.js';
@@ -203,6 +204,8 @@ import { initFeishuChatSessionRepository } from './fundamentals/feishu/feishu-ch
     DocumentScanService,
     DocumentSchedulerService,
     ImageRetrySchedulerService,
+    // 两阶段交付：挂起交付计划补偿扫描（进程崩溃后的孤儿计划每 5 分钟补偿一次）
+    DeliveryCompensationSchedulerService,
     KnowledgeSourceService,
     KnowledgeSourceSchedulerService,
     ToolUsageService,

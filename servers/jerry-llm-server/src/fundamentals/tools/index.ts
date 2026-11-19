@@ -208,6 +208,23 @@ export interface ToolContext {
    * 必须由每次请求单独创建（不能是模块级变量），否则并发请求会互相污染。
    */
   docIntents?: GenerateDocumentIntent[];
+
+  /**
+   * 请求级"交付计划"收集器（两阶段交付架构）
+   *
+   * send_notification 在聊天链路中只登记 DeliveryPlan（不真实发送），
+   * 由 prompt.ts 在本轮工具循环结束后统一交给 DeliveryExecutor 执行
+   * （附件完整性校验 + 幂等去重后发送）。
+   * 必须由每次请求单独创建（与 docIntents 同理），否则并发请求互相污染。
+   * 工作流等无收集器的场景不传此字段 → send_notification 保持立即发送的旧行为。
+   */
+  deliveryPlans?: import('../delivery/delivery-plan').DeliveryPlan[];
+
+  /** 当前执行轮次（FC 工具循环 iteration / DSML 流式 streamRound），用于生成幂等键 */
+  iteration?: number;
+
+  /** 登记来源标记：DSML 流式阶段传 'dsml-stream'，FC 循环不传（默认 fc-loop） */
+  source?: 'fc-loop' | 'dsml-stream';
 }
 
 // 工具调用记录回调，由外部注入（避免循环依赖）
