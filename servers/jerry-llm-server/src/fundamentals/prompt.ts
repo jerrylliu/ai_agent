@@ -197,6 +197,9 @@ import {
   executeDeliveryPlans,
 } from './delivery/delivery-executor';
 import { clearPendingPlan } from './delivery/delivery-plan-store';
+// 【fc:// 权威兜底】本轮收集数组未命中时查权威存储（文档持久化 / 图表导图缓存），
+// 支持模型复用 FC 资产缓存的跨轮引用。见 fundamentals/delivery/asset-resolver.ts
+import { resolveFcAssetFromStores } from './delivery/asset-resolver';
 // 【多模态产出辅助】mindmapImageUrl：把 mermaid 源码转成可访问的图片 URL（懒渲染）。
 import { mindmapImageUrl } from './tools/multimodal-output';
 // 【泛型缓存类】MultiLevelCache<T>：T 为缓存值类型，支持 L1（内存 LRU）+ L2（Redis）。
@@ -3941,30 +3944,36 @@ async function promptWithFunctionCalling(
               }
               deliveryPlans.length = 0;
             } else {
-              // DeliveryWorkspace 实现：从本轮收集数组解析 fc:// 引用。
+              // DeliveryWorkspace 实现：先查本轮收集数组（内存命中零 IO），未命中
+              // 再走权威存储兜底（resolveFcAssetFromStores）。
               // 文档/图表引用直接透传原 fc:// 地址（发送层已有该协议的下载/渲染逻辑），
-              // Workspace 只负责"存在性校验"——引用在本轮产物中不存在即拒发
+              // Workspace 只负责"存在性校验"。
+              //
+              // 跨轮引用兜底（2026-11-20 生产案例）：dedupeKey 显示 send_notification
+              // 在 iteration 0 就带着 4 个 fc:// 附件登记——模型通过 FC 资产缓存复用了
+              // 上一轮生成的地址（该机制的存在意义就是跨轮引用）。只查本轮收集数组会把
+              // 合法的跨轮引用误判为缺失而整封拒发。
+              // 修复点 2：思维导图收集在 collectedMindmaps，旧实现误查 collectedChartOptions
+              // 导致**本轮**生成的思维导图引用也必然拒发。
               const workspace: DeliveryWorkspace = {
-                resolveAsset: (ref: string) => {
+                resolveAsset: async (ref: string) => {
                   if (ref.startsWith('fc://document/')) {
                     const key = ref.slice('fc://document/'.length);
-                    return collectedFileCards.some((c) => c.key === key)
-                      ? { url: ref }
-                      : null;
+                    if (collectedFileCards.some((c) => c.key === key)) {
+                      return { url: ref };
+                    }
+                  } else if (ref.startsWith('fc://chart/')) {
+                    if (collectedChartOptions.some((c) => c.imageUrl === ref)) {
+                      return { url: ref };
+                    }
+                  } else if (ref.startsWith('fc://mindmap/')) {
+                    if (collectedMindmaps.some((m) => m.imageUrl === ref)) {
+                      return { url: ref };
+                    }
                   }
-                  if (
-                    ref.startsWith('fc://chart/') ||
-                    ref.startsWith('fc://mindmap/')
-                  ) {
-                    return collectedChartOptions.some(
-                      (c) => c.imageUrl === ref,
-                    )
-                      ? { url: ref }
-                      : null;
-                  }
-                  // fc://image/ 目前无产生方（generate_image 返回 http 直链），
-                  // 收集数组中找不到对应产物，返回 null 触发拒发
-                  return null;
+                  // 本轮未命中 → 权威存储兜底（文档持久化 7 天 / MultiLevelCache
+                  // L1+L2 Redis；fc://image/ 与未知协议在兜底内恒 null 拒发）
+                  return resolveFcAssetFromStores(ref);
                 },
               };
 

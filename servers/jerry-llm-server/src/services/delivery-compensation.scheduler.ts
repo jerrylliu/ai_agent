@@ -6,9 +6,10 @@
  *       正常轮次收口执行后 clearPendingPlan 删键 →
  *       进程在收口前崩溃的"孤儿计划"由本任务补偿（Outbox 可靠性闭环）。
  *
- * 补偿语义：用空 Workspace 执行（本轮内存产物已随崩溃丢失）——
- * 纯 http 附件/无附件计划可正常发送；fc:// 引用会被 Executor
- * 校验闸门拒发并留下结构化回执，用户可在对话中要求重发。
+ * 补偿语义：用权威存储 Workspace 执行（本轮内存产物已随崩溃丢失，但文档
+ * 持久化/Redis 缓存仍可解析，见 delivery/asset-resolver.ts）——
+ * 有效期内的 fc:// 引用正常发送；已过期的引用被 Executor 校验闸门
+ * 拒发并留下结构化回执，用户可在对话中要求重发。
  *
  * 间隔 5 分钟（@Cron），单轮最多补偿 3 个（防重启雪崩，见 store 内 MAX_COMPENSATE_PER_SCAN）
  */
