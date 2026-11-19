@@ -91,6 +91,15 @@ export {
 
 export type { ImageChunkInput } from './vector-crud.js';
 
+// ==================== Doc Tree：文档级摘要节点 ====================
+export {
+  addDocSummaryChunk,
+  generateSummaryText,
+  truncateSummarySource,
+  extractiveSummaryFallback,
+  buildSummaryChunkMetadata,
+} from './doc-summary.js';
+
 // ==================== 检索 ====================
 export {
   searchKnowledgeBase,

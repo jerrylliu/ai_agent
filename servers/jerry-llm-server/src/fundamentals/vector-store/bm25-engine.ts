@@ -96,10 +96,24 @@ export function getBM25Engine(): BM25Engine {
       // （musl）。顶层 import 会在启动期 require 原生绑定失败，直接炸掉整个进程，
       // 连默认 minisearch 引擎都起不来。改为选中 tantivy 时才加载：生产（minisearch）
       // 永不触碰该模块；真选 tantivy 且缺二进制时在首次调用处 fail-fast，报错更聚焦。
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { TantivyBM25Engine } = require('./tantivy-engine.js') as {
-        TantivyBM25Engine: new () => BM25Engine;
-      };
+      // require('./tantivy-engine.js') 在两条链路下的解析差异：
+      // - NestJS 链路（tsc 编译到 dist）：同目录存在编译产物 .js，正常命中；
+      // - bench 脚本链路（scripts/ts-loader.mjs --experimental-transform-types）：
+      //   require 垫片是 createRequire(源码路径)，CJS 解析不经过自定义 ESM resolve
+      //   hook（ts-resolver.mjs 的 .js→.ts 映射只对 import 生效），会按字面路径
+      //   查找源码目录里的 .js（不存在）→ MODULE_NOT_FOUND。兜底直接 require .ts
+      //   源文件（transform-types 已启用且本文件无顶层 await，require(esm) 可加载）。
+      let tantivyMod: { TantivyBM25Engine: new () => BM25Engine };
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        tantivyMod = require('./tantivy-engine.js');
+      } catch {
+        // 仅吞编译产物缺失类错误；模块找到但原生绑定初始化失败时，
+        // 第二次 require 会带着真实原因再次抛出，不会被这里掩盖。
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        tantivyMod = require('./tantivy-engine.ts');
+      }
+      const { TantivyBM25Engine } = tantivyMod;
       engineInstance = new TantivyBM25Engine();
       break;
     }

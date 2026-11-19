@@ -237,6 +237,13 @@ const MermaidBlock: React.FC<{ chart: string }> = React.memo(({ chart }) => {
   const [error, setError] = React.useState<string>('');
 
   useEffect(() => {
+    // 空内容防御（生产案例 2026-11-19）：工具失败后模型可能复述空 ```mermaid
+    // 块，mermaid.render 对空串必抛错，会渲染出红色错误框。空块直接不渲染。
+    if (!chart.trim()) {
+      setSvg('');
+      setError('');
+      return;
+    }
     let cancelled = false;
     const renderChart = async () => {
       try {
@@ -256,6 +263,12 @@ const MermaidBlock: React.FC<{ chart: string }> = React.memo(({ chart }) => {
     renderChart();
     return () => { cancelled = true; };
   }, [chart]);
+
+  // 空 mermaid 块不渲染任何占位：若不在渲染期拦截，effect 跳过渲染后 svg 恒为空，
+  // 会命中下方的 "!svg" 分支永远显示"正在渲染..."脉冲占位（比空框更糟）
+  if (!chart.trim()) {
+    return null;
+  }
 
   if (error) {
     return (
@@ -293,7 +306,39 @@ const EChartsBlock: React.FC<{ optionJson: string }> = React.memo(({ optionJson 
   const chartRef = useRef<echarts.ECharts | null>(null);
   const [error, setError] = React.useState<string>('');
 
+  // 空 option 判定放在渲染期同步计算（useMemo）：若放 useEffect + state，
+  // state 在 paint 后才生效，空块会先闪现一帧空容器再消失。
+  // 空 option 防御（生产案例 2026-11-19）：图表工具失败后模型可能复述空的
+  // ```echarts {} 块，不防御会被渲染成 368px 高的大空白框。没有任何可渲染
+  // 数据（series/xAxis.data/dataset.source 均为空）时直接不渲染。
+  // 注意 series 可能是单个对象（ECharts 允许非数组形式），不能只判 Array
+  const isEmpty = React.useMemo(() => {
+    try {
+      const o = JSON.parse(optionJson);
+      if (!o || typeof o !== 'object' || Array.isArray(o)) return true;
+      const hasSeries =
+        (Array.isArray(o.series) && o.series.length > 0) ||
+        (!Array.isArray(o.series) &&
+          typeof o.series === 'object' &&
+          o.series !== null);
+      const hasXAxisData =
+        Array.isArray(o.xAxis?.data) && o.xAxis.data.length > 0;
+      const hasDatasetSource =
+        Array.isArray(o.dataset?.source) && o.dataset.source.length > 0;
+      return !hasSeries && !hasXAxisData && !hasDatasetSource;
+    } catch {
+      // JSON 解析失败不算空块：交给 effect 的 catch 走错误展示分支
+      return false;
+    }
+  }, [optionJson]);
+
   useEffect(() => {
+    // 空块：容器不会挂载（渲染期直接 return null），这里只负责释放旧实例
+    if (isEmpty) {
+      chartRef.current?.dispose();
+      chartRef.current = null;
+      return;
+    }
     if (!containerRef.current) return;
 
     // ResizeObserver 在 window resize 之外补充"容器级"自适应：
@@ -334,7 +379,7 @@ const EChartsBlock: React.FC<{ optionJson: string }> = React.memo(({ optionJson 
       window.removeEventListener('resize', handleResize);
       resizeObserver?.disconnect();
     };
-  }, [optionJson]);
+  }, [optionJson, isEmpty]);
 
   useEffect(() => {
     return () => {
@@ -342,6 +387,11 @@ const EChartsBlock: React.FC<{ optionJson: string }> = React.memo(({ optionJson 
       chartRef.current = null;
     };
   }, []);
+
+  // 空 echarts 块不渲染任何占位，避免聊天流中出现大空白框
+  if (isEmpty) {
+    return null;
+  }
 
   if (error) {
     return (

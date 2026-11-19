@@ -20,7 +20,11 @@ interface VersionTimelineProps {
   onRollback: (versionId: number) => void;
   onDelete: (versionId: number) => void;
   onArchive: (versionId: number) => void;
-  onDiff: (v1: number, v2: number) => void;
+  /** 对比两个版本：参数携带 {id, versionNumber}，versionNumber 供对比弹窗头部展示 */
+  onDiff: (
+    v1: { id: number; versionNumber: number },
+    v2: { id: number; versionNumber: number },
+  ) => void;
   /** 发布到知识库（向量化 + 激活），DRAFT 和 ACTIVE 都可触发 */
   onPublish: (versionId: number) => void;
   /** 正在发布的版本 ID（用于 loading 状态） */
@@ -55,7 +59,13 @@ export function VersionTimeline({
 
   const handleCompare = () => {
     if (selectedForDiff.length === 2) {
-      onDiff(selectedForDiff[0], selectedForDiff[1]);
+      // 把 id 解析为 {id, versionNumber}：对比弹窗头部需要展示用户在时间线上
+      // 看到的版本号，而不是数据库记录 ID（两者数值不同会造成困惑）
+      const toRef = (id: number) => {
+        const v = versions.find((item) => item.id === id);
+        return { id, versionNumber: v?.versionNumber ?? id };
+      };
+      onDiff(toRef(selectedForDiff[0]), toRef(selectedForDiff[1]));
       setSelectedForDiff([]);
     }
   };

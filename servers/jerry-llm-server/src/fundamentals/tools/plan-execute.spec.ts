@@ -189,9 +189,23 @@ describe('Plan-Execute 数据绑定（P0）', () => {
       expect(resolveBinding('$step1.output.a.b.c', plan)).toBe(42);
     });
 
-    it('引用未完成的步骤应返回 undefined', () => {
+    it('引用未完成且无输出的步骤应返回 undefined', () => {
       const plan = buildPlan('s', null);
       plan.steps[0].status = 'pending';
+      expect(resolveBinding('$step1.output', plan)).toBeUndefined();
+    });
+
+    it('步骤未标记完成但已有输出时应按实际输出解析（时序容错）', () => {
+      // 生产案例 2026-11-19：模型忘记先调 update_plan_step 就调用下游工具，
+      // 输出已存储但 status 仍为 pending，此时应解析成功而非注入原始表达式
+      const plan = buildPlan('s', { results: ['a'] });
+      plan.steps[0].status = 'pending';
+      expect(resolveBinding('$step1.output', plan)).toEqual({ results: ['a'] });
+    });
+
+    it('failed 步骤的输出应拒绝解析（错误结果不注入下游参数）', () => {
+      const plan = buildPlan('s', { success: false, message: '执行失败' });
+      plan.steps[0].status = 'failed';
       expect(resolveBinding('$step1.output', plan)).toBeUndefined();
     });
 
@@ -244,14 +258,14 @@ describe('Plan-Execute 数据绑定（P0）', () => {
       });
     });
 
-    it('解析失败时应保留原始表达式（不抛错）', () => {
+    it('解析失败时应丢弃该参数（不保留原始表达式毒化下游校验）', () => {
       const plan = buildPlan({ foo: 'bar' });
       const resolved = resolveDataBindings(
         { x: '$step99.output.something' },
         plan,
       );
-      // 解析失败时应保留原表达式
-      expect(resolved.x).toBe('$step99.output.something');
+      // 解析失败时直接丢弃，绝不让 "$step..." 字符串流入工具的 zod 校验
+      expect(resolved).toEqual({});
     });
 
     it('应递归解析嵌套对象', () => {
@@ -265,6 +279,20 @@ describe('Plan-Execute 数据绑定（P0）', () => {
       );
       expect(resolved.nested.inner).toBe(100);
       expect(resolved.arr).toEqual([1, 2, 3]);
+    });
+
+    it('数组内的绑定表达式应被解析，失败元素被丢弃', () => {
+      const plan = buildPlan({ items: ['a', 'b'] });
+      const resolved = resolveDataBindings(
+        {
+          ok: ['$step1.output', 'literal'],
+          bad: ['$step99.output', 'keep'],
+        },
+        plan,
+      );
+      // 成功解析 → 替换为实际输出；失败 → 丢弃该元素，普通字符串保留
+      expect(resolved.ok).toEqual([{ items: ['a', 'b'] }, 'literal']);
+      expect(resolved.bad).toEqual(['keep']);
     });
 
     it('字面量参数应原样保留', () => {

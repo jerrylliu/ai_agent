@@ -159,13 +159,35 @@ export function resolveBinding(expression: string, plan: Plan): any {
     return undefined;
   }
 
-  if (step.status !== 'completed') {
-    logger.warn('数据绑定：引用的步骤尚未完成', {
+  // 时序容错（生产案例 2026-11-19 09:19）：模型常在调 generate_chart 前忘记先
+  // 调 update_plan_step 把前序步骤标记为 completed，但工具执行成功时输出已经
+  // 存入 step.output。此时若严格按 status 拦截，绑定会解析失败并把原始
+  // "$stepN.output" 字符串注入下游工具参数，毒化 zod 校验导致整个工具调用失败。
+  // 因此：只要 output 已存在就允许解析，仅当既未完成也无输出时才拦截。
+  // 例外：failed 步骤的 output 是失败结果（含 success:false/error 信息），
+  // 绑定进下游工具参数只会注入垃圾数据，必须拦截。
+  if (step.status === 'failed') {
+    logger.warn('数据绑定：引用的步骤已失败，拒绝解析', {
+      module: 'Tool:PlanExecute',
+      stepId,
+      expression,
+    });
+    return undefined;
+  }
+  if (step.status !== 'completed' && step.output == null) {
+    logger.warn('数据绑定：引用的步骤尚未完成且无输出', {
       module: 'Tool:PlanExecute',
       stepId,
       stepStatus: step.status,
     });
     return undefined;
+  }
+  if (step.status !== 'completed') {
+    logger.warn('数据绑定：步骤未标记完成但已有输出，按实际输出解析', {
+      module: 'Tool:PlanExecute',
+      stepId,
+      stepStatus: step.status,
+    });
   }
 
   let value = step.output;
@@ -210,9 +232,12 @@ export function resolveDataBindings(
           resolvedType: typeof resolvedValue,
         });
       } else {
-        // 解析失败，保留原始表达式（LLM 可能自行处理）
-        resolved[key] = value;
-        logger.warn('数据绑定：解析失败，保留原始表达式', {
+        // 解析失败时直接丢弃该参数，绝不把 "$stepN.output" 原始字符串注入工具参数
+        //（生产案例 2026-11-19：字符串流入 generate_chart.data 的 zod record 校验，
+        // "expected record, received string" 使整个调用失败，连模型自带的完整
+        // echartsOption 也被连坐）。丢弃后若参数必填，zod 会给出清晰的缺参错误
+        // 回传模型重试，这才是可自愈的失败路径。
+        logger.warn('数据绑定：解析失败，丢弃该绑定参数', {
           module: 'Tool:PlanExecute',
           key,
           expression: value,
@@ -225,6 +250,27 @@ export function resolveDataBindings(
     ) {
       // 递归解析嵌套对象
       resolved[key] = resolveDataBindings(value, plan);
+    } else if (Array.isArray(value)) {
+      // 数组元素级别的绑定解析：数组内的 "$step..." 字符串若不处理会原样注入
+      // 下游工具参数（与顶层保留原始表达式同样的毒化风险）。解析失败时丢弃
+      // 该元素，非绑定表达式（普通字符串/数字/对象）一律按字面量保留；
+      // 对象元素递归解析（如 items: [{ url: "$step1.output.imageUrl" }]）
+      const resolvedArr = value
+        .map((item) => {
+          if (typeof item === 'string' && item.startsWith('$step')) {
+            return resolveBinding(item, plan);
+          }
+          if (
+            typeof item === 'object' &&
+            item !== null &&
+            !Array.isArray(item)
+          ) {
+            return resolveDataBindings(item, plan);
+          }
+          return item;
+        })
+        .filter((item) => item !== undefined);
+      resolved[key] = resolvedArr;
     } else {
       resolved[key] = value;
     }

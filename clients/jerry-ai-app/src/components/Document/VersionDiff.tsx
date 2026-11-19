@@ -13,35 +13,48 @@ interface VersionDiffProps {
   documentId: number;
   v1: number;
   v2: number;
+  /** 两个版本的版本号（用于头部展示；不传则退化为显示版本记录 ID） */
+  v1Number?: number;
+  v2Number?: number;
   onClose: () => void;
 }
 
-export function VersionDiff({ documentId, v1, v2, onClose }: VersionDiffProps) {
+export function VersionDiff({ documentId, v1, v2, v1Number, v2Number, onClose }: VersionDiffProps) {
   const [diff, setDiff] = useState<DiffLine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 重试触发器：递增后作为 effect 依赖强制重新加载（loadDiff 已内联进 effect）
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
-    loadDiff();
-  }, [documentId, v1, v2]);
-
-  const loadDiff = async () => {
+    // 竞态守卫：v1/v2 快速切换时，慢请求的后返回会覆盖新请求的正确结果；
+    // 关闭弹窗后请求返回也会在已卸载组件上 setState。用 cancelled 标志丢弃过期响应
+    let cancelled = false;
     setLoading(true);
     setError(null);
-    try {
-      const result = await diffVersions(documentId, v1, v2);
-      setDiff(result.diff || []);
-    } catch (err: any) {
-      setError(err.message || '加载对比数据失败');
-    } finally {
-      setLoading(false);
-    }
-  };
+    diffVersions(documentId, v1, v2)
+      .then((result) => {
+        if (!cancelled) setDiff(result.diff || []);
+      })
+      .catch((err: any) => {
+        if (!cancelled) setError(err.message || '加载对比数据失败');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [documentId, v1, v2, retryKey]);
 
-  // 统计
-  const addedCount = diff.filter(d => d.added).length;
-  const removedCount = diff.filter(d => d.removed).length;
-  const unchangedCount = diff.filter(d => !d.added && !d.removed).length;
+  // 统计（按行而非按 diff 块：一个块可能包含多行，按块统计会严重低估）
+  const countLines = (d: DiffLine) =>
+    d.value.split('\n').filter((l) => l.trim() !== '').length;
+  const addedCount = diff.filter((d) => d.added).reduce((n, d) => n + countLines(d), 0);
+  const removedCount = diff.filter((d) => d.removed).reduce((n, d) => n + countLines(d), 0);
+  const unchangedCount = diff
+    .filter((d) => !d.added && !d.removed)
+    .reduce((n, d) => n + countLines(d), 0);
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
@@ -52,7 +65,12 @@ export function VersionDiff({ documentId, v1, v2, onClose }: VersionDiffProps) {
             <GitCompare className="h-5 w-5 text-primary" />
             <h3 className="font-semibold">版本对比</h3>
             <span className="text-sm text-muted-foreground">
-              v{v1} vs v{v2}
+              v{v1Number ?? v1} vs v{v2Number ?? v2}
+              {(v1Number === undefined || v2Number === undefined) && (
+                <span className="ml-1 text-xs text-muted-foreground/60">
+                  （版本 ID）
+                </span>
+              )}
             </span>
           </div>
           <div className="flex items-center gap-3">
@@ -86,7 +104,10 @@ export function VersionDiff({ documentId, v1, v2, onClose }: VersionDiffProps) {
           ) : error ? (
             <div className="text-center py-12">
               <p className="text-destructive mb-3">{error}</p>
-              <Button variant="outline" size="sm" onClick={loadDiff}>重试</Button>
+              <Button variant="outline" size="sm" onClick={() => {
+                // 重试：重新触发加载（改 key 强制 effect 重跑）
+                setRetryKey((k) => k + 1);
+              }}>重试</Button>
             </div>
           ) : diff.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">

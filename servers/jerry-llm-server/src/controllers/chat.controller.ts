@@ -36,7 +36,10 @@ import {
   syncRichAssetsToFeishu,
   type AssetDocument,
 } from '../fundamentals/feishu/feishu-asset-sync.js';
-import { handleConfirmationResponse } from '../fundamentals/human-in-the-loop.js';
+import {
+  handleConfirmationResponse,
+  listPendingConfirmationsForUser,
+} from '../fundamentals/human-in-the-loop.js';
 import { logger } from '../fundamentals/logger';
 import {
   acquireLock,
@@ -314,6 +317,19 @@ export class ChatController {
     res.write(
       `event: ready\ndata: ${JSON.stringify({ ownerUserId, at: Date.now() })}\n\n`,
     );
+
+    // HITL 回放：把该用户当前仍挂起的确认请求补推给新连接。
+    // 为什么：SSE 无历史回放，移动端切后台时 /chat/events 断开，断开窗口内
+    // 广播的 confirmation_request 在 EventSource 自动重连后无法补收，
+    // 弹窗丢失后用户回到 App 会看到"既没有弹框也没有回复"（生产案例 2026-11-19：
+    // 手机弹框 → 切飞书确认 → 回 App 弹框未消失/无回复）。payload 结构与
+    // 流内 confirmation_request 完全一致，前端按 id 幂等去重不会弹两个框。
+    for (const pending of listPendingConfirmationsForUser(ownerUserId)) {
+      if (res.writableEnded) break;
+      res.write(
+        `event: confirmation_request\ndata: ${JSON.stringify(pending)}\n\n`,
+      );
+    }
 
     const unsubscribe = subscribeChatHistoryEvents(ownerUserId, (event) => {
       if (res.writableEnded) return;

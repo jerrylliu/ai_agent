@@ -429,6 +429,46 @@ export async function executeSearchKnowledgeBase(
       after: rerankedResults.length,
     });
   }
+
+  // ==================== Doc Tree：摘要块同文档让位 ====================
+  // 摘要块（chunk_role='summary'）与同文档正文块并存时让位：正文是直接证据，
+  // 两者并存只会在同一文档下重复占位浪费 topK 名额；摘要只在「该文档没有任何
+  // 正文块入选」时保留——此时正是「这份文档讲什么」类全局问题的兜底入口。
+  // 缺 documentId 的块不参与判定（原样保留，防御性兜底）。
+  const textDocIds = new Set<string>();
+  for (const r of rerankedResults) {
+    // RerankableResult.metadata 为 any，收窄到本判定用到的字段
+    const meta = r.metadata as
+      | { chunk_role?: unknown; documentId?: unknown }
+      | undefined;
+    if (
+      meta?.chunk_role !== 'summary' &&
+      typeof meta?.documentId === 'string'
+    ) {
+      textDocIds.add(meta.documentId);
+    }
+  }
+  if (textDocIds.size > 0) {
+    const beforeSummaryYield = rerankedResults.length;
+    rerankedResults = rerankedResults.filter((r) => {
+      const meta = r.metadata as
+        | { chunk_role?: unknown; documentId?: unknown }
+        | undefined;
+      if (meta?.chunk_role !== 'summary') return true;
+      return (
+        meta?.documentId === undefined ||
+        !textDocIds.has(String(meta.documentId))
+      );
+    });
+    if (rerankedResults.length < beforeSummaryYield) {
+      logger.info('FC工具 [search_knowledge_base] 摘要块同文档让位', {
+        module: 'Tool:SearchKnowledgeBase',
+        before: beforeSummaryYield,
+        after: rerankedResults.length,
+        yielded: beforeSummaryYield - rerankedResults.length,
+      });
+    }
+  }
   rerankedResults = rerankedResults.slice(0, topK);
 
   // ==================== KG 图补充位（基线优先，图只占末尾 supplementSlots 个槽位） ====================

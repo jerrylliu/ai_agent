@@ -50,8 +50,10 @@ interface PendingConfirmation {
 // 待确认队列
 const pendingConfirmations = new Map<string, PendingConfirmation>();
 
-// 确认请求超时时间（默认5分钟）
-const CONFIRMATION_TIMEOUT_MS = 5 * 60 * 1000;
+// 确认请求超时时间（默认10分钟）
+// 为什么 10 分钟：移动端弹框后切到其他 App（如飞书审批）是高频场景，
+// 5 分钟常在用户返回前就超时自动拒绝，导致"确认了但工具被拒"的困惑
+const CONFIRMATION_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * 需要人工确认的工具列表及其风险等级和提示信息
@@ -478,6 +480,43 @@ export function getPendingConfirmationInfo(confirmationId: string) {
     riskLevel: pending.riskLevel,
     message: pending.message,
   };
+}
+
+/**
+ * 列出某用户所有未过期的待确认请求（用于 /chat/events 新连接回放）
+ *
+ * 为什么需要回放：SSE 无历史回放能力，移动端切后台时 /chat/events 断开，
+ * 断开窗口内广播的 confirmation_request 在重连后无法补收，弹窗就丢了。
+ * EventSource 自动重连成功后，把当前仍挂起的确认请求补推一遍即可弥补。
+ */
+export function listPendingConfirmationsForUser(userId: string): Array<{
+  id: string;
+  toolName: string;
+  paramsSummary: string;
+  riskLevel: 'low' | 'medium' | 'high';
+  message: string;
+}> {
+  const now = Date.now();
+  const result: Array<{
+    id: string;
+    toolName: string;
+    paramsSummary: string;
+    riskLevel: 'low' | 'medium' | 'high';
+    message: string;
+  }> = [];
+  for (const pending of pendingConfirmations.values()) {
+    if (pending.ownerUserId !== userId) continue;
+    // 过滤已超时但定时器尚未触发清理的条目（理论窗口极小，防御性跳过）
+    if (now - pending.createdAt.getTime() >= CONFIRMATION_TIMEOUT_MS) continue;
+    result.push({
+      id: pending.id,
+      toolName: pending.toolName,
+      paramsSummary: pending.paramsSummary,
+      riskLevel: pending.riskLevel,
+      message: pending.message,
+    });
+  }
+  return result;
 }
 
 /**

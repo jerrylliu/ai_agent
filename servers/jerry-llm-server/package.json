@@ -34,9 +34,11 @@
     "bench:measure-expansion": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/measure-expansion.ts",
     "bench:measure-runtime": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/measure-runtime.ts",
     "bench:import": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/import-erb-corpus.ts",
+    "bench:rebuild-summaries": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/rebuild-erb-summaries.ts",
     "bench:backfill": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/backfill-parent-content.ts",
     "bench:eval": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/run-erb-eval.ts",
-    "bench:metrics": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/internal-metrics.ts",
+    "bench:metrics": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/erb-internal-metrics.ts",
+    "bench:retrieval-gate": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/compare-retrieval-gate.ts",
     "bench:judge": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/run-judge.ts",
     "bench:kg-spike": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/kg-link-spike.ts",
     "bench:kg-online-check": "node --import ./scripts/ts-loader.mjs --experimental-transform-types scripts/bench/kg-online-link-check.ts"
