@@ -198,7 +198,7 @@ describe('DocumentService.diffVersions', () => {
     );
   });
 
-  it('占位文本防护：文件丢失（空文本）必须中止对比并指明具体版本', async () => {
+  it('占位文本防护：文件丢失（空文本且磁盘无文件）必须中止对比并指明具体版本', async () => {
     const service = createService();
     const v1 = makeVersion(101, 1);
     const v2 = makeVersion(102, 2);
@@ -208,9 +208,47 @@ describe('DocumentService.diffVersions', () => {
       .mockImplementation((v: any) =>
         Promise.resolve(v.id === 102 ? '' : '第一版正常内容'),
       );
-
+    // readVersionFile 显式 mock 为 null（磁盘无文件）：
+    // 模块级 jest.fn() 不受 afterEach restoreAllMocks 重置，
+    // 不显式设置会被其他用例泄漏的 mockReturnValue 污染（测试顺序脆弱性）
+    const { readVersionFile } = require('../fundamentals/file-storage');
+    (readVersionFile as jest.Mock).mockReturnValue(null);
     await expect(service.diffVersions(1, 101, 102)).rejects.toThrow(
-      /v2.*丢失或内容为空/,
+      /v2.*丢失/,
     );
+  });
+
+  it('空内容但文件存在的版本是合法版本，允许参与对比（产出全文新增 diff）', async () => {
+    const service = createService();
+    const v1 = makeVersion(101, 1);
+    const v2 = makeVersion(102, 2);
+    setupVersions(service, v1, v2);
+    jest
+      .spyOn(service as any, 'parseVersionText')
+      .mockImplementation((v: any) =>
+        Promise.resolve(v.id === 101 ? '' : '第二版正常内容'),
+      );
+    // 文件存在但内容为空：合法版本，不再拦截（真值判断：Buffer 对象为真）
+    const { readVersionFile } = require('../fundamentals/file-storage');
+    (readVersionFile as jest.Mock).mockReturnValue(Buffer.from(''));
+
+    const changes = await service.diffVersions(1, 101, 102);
+    const added = changes.filter((c) => c.added);
+    expect(added.length).toBeGreaterThan(0);
+    expect(changes.some((c) => c.removed)).toBe(false);
+  });
+
+  it('v1 与 v2 为同一版本时应直接返回空 diff（跳过文件解析）', async () => {
+    const service = createService();
+    const v1 = makeVersion(101, 1);
+    setupVersions(service, v1, null);
+    const parseSpy = jest
+      .spyOn(service as any, 'parseVersionText')
+      .mockResolvedValue('任意内容');
+
+    const changes = await service.diffVersions(1, 101, 101);
+
+    expect(changes).toEqual([]);
+    expect(parseSpy).not.toHaveBeenCalled();
   });
 });

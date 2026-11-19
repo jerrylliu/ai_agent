@@ -184,8 +184,8 @@ describe('HumanInTheLoop', () => {
         resolvedValue = v;
       });
 
-      // 快进 6 分钟（超过 5 分钟超时）
-      jest.advanceTimersByTime(6 * 60 * 1000);
+      // 快进超过超时阈值（10 分钟，见 CONFIRMATION_TIMEOUT_MS）
+      jest.advanceTimersByTime(10 * 60 * 1000 + 1);
       await Promise.resolve();
 
       expect(resolvedValue).toBe(false);
@@ -219,6 +219,68 @@ describe('HumanInTheLoop', () => {
 
     it('不存在的 ID 应返回 null', () => {
       expect(mod.getPendingConfirmationInfo('fake')).toBeNull();
+    });
+  });
+
+  /* ====================================================================
+   * listPendingConfirmationsForUser（/chat/events 回放）
+   * ==================================================================*/
+  describe('listPendingConfirmationsForUser', () => {
+    beforeEach(async () => {
+      jest.useFakeTimers();
+      await loadModule();
+    });
+
+    afterEach(() => jest.useRealTimers());
+
+    it('应列出该用户所有挂起的确认请求（回放用）', async () => {
+      const p1 = mod.requestConfirmation(
+        'query_database',
+        { sql: 'SELECT 1' },
+        'user-a',
+      );
+      mod.requestConfirmation(
+        'send_notification',
+        { channel: 'email', title: 't' },
+        'user-b',
+      );
+
+      const list = mod.listPendingConfirmationsForUser('user-a');
+      expect(list).toHaveLength(1);
+      expect(list[0].id).toBe(p1.confirmationId);
+      expect(list[0].toolName).toBe('query_database');
+      // 结构与流内 confirmation_request payload 一致，前端可按同构去重
+      expect(Object.keys(list[0]).sort()).toEqual([
+        'id',
+        'message',
+        'paramsSummary',
+        'riskLevel',
+        'toolName',
+      ]);
+    });
+
+    it('已解决的请求不应再出现在回放列表中', async () => {
+      const p1 = mod.requestConfirmation(
+        'query_database',
+        { sql: 'SELECT 1' },
+        'user-a',
+      );
+      mod.handleConfirmationResponse(p1.confirmationId, true, 'web');
+      await Promise.resolve(); // 让 handleConfirmationResponse 的 promise resolve
+
+      expect(mod.listPendingConfirmationsForUser('user-a')).toHaveLength(0);
+    });
+
+    it('超时的请求不应出现在回放列表中', () => {
+      mod.requestConfirmation(
+        'query_database',
+        { sql: 'SELECT 1' },
+        'user-a',
+      );
+      // 快进超过超时阈值（触发超时清理定时器）
+      jest.advanceTimersByTime(10 * 60 * 1000 + 1);
+
+      expect(mod.listPendingConfirmationsForUser('user-a')).toHaveLength(0);
     });
   });
 

@@ -106,11 +106,16 @@ export function recallAtK(
   expectedDocIds: string[],
   k: number,
 ): number {
-  if (expectedDocIds.length === 0) return 0;
+  // k<=0 守卫必须先于 slice：slice(0, 负数) 语义是「去掉末尾 N 个」而非空数组，
+  // 与 precisionAtK/ndcgAtK 的 k<=0 → 0 口径保持一致
+  if (expectedDocIds.length === 0 || k <= 0) return 0;
+  // gold 去重：脏数据中重复的 expected id 会虚增分母，导致 Recall 系统性偏低
+  //（对无重复的正常数据是 no-op，不改变既有评测数字）
+  const expected = dedupePreserveOrder(expectedDocIds);
   const topK = dedupePreserveOrder(retrievedDocIds).slice(0, k);
-  const expectedSet = new Set(expectedDocIds);
+  const expectedSet = new Set(expected);
   const hits = topK.filter((id) => expectedSet.has(id)).length;
-  return hits / expectedDocIds.length;
+  return hits / expected.length;
 }
 
 /**
@@ -186,7 +191,9 @@ export function ndcgAtK(
   k: number,
 ): number {
   if (expectedDocIds.length === 0 || k <= 0) return 0;
-  const expectedSet = new Set(expectedDocIds);
+  // gold 去重：重复 expected id 会虚增 IDCG（理想 DCG），导致 NDCG 被系统性压低
+  const expected = dedupePreserveOrder(expectedDocIds);
+  const expectedSet = new Set(expected);
   const topK = dedupePreserveOrder(retrievedDocIds).slice(0, k);
 
   // DCG@K：实际检索结果中相关文档的折损累计
@@ -199,7 +206,7 @@ export function ndcgAtK(
   }
 
   // IDCG@K：理想情况下（所有相关文档排在最前）的 DCG
-  const idealHits = Math.min(k, expectedDocIds.length);
+  const idealHits = Math.min(k, expected.length);
   let idcg = 0;
   for (let i = 0; i < idealHits; i++) {
     idcg += 1 / Math.log2(i + 2);
@@ -292,15 +299,37 @@ function round(value: number): number {
   return Math.round(value * 10000) / 10000;
 }
 
-/** 计算一组查询结果各指标的均值 */
+/**
+ * 计算一组查询结果各指标的均值。
+ *
+ * 按指标键分组求均值（只对拥有该键的样本取平均）：
+ * 旧实现取首行的键集合，混合 kValues 的样本会丢失首行没有的键，
+ * 或把其他行缺失的键静默按 0 填充拉低均值；正常同构输入下行为与旧实现一致。
+ */
 function averageMetrics(results: SingleQueryEval[]): Record<string, number> {
   if (results.length === 0) return {};
-  const metricKeys = Object.keys(results[0].metrics);
-  const aggregated: Record<string, number> = {};
 
-  for (const key of metricKeys) {
-    const sum = results.reduce((acc, r) => acc + (r.metrics[key] || 0), 0);
-    aggregated[key] = round(sum / results.length);
+  // 收集全部样本的指标键并集
+  const keySet = new Set<string>();
+  for (const r of results) {
+    for (const key of Object.keys(r.metrics)) keySet.add(key);
+  }
+
+  const aggregated: Record<string, number> = {};
+  for (const key of keySet) {
+    let sum = 0;
+    let count = 0;
+    for (const r of results) {
+      const value = r.metrics[key];
+      // Number.isFinite 兜底 NaN/Infinity（旧实现 `|| 0` 隐式兜底），防止脏值传播到聚合结果
+      if (value !== undefined && Number.isFinite(value)) {
+        sum += value;
+        count++;
+      }
+    }
+    if (count > 0) {
+      aggregated[key] = round(sum / count);
+    }
   }
 
   return aggregated;

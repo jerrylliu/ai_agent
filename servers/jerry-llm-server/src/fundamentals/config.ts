@@ -318,6 +318,16 @@ const RootSchema = z.object({
   semanticCacheEnabled: zBoolFromString(true),
 
   /**
+   * Doc Tree v1 总开关（文档级摘要节点入库），默认 false（显式 opt-in）
+   * - 开启后 publishToVectorStore 会在正文入库后追加 1 个 chunk_role='summary'
+   *   的文档级摘要块（LLM 生成，失败降级为抽取式兜底，不阻断主流程）
+   * - 摘要块参与常规向量/BM25 检索，补「这份文档讲什么」类全局问题的召回；
+   *   检索收口段对同文档摘要块做让位去重（正文块入选时摘要让位）
+   * - 关闭时行为与引入前完全一致；存量文档如需补摘要走重新发布
+   */
+  docTreeEnabled: zBoolFromString(false),
+
+  /**
    * 二段式检索：宽召回候选池宽度（rerank 精排前的召回数量上限）
    * - 工具层按 max(LLM top_k, 此值) 宽召回 → rerank 精排 → 按 LLM top_k 截断返回，
    *   最终返回条数与默认口径一致（top_k 默认 6），只扩大精排的候选面
@@ -435,6 +445,7 @@ function buildRawConfig() {
 
     bm25Engine: env.BM25_ENGINE,
     semanticCacheEnabled: env.SEMANTIC_CACHE_ENABLED,
+    docTreeEnabled: env.DOC_TREE_ENABLED,
     rerankCandidatePool: env.RETRIEVAL_CANDIDATE_POOL,
     retrievalMinSimilarity: env.RETRIEVAL_MIN_SIMILARITY,
 
@@ -650,6 +661,9 @@ export const config = {
 
   /** RAG 语义缓存总开关（默认 true；benchmark 评测设 false，见 .env.example 说明） */
   semanticCacheEnabled: parsed.semanticCacheEnabled,
+
+  /** Doc Tree v1 总开关（文档级摘要节点入库，默认 false，显式 opt-in） */
+  docTreeEnabled: parsed.docTreeEnabled,
 
   /** 二段式检索：宽召回候选池宽度（rerank 精排前的召回数量上限，默认 30） */
   rerankCandidatePool: parsed.rerankCandidatePool,

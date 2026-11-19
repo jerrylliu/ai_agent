@@ -59,6 +59,23 @@ describe('检索评估指标', () => {
     it('重复 docId 只算一次（去重）', () => {
       expect(recallAtK(['d1', 'd1', 'd2'], ['d1', 'd2'], 3)).toBe(1);
     });
+
+    it('gold 含重复 id 时分母去重（不虚增分母拉低 Recall）', () => {
+      // 期望 [d1, d1, d2] 去重后分母为 2：命中 d1 → 1/2（旧实现错误地按 3 算 → 1/3）
+      expect(recallAtK(['d1', 'd4'], ['d1', 'd1', 'd2'], 3)).toBeCloseTo(
+        1 / 2,
+        4,
+      );
+    });
+
+    it('K=0 → 0', () => {
+      expect(recallAtK(['d1'], ['d1'], 0)).toBe(0);
+    });
+
+    it('K 为负数 → 0（slice(0,负数) 陷阱：返回去尾结果而非空数组）', () => {
+      // 无守卫时 slice(0,-1) 会返回 ['d1']，错误得到 0.5
+      expect(recallAtK(['d1', 'd4'], ['d1', 'd2'], -1)).toBe(0);
+    });
   });
 
   // ==================== Precision@K ====================
@@ -173,6 +190,12 @@ describe('检索评估指标', () => {
       // d1 出现两次，只算第一次
       const result = ndcgAtK(['d1', 'd1', 'd2'], ['d1'], 3);
       expect(result).toBe(1); // d1 排第一 → NDCG = 1
+    });
+
+    it('gold 含重复 id 时 IDCG 按去重计算（不虚增理想 DCG）', () => {
+      // 期望 [d1, d1] 去重后只有 1 个相关文档：IDCG = 1/log2(2) = 1
+      // d1 排第一 → DCG = 1 → NDCG = 1（旧实现 IDCG 多加一项 → NDCG < 1）
+      expect(ndcgAtK(['d1'], ['d1', 'd1'], 3)).toBe(1);
     });
   });
 
@@ -302,6 +325,41 @@ describe('检索评估指标', () => {
 
       expect(report.byDifficulty['easy']['Recall@3']).toBe(1.0);
       expect(report.byDifficulty['hard']['Recall@3']).toBe(0.2);
+    });
+
+    it('混合指标键的样本按各自拥有的键求均值（不丢失键、不静默补 0）', () => {
+      // 旧实现只认首行的键：'NDCG@3' 会被整体丢弃
+      const perQuery: SingleQueryEval[] = [
+        makeResult('q1', { 'Recall@3': 1.0 }),
+        makeResult('q2', { 'Recall@3': 0.5 }),
+        makeResult('q3', { 'Recall@3': 0.0, 'NDCG@3': 0.8 }),
+      ];
+
+      const report = aggregateResults(perQuery, {
+        topK: 3,
+        kValues: [3],
+        searchType: 'hybrid',
+      });
+
+      expect(report.aggregate['Recall@3']).toBeCloseTo(0.5, 4);
+      // 'NDCG@3' 只在 q3 上存在 → 均值只按 q3 计算（不把 q1/q2 当 0 拉低）
+      expect(report.aggregate['NDCG@3']).toBeCloseTo(0.8, 4);
+    });
+
+    it('NaN 指标值不传播到聚合结果（等价于缺键）', () => {
+      // 旧实现 `|| 0` 隐式兜底 NaN；新实现用 Number.isFinite 显式过滤
+      const perQuery: SingleQueryEval[] = [
+        makeResult('q1', { 'Recall@3': 1.0 }),
+        makeResult('q2', { 'Recall@3': Number.NaN }),
+      ];
+
+      const report = aggregateResults(perQuery, {
+        topK: 3,
+        kValues: [3],
+        searchType: 'hybrid',
+      });
+
+      expect(report.aggregate['Recall@3']).toBe(1.0);
     });
 
     it('空结果集 → 空聚合', () => {

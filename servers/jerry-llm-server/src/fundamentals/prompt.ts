@@ -1361,7 +1361,12 @@ function formatToolResult(
         : '';
       return `思维导图生成成功！${imageUrlLine}思维导图已自动展示给用户，请用文字简要描述内容即可，不要再输出任何 \`\`\`mermaid 代码块（前端会自动渲染）。如果用户要求发邮件，把 imageUrl 传给 send_notification.attachments 字段。`;
     }
-    return data.message || content;
+    // 失败路径（mermaidCode 为空时落到此处）：禁止模型复述空 mermaid 块，
+    // 前端对空块不渲染，但复述行为本身会误导用户以为导图已生成
+    return (
+      (data.message || content) +
+      '\n【注意】本次思维导图生成失败，前端没有展示任何导图。绝对不要在回复中输出 ```mermaid 代码块（尤其禁止输出空的 ```mermaid 块）。请根据上述原因修正参数后重试；若重试仍失败，请用 Markdown 列表向用户展示内容结构并说明导图生成失败。'
+    );
   }
 
   if (toolName === 'generate_chart') {
@@ -1373,14 +1378,19 @@ function formatToolResult(
       return content;
     }
     const data = parsed.data;
-    if (data.type === 'chart' && data.echartsOption) {
+    // 成功判定必须以 imageUrl 为准：失败路径返回 echartsOption:{}（真值），
+    // 只判 echartsOption 会把失败误报成"图表生成成功"，导致模型对用户声称
+    // "图表已展示"并复述空 echarts 块（生产案例 2026-11-19 09:19）
+    if (data.type === 'chart' && data.imageUrl) {
       // 把 imageUrl 放在最前面，LLM 必须看到并传给 send_notification.attachments
-      const imageUrlLine = data.imageUrl
-        ? `**静态图片链接**（传给 send_notification.attachments 用）：${data.imageUrl}\n\n`
-        : '';
+      const imageUrlLine = `**静态图片链接**（传给 send_notification.attachments 用）：${data.imageUrl}\n\n`;
       return `图表生成成功！${data.chartType ? `类型：${data.chartType}。` : ''}${imageUrlLine}图表已自动以交互式形式展示给用户，请用文字简要描述图表内容即可，不要再输出任何 \`\`\`echarts 代码块（前端会自动渲染）。如果用户要求发邮件，把 imageUrl 传给 send_notification.attachments 字段。`;
     }
-    return data.message || content;
+    // 失败路径：原样回传失败原因，并明确禁止模型复述空 echarts 块
+    return (
+      (data.message || content) +
+      '\n【注意】本次图表生成失败，前端没有展示任何图表。绝对不要在回复中输出 ```echarts 代码块（尤其禁止输出空的 ```echarts {} 块，前端会渲染成空白框）。请根据上述原因修正参数后重试；若重试仍失败，请用 Markdown 表格向用户展示数据并说明图表生成失败。'
+    );
   }
 
   if (toolName === 'generate_document') {
@@ -2699,11 +2709,109 @@ async function promptWithFunctionCalling(
     modelId: getCurrentModelId(),
   });
 
+  // ==================== 取消路径成果保全 ====================
+  // 生产案例 2026-11-19：手机端弹确认框后切到飞书审批，主流 /chat/prompt 断开
+  // → cancelled=true + LLM 连接被 abort。用户在飞书点确认后工具实际执行成功
+  // （邮件已发出），但下一轮循环检测到取消信号直接 return——AI 回复不落库、
+  // 资产不进缓存，回到 App 只看到自己的提问（回复"凭空消失"）。
+  // 修复：取消退出前 ① 资产照常入缓存；② 若本轮已实际执行过工具，无连接
+  // headless 生成一段简短交代文本并经 onUsageComplete 走正常落库链路
+  // （saveChatHistory + 飞书同步），保证所有端的历史记录里能看到执行结果。
+  const persistCancelledOutcome = async (): Promise<void> => {
+    // ① 资产保全：与正常路径同一口径（fire-and-forget 已在函数内部处理失败）
+    try {
+      await saveSessionAssets(
+        sessionId,
+        collectedImages,
+        collectedChartOptions,
+        collectedMindmaps,
+        collectedFileCards,
+      );
+    } catch (e: any) {
+      logger.warn('取消路径：saveSessionAssets 失败（已忽略）', {
+        module: 'PromptService',
+        err: e?.message || String(e),
+      });
+    }
+
+    // 未执行过任何工具（用户一开始就按了停止）：没有可交代的内容，不编造回复
+    if (toolCallsMade.length === 0) {
+      return;
+    }
+
+    // ② headless 生成执行结果交代文本（不传已 abort 的 signal，用硬超时兜底）
+    try {
+      const cancelStart = Date.now();
+      const cleaned = cleanMessagesForFinalSummary(messages);
+      cleaned.push(
+        new HumanMessage({
+          content:
+            '用户已离开当前会话界面（连接中断），但本轮工具调用已实际执行。请根据以上工具执行结果，用简短的中文向用户交代：哪些操作已成功完成（含关键结果，如邮件已发送、文件已生成）、哪些失败及原因。直接输出正文，不要调用任何工具，不要输出 ```echarts 或 ```mermaid 代码块。',
+        }),
+      );
+      const result = await llm.invoke(cleaned, {
+        signal: AbortSignal.timeout(90_000),
+      });
+      let text =
+        typeof result.content === 'string'
+          ? result.content
+          : JSON.stringify(result.content);
+      text = text.replace(/<think>[\s\S]*?<\/think>/gs, '');
+      text = suppressRawToolCallBlocks(text).safeText.trim();
+      if (!text) {
+        logger.warn('取消路径：headless 交代文本为空，跳过落库', {
+          module: 'PromptService',
+        });
+        return;
+      }
+      // 资产块拼在交代文本前：图表/图片随回复一起进入历史记录
+      const assetBlocks = renderCollectedAssetBlocks({
+        images: collectedImages,
+        chartOptions: collectedChartOptions,
+        mindmaps: collectedMindmaps,
+      });
+      const reply = (assetBlocks ? assetBlocks + '\n\n' : '') + text;
+
+      if (onUsageComplete) {
+        onUsageComplete({
+          userId: userId || 'default',
+          sessionId,
+          modelId: currentModelId,
+          inputTokens: estimateTokensFromMessages(messages),
+          outputTokens: estimateTokens(reply),
+          historyCount: recentHistory.length,
+          usedKnowledgeBase,
+          imageCount: images?.length || 0,
+          responseTimeMs: Date.now() - cancelStart,
+          userMessage: promptText || '',
+          assistantMessage: reply,
+          retrievedDocumentIds: [...fcRetrievedDocIds],
+          retrievedContexts: fcRetrievedContexts,
+        });
+      }
+      logger.info('取消路径：已 headless 生成执行结果交代并落库', {
+        module: 'PromptService',
+        sessionId,
+        toolCalls: toolCallsMade.map((tc) => tc.name),
+        replyLength: reply.length,
+      });
+    } catch (e: any) {
+      // 交代生成失败不阻塞退出（连接已断，无处可推），仅记录
+      logger.warn('取消路径：headless 交代生成失败（已忽略）', {
+        module: 'PromptService',
+        err: e?.message || String(e),
+      });
+    }
+  };
+
   for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
     if (isCancelled && isCancelled()) {
       logger.info('FC模式：检测到取消信号', { module: 'PromptService' });
       stopHeartbeat(heartbeatTimer);
       if (res && !res.writableEnded) res.end();
+      // 断开 ≠ 放弃：工具可能已在飞书等旁路确认后执行成功，成果必须落库
+      //（生产案例 2026-11-19：飞书确认发邮件成功，但回复不落库"凭空消失"）
+      await persistCancelledOutcome();
       return;
     }
 
@@ -3417,6 +3525,9 @@ async function promptWithFunctionCalling(
             .length,
           toolCalls: toolCallsMade.map((tc) => tc.name),
         };
+        // 声明提升到 try 之外：AbortError catch 需要读取已流出的部分文本落库
+        //（断开 ≠ 丢成果：流式中途断开时部分回复也要进入历史记录）
+        let fcFullResponse = '';
         try {
           // 先发送 metadata 和 session_action 事件
           sendMetadata(res, ragMetadata);
@@ -3478,7 +3589,7 @@ async function promptWithFunctionCalling(
           };
 
           // 首轮发送工具调用循环阶段已收集的全部资产
-          let fcFullResponse = emitNewAssets();
+          fcFullResponse = emitNewAssets();
 
           // ==================== 流式输出 + DSML 抑制/解析执行轮次循环 ====================
           // 模型可能在最终流式阶段把 DSML 文本格式工具调用（如 generate_document）写在 content 里。
@@ -3679,6 +3790,17 @@ async function promptWithFunctionCalling(
           // 文档正文落盘，并推送文件卡片。这样大 payload 不再经过工具参数，既快又不会被
           // 中转站截断，且审核重写不会造成"回答与 PDF 内容不一致"。
           if (docIntents.length > 0) {
+            // 取消守卫：客户端已断开时 fcFullResponse 只剩部分正文（甚至只有资产块），
+            // 此时落盘会生成半截文档入库（生产案例 2026-11-19 取消路径成果保全审查发现）。
+            // 文档意图保留在 docIntents 中被丢弃（splice 在 else 分支），绝不半截入库
+            if (dsmlStreamCancelled || (isCancelled && isCancelled())) {
+              logger.warn('延迟文档：客户端已断开，放弃落盘（避免半截文档入库）', {
+                module: 'PromptService',
+                intentCount: docIntents.length,
+                titles: docIntents.map((i) => i.title),
+              });
+              docIntents.length = 0;
+            } else {
             const docBody = fcFullResponse.trim();
             if (!docBody) {
               logger.warn('延迟文档：本轮回复正文为空，放弃落盘', {
@@ -3728,6 +3850,7 @@ async function promptWithFunctionCalling(
                   });
                 }
               }
+            }
             }
           }
 
@@ -3813,6 +3936,41 @@ async function promptWithFunctionCalling(
               module: 'PromptService',
             });
             if (!res.writableEnded) res.end();
+            // 断开时已流出的部分文本不丢弃：落库 + 资产入缓存，保证历史记录
+            // 完整（与取消路径成果保全同族：断开 ≠ 丢成果）
+            try {
+              await saveSessionAssets(
+                sessionId,
+                collectedImages,
+                collectedChartOptions,
+                collectedMindmaps,
+                collectedFileCards,
+              );
+            } catch {
+              /* 缓存失败不影响退出 */
+            }
+            if (fcFullResponse.trim() && onUsageComplete) {
+              onUsageComplete({
+                userId: userId || 'default',
+                sessionId,
+                modelId: currentModelId,
+                inputTokens: estimateTokensFromMessages(messages),
+                outputTokens: estimateTokens(fcFullResponse),
+                historyCount: recentHistory.length,
+                usedKnowledgeBase,
+                imageCount: images?.length || 0,
+                responseTimeMs: Date.now() - fcStartTime,
+                userMessage: promptText || '',
+                assistantMessage: fcFullResponse,
+                retrievedDocumentIds: [...fcRetrievedDocIds],
+                retrievedContexts: fcRetrievedContexts,
+              });
+              logger.info('FC模式流式：中断后已落库已流出的部分回复', {
+                module: 'PromptService',
+                sessionId,
+                length: fcFullResponse.length,
+              });
+            }
           } else {
             logger.error('FC模式流式输出失败，回退一次性输出', {
               module: 'PromptService',

@@ -53,6 +53,7 @@ import {
 import {
   addDocuments,
   addImageChunks,
+  addDocSummaryChunk,
   removeDocumentVersion,
   updateVersionVectorStatus,
   reindexVersion,
@@ -812,6 +813,28 @@ export class DocumentService implements OnApplicationBootstrap {
         metadata,
       );
 
+      // ==================== Doc Tree v1：文档级摘要节点 ====================
+      // 正文入库成功后追加 1 个 chunk_role='summary' 的摘要块（开关关闭时内部直接跳过）。
+      // 摘要失败只记日志、绝不阻断发布主流程（addDocSummaryChunk 内部永不抛出，此处再兜一层）
+      let summaryAdded = false;
+      try {
+        summaryAdded = await addDocSummaryChunk(
+          metadata,
+          doc.title,
+          textContent,
+        );
+      } catch (summaryErr) {
+        logger.warn('文档摘要节点入库异常（不影响发布主流程）', {
+          module: 'DocumentService',
+          versionId,
+          documentId: version.documentId,
+          error:
+            summaryErr instanceof Error
+              ? summaryErr.message
+              : String(summaryErr),
+        });
+      }
+
       await this.versionRepo.update(versionId, {
         parsingStatus: ParsingStatus.SUCCESS,
         chunkCount,
@@ -840,6 +863,7 @@ export class DocumentService implements OnApplicationBootstrap {
         documentId: version.documentId,
         chunkCount,
         imageChunkCount,
+        summaryAdded,
         isRepublish,
       });
 
@@ -1327,9 +1351,7 @@ export class DocumentService implements OnApplicationBootstrap {
 
     // 清理表格规则（功能 5：删除文档时级联删除其规则，不留孤儿数据）
     try {
-      await this.dataSource
-        .getRepository(TableRule)
-        .delete({ documentId: id });
+      await this.dataSource.getRepository(TableRule).delete({ documentId: id });
     } catch (err: any) {
       logger.warn('清理表格规则失败（不影响文档删除）', {
         module: 'DocumentService',
@@ -2370,6 +2392,17 @@ export class DocumentService implements OnApplicationBootstrap {
     if (!v1) throw new NotFoundException(`版本 ${versionId1} 不存在`);
     if (!v2) throw new NotFoundException(`版本 ${versionId2} 不存在`);
 
+    // 同版本对比守卫：直接返回无差异，跳过两次完整的文件解析
+    //（PDF/docx 解析是重 IO，同一版本对比纯属浪费；v1===v2 时 diff 恒为空）
+    if (versionId1 === versionId2) {
+      logger.info('版本对比：v1 与 v2 为同一版本，直接返回无差异', {
+        module: 'DocumentService',
+        documentId,
+        versionId1,
+      });
+      return [];
+    }
+
     // 读取文件内容并解析为纯文本
     const [text1, text2] = await Promise.all([
       this.parseVersionText(v1),
@@ -2388,7 +2421,14 @@ export class DocumentService implements OnApplicationBootstrap {
         return `版本 v${v.versionNumber}（ID:${v.id}）源文件解析失败，无法对比${text}`;
       }
       if (text.trim().length === 0) {
-        return `版本 v${v.versionNumber}（ID:${v.id}）源文件丢失或内容为空，无法对比`;
+        // 区分"文件丢失"和"文件存在但内容为空"：前者不可恢复必须拦截，
+        // 后者是合法版本（如用户上传的空文件 / 空首版），允许参与对比——
+        // 空版本 vs 有内容版本会产出"全文新增"，这正是正确的 diff 语义
+        // 用真值判断（而非 !== null）：readVersionFile 对缺失文件可能返回 null/undefined
+        const fileExists = !!readVersionFile(v.fileUrl);
+        if (!fileExists) {
+          return `版本 v${v.versionNumber}（ID:${v.id}）源文件丢失（磁盘上找不到该文件），无法对比`;
+        }
       }
       return null;
     };
@@ -2477,9 +2517,12 @@ export class DocumentService implements OnApplicationBootstrap {
       }
     }
 
-    // normalize：统一换行符、去除连续空行和行首尾空格
-    // 解决原始文件解析文本与编辑器 txt 文本格式不一致导致 diff 全标红的问题
+    // normalize：统一换行符、剥离 UTF-8 BOM、去除连续空行和行首尾空格
+    // 解决原始文件解析文本与编辑器 txt 文本格式不一致导致 diff 全标红的问题。
+    // BOM 必须剥离：上传的原始文件可能带 BOM（Windows 记事本等），而编辑器
+    // 保存的 txt 不带，不剥离则首行必现幽灵差异
     return text
+      .replace(/^\uFEFF/, '')
       .replace(/\r\n/g, '\n')
       .replace(/\r/g, '\n')
       .split('\n')

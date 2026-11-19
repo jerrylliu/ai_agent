@@ -57,7 +57,9 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
   const [versions, setVersions] = useState<DocumentVersionItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<DocumentAuditLogItem[]>([]);
   const [showUpload, setShowUpload] = useState(false);
-  const [diffVersionIds, setDiffVersionIds] = useState<[number, number] | null>(null);
+  const [diffVersionIds, setDiffVersionIds] = useState<
+    [{ id: number; versionNumber: number }, { id: number; versionNumber: number }] | null
+  >(null);
   const [feedback, setFeedback] = useState<{ show: boolean; success: boolean; message: string }>({
     show: false, success: false, message: '',
   });
@@ -400,7 +402,10 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
     onRefreshKnowledgeBase?.();
   };
 
-  const handleDiff = (v1: number, v2: number) => {
+  const handleDiff = (
+    v1: { id: number; versionNumber: number },
+    v2: { id: number; versionNumber: number },
+  ) => {
     setDiffVersionIds([v1, v2]);
   };
 
@@ -520,8 +525,10 @@ export function DocumentManager({ onClose, onRefreshKnowledgeBase }: DocumentMan
       {diffVersionIds && selectedDocId && (
         <VersionDiff
           documentId={selectedDocId}
-          v1={diffVersionIds[0]}
-          v2={diffVersionIds[1]}
+          v1={diffVersionIds[0].id}
+          v2={diffVersionIds[1].id}
+          v1Number={diffVersionIds[0].versionNumber}
+          v2Number={diffVersionIds[1].versionNumber}
           onClose={() => setDiffVersionIds(null)}
         />
       )}

@@ -33,6 +33,7 @@ import {
   clearBM25Index,
 } from './bm25-index.js';
 import { addDocuments, getAllDocuments } from './vector-crud.js';
+import { addDocSummaryChunk } from './doc-summary.js';
 import { searchKnowledgeBase } from './vector-search.js';
 import { DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP } from './text-splitter.js';
 
@@ -602,11 +603,36 @@ export async function reindexVersion(
   const chunkCount = await addDocuments([textContent], [metadata], {
     chunkingStrategy: 'parent-child',
   });
+
+  // ==================== Doc Tree v1：文档级摘要节点 ====================
+  // 重建路径与 publishToVectorStore 同级对齐：正文入库后补摘要块（开关关闭时内部跳过）。
+  // 上方 removeDocumentVersion 已按 versionId 清掉旧摘要，此处重建保持摘要不丢。
+  // 失败只记日志，不阻断重建主流程。
+  let summaryAdded = false;
+  try {
+    summaryAdded = await addDocSummaryChunk(
+      metadata,
+      metadata.documentTitle,
+      textContent,
+    );
+  } catch (summaryError) {
+    logger.warn('重建路径摘要节点入库异常（不影响重建主流程）', {
+      module: 'VectorStore',
+      versionId,
+      documentId,
+      error:
+        summaryError instanceof Error
+          ? summaryError.message
+          : String(summaryError),
+    });
+  }
+
   logger.info('版本重新向量化完成', {
     module: 'VectorStore',
     versionId,
     documentId,
     chunkCount,
+    summaryAdded,
   });
   return chunkCount;
 }
