@@ -176,10 +176,13 @@ const CONFIRMATION_CONFIG: Record<
   },
 
   // ---------------- 三大外部 API 工具：均需要用户确认 ----------------
-  // send_notification 会向第三方/用户发送消息，存在打扰风险，标记为 medium
+  // send_notification 会向第三方/用户发送消息，存在打扰风险，标记为 medium。
+  // 两阶段交付升级：确认卡展示"最终组装预览"——用户确认的是真实将发出的
+  // 内容（含附件清单与正文预览），而非工具参数摘要。此时 send_notification
+  // 的调用已是登记语义，用户确认的就是登记动作本身。
   send_notification: {
     riskLevel: 'medium',
-    message: '即将发送通知，请确认后再继续',
+    message: '即将登记交付计划（本轮回复结束后统一发送），请确认',
     paramSummary: (params) => {
       const channel = params.channel || '?';
       const recipients = Array.isArray(params.recipients)
@@ -187,7 +190,29 @@ const CONFIRMATION_CONFIG: Record<
         : '';
       const target =
         params.channel === 'webhook' ? params.webhookUrl : recipients;
-      return `通道：${channel}${target ? `，目标：${String(target).slice(0, 80)}` : ''}，标题：${(params.title || '').slice(0, 40)}`;
+      // 附件清单：展示模型引用的每个附件（fc:// 或外链），用户可核对
+      // "邮件里到底有什么"——旧摘要只显示收件人和标题，附件缺失无从发现
+      const attachments = Array.isArray(params.attachments)
+        ? params.attachments
+            .map(
+              (a: { filename?: string; url?: string }) =>
+                a?.filename || String(a?.url || '').slice(0, 40),
+            )
+            .filter(Boolean)
+        : [];
+      const attachLine =
+        attachments.length > 0
+          ? `，附件（${attachments.length}）：${attachments.slice(0, 5).join('、')}${attachments.length > 5 ? ' 等' : ''}`
+          : '';
+      // 正文预览：截前 120 字，用户可粗核对内容与预期一致
+      const contentPreview = String(params.content || '')
+        .replace(/\s+/g, ' ')
+        .slice(0, 120);
+      return (
+        `通道：${channel}${target ? `，目标：${String(target).slice(0, 80)}` : ''}` +
+        `，标题：${(params.title || '').slice(0, 40)}${attachLine}` +
+        (contentPreview ? `，正文预览：${contentPreview}…` : '')
+      );
     },
   },
   // query_database 即便是只读 SELECT，也涉及外部业务数据，标记为 low（轻量提示）
@@ -321,6 +346,7 @@ export function requestConfirmation(
       if (entry) {
         pendingConfirmations.delete(id);
         entry.resolve(false);
+        recordRecentlyResolved(entry.ownerUserId, id, false, 'timeout');
         metrics.hitlResolved.inc({ action: 'timeout', source: 'web' });
         // 超时也要广播：其他端（移动/桌面）弹窗还挂着，收到后关闭
         publishHITLEvent({
@@ -390,6 +416,12 @@ export function handleConfirmationResponse(
 
   pendingConfirmations.delete(confirmationId);
   pending.resolve(confirmed);
+
+  // 记录到"最近已解决"表：SSE 重连回放用。生产案例（2026-11-20）：手机弹框 →
+  // 切飞书确认 → 手机错过 resolved 广播 → 回 App 旧弹框永远挂着。
+  // 只回放 pending 不够——resolved 的确认不在 pending 列表里，前端旧弹框没有
+  // 任何事件可关。把最近 resolved 的也补推一遍，前端按 id 关闭弹窗（幂等）。
+  recordRecentlyResolved(pending.ownerUserId, confirmationId, confirmed, source);
 
   // Prometheus 指标
   metrics.hitlResolved.inc({
@@ -517,6 +549,83 @@ export function listPendingConfirmationsForUser(userId: string): Array<{
     });
   }
   return result;
+}
+
+// ==================== 最近已解决确认记录（SSE 重连回放用） ====================
+
+/** 最近已解决确认条目 */
+interface RecentlyResolvedEntry {
+  /** 确认请求 ID */
+  id: string;
+  /** 是否确认（false = 拒绝/超时） */
+  confirmed: boolean;
+  /** 解决来源（web/feishu/timeout） */
+  source: string;
+  /** 解决时间戳 */
+  resolvedAt: number;
+}
+
+/** 最近已解决确认：ownerUserId → entries（按解决时间升序） */
+const recentlyResolvedConfirmations = new Map<
+  string,
+  RecentlyResolvedEntry[]
+>();
+
+/** 最近已解决记录保留时长：与 CONFIRMATION_TIMEOUT_MS 对齐再放宽一档，
+ *  保证"确认后 10 分钟内任意时刻重连"都能收到回放 */
+const RECENT_RESOLVED_RETENTION_MS = 15 * 60 * 1000;
+
+/** 单用户最多保留的 resolved 记录数：防异常风暴撑爆内存 */
+const MAX_RECENT_RESOLVED_PER_USER = 50;
+
+/**
+ * 记录一次确认解决（确认/拒绝/超时）
+ * @param ownerUserId 确认请求归属用户
+ * @param id 确认请求 ID
+ * @param confirmed 是否确认
+ * @param source 解决来源
+ */
+function recordRecentlyResolved(
+  ownerUserId: string,
+  id: string,
+  confirmed: boolean,
+  source: string,
+): void {
+  const list = recentlyResolvedConfirmations.get(ownerUserId) ?? [];
+  list.push({ id, confirmed, source, resolvedAt: Date.now() });
+  // 容量上限：超出时丢最旧的
+  if (list.length > MAX_RECENT_RESOLVED_PER_USER) {
+    list.splice(0, list.length - MAX_RECENT_RESOLVED_PER_USER);
+  }
+  recentlyResolvedConfirmations.set(ownerUserId, list);
+}
+
+/**
+ * 列出某用户最近的已解决确认（用于 /chat/events 新连接回放关闭旧弹窗）
+ *
+ * 为什么需要：只回放 pending 不够——飞书/超时解决的确认已从 pending 列表
+ * 移除，错过 resolved 广播的端（切后台）重连后旧弹框没有任何事件可关。
+ * 把最近 resolved 的补推一遍，前端按 id 幂等关闭。
+ *
+ * @param userId 用户 ID
+ * @param sinceMs 只返回最近 N 毫秒内解决的（调用方传 0 取全部保留期内的）
+ */
+export function listRecentlyResolvedForUser(
+  userId: string,
+): Array<{ id: string; confirmed: boolean; source: string }> {
+  const now = Date.now();
+  const list = recentlyResolvedConfirmations.get(userId);
+  if (!list) return [];
+  // 惰性清理过期条目
+  const fresh = list.filter(
+    (e) => now - e.resolvedAt < RECENT_RESOLVED_RETENTION_MS,
+  );
+  if (fresh.length === 0) {
+    recentlyResolvedConfirmations.delete(userId);
+    return [];
+  }
+  recentlyResolvedConfirmations.set(userId, fresh);
+  return fresh.map(({ id, confirmed, source }) => ({ id, confirmed, source }));
 }
 
 /**

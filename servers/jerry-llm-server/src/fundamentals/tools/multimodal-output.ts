@@ -12,6 +12,8 @@
  */
 
 import { z } from 'zod';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { logger } from '../logger';
 import { config } from '../config';
 import { launchBrowser } from '../web-crawler';
@@ -512,6 +514,79 @@ const closeBrowserOnExit = async () => {
 process.once('SIGTERM', closeBrowserOnExit);
 process.once('SIGINT', closeBrowserOnExit);
 
+// ==================== 渲染用本地 JS 资产加载 ====================
+//
+// 设计背景（2026-11-20 生产事故）：puppeteer 渲染 HTML 里的 echarts/mermaid
+// 走 jsdelivr CDN，服务器访问不了 CDN 时脚本加载超时 → page.setContent
+// 30s 导航超时 → 2 次尝试均失败 → 思维导图 PNG 生成不出来，
+// 邮件/飞书附件跟着被跳过（"附件内容获取失败"）。
+//
+// 根治方案：把 mermaid.min.js / echarts.min.js 作为本地资产随构建分发
+// （nest build 经 nest-cli.json assets 复制到 dist/assets/vendor/），
+// 渲染 HTML 直接内联脚本内容，彻底不依赖外网。本地资产缺失时降级回 CDN
+// （行为与旧版一致），保证功能不因资产丢失而完全不可用。
+const vendorScriptCache = new Map<string, string | null>();
+
+/**
+ * 读取本地 vendor JS 资产（读取一次后进程内缓存）
+ * @returns 脚本内容（已做 </script 转义）；资产不存在返回 null
+ */
+function loadVendorScript(filename: string): string | null {
+  if (vendorScriptCache.has(filename)) {
+    return vendorScriptCache.get(filename) ?? null;
+  }
+
+  // 与 model-provider.ts 读取 capabilities.json 相同的多候选路径策略：
+  // - 编译产物（dist/src/main.js 布局）：dist/src/fundamentals/tools
+  //   三级向上 = dist/assets/vendor（nest-cli assets 按 sourceRoot 相对路径复制）
+  // - 源码直跑（jest / ts-node）：src/fundamentals/tools 两级向上 = src/assets/vendor
+  // - cwd 兜底：dist/assets/vendor 与 src/assets/vendor
+  const candidates: string[] = [];
+  if (typeof __dirname !== 'undefined') {
+    candidates.push(
+      join(__dirname, '..', '..', '..', 'assets', 'vendor', filename),
+      join(__dirname, '..', '..', 'assets', 'vendor', filename),
+    );
+  }
+  candidates.push(
+    join(process.cwd(), 'dist', 'assets', 'vendor', filename),
+    join(process.cwd(), 'src', 'assets', 'vendor', filename),
+  );
+
+  let result: string | null = null;
+  for (const candidate of candidates) {
+    try {
+      const content = readFileSync(candidate, 'utf8');
+      // 防止脚本内容里的 "</script" 字面量提前闭合 HTML 中的 script 标签
+      // （压缩后的库文件可能包含该序列，转义为 <\/script 在 JS 中等价）
+      result = content.replace(/<\/script/gi, '<\\/script');
+      break;
+    } catch {
+      // 尝试下一个候选路径
+    }
+  }
+  if (result === null) {
+    logger.warn('本地 vendor 渲染资产缺失，将降级使用 CDN', {
+      module: 'Tool:MultiModal',
+      filename,
+    });
+  }
+  vendorScriptCache.set(filename, result);
+  return result;
+}
+
+/**
+ * 生成渲染 HTML 的 <script> 标签：优先内联本地资产，缺失时降级 CDN
+ */
+function buildVendorScriptTag(
+  cdnUrl: string,
+  vendorFile: string,
+): string {
+  const inline = loadVendorScript(vendorFile);
+  if (inline !== null) return `<script>${inline}</script>`;
+  return `<script src="${cdnUrl}"></script>`;
+}
+
 /**
  * 用 puppeteer + ECharts 在本地渲染图表为 PNG，返回 base64 data URI
  * 加载 ECharts CDN（首次较慢，后续从浏览器缓存命中，极快）
@@ -553,11 +628,16 @@ async function chartPngDataUriOnce(
     page = await browser.newPage();
     await page.setViewport({ width, height, deviceScaleFactor: 2 });
 
+    // echarts 从本地 vendor 资产内联加载（不依赖外网 CDN，见上方区块说明）
+    const echartsScript = buildVendorScriptTag(
+      'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js',
+      'echarts.min.js',
+    );
     const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  ${echartsScript}
   <style>
     html, body { margin: 0; padding: 0; background: #fff; }
     #chart { width: ${width}px; height: ${height}px; }
@@ -1073,11 +1153,16 @@ async function mindmapPngDataUriOnce(
 
     // mermaid 代码用 JSON.stringify 安全注入（转义 </ 防 HTML 解析器提前关闭 script 标签）
     const codeLiteral = JSON.stringify(mermaidCode).replace(/<\//g, '<\\/');
+    // mermaid 从本地 vendor 资产内联加载（不依赖外网 CDN，见上方区块说明）
+    const mermaidScript = buildVendorScriptTag(
+      'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js',
+      'mermaid.min.js',
+    );
     const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  ${mermaidScript}
   <style>
     html, body { margin: 0; padding: 0; background: #fff; }
     #chart { width: ${width}px; min-height: ${height}px; padding: 20px; box-sizing: border-box; }

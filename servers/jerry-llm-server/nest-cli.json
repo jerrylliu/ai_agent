@@ -8,6 +8,10 @@
       {
         "include": "fundamentals/capabilities.json",
         "outDir": "dist"
+      },
+      {
+        "include": "assets/vendor/*.js",
+        "outDir": "dist"
       }
     ]
   }

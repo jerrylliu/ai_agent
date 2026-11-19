@@ -87,11 +87,25 @@ describe('HumanInTheLoop', () => {
   describe('getConfirmationConfig', () => {
     beforeEach(loadModule);
 
-    it('应返回已配置工具的确认配置', () => {
+    it('应返回已配置工具的确认配置（两阶段交付：message 为登记语义）', () => {
       const config = mod.getConfirmationConfig('send_notification');
       expect(config).toBeDefined();
       expect(config!.riskLevel).toBe('medium');
-      expect(config!.message).toContain('通知');
+      // 阶段 6 升级后 message 描述"登记交付计划"而非"发送"
+      expect(config!.message).toContain('登记');
+      // paramSummary 含附件清单（最终组装预览）
+      const summary = config!.paramSummary({
+        channel: 'email',
+        title: 'T',
+        content: 'hello world content',
+        recipients: ['a@x.com'],
+        attachments: [
+          { filename: 'a.png', url: 'https://x/a.png' },
+          { filename: 'b.pdf', url: 'fc://document/k1' },
+        ],
+      });
+      expect(summary).toContain('附件（2）：a.png、b.pdf');
+      expect(summary).toContain('正文预览：hello world content');
     });
 
     it('未配置的工具应返回 null', () => {
